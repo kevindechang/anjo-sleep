@@ -124,6 +124,51 @@ At line 521, added by `feat: Glimmer serving on Modal, route override, cleared s
 +
 ```
 
+## `anjo/core/erasure.py` (+16 -0)
+
+At line 10, added by `feat: undo, delete and what changed with their routes [task9]`:
+
+```diff
++from collections.abc import Callable
+```
+
+At line 14, added by `fix: delete fences, drains the night lock, then lists; durable cleanup inventory; erasure never blocked [task9]`:
+
+```diff
++from anjo.core.best_effort import best_effort
+```
+
+At line 220, added by `feat: undo, delete and what changed with their routes [task9]`; `fix: delete fences, drains the night lock, then lists; durable cleanup inventory; erasure never blocked [task9]`:
+
+```diff
++# Removes a user's state outside their own folder (Anjo Sleep registers one: remote adapters, night
++# logs). Each runs under the erasure locks before the folder goes, as a best-effort step: a failure is
++# logged and never stops the erasure (the hook keeps its own durable record of what is outstanding).
++ERASURE_HOOKS: list[Callable[[str], None]] = []
++
++
++def _run_erasure_hooks(user_id: str) -> None:
++    for hook in ERASURE_HOOKS:
++        with best_effort("erasure hook", type_only=True, user_id=user_id):
++            hook(user_id)
++
++
+```
+
+At line 743, added by `feat: undo, delete and what changed with their routes [task9]`:
+
+```diff
+existing: def _wipe_user_memory_state_locked(user_id: str, *, reset_self_core: bool) -> int:
++    _run_erasure_hooks(user_id)
+```
+
+At line 843, added by `feat: undo, delete and what changed with their routes [task9]`:
+
+```diff
+existing: def _delete_account_data_locked(user_id: str) -> None:
++    _run_erasure_hooks(user_id)
+```
+
 ## `anjo/core/export_inventory.py` (+14 -2)
 
 At line 19, added by `fix: harden sleep export and cleared sessions [task3]`:
