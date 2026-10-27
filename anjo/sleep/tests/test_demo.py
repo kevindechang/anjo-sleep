@@ -5,7 +5,7 @@ the starter scenes. The routes and the crisis wiring are tested in ``tests/app/t
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -16,8 +16,8 @@ import pytest
 from anjo.sleep.demo import words
 from anjo.sleep.demo.limits import CounterError, JsonCounterStore, Limiter, Limits, Refused
 from anjo.sleep.demo.page import COPY_SLOT, page_html, render
-from anjo.sleep.demo.pairs import CHOICES, PairRegistry, SideFacts, Vote
-from anjo.sleep.demo.service import Answer, Asleep, DemoConfig, DemoService, Fixed, PairView
+from anjo.sleep.demo.pairs import CHOICES, OPEN_PER_VISIT, VOTES_PER_VISIT, PairRegistry, SideFacts, Vote
+from anjo.sleep.demo.service import Answer, Asleep, DemoConfig, DemoService, Fixed, PairView, Upkeep
 from anjo.sleep.demo.starters import LABEL, Side, StarterSet, from_json, generate, load, to_json
 from anjo.sleep.demo.visits import NON_GLOBAL, VISIT_TTL_S, client_key, mint_visit, visit_nonce
 from anjo.sleep.probes.decontam import OverlapDecontaminator
@@ -46,6 +46,17 @@ class MemoryStore:
         if self.fail_save:
             raise CounterError("unsaved")
         self.saved = json.loads(json.dumps(dict(counters)))
+
+
+def _pay(paid: list[float] | None = None, *, ok: bool = True) -> Callable[[float], bool]:
+    """The budget ledger's stand-in: records each purchase of warm seconds."""
+
+    def pay(seconds: float) -> bool:
+        if paid is not None and ok:
+            paid.append(seconds)
+        return ok
+
+    return pay
 
 
 def _refused(call: Any, *args: Any) -> Refused:
@@ -144,7 +155,7 @@ def test_limiter_fails_closed() -> None:
     store.fail_load = True
     assert _refused(restarted.visit, "b", NOW).status == 503
     assert _refused(restarted.admit, "b", "v", 1, NOW).status == 503
-    assert _refused(restarted.claim_wake, NOW).status == 503
+    assert _refused(lambda: restarted.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())).status == 503
     store.fail_load = False
     store.fail_save = False
     restarted.visit("b", NOW)
@@ -162,9 +173,82 @@ def test_limiter_refuses_unreadable_counter_files(tmp_path: Path) -> None:
     assert _refused(Limiter(JsonCounterStore(path)).visit, "a", NOW).status == 503
 
 
-def test_wakes_are_capped_per_day() -> None:
-    limiter = Limiter(MemoryStore(), Limits(wakes_per_day=2))
-    assert [limiter.claim_wake(NOW) for _ in range(3)] == [True, True, False]
+def test_limiter_caps_asks_per_client_per_day() -> None:
+    limiter = Limiter(MemoryStore(), Limits(asks_per_client_per_day=3, calls_per_client_per_minute=100))
+    for n in range(3):
+        limiter.settle(limiter.admit("a", f"v{n}", 2, NOW), 10, NOW)
+    refused = _refused(limiter.admit, "a", "v9", 2, NOW)
+    assert (refused.status, refused.reason) == (429, "asks_spent")  # a new visit doesn't reset it
+    limiter.admit("b", "vb", 2, NOW)  # another address has its own
+    limiter.admit("a", "v9", 2, NOW + timedelta(days=1))  # and a new day
+    once = Limiter(MemoryStore(), Limits(asks_per_client_per_day=1))
+    once.release(once.admit("a", "v", 2, NOW), NOW)  # she was asleep: the ask goes back
+    once.admit("a", "v", 2, NOW)
+
+
+def test_a_few_addresses_cannot_spend_the_shared_daily_caps() -> None:
+    limits = Limits()
+    assert limits.visits_per_day // limits.visits_per_client_per_day >= 300
+    calls_per_address = 2 * min(limits.asks_per_client_per_day, limits.visits_per_client_per_day * limits.asks_per_visit)
+    assert limits.calls_per_day // calls_per_address >= 100  # the call cap guards throughput; warm time guards dollars
+    assert limits.warm_minutes_per_day <= 120 and limits.wakes_per_day <= 3 and limits.live_hours_utc is None
+
+
+def test_warm_time_is_bought_once_capped_per_day_and_paid_for() -> None:
+    paid: list[float] = []
+    limiter = Limiter(MemoryStore(), Limits(warm_minutes_per_day=60))
+
+    def buy(at: datetime, until: float | None = None) -> None:
+        limiter.buy_warm_time(at, 35 * 60, covered_until=until, pay=_pay(paid))
+
+    buy(NOW)  # a cold ask keeps her up 35 minutes: all of it is bought
+    buy(NOW + timedelta(minutes=1))  # a minute later only the minute it adds
+    assert paid == [2100, 60]
+    later = NOW + timedelta(minutes=40)
+    refused = _refused(lambda: buy(later))  # 36 minutes bought; 35 more would pass the hour
+    assert (refused.status, refused.reason) == (429, "live_spent") and paid == [2100, 60]
+    assert limiter.live_state(later, 35 * 60, covered_until=None) == "spent"
+    window_end = (NOW + timedelta(minutes=90)).timestamp()  # a keep-warm window someone else holds
+    buy(later, window_end)
+    assert paid == [2100, 60] and limiter.live_state(later, 35 * 60, covered_until=window_end) == "open"
+    buy(NOW + timedelta(days=1))  # a new day has its own warm time
+    assert paid[-1] == 2100
+
+
+def test_warm_time_the_budget_refuses_is_not_bought() -> None:
+    store = MemoryStore()
+    limiter = Limiter(store)
+    refused = _refused(lambda: limiter.buy_warm_time(NOW, 600, covered_until=None, pay=_pay(ok=False)))
+    assert refused.reason == "live_spent" and (store.saved or {}).get("warm_s", 0) == 0
+    limiter.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())
+    assert store.saved is not None and store.saved["warm_s"] == 600
+
+
+def test_live_hours_close_waking_and_extending_but_not_a_window_held_by_someone_else() -> None:
+    limiter = Limiter(MemoryStore(), Limits(live_hours_utc=(14, 22)))  # NOW is 15:00 UTC
+    limiter.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())
+    late = NOW.replace(hour=23)
+    refused = _refused(lambda: limiter.buy_warm_time(late, 600, covered_until=None, pay=_pay()))
+    assert (refused.status, refused.reason) == (429, "live_closed")
+    assert limiter.live_state(late, 600, covered_until=None) == "closed"
+    limiter.buy_warm_time(late, 600, covered_until=late.timestamp() + 3600, pay=_pay(ok=False))  # nothing to buy
+    overnight = Limiter(MemoryStore(), Limits(live_hours_utc=(22, 6)))
+    overnight.buy_warm_time(late, 600, covered_until=None, pay=_pay())
+    next_afternoon = NOW + timedelta(days=1)
+    assert _refused(lambda: overnight.buy_warm_time(next_afternoon, 600, covered_until=None, pay=_pay())).reason == "live_closed"
+    with pytest.raises(ValueError):
+        Limits(live_hours_utc=(9, 9))
+
+
+def test_a_wake_takes_one_of_the_days_wakes_and_its_warm_time() -> None:
+    paid: list[float] = []
+    limiter = Limiter(MemoryStore(), Limits(wakes_per_day=2, warm_minutes_per_day=600))
+    for hour in range(2):
+        limiter.buy_warm_time(NOW + timedelta(hours=hour), 3000, covered_until=None, pay=_pay(paid), wake=True)
+    assert paid == [3000, 3000]
+    refused = _refused(lambda: limiter.buy_warm_time(NOW + timedelta(hours=2), 3000, covered_until=None,
+                                                     pay=_pay(paid), wake=True))
+    assert refused.reason == "live_spent" and paid == [3000, 3000]
 
 
 # ── visits and client buckets ─────────────────────────────────────────────────
@@ -223,36 +307,86 @@ def test_vote_offers_tie_and_neither() -> None:
     registry, votes = PairRegistry(), Votes()
     product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
     for n, choice in enumerate(CHOICES):
-        registry.open(f"p{n}", left=product, right=baseline, votable=True, now=NOW)
-        assert registry.vote(f"p{n}", choice, now=NOW, record=votes).vote.choice == choice
-    registry.open("p9", left=product, right=baseline, votable=True, now=NOW)
+        registry.open(f"p{n}", visit="v", left=product, right=baseline, votable=True, now=NOW)
+        assert registry.vote(f"p{n}", choice, visit="v", now=NOW, record=votes).vote.choice == choice
+    registry.open("p9", visit="v", left=product, right=baseline, votable=True, now=NOW)
     with pytest.raises(Refused) as caught:
-        registry.vote("p9", "both", now=NOW, record=votes)
+        registry.vote("p9", "both", visit="v", now=NOW, record=votes)
     assert caught.value.status == 422
     assert [row["choice"] for row in votes.stored] == list(CHOICES)
 
 
 def test_a_pair_takes_one_stored_vote_then_reveals() -> None:
     registry, votes = PairRegistry(ttl_s=60), Votes()
-    registry.open("p", left=SideFacts("2F", 9000, 0.05), right=SideFacts("4", 800, 0.01), votable=True, now=NOW)
+    registry.open("p", visit="v", left=SideFacts("2F", 9000, 0.05), right=SideFacts("4", 800, 0.01), votable=True, now=NOW)
     votes.fail = True
     with pytest.raises(Refused):
-        registry.vote("p", "left", now=NOW, record=votes)
+        registry.vote("p", "left", visit="v", now=NOW, record=votes)
     votes.fail = False
-    reveal = registry.vote("p", "left", now=NOW, record=votes)  # the failed write left it open
+    reveal = registry.vote("p", "left", visit="v", now=NOW, record=votes)  # the failed write left it open
     assert (reveal.left.arm, reveal.right.arm, reveal.left.prompt_tokens) == ("2F", "4", 9000)
     assert votes.stored == [{"choice": "left", "left": "2F", "right": "4", "at": NOW.isoformat(timespec="seconds")}]
     with pytest.raises(Refused) as again:
-        registry.vote("p", "right", now=NOW, record=votes)
+        registry.vote("p", "right", visit="v", now=NOW, record=votes)
     assert again.value.reason == "already_voted"
-    registry.open("q", left=SideFacts("4", 1, None), right=SideFacts("2C", 1, None), votable=True, now=NOW)
+    registry.open("q", visit="v", left=SideFacts("4", 1, None), right=SideFacts("2C", 1, None), votable=True, now=NOW)
     with pytest.raises(Refused) as expired:
-        registry.vote("q", "tie", now=NOW + timedelta(seconds=61), record=votes)
+        registry.vote("q", "tie", visit="v", now=NOW + timedelta(seconds=61), record=votes)
     assert expired.value.reason == "pair_gone"
-    registry.open("w", left=SideFacts("4", 1, None), right=SideFacts("2C", 1, None), votable=False, now=NOW)
+    registry.open("w", visit="v", left=SideFacts("4", 1, None), right=SideFacts("2C", 1, None), votable=False, now=NOW)
     with pytest.raises(Refused) as withheld:
-        registry.vote("w", "tie", now=NOW, record=votes)
+        registry.vote("w", "tie", visit="v", now=NOW, record=votes)
     assert withheld.value.reason == "not_votable" and len(votes.stored) == 1
+
+
+def test_a_visit_votes_once_per_scene_and_only_on_its_own_pairs() -> None:
+    registry, votes = PairRegistry(), Votes()
+    product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
+    registry.open("p1", visit="v", scene="credit", left=product, right=baseline, votable=True, now=NOW)
+    registry.vote("p1", "left", visit="v", now=NOW, record=votes)
+    # The scene's texts are fixed: once its sides are revealed, this visit's later opens are not blind.
+    registry.open("p2", visit="v", scene="credit", left=baseline, right=product, votable=True, now=NOW)
+    with pytest.raises(Refused) as again:
+        registry.vote("p2", "tie", visit="v", now=NOW, record=votes)
+    assert (again.value.status, again.value.reason) == (409, "scene_voted")
+    registry.open("p3", visit="w", scene="credit", left=product, right=baseline, votable=True, now=NOW)
+    with pytest.raises(Refused) as not_theirs:
+        registry.vote("p3", "tie", visit="v", now=NOW, record=votes)
+    assert not_theirs.value.reason == "pair_gone"  # another visit's pair, to this one, doesn't exist
+    registry.vote("p3", "tie", visit="w", now=NOW, record=votes)
+    assert len(votes.stored) == 2
+
+
+def test_votes_are_capped_per_visit() -> None:
+    registry, votes = PairRegistry(), Votes()
+    for n in range(VOTES_PER_VISIT + 1):
+        registry.open(f"p{n}", visit="v", left=SideFacts("4", 1, None), right=SideFacts("2C", 1, None),
+                      votable=True, now=NOW)
+        if n < VOTES_PER_VISIT:
+            registry.vote(f"p{n}", "tie", visit="v", now=NOW, record=votes)
+    with pytest.raises(Refused) as spent:
+        registry.vote(f"p{VOTES_PER_VISIT}", "tie", visit="v", now=NOW, record=votes)
+    assert (spent.value.status, spent.value.reason) == (429, "votes_spent")
+    assert len(votes.stored) == VOTES_PER_VISIT
+
+
+def test_open_pairs_are_capped_per_visit_and_never_evicted() -> None:
+    registry, votes = PairRegistry(), Votes()
+    left, right = SideFacts("4", 1, None), SideFacts("2C", 1, None)
+    for n in range(OPEN_PER_VISIT):
+        registry.open(f"a{n}", visit="a", votable=True, now=NOW, left=left, right=right)
+    with pytest.raises(Refused) as flood:
+        registry.open("a-more", visit="a", votable=True, now=NOW, left=left, right=right)
+    assert (flood.value.status, flood.value.reason) == (429, "too_many_open")
+    registry.vote("a0", "tie", visit="a", now=NOW, record=votes)  # a vote frees a place
+    registry.open("a-more", visit="a", votable=True, now=NOW, left=left, right=right)
+    full = PairRegistry(max_pairs=2)
+    full.open("p", visit="judge", votable=True, now=NOW, left=left, right=right)
+    full.open("q", visit="other", votable=True, now=NOW, left=left, right=right)
+    with pytest.raises(Refused) as busy:
+        full.open("r", visit="flood", votable=True, now=NOW, left=left, right=right)
+    assert (busy.value.status, busy.value.reason) == (503, "busy")
+    assert full.vote("p", "left", visit="judge", now=NOW, record=votes).vote.choice == "left"  # still there
 
 
 # ── the service, on fakes ─────────────────────────────────────────────────────
@@ -300,14 +434,16 @@ class FakeWaker:
 
 
 def _service(arms: FakeArms, *, coin: Iterator[bool] | None = None, ids: Iterator[str] | None = None,
-             starters: StarterSet | None = None, waker: FakeWaker | None = None) -> tuple[DemoService, Votes]:
+             starters: StarterSet | None = None, waker: FakeWaker | None = None, limits: Limits = Limits(),
+             paid: list[float] | None = None) -> tuple[DemoService, Votes]:
     votes = Votes()
     flips = coin or iter(lambda: True, None)
     names = ids or (f"id-{n:020d}" for n in range(10_000))
+    upkeep = Upkeep(idle_s=600.0, answer_s=300.0, wake_s=600.0, covered_until=lambda: None, pay=_pay(paid))
     service = DemoService(
-        config=DemoConfig("2C", KEY, 3.6), limiter=Limiter(MemoryStore()), pairs=PairRegistry(),
+        config=DemoConfig("2C", KEY, 3.6), limiter=Limiter(MemoryStore(), limits), pairs=PairRegistry(),
         floor=PassFloor(), reply_check=PassCheck(), arms=arms, starters=lambda: starters, votes=votes,
-        waker=waker, coin=lambda: next(flips), new_id=lambda: next(names),
+        upkeep=upkeep, waker=waker, coin=lambda: next(flips), new_id=lambda: next(names),
     )
     return service, votes
 
@@ -368,9 +504,23 @@ def test_asleep_never_wakes_without_a_waker_and_wakes_are_capped() -> None:
     waker = FakeWaker()
     waking, _ = _service(arms, waker=waker)
     token = waking.start_visit("c", True, NOW)
-    asked = [waking.ask("c", token, f"q{n}", NOW + timedelta(minutes=n)) for n in range(4)]
-    assert asked == [Asleep(True)] * 3 + [Asleep(False)]
-    assert waker.started == Limits().wakes_per_day
+    asked = [waking.ask("c", token, f"q{n}", NOW + timedelta(minutes=n)) for n in range(3)]
+    assert asked == [Asleep(True)] * 3
+    spent = _refused(waking.ask, "c", token, "q3", NOW + timedelta(minutes=3))
+    assert (spent.reason, waker.started, arms.calls) == ("live_spent", Limits().wakes_per_day, 0)
+
+
+def test_past_the_warm_cap_the_live_path_answers_nothing_and_says_so() -> None:
+    arms, paid = FakeArms(), list[float]()
+    service, _ = _service(arms, limits=Limits(warm_minutes_per_day=20), starters=_starters(), paid=paid)
+    token = service.start_visit("c", True, NOW)
+    assert isinstance(service.ask("c", token, "Is the pier light too warm?", NOW), PairView)
+    assert paid == [900] and service.scenes("c", NOW).live == "open"  # her answer and the idle window after
+    later = NOW + timedelta(minutes=20)
+    refused = _refused(service.ask, "c", token, "And the jetty?", later)
+    assert (refused.status, refused.reason, arms.calls, paid) == (429, "live_spent", 2, [900])
+    assert service.scenes("c", later).live == "spent"
+    assert isinstance(service.starter("c", token, "credit", later), PairView)  # the starters still answer
 
 
 def test_chat_needs_an_adult_visit() -> None:
@@ -418,8 +568,20 @@ def test_starter_pairs_serve_with_no_model_and_only_for_their_baseline() -> None
     assert {pair.left.text, pair.right.text} == {"P:credit", "B:credit"}
     assert (arms.calls, arms.pings) == (0, 0)
     stale, _ = _service(arms, starters=_starters("2F"))
-    views, source = stale.scenes("c", NOW)
-    assert source is None and not any(view.ready for view in views)
+    page = stale.scenes("c", NOW)
+    assert page.source is None and not any(view.ready for view in page.scenes)
+
+
+def test_a_starter_scene_takes_one_vote_per_visit() -> None:
+    service, votes = _service(FakeArms(up=False), starters=_starters())
+    token = service.start_visit("c", True, NOW)
+    first = service.starter("c", token, "credit", NOW)
+    service.vote("c", token, first.pair_id, "left", NOW)
+    second = service.starter("c", token, "credit", NOW)
+    assert _refused(service.vote, "c", token, second.pair_id, "right", NOW).reason == "scene_voted"
+    other = service.start_visit("c", True, NOW)
+    service.vote("c", other, service.starter("c", other, "credit", NOW).pair_id, "tie", NOW)
+    assert len(votes.stored) == 2
 
 
 def test_starter_scenes_not_in_training_or_sealed_sets() -> None:

@@ -15,9 +15,16 @@ status and the demo's files, for ``anjo.sleep.demo.service``.
   reads, so nothing is written to history, evidence or memory, and the question is never logged.
 - **Glimmer is never woken by default.** ``glimmer_status`` asks without waking: on SageMaker a ping
   finds no copy running and says so. On Modal any request starts a container, so the page never
-  pings it and treats Glimmer as up only within the scale-down window after its own last answer or
-  wake. Waking on demand needs ``ANJO_SLEEP_DEMO_WAKE=1`` (off by default) and is capped per day
-  (``Limits.wakes_per_day``): the seam for judging week, whose warm windows Kevin sets.
+  pings it: Glimmer is up inside a keep-warm window (``serving.wake``'s window file, whose pings
+  still answer) or the scale-down window after the page's own last answer or wake. Waking on demand
+  needs ``ANJO_SLEEP_DEMO_WAKE=1`` (off by default) and is capped per day (``Limits.wakes_per_day``).
+- **Warm time is bought, then capped.** Each live answer and wake first buys the GPU time it keeps
+  Glimmer up (``Upkeep``: the call, then the backend's idle window), except what a keep-warm window
+  already covers: debited at the serving GPU's list price to ``modal_usd`` on the host's budget
+  ledger, which holds serving on either backend, and capped per day (``Limits.warm_minutes_per_day``).
+  Without a list price none is bought. ``ANJO_SLEEP_DEMO_LIVE_HOURS`` (``HH-HH``, UTC) limits buying
+  to those hours. Past either, the page runs on its starter pairs and says so; a keep-warm window
+  Kevin runs still answers, its cost his window's.
 
 The baseline is ``ANJO_SLEEP_DEMO_BASELINE`` (``2C`` or ``2F``, default ``2C``; Kevin picks it on
 Oct 31). Cost per turn is a side's measured seconds at the serving GPU's list price
@@ -33,6 +40,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Final, cast
@@ -40,9 +48,10 @@ from typing import Final, cast
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.storage import SLEEP_DIR, data_root
-from anjo.sleep.demo.limits import JsonCounterStore, Limiter, Refused
+from anjo.sleep.budget import LEDGER_NAME, Bound, BudgetError, Ledger, Pool
+from anjo.sleep.demo.limits import JsonCounterStore, Limiter, Limits, Refused
 from anjo.sleep.demo.pairs import PairRegistry, Vote
-from anjo.sleep.demo.service import Answer, ArmsError, DemoConfig, DemoService, LiveArms
+from anjo.sleep.demo.service import Answer, ArmsError, DemoConfig, DemoService, LiveArms, Upkeep
 from anjo.sleep.demo.starters import BASELINES, PRODUCT, StarterSet
 from anjo.sleep.demo.starters import load as load_starters
 from anjo.sleep.evidence.jsonl import PLAIN, LogError, append_records
@@ -51,6 +60,8 @@ from anjo.sleep.serving import client as vllm
 from anjo.sleep.serving.backend import Serving
 from anjo.sleep.serving.client import ServingError, VllmClient, WakeResult
 from anjo.sleep.serving.config import SCALEDOWN_S, ServeConfigError
+from anjo.sleep.serving.sagemaker import settings as sagemaker
+from anjo.sleep.serving.wake import read_window, window_path
 from anjo.sleep.types import Probe
 
 logger = logging.getLogger(__name__)
@@ -58,6 +69,8 @@ logger = logging.getLogger(__name__)
 USER_ENV: Final = "ANJO_SLEEP_DEMO_USER_ID"
 BASELINE_ENV: Final = "ANJO_SLEEP_DEMO_BASELINE"
 WAKE_ENV: Final = "ANJO_SLEEP_DEMO_WAKE"
+LIVE_HOURS_ENV: Final = "ANJO_SLEEP_DEMO_LIVE_HOURS"
+WARM_POOLS: Final[tuple[Pool, ...]] = ("modal_usd",)
 DEFAULT_BASELINE: Final = "2C"
 DEMO_PERSONA: Final = "film_student"
 DEMO_DIR: Final = "demo"
@@ -142,10 +155,18 @@ class Warmth:
         return self._last is not None and self._clock() - self._last < SCALEDOWN_S - WARM_MARGIN_S
 
 
-def glimmer_status(serving: Serving, warmth: Warmth | None = None) -> bool:
+def window_until() -> float | None:
+    """The end of the keep-warm window running now (epoch seconds), or None."""
+    window = read_window(window_path(data_root()))
+    return window.until if window is not None and window.open_at(time.time()) else None
+
+
+def glimmer_status(
+    serving: Serving, warmth: Warmth | None = None, window: Callable[[], float | None] = window_until,
+) -> bool:
     """Whether Glimmer is up, found without waking her."""
     if serving.name == "modal":
-        return warmth is not None and warmth.warm()
+        return window() is not None or (warmth is not None and warmth.warm())
     try:
         return serving.ping()
     except ServingError as error:
@@ -290,6 +311,54 @@ def serve_rate() -> float | None:
         return None  # no list price set: the reveal says cost wasn't measured
 
 
+def ledger_pay(rate: float | None) -> Callable[[float], bool]:
+    """``Upkeep.pay``: ``seconds`` of the serving GPU at ``rate`` dollars an hour, held on
+    ``modal_usd`` and settled at once. False when there is no rate or the ledger refuses."""
+
+    def pay(seconds: float) -> bool:
+        if rate is None:
+            return False
+        job = f"sleep-demo-warm-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{secrets.token_hex(4)}"
+        try:
+            held = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME).reserve(job, WARM_POOLS, Bound(rate, seconds))
+            if held is None:
+                logger.warning("the budget ledger refused the live demo's warm time")
+                return False
+            held.settle(held.bound.amount)
+        except (BudgetError, LogError, OSError) as error:
+            logger.error("the live demo's warm time wasn't debited: %s", type(error).__name__)
+            return False
+        return True
+
+    return pay
+
+
+def upkeep(serving: Serving | None, rate: float | None) -> Upkeep:
+    """What a live answer and a wake keep Glimmer up for, on the backend in use."""
+    if serving is not None and serving.name == "sagemaker":
+        idle, wake = sagemaker.IDLE_MINUTES * 60.0, sagemaker.WAKE_TOTAL_TIMEOUT_S
+    else:
+        idle, wake = float(SCALEDOWN_S), vllm.WAKE_TOTAL_TIMEOUT_S
+    return Upkeep(idle_s=idle, answer_s=vllm.REQUEST_TIMEOUT_S, wake_s=wake, covered_until=window_until,
+                  pay=ledger_pay(rate))
+
+
+def live_hours(environ: Mapping[str, str]) -> tuple[int, int] | None:
+    """``ANJO_SLEEP_DEMO_LIVE_HOURS``: ``HH-HH`` in UTC, from and to; unset is every hour."""
+    raw = environ.get(LIVE_HOURS_ENV, "").strip()
+    if not raw:
+        return None
+    start, sep, end = raw.partition("-")
+    if not sep or not start.strip().isdigit() or not end.strip().isdigit():
+        raise ValueError(f"{LIVE_HOURS_ENV} is two UTC hours, HH-HH")
+    return int(start), int(end)
+
+
+def _limits(given: Limits | None, rate: float | None) -> Limits:
+    chosen = given or Limits(live_hours_utc=live_hours(os.environ))
+    return chosen if rate is not None else replace(chosen, warm_minutes_per_day=0)  # no price: none bought
+
+
 def _demo_key() -> bytes:
     from anjo.core.crypto import _get_key
 
@@ -323,12 +392,13 @@ def _from_env(serving: Serving | None) -> tuple[Serving | None, str | None]:
 
 def build_service(
     *, serving: Serving | None = None, arms: LiveArms | None = None,
-    spawn: Callable[[Callable[[], None]], None] | None = None,
+    spawn: Callable[[Callable[[], None]], None] | None = None, limits: Limits | None = None,
 ) -> DemoService:
-    """The page's service from the host's settings. ``serving`` and ``arms`` replace the ones the
-    settings would give (tests)."""
+    """The page's service from the host's settings. ``serving``, ``arms`` and ``limits`` replace the
+    ones the settings would give (tests)."""
     require_sleep_host()
     serving, user = _from_env(serving)
+    rate = serve_rate()
     warmth = Warmth()
     if arms is None:
         arms = Unavailable() if serving is None or user is None else GlimmerArms(
@@ -339,8 +409,8 @@ def build_service(
         waker = BackgroundWake(serving.wake, warmth.mark, spawn)
     folder = demo_dir()
     return DemoService(
-        config=DemoConfig(baseline_from(os.environ), _demo_key(), serve_rate()),
-        limiter=Limiter(JsonCounterStore(folder / COUNTERS_FILE)), pairs=PairRegistry(),
+        config=DemoConfig(baseline_from(os.environ), _demo_key(), rate),
+        limiter=Limiter(JsonCounterStore(folder / COUNTERS_FILE), _limits(limits, rate)), pairs=PairRegistry(),
         floor=AnjoFloor(), reply_check=AnjoReplyCheck(), arms=arms, starters=_starters,
-        votes=_record_vote, waker=waker,
+        votes=_record_vote, waker=waker, upkeep=upkeep(serving, rate),
     )

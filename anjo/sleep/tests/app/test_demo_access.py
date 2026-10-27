@@ -20,6 +20,7 @@ from anjo.sleep.tests.app.test_demo_page import (  # noqa: F401  (account is a f
     FakeServing,
     ScriptedModel,
     _arms,
+    _behind_caddy,
     _write_starters,
     account,
 )
@@ -158,20 +159,6 @@ def test_anjo_dashboard_keeps_uvicorns_proxy_headers(monkeypatch: pytest.MonkeyP
     config = uvicorn.Config(target, **{k: v for k, v in ran.items() if k != "reload"})
     assert config.proxy_headers is True
     assert "127.0.0.1" in str(config.forwarded_allow_ips) and ran["host"] == "127.0.0.1"
-
-
-def _behind_caddy(app: Any) -> Any:
-    """``app`` as the dev host serves it: Caddy on loopback in front, uvicorn's proxy headers."""
-    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-
-    proxied = ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")
-
-    async def caddy(scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope["type"] == "http":
-            scope = {**scope, "client": ("127.0.0.1", 50123)}
-        await proxied(scope, receive, send)
-
-    return caddy
 
 
 def test_the_demo_counts_the_forwarded_address_never_a_named_one(account: str) -> None:  # noqa: F811  (the imported fixture)

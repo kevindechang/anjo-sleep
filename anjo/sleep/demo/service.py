@@ -9,11 +9,15 @@
   2. the limits hold both calls at their worst case (``Limiter.admit``);
   3. Glimmer must already be up (``LiveArms.awake``). If she isn't, the hold goes back and the page
      says she's asleep. Nothing wakes her unless the app gave a ``Waker`` (an opt-in setting, off
-     by default) and the day has a wake left;
-  4. arm 4 and the baseline answer (``LiveArms.answer_pair``), and the hold is settled.
+     by default), the day has a wake left and the wake's warm time can be bought;
+  4. the warm time the answer keeps her up is bought (``Limiter.buy_warm_time``, paid through
+     ``Upkeep.pay``): past the day's warm minutes, or outside the live hours, nothing is asked and
+     the page says so, and runs on its starter pairs;
+  5. arm 4 and the baseline answer (``LiveArms.answer_pair``), and the hold is settled.
 - Every reply, pre-generated or live, passes the reply check (``ReplyCheck``) before it is shown. A
   side that trips is withheld and the check's own text stands in its place; that pair takes no vote.
-- ``vote``: through ``pairs.PairRegistry``, which reveals the sides only after the vote is stored.
+- ``vote``: through ``pairs.PairRegistry``, which reveals the sides only after the vote is stored,
+  takes one vote per starter scene per visit and caps a visit's votes and open pairs.
 
 Stateless: the question lives only in this call. Nothing here stores, logs or returns it, and the
 ports only read (``LiveArms`` answers through ``arms.reply``, which writes nothing).
@@ -82,6 +86,20 @@ class Waker(Protocol):
 
 
 @dataclass(frozen=True)
+class Upkeep:
+    """What keeping Glimmer up costs the demo, in seconds of GPU time, and who pays. ``idle_s``: how
+    long one call keeps her up (the backend's idle window); ``answer_s``: the longest a live pair
+    takes; ``wake_s``: the longest a wake takes. ``covered_until`` is the end of a keep-warm window
+    someone else holds (epoch seconds), or None; ``pay`` debits seconds to the budget ledger."""
+
+    idle_s: float
+    answer_s: float
+    wake_s: float
+    covered_until: Callable[[], float | None]
+    pay: Callable[[float], bool]
+
+
+@dataclass(frozen=True)
 class SideView:
     text: str
     withheld: bool
@@ -127,6 +145,16 @@ class SceneView:
 
 
 @dataclass(frozen=True)
+class PageView:
+    """The page's opening state: the scenes, where their pairs came from, and whether a question of
+    the visitor's own can be answered live (``open``, ``spent`` for today, or ``closed`` now)."""
+
+    scenes: tuple[SceneView, ...]
+    source: Source | None
+    live: str
+
+
+@dataclass(frozen=True)
 class DemoConfig:
     baseline: str
     secret: bytes
@@ -151,10 +179,11 @@ class DemoService:
     def __init__(
         self, *, config: DemoConfig, limiter: Limiter, pairs: PairRegistry, floor: Floor,
         reply_check: ReplyCheck, arms: LiveArms, starters: Callable[[], StarterSet | None],
-        votes: Callable[[Vote], None], waker: Waker | None = None,
+        votes: Callable[[Vote], None], upkeep: Upkeep, waker: Waker | None = None,
         coin: Callable[[], bool] = _coin, new_id: Callable[[], str] = _new_id,
     ) -> None:
         self.config = config
+        self._upkeep = upkeep
         self._limiter = limiter
         self._pairs = pairs
         self._floor = floor
@@ -166,11 +195,12 @@ class DemoService:
         self._coin = coin
         self._new_id = new_id
 
-    def scenes(self, client: str, now: datetime) -> tuple[tuple[SceneView, ...], Source | None]:
+    def scenes(self, client: str, now: datetime) -> PageView:
         self._limiter.request(client, now)
         starters = self._current_starters()
         views = tuple(SceneView(s, starters is not None and starters.pair(s) is not None) for s in words.SCENES)
-        return views, None if starters is None else _source(starters)
+        live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
+        return PageView(views, None if starters is None else _source(starters), live)
 
     def start_visit(self, client: str, adult: bool, now: datetime) -> str:
         self._limiter.request(client, now)
@@ -180,7 +210,7 @@ class DemoService:
         return mint_visit(self.config.secret, self._new_id(), now)
 
     def starter(self, client: str, token: str, scene_id: str, now: datetime) -> PairView:
-        self._visit(token, now)
+        visit = self._visit(token, now)
         self._limiter.request(client, now)
         scene = words.scene(scene_id)
         if scene is None:
@@ -189,7 +219,7 @@ class DemoService:
         pair = None if starters is None else starters.pair(scene)
         if starters is None or pair is None:
             raise Refused(404, "not_ready")
-        return self._open(pair.product, pair.baseline, _source(starters), now)
+        return self._open(pair.product, pair.baseline, _source(starters), now, visit=visit, scene=scene.id)
 
     def ask(self, client: str, token: str, raw: str, now: datetime) -> PairView | Fixed | Asleep:
         visit = self._visit(token, now)
@@ -202,11 +232,15 @@ class DemoService:
         fixed = self._floor.fixed_reply(text)
         if fixed is not None:
             return Fixed(fixed)
+        live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
+        if live != "open":  # before even a status ping: on SageMaker a ping keeps her up too
+            raise Refused(429, f"live_{live}")
         hold = self._limiter.admit(client, visit, CALLS_PER_ASK, now)
         ran, used = False, hold.tokens
         try:
             if not self._arms.awake():
                 return Asleep(self._wake(now))
+            self._buy(now, self._answer_s)
             ran = True
             product, baseline = self._arms.answer_pair(text, self.config.baseline)
             used = product.tokens + baseline.tokens
@@ -218,12 +252,12 @@ class DemoService:
                 self._limiter.settle(hold, used, now)  # a failed pair keeps its worst case
             else:
                 self._limiter.release(hold, now)
-        return self._open(self._side(product), self._side(baseline), Source("live"), now)
+        return self._open(self._side(product), self._side(baseline), Source("live"), now, visit=visit)
 
     def vote(self, client: str, token: str, pair_id: str, choice: str, now: datetime) -> Reveal:
-        self._visit(token, now)
+        visit = self._visit(token, now)
         self._limiter.request(client, now)
-        return self._pairs.vote(pair_id, choice, now=now, record=self._votes)
+        return self._pairs.vote(pair_id, choice, visit=visit, now=now, record=self._votes)
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -242,13 +276,21 @@ class DemoService:
             return None
         return starters if starters is not None and starters.baseline == self.config.baseline else None
 
+    @property
+    def _answer_s(self) -> float:
+        """How long a live answer keeps her up: the answer, then the backend's idle window."""
+        return self._upkeep.answer_s + self._upkeep.idle_s
+
+    def _buy(self, now: datetime, seconds: float, *, wake: bool = False) -> None:
+        upkeep = self._upkeep
+        self._limiter.buy_warm_time(now, seconds, covered_until=upkeep.covered_until(), pay=upkeep.pay, wake=wake)
+
     def _wake(self, now: datetime) -> bool:
         if self._waker is None:
             return False
         if self._waker.running():
             return True
-        if not self._limiter.claim_wake(now):
-            return False
+        self._buy(now, self._upkeep.wake_s + self._upkeep.idle_s, wake=True)  # refused: the page says why
         self._waker.start()
         return True
 
@@ -261,16 +303,19 @@ class DemoService:
         replacement = self._reply_check.replacement(side.text)
         return SideView(side.text, False) if replacement is None else SideView(replacement, True)
 
-    def _open(self, product: Side, baseline: Side, source: Source, now: datetime) -> PairView:
+    def _open(
+        self, product: Side, baseline: Side, source: Source, now: datetime, *, visit: str, scene: str | None = None,
+    ) -> PairView:
         product_view, baseline_view = self._shown(product), self._shown(baseline)
         votable = not (product_view.withheld or baseline_view.withheld)
         product_facts = SideFacts(PRODUCT, product.prompt_tokens, product.cost_usd)
         baseline_facts = SideFacts(self.config.baseline, baseline.prompt_tokens, baseline.cost_usd)
         pair_id = self._new_id()
-        if self._coin():
-            self._pairs.open(pair_id, left=product_facts, right=baseline_facts, votable=votable, now=now)
+        product_left = self._coin()
+        left, right = (product_facts, baseline_facts) if product_left else (baseline_facts, product_facts)
+        self._pairs.open(pair_id, visit=visit, scene=scene, left=left, right=right, votable=votable, now=now)
+        if product_left:
             return PairView(pair_id, product_view, baseline_view, votable, source)
-        self._pairs.open(pair_id, left=baseline_facts, right=product_facts, votable=votable, now=now)
         return PairView(pair_id, baseline_view, product_view, votable, source)
 
 

@@ -4,9 +4,15 @@ The page is public and unauthenticated, and a visitor's own question costs a mod
 (and, from the full step, per slider stop), so every limit is held on the server:
 
 - per client, counted by a keyed hash of the address (``visits.client_key``), never the address:
-  visits a day, requests a minute and model calls a minute;
+  visits a day, questions a day, requests a minute and model calls a minute;
 - per visit: questions of their own;
-- for everyone: model calls in flight, model calls a day and tokens a day.
+- for everyone: model calls in flight, model calls a day and tokens a day. These guard throughput,
+  and each address's daily share is small enough that a few addresses can't spend them;
+- **dollars: warm time.** The GPU bills by the hour it is up, not by the call. Every live answer and
+  every wake on demand first buys the time it keeps Glimmer up (``buy_warm_time``): only the part no
+  earlier answer, wake or keep-warm window already covers, debited to the budget ledger (``pay``)
+  and capped per day (``warm_minutes_per_day``), and only within the live hours when they are set.
+  Past the cap the page runs on its starter pairs and says so.
 
 **Worst-case admission.** An ask holds its worst case in the same locked step as the checks: every
 call at Glimmer's whole window, which prompt and reply together never exceed. When the calls
@@ -26,10 +32,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 from collections import OrderedDict, deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from itertools import count
@@ -47,15 +54,23 @@ GLIMMER_WINDOW_TOKENS: Final = 131_072  # arms.GLIMMER_WINDOW_TOKENS: no call ca
 @dataclass(frozen=True)
 class Limits:
     visits_per_client_per_day: int = 6
-    visits_per_day: int = 600
+    visits_per_day: int = 2_000  # a visit costs a counter write: 333 addresses to spend them
     requests_per_client_per_minute: int = 30
     calls_per_client_per_minute: int = 6  # three questions of their own: two calls each
     asks_per_visit: int = 10
+    asks_per_client_per_day: int = 10  # 20 calls: 100 addresses to spend the day's calls
     max_inflight_calls: int = 8
-    calls_per_day: int = 400
-    tokens_per_day: int = 20_000_000
+    calls_per_day: int = 2_000  # throughput, not dollars: warm time caps those
+    tokens_per_day: int = 60_000_000
     tokens_per_call: int = GLIMMER_WINDOW_TOKENS
     wakes_per_day: int = 3  # only when waking on demand is switched on
+    warm_minutes_per_day: int = 120  # about $5.60 a day at the g6e.2xlarge's $2.81 an hour
+    live_hours_utc: tuple[int, int] | None = None  # (from, to) hours: waking and buying warm time
+
+    def __post_init__(self) -> None:
+        hours = self.live_hours_utc
+        if hours is not None and (len(hours) != 2 or hours[0] == hours[1] or not all(0 <= h < 24 for h in hours)):
+            raise ValueError("the live hours are two different UTC hours, 0 to 23")
 
 
 class Refused(Exception):
@@ -120,13 +135,17 @@ class Day:
     day: str
     visits: int = 0
     visits_by_client: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    asks_by_client: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     calls: int = 0
     tokens: int = 0
     wakes: int = 0
+    warm_s: int = 0  # warm time bought today, in seconds
+    warm_until: int = 0  # what has been bought keeps her up until here (epoch seconds)
 
     def dump(self) -> dict[str, Any]:
         return {"day": self.day, "visits": self.visits, "visits_by_client": dict(self.visits_by_client),
-                "calls": self.calls, "tokens": self.tokens, "wakes": self.wakes}
+                "asks_by_client": dict(self.asks_by_client), "calls": self.calls, "tokens": self.tokens,
+                "wakes": self.wakes, "warm_s": self.warm_s, "warm_until": self.warm_until}
 
 
 def _count(data: Mapping[str, Any], key: str) -> int:
@@ -136,17 +155,26 @@ def _count(data: Mapping[str, Any], key: str) -> int:
     return value
 
 
+def _by_client(data: Mapping[str, Any], key: str) -> Mapping[str, int]:
+    found = data.get(key, {})
+    if not isinstance(found, dict):
+        raise CounterError(f"the demo counters' {key} is not an object")
+    return MappingProxyType({str(k): _count(found, k) for k in found})
+
+
 def _parse(data: Mapping[str, Any] | None, today: str) -> Day:
     if data is None or data.get("day") != today:
         return Day(today)
-    by_client = data.get("visits_by_client", {})
-    if not isinstance(by_client, dict):
-        raise CounterError("the demo counters' visits_by_client is not an object")
     return Day(
-        today, visits=_count(data, "visits"),
-        visits_by_client=MappingProxyType({str(k): _count(by_client, k) for k in by_client}),
-        calls=_count(data, "calls"), tokens=_count(data, "tokens"), wakes=_count(data, "wakes"),
+        today, visits=_count(data, "visits"), visits_by_client=_by_client(data, "visits_by_client"),
+        asks_by_client=_by_client(data, "asks_by_client"), calls=_count(data, "calls"),
+        tokens=_count(data, "tokens"), wakes=_count(data, "wakes"), warm_s=_count(data, "warm_s"),
+        warm_until=_count(data, "warm_until"),
     )
+
+
+def _with(table: Mapping[str, int], key: str, change: int) -> Mapping[str, int]:
+    return MappingProxyType({**table, key: max(0, table.get(key, 0) + change)})
 
 
 @dataclass(frozen=True)
@@ -155,6 +183,7 @@ class Hold:
 
     key: int
     day: str
+    client: str
     visit: str
     calls: int
     tokens: int
@@ -200,13 +229,16 @@ class Limiter:
                 raise Refused(429, "resting_today")
             if self._asks.get(visit, 0) >= limits.asks_per_visit:
                 raise Refused(429, "visit_spent")
+            if day.asks_by_client.get(client, 0) >= limits.asks_per_client_per_day:
+                raise Refused(429, "asks_spent")
             hits = self._window(f"calls:{client}", calls, limits.calls_per_client_per_minute, now)
             if sum(hold.calls for hold in self._inflight.values()) + calls > limits.max_inflight_calls:
                 raise Refused(503, "busy")
-            self._commit(replace(day, calls=day.calls + calls, tokens=day.tokens + worst))
+            self._commit(replace(day, calls=day.calls + calls, tokens=day.tokens + worst,
+                                 asks_by_client=_with(day.asks_by_client, client, 1)))
             hits.extend([now.timestamp()] * calls)
             self._remember(self._asks, visit, self._asks.get(visit, 0) + 1)
-            hold = Hold(next(self._keys), day.day, visit, calls, worst)
+            hold = Hold(next(self._keys), day.day, client, visit, calls, worst)
             self._inflight[hold.key] = hold
             return hold
 
@@ -217,21 +249,49 @@ class Limiter:
                 self._refund(hold, 0, hold.tokens - used_tokens, now)
 
     def release(self, hold: Hold, now: datetime) -> None:
-        """No call ran: the hold, and the visit's question, go back."""
+        """No call ran: the hold, and the question (the visit's and the address's), go back."""
         with self._lock:
             if self._inflight.pop(hold.key, None) is not None:
-                self._refund(hold, hold.calls, hold.tokens, now)
+                self._refund(hold, hold.calls, hold.tokens, now, asked=True)
                 if self._asks.get(hold.visit, 0) > 0:
                     self._asks[hold.visit] -= 1
 
-    def claim_wake(self, now: datetime) -> bool:
-        """Count one wake on demand, or False when the day's wakes are spent."""
+    def buy_warm_time(
+        self, now: datetime, seconds: float, *, covered_until: float | None, pay: Callable[[float], bool],
+        wake: bool = False,
+    ) -> None:
+        """Keep Glimmer up until ``now + seconds`` for the demo. Only the part nothing covers yet (an
+        earlier purchase, or ``covered_until``: a keep-warm window someone else holds) is bought: it
+        counts against the day's warm minutes and ``pay`` debits it to the budget ledger, all or
+        nothing. ``wake`` also takes one of the day's wakes. Refused outside the live hours
+        (``live_closed``), and past the warm minutes, the wakes or what ``pay`` allows (``live_spent``)."""
         with self._lock:
             day = self._today(now)
-            if day.wakes >= self.limits.wakes_per_day:
-                return False
-            self._commit(replace(day, wakes=day.wakes + 1))
-            return True
+            extra = self._extra(day, now, seconds, covered_until)
+            if extra == 0 and not wake:
+                return
+            if not self._live_hour(now):
+                raise Refused(429, "live_closed")
+            if wake and day.wakes >= self.limits.wakes_per_day:
+                raise Refused(429, "live_spent")
+            if day.warm_s + extra > self.limits.warm_minutes_per_day * 60:
+                raise Refused(429, "live_spent")
+            if extra and not pay(float(extra)):
+                raise Refused(429, "live_spent")
+            until = max(day.warm_until, math.ceil(now.timestamp() + seconds))
+            self._commit(replace(day, warm_s=day.warm_s + extra, warm_until=until, wakes=day.wakes + int(wake)))
+
+    def live_state(self, now: datetime, seconds: float, *, covered_until: float | None) -> str:
+        """What an answer now would meet: ``open``, ``closed`` (outside the live hours) or ``spent``
+        (the day's warm minutes can't cover it). Inside a window someone else holds, ``open``."""
+        with self._lock:
+            day = self._today(now)
+            extra = self._extra(day, now, seconds, covered_until)
+            if extra == 0:
+                return "open"
+            if not self._live_hour(now):
+                return "closed"
+            return "spent" if day.warm_s + extra > self.limits.warm_minutes_per_day * 60 else "open"
 
     # ── under the lock ────────────────────────────────────────────────────────
 
@@ -255,13 +315,30 @@ class Limiter:
             raise Refused(503, "resting") from None
         self._day = day
 
-    def _refund(self, hold: Hold, calls: int, tokens: int, now: datetime) -> None:
+    def _refund(self, hold: Hold, calls: int, tokens: int, now: datetime, *, asked: bool = False) -> None:
         try:
             day = self._today(now)
             if day.day == hold.day:  # a hold from an earlier day went with that day
-                self._commit(replace(day, calls=max(0, day.calls - calls), tokens=max(0, day.tokens - tokens)))
+                asks = _with(day.asks_by_client, hold.client, -1) if asked else day.asks_by_client
+                self._commit(replace(day, calls=max(0, day.calls - calls), tokens=max(0, day.tokens - tokens),
+                                     asks_by_client=asks))
         except Refused:
             logger.warning("a demo refund wasn't saved; the day stays charged at the worst case")
+
+    @staticmethod
+    def _extra(day: Day, now: datetime, seconds: float, covered_until: float | None) -> int:
+        """The whole seconds past what is already covered that keeping her up ``seconds`` adds."""
+        moment = now.timestamp()
+        covered = max(float(day.warm_until), covered_until or 0.0, moment)
+        return max(0, math.ceil(moment + seconds - covered))
+
+    def _live_hour(self, now: datetime) -> bool:
+        hours = self.limits.live_hours_utc
+        if hours is None:
+            return True
+        start, end = hours
+        hour = now.astimezone(timezone.utc).hour
+        return start <= hour < end if start <= end else (hour >= start or hour < end)
 
     def _window(self, key: str, adding: int, cap: int, now: datetime) -> deque[float]:
         hits = self._hits.get(key)

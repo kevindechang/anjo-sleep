@@ -195,6 +195,16 @@
     }
   }
 
+  // Past the day's warm time, or outside the live hours, her own questions close and the page says why.
+  function liveNote(state) {
+    const text = state === "open" ? "" : copy[`live_${state}`];
+    if (!text) return;
+    byId("ask-form").hidden = true;
+    const note = byId("live-note");
+    note.textContent = text;
+    note.hidden = false;
+  }
+
   async function ask(event) {
     event.preventDefault();
     const field = byId("ask-text");
@@ -225,6 +235,7 @@
       say("");
     } catch (error) {
       say(error.message);
+      liveNote(["spent", "closed"].find((state) => copy[`live_${state}`] === error.message) || "open");
     } finally {
       submit.disabled = false;
       field.removeAttribute("aria-busy");
@@ -257,6 +268,7 @@
       const data = await call("/page");
       renderBrief(data.brief);
       renderScenes(data.scenes);
+      liveNote(data.live);
     } catch (error) {
       byId("brief-body").replaceChildren(element("p", "", error.message));
     }

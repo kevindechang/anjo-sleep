@@ -134,6 +134,14 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "visit_expired": "Your visit has ended. Reload the page to start again.",
     "visits_spent": "That's the demo for today from your connection.",
     "visit_spent": "That's all the questions for this visit. Reload the page to start a new one.",
+    "asks_spent": "That's all the questions for today from your connection. The starter questions still work.",
+    "live_spent": (
+        "She's done answering new questions for today, so the page is running on the starter questions."
+    ),
+    "live_closed": (
+        "She answers new questions only at set hours, and this isn't one of them. The starter "
+        "questions still work."
+    ),
     "slow_down": "That's faster than this demo allows. Wait a minute and try again.",
     "busy": "She's answering a lot of people right now. Try again in a moment.",
     "resting": "The demo is resting right now. Try again later.",
@@ -144,6 +152,9 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "not_ready": "That scene's replies haven't been generated yet.",
     "pair_gone": "That pair has expired. Ask again to vote.",
     "already_voted": "You've already voted on this pair.",
+    "scene_voted": "You've already voted on this question in this visit.",
+    "votes_spent": "That's all the votes for this visit. Reload the page to start a new one.",
+    "too_many_open": "Vote on the pairs you have open before asking for more.",
     "bad_choice": "Pick left, right, about the same or neither.",
     "lost_thread": "Something went wrong while she was answering. Try again.",
     "offline": "The page can't reach the server. Check your connection and try again.",

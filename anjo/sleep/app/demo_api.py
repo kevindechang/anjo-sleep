@@ -155,16 +155,18 @@ def page_data(request: Request, service: DemoService = Depends(demo_service)) ->
     from anjo.sleep.probes.judge_brief import judge_brief
 
     try:
-        scenes, source = service.scenes(_client(request, service), _now())
+        page = service.scenes(_client(request, service), _now())
     except Refused as refused:
         raise _refusal(refused) from None
+    source = page.source
     return {
         "brief": judge_brief(DEMO_PERSONA),
         "scenes": [{"id": v.scene.id, "title": v.scene.title, "prompt": v.scene.prompt, "ready": v.ready}
-                   for v in scenes],
+                   for v in page.scenes],
         "pregenerated": None if source is None else {
             "label": source.kind, "checkpoint": source.checkpoint, "night": source.night,
             "generated_at": source.generated_at},
+        "live": page.live,
     }
 
 

@@ -15,11 +15,13 @@ from typing import Any
 import pytest
 
 from anjo.sleep.demo import words
+from anjo.sleep.demo.pairs import OPEN_PER_VISIT
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs
 
 ACCOUNT = "demo-film-student"
+SERVE_RATE = 2.81  # the serving GPU's list price an hour (ANJO_SLEEP_PRICES' fourth value)
 VISIT = "/api/sleep/demo/visits"
 ASK = "/api/sleep/demo/ask"
 VOTE = "/api/sleep/demo/vote"
@@ -76,8 +78,10 @@ def account(monkeypatch: pytest.MonkeyPatch) -> str:
 
     register_synthetic(ACCOUNT, at=datetime(2026, 10, 27, tzinfo=timezone.utc))
     monkeypatch.setenv("ANJO_SLEEP_DEMO_USER_ID", ACCOUNT)
+    monkeypatch.setenv("ANJO_SLEEP_PRICES", f"0.1,0.4,2.0,{SERVE_RATE}")
     monkeypatch.delenv("ANJO_SLEEP_DEMO_BASELINE", raising=False)
     monkeypatch.delenv("ANJO_SLEEP_DEMO_WAKE", raising=False)
+    monkeypatch.delenv("ANJO_SLEEP_DEMO_LIVE_HOURS", raising=False)
     return ACCOUNT
 
 
@@ -266,9 +270,10 @@ def test_replies_pass_reply_crisis_check(account: str) -> None:
 def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
     _write_starters()
     client = _page()
-    headers = _visit(client)
     lefts, pairs = set(), []
-    for _ in range(24):  # under the 30-a-minute request limit; one order every time has odds 2**-23
+    for n in range(24):  # under the 30-a-minute request limit; one order every time has odds 2**-23
+        if n % OPEN_PER_VISIT == 0:  # a visit holds this many unvoted pairs at most
+            headers = _visit(client)
         pair = client.post("/api/sleep/demo/starters/credit", headers=headers).json()
         assert set(pair) == {"pair_id", "left", "right", "votable", "source"}
         assert pair["source"] == {"kind": "pre-generated", "checkpoint": "p-film-n3", "night": "2026-10-30",
@@ -276,10 +281,12 @@ def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
         shown = json.dumps({key: value for key, value in pair.items() if key != "pair_id"})  # the id is random
         assert '"4"' not in shown and "2C" not in shown and "1200" not in shown
         lefts.add(pair["left"]["text"])
-        pairs.append(pair)
+        pairs.append((pair, headers))
     assert lefts == {"P:credit", "B:credit"}  # the server shuffles every pair
-    for pair in (next(p for p in pairs if p["left"]["text"] == "P:credit"),
-                 next(p for p in pairs if p["left"]["text"] == "B:credit")):
+    product_first = [(p, h) for p, h in pairs if p["left"]["text"] == "P:credit"]
+    baseline_first = [(p, h) for p, h in pairs if p["left"]["text"] == "B:credit"]
+    # A visit votes once a scene: one pair of each order, from two visits.
+    for pair, headers in next((a, b) for a in product_first for b in baseline_first if a[1] != b[1]):
         reveal = client.post(VOTE, json={"pair_id": pair["pair_id"], "choice": "left"}, headers=headers).json()
         product_left = pair["left"]["text"] == "P:credit"
         assert reveal["left"]["arm"] == ("4" if product_left else "2C")
@@ -321,24 +328,59 @@ def test_vote_offers_only_the_four_choices(account: str) -> None:
 # ── the limits ────────────────────────────────────────────────────────────────
 
 
-def test_demo_rate_limited(account: str) -> None:
+def _behind_caddy(app: Any) -> Any:
+    """``app`` as the dev host serves it: Caddy on loopback in front, uvicorn's proxy headers."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    proxied = ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")
+
+    async def caddy(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            scope = {**scope, "client": ("127.0.0.1", 50123)}
+        await proxied(scope, receive, send)
+
+    return caddy
+
+
+def test_demo_rate_limited(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every cap through HTTP, from public addresses as Caddy forwards them."""
+    from datetime import timedelta
+
+    from fastapi.testclient import TestClient
+
+    from anjo.sleep.app import demo_api
+    from anjo.sleep.app.demo_live import build_service
     from anjo.sleep.demo.limits import Limits
 
-    model = ScriptedModel()
-    client = _page(model)
-    headers = _visit(client)
-    per_minute = Limits().calls_per_client_per_minute // 2
-    for n in range(per_minute):
-        assert client.post(ASK, json={"text": f"question {n}"}, headers=headers).status_code == 200
-    refused = client.post(ASK, json={"text": "one more"}, headers=headers)
-    assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["slow_down"]
-    assert len(model.calls) == 2 * per_minute  # both sides counted; the refused ask called nothing
-    for _ in range(Limits().visits_per_client_per_day - 1):
-        _visit(client)
-    spent = client.post(VISIT, json={"adult": True})
-    assert spent.status_code == 429 and spent.json()["detail"] == words.COPY["visits_spent"]
+    clock = [datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)]
+    monkeypatch.setattr(demo_api, "_now", lambda: clock[0])
+    limits = Limits(visits_per_client_per_day=2, visits_per_day=4, calls_per_client_per_minute=2,
+                    asks_per_client_per_day=2, calls_per_day=10)
+    serving, model = FakeServing(), ScriptedModel()
+    client = TestClient(_behind_caddy(_client(build_service(serving=serving, arms=_arms(model, serving),
+                                                            limits=limits)).app))
+
+    def visit(address: str) -> Any:
+        return client.post(VISIT, json={"adult": True}, headers={"X-Forwarded-For": address})
+
+    def ask(address: str, token: Any) -> str:
+        sent = {"X-Forwarded-For": address, HEADER: token.json()["token"]}
+        answer = client.post(ASK, json={"text": "Where does the title go?"}, headers=sent)
+        return "ok" if answer.status_code == 200 else next(k for k, v in words.COPY.items() if v == answer.json()["detail"])
+
+    a, b, c = "8.8.8.8", "1.1.1.1", "9.9.9.9"
+    a_visit = visit(a)
+    assert visit(a).status_code == 200 and visit(a).json()["detail"] == words.COPY["visits_spent"]
+    b_visit, c_visit = visit(b), visit(c)
+    assert visit("4.4.4.4").json()["detail"] == words.COPY["resting_today"]  # the day's visits, for everyone
+    assert [ask(a, a_visit), ask(a, a_visit), ask(b, b_visit)] == ["ok", "slow_down", "ok"]  # a's minute, not b's
+    clock[0] += timedelta(seconds=61)
+    assert [ask(a, a_visit), ask(b, b_visit)] == ["ok", "ok"]
+    clock[0] += timedelta(seconds=61)
+    assert [ask(a, a_visit), ask(c, c_visit), ask(b, b_visit)] == ["asks_spent", "ok", "resting_today"]
+    assert len(model.calls) == 2 * 5  # both sides of each answered question; no refused one called anything
     counters = (_demo_dir() / "counters.json").read_text()
-    assert "testclient" not in counters and "127.0.0.1" not in counters  # keyed buckets only
+    assert not any(address in counters for address in (a, b, c, "127.0.0.1"))  # keyed buckets only
 
 
 def test_the_limiter_fails_closed_on_the_host(account: str) -> None:
@@ -353,12 +395,13 @@ def test_the_limiter_fails_closed_on_the_host(account: str) -> None:
 
 
 def _snapshot(root: Path) -> dict[str, str]:
-    """Every file under the data root but the demo's own counters and votes, by content hash."""
-    demo = _demo_dir()
+    """Every file under the data root but the demo's own counters and votes and the budget ledger
+    its warm time is debited to, by content hash."""
+    demo, ledger = _demo_dir(), str(_ledger().path)  # the ledger and its lock file
     return {
         str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*")) if path.is_file() and demo not in path.parents
-        and not path.name.endswith(("-wal", "-shm", "-journal"))
+        and not str(path).startswith(ledger) and not path.name.endswith(("-wal", "-shm", "-journal"))
     }
 
 
@@ -452,7 +495,7 @@ def test_page_writes_no_history_or_memory(account: str, offline_embedder: None) 
     assert any(MEMORY in json.dumps(call["messages"]) for call in model.calls)  # her memory was read
     assert _memory_rows() == memory  # and not one of its rows moved: no recall count, nothing added
     assert _db_rows() == rows  # no message, session, memory, surface or evidence row, added or changed
-    assert _snapshot(root) == files  # no file outside the demo's counters and votes changed
+    assert _snapshot(root) == files  # no file outside the demo's counters, votes and warm time changed
     for path in _demo_dir().iterdir():
         assert "MARKER" not in path.read_text()
 
@@ -516,24 +559,124 @@ def test_gpu_never_woken_by_default(account: str) -> None:
     assert glimmer_status(modal) is False and modal.pings == 0  # on Modal any request starts a container
 
 
-def test_waking_on_demand_is_opt_in_and_capped(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def _ledger() -> Any:
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.budget import LEDGER_NAME, Ledger
+
+    return Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
+
+
+def _window(*, until_s: float, beat_s: float = 0.0) -> None:
+    """A keep-warm window as ``serving.wake`` writes it: ends ``until_s`` from now, last answered
+    ping ``beat_s`` ago."""
+    import time
+
+    from anjo.sleep.app.storage import data_root
+    from anjo.sleep.serving.wake import WarmWindow, _write_window, window_path
+
+    now = time.time()
+    _write_window(window_path(data_root()), WarmWindow(now + until_s, now - beat_s))
+
+
+def test_waking_on_demand_is_opt_in_capped_and_paid_for(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import timedelta
 
     from anjo.sleep.app.demo_live import build_service
-    from anjo.sleep.demo.limits import Limits
+    from anjo.sleep.demo.limits import Limits, Refused
     from anjo.sleep.demo.service import Asleep
+    from anjo.sleep.serving.sagemaker import settings
 
-    asleep, now = FakeServing(up=False), datetime(2026, 11, 5, 15, tzinfo=timezone.utc)
+    asleep, now = FakeServing(up=False), datetime.now(timezone.utc)
     off = build_service(serving=asleep, arms=_arms(ScriptedModel(), asleep), spawn=lambda run: run())
     assert off.ask("c", off.start_visit("c", True, now), "wake?", now) == Asleep(waking=False)
-    assert asleep.wakes == 0
+    assert asleep.wakes == 0 and _ledger().used("modal_usd") == 0
     monkeypatch.setenv("ANJO_SLEEP_DEMO_WAKE", "1")
     on = build_service(serving=asleep, arms=_arms(ScriptedModel(), asleep), spawn=lambda run: run())
     token = on.start_visit("c", True, now)
     cap = Limits().wakes_per_day
-    asked = [on.ask("c", token, f"wake {n}", now + timedelta(minutes=n)) for n in range(cap + 1)]
-    assert asked == [Asleep(waking=True)] * cap + [Asleep(waking=False)]
-    assert asleep.wakes == cap
+    asked = [on.ask("c", token, f"wake {n}", now + timedelta(minutes=n)) for n in range(cap)]
+    assert asked == [Asleep(waking=True)] * cap and asleep.wakes == cap
+    with pytest.raises(Refused) as spent:
+        on.ask("c", token, "once more", now + timedelta(minutes=cap))
+    assert spent.value.reason == "live_spent" and asleep.wakes == cap
+    # The first wake bought its wake and SageMaker's idle window; each later one only the minute it added.
+    bought = settings.WAKE_TOTAL_TIMEOUT_S + settings.IDLE_MINUTES * 60 + 60 * (cap - 1)
+    assert _ledger().used("modal_usd") == pytest.approx(SERVE_RATE * bought / 3600)
+
+
+def test_answers_buy_their_warm_time_from_the_gpu_pool(account: str) -> None:
+    from anjo.sleep.serving import client
+    from anjo.sleep.serving.sagemaker import settings
+
+    client_ = _page()
+    headers = _visit(client_)
+    assert client_.post(ASK, json={"text": "Should the gulls open the film?"}, headers=headers).json()["kind"] == "pair"
+    first = SERVE_RATE * (client.REQUEST_TIMEOUT_S + settings.IDLE_MINUTES * 60) / 3600
+    assert _ledger().used("modal_usd") == pytest.approx(first)  # the answer and SageMaker's idle window after it
+    assert client_.post(ASK, json={"text": "And the ending?"}, headers=headers).json()["kind"] == "pair"
+    assert first <= _ledger().used("modal_usd") < first + SERVE_RATE * 60 / 3600  # only the seconds it added
+    assert not _ledger().open_holds()  # each purchase is settled as it is made
+
+
+def test_without_a_gpu_price_nothing_is_asked_live(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_PRICES")
+    model = ScriptedModel()
+    client = _page(model)
+    refused = client.post(ASK, json={"text": "Is she there?"}, headers=_visit(client))
+    assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["live_spent"]
+    assert model.calls == [] and _ledger().used("modal_usd") == 0
+
+
+def test_inside_a_keep_warm_window_she_answers_on_either_backend_without_waking(account: str) -> None:
+    for name in ("modal", "sagemaker"):
+        _window(until_s=3600)
+        serving, model = FakeServing(name=name, up=True), ScriptedModel()
+        client = _page(model, serving)
+        pair = client.post(ASK, json={"text": f"Where does the {name} title go?"}, headers=_visit(client)).json()
+        assert pair["kind"] == "pair" and len(model.calls) == 2, name
+        assert serving.wakes == 0 and serving.pings == (0 if name == "modal" else 1), name
+        assert client.get("/api/sleep/demo/page").json()["live"] == "open"
+    assert _ledger().used("modal_usd") == 0  # the window's owner pays for it, not the demo
+
+
+def test_on_modal_outside_a_window_she_stays_asleep_and_unasked(account: str) -> None:
+    for window in (None, {"until_s": 3600.0, "beat_s": 400.0}, {"until_s": -1.0}):  # none, stale pings, ended
+        if window is not None:
+            _window(**window)
+        modal = FakeServing(name="modal", up=True)
+        client = _page(serving=modal)
+        answer = client.post(ASK, json={"text": "Are you awake?"}, headers=_visit(client)).json()
+        assert answer == {"kind": "asleep", "waking": False} and modal.pings == 0 and modal.wakes == 0, window
+
+
+def test_past_the_warm_cap_the_page_runs_on_starters_and_says_so(account: str) -> None:
+    from anjo.sleep.app.demo_live import build_service
+    from anjo.sleep.demo.limits import Limits
+
+    _write_starters()
+    serving, model = FakeServing(), ScriptedModel()
+    tight = build_service(serving=serving, arms=_arms(model, serving), limits=Limits(warm_minutes_per_day=30))
+    client = _client(tight)  # an answer keeps SageMaker up 35 minutes: more than the day allows
+    assert client.get("/api/sleep/demo/page").json()["live"] == "spent"
+    headers = _visit(client)
+    refused = client.post(ASK, json={"text": "One more cut?"}, headers=headers)
+    assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["live_spent"]
+    assert model.calls == [] and serving.pings == 0  # not even asked: on SageMaker a ping keeps her up
+    assert client.post("/api/sleep/demo/starters/credit", headers=headers).status_code == 200
+    assert "COPY-PENDING(kevin)" in Path(words.__file__).read_text() and words.COPY["live_spent"]
+
+
+def test_outside_the_live_hours_nothing_is_bought(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    hour = datetime.now(timezone.utc).hour
+    monkeypatch.setenv("ANJO_SLEEP_DEMO_LIVE_HOURS", f"{(hour + 2) % 24}-{(hour + 4) % 24}")
+    model = ScriptedModel()
+    client = _page(model)
+    assert client.get("/api/sleep/demo/page").json()["live"] == "closed"
+    refused = client.post(ASK, json={"text": "Now?"}, headers=_visit(client))
+    assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["live_closed"]
+    assert model.calls == [] and _ledger().used("modal_usd") == 0
+    _window(until_s=3600)  # a keep-warm window someone else holds opens it: nothing to buy
+    assert client.get("/api/sleep/demo/page").json()["live"] == "open"
 
 
 # ── the starter pairs ─────────────────────────────────────────────────────────
