@@ -25,7 +25,9 @@ def _vector(text: str) -> list[float]:
     return [p / norm for p in parts]
 
 
-def _correction_row(evidence_id: str, quote: str, at: datetime) -> None:
+def _correction_row(
+    evidence_id: str, quote: str, at: datetime, *, person: str = PERSON, session_id: str | None = None,
+) -> None:
     from anjo.core.crypto import encrypt_db
     from anjo.core.db import get_db
 
@@ -33,10 +35,25 @@ def _correction_row(evidence_id: str, quote: str, at: datetime) -> None:
                          "operation": "set"}, "quote": quote}
     db = get_db()
     db.execute(
-        "INSERT INTO learning_evidence (user_id, evidence_id, event_key, relationship_epoch, "
+        "INSERT INTO learning_evidence (user_id, evidence_id, event_key, session_id, relationship_epoch, "
         "consent_generation, revocation_generation, kind, payload_encrypted, created_at) "
-        "VALUES (?, ?, ?, 0, 0, 0, 'explicit_preference', ?, ?)",
-        (PERSON, evidence_id, f"key-{evidence_id}", encrypt_db(json.dumps(payload)), at.isoformat()),
+        "VALUES (?, ?, ?, ?, 0, 0, 0, 'explicit_preference', ?, ?)",
+        (person, evidence_id, f"key-{evidence_id}", session_id, encrypt_db(json.dumps(payload)), at.isoformat()),
+    )
+    db.commit()
+
+
+def _preference_row(person: str, preference_id: str, session_id: str, at: datetime) -> None:
+    """Where a preference was said: its row's source session (the value is read through the patched
+    ``list_explicit_preferences``)."""
+    from anjo.core.db import get_db
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO personal_preferences (user_id, preference_id, source_turn_id, source_session_id, "
+        "relationship_epoch, scope, field, status, payload_encrypted, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 0, 'ongoing', 'humor', 'superseded', 'sealed', ?, ?)",
+        (person, preference_id, f"turn-{preference_id}", session_id, at.isoformat(), at.isoformat()),
     )
     db.commit()
 
@@ -128,3 +145,38 @@ def test_the_builder_refuses_to_run_off_the_sleep_host(monkeypatch: pytest.Monke
     monkeypatch.delenv("ANJO_SLEEP_HOST")
     with pytest.raises(SleepHostOff):
         anjo_context_builder(_Brief(), until=DAY, settings=RecallSettings(k=1, budget_tokens=10))
+
+
+def test_a_cleared_context_keeps_only_own_words_said_in_cleared_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.core import learning_evidence, personal_preferences
+    from anjo.sleep.app.cleared_sessions import mark_cleared, register_synthetic
+    from anjo.sleep.app.context_builder import cleared_context_builder
+
+    synthetic = "person-synthetic"
+    register_synthetic(synthetic, at=T0)
+    mark_cleared(synthetic, "s-cleared", at=T0)
+    later = T0 + timedelta(hours=1)
+    said = {"cleared": "s-cleared", "open": "s-open"}
+    prefs = [
+        {"preference_id": f"p-{name}", "field": "humor", "value": "dry", "scope": "ongoing", "applies_now": True,
+         "created_at": later.isoformat(), "receipt": f"PREF-{name.upper()} dry humor"}
+        for name in said
+    ] + [{"preference_id": "p-parsed", "field": "pace", "value": "PARSED-SLOW", "scope": "ongoing",
+          "applies_now": True, "created_at": later.isoformat(), "receipt": ""}]
+    for name, session in [*said.items(), ("parsed", "s-cleared")]:
+        _preference_row(synthetic, f"p-{name}", session, later)
+    _correction_row("ev-cleared", "FIX-CLEARED be blunt", later, person=synthetic, session_id="s-cleared")
+    _correction_row("ev-open", "FIX-OPEN be blunt", later, person=synthetic, session_id="s-open")
+    _correction_row("ev-none", "FIX-NONE be blunt", later, person=synthetic)
+    monkeypatch.setattr(personal_preferences, "list_explicit_preferences", lambda user_id, **_: prefs)
+    monkeypatch.setattr(learning_evidence, "training_eligible", lambda row: True)
+
+    builder = cleared_context_builder(
+        _Brief(), until=DAY, settings=RecallSettings(k=1, budget_tokens=1000),
+        evidence=lambda user_id: StoreSpy([]), embed=_vector,
+    )
+    text = builder.build(synthetic, probe(person=synthetic))
+
+    assert "PREF-CLEARED" in text and "FIX-CLEARED" in text
+    for absent in ("PREF-OPEN", "PARSED-SLOW", "FIX-OPEN", "FIX-NONE"):
+        assert absent not in text  # said elsewhere, unrecorded, or not in their own words

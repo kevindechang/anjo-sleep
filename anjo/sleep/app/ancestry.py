@@ -12,6 +12,11 @@ encrypted like the rest of the person's sleep files:
 ``reply_ancestry`` folds them. A turn with a context record and no served record was answered by
 the frontier fallback (RF3); its ancestry is unknown, since another model wrote it. A reply Glimmer
 served derives from Glimmer and from everything its context derives from. Tasks 3 and 5 read it.
+
+``simulated_sessions`` gives each line of a synthetic person's sessions its ancestry: a simulated
+line's is Spark Open's and every reply the simulator read before it in its session
+(``persona_sim.simulated_ancestry``), and Anjo's is its recorded reply ancestry. ``NewestReply`` is
+the simulator's ``ReplyAncestry`` port over this log.
 """
 from __future__ import annotations
 
@@ -24,7 +29,8 @@ from typing import Any, Final, Literal
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.storage import CODEC, sleep_dir, writer_guard
 from anjo.sleep.evidence.jsonl import LogError, append_records, read_records
-from anjo.sleep.provenance import GLIMMER
+from anjo.sleep.provenance import GLIMMER, union
+from anjo.sleep.sim.persona_sim import simulated_ancestry
 
 ANCESTRY_FILE: Final = "reply_ancestry.jsonl"
 SERVED_BY_SLEEP: Final = "sleep_modal"
@@ -50,16 +56,6 @@ class ReplyAncestry:
     model: str | None
     context: frozenset[str] | None
     reply: frozenset[str] | None
-
-
-def union(parts: Iterable[frozenset[str] | None]) -> frozenset[str] | None:
-    """The ancestry of text built from these parts: unknown when any part's is."""
-    total: frozenset[str] = frozenset()
-    for ancestry in parts:
-        if ancestry is None:
-            return None
-        total |= ancestry
-    return total
 
 
 def _path(user_id: str) -> Path:
@@ -148,3 +144,66 @@ def _fold(turn_id: str, mine: list[dict[str, Any]]) -> ReplyAncestry | None:
 
 def export_ancestry(user_id: str) -> list[dict[str, Any]]:
     return _records(user_id)
+
+
+@dataclass(frozen=True)
+class Line:
+    """One stored line of a synthetic person's session: who said it, what it derives from, and
+    whether the sleep runtime served it (Glimmer's own reply)."""
+
+    role: str
+    ancestry: frozenset[str] | None
+    served: bool
+
+
+def _session_rows(user_id: str, sessions: frozenset[str]) -> list[Any]:
+    from anjo.core.db import get_db
+
+    if not sessions:
+        return []
+    marks = ", ".join("?" for _ in sessions)
+    rows: list[Any] = get_db().execute(
+        f"SELECT id, role, turn_id, session_id FROM messages WHERE user_id = ? AND session_id IN ({marks}) "
+        "ORDER BY id",
+        (user_id, *sorted(sessions)),
+    ).fetchall()
+    return rows
+
+
+def simulated_sessions(user_id: str, sessions: frozenset[str]) -> dict[int, Line]:
+    """Each line of a synthetic person's ``sessions``, by message id, forgotten ones included. The
+    simulator reads only the replies to its own lines, so Anjo's lines before its first one (an
+    opener) are not counted as read."""
+    recorded = reply_ancestries(user_id)
+    read: dict[str, list[frozenset[str] | None]] = {}
+    lines: dict[int, Line] = {}
+    for row in _session_rows(user_id, sessions):
+        if row["role"] == "user":
+            heard = read.setdefault(row["session_id"], [])
+            lines[row["id"]] = Line("user", simulated_ancestry(heard), served=False)
+            continue
+        known = recorded.get(row["turn_id"] or "")
+        reply = None if known is None else known.reply
+        lines[row["id"]] = Line(row["role"], reply, served=known is not None and known.served_by == SERVED_BY_SLEEP)
+        if row["session_id"] in read:
+            read[row["session_id"]].append(reply)
+    return lines
+
+
+class NewestReply:
+    """``persona_sim.ReplyAncestry`` for the dev API, which serves a person's one live session: the
+    reply ``send`` just returned is their newest line of Anjo's, whatever the simulator calls its
+    session."""
+
+    def __init__(self, user_id: str) -> None:
+        self._user_id = user_id
+
+    def of_reply(self, session_id: str) -> frozenset[str] | None:
+        from anjo.core.db import get_db
+
+        row = get_db().execute(
+            "SELECT turn_id FROM messages WHERE user_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+            (self._user_id,),
+        ).fetchone()
+        known = reply_ancestry(self._user_id, row["turn_id"] or "") if row is not None else None
+        return None if known is None else known.reply

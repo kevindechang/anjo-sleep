@@ -4,16 +4,24 @@ It takes only the visible `Persona` (RF5). The model client and the chat transpo
 injected ports, so the engine never imports a provider. Every request is sent in a cleared
 session (`cleared=True`) while `hosted_in_training` is false, which is always, here.
 The dev-API side that honors the flag is Task 4's.
+
+Each simulated line derives from Spark Open and from every Anjo reply it read before it in its
+session (`simulated_ancestry`), so one reply of unknown ancestry leaves every line after it
+unknown, and extraction never trains on them. The replies' recorded ancestry comes through the
+`ReplyAncestry` port (the app's reply log); without it, a reply is unknown.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.personas.model import Persona
+from anjo.sleep.provenance import union
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "sim_v1.md"
 END_MARKER = "[END]"
@@ -26,10 +34,19 @@ SIM_TEMPERATURE = 0.8
 
 @dataclass(frozen=True)
 class Turn:
+    """One line of the day. ``ancestry`` is what its text derives from (``None`` when unknown)."""
+
     role: Literal["user", "assistant"]
     text: str
     day: int
     index: int
+    ancestry: frozenset[str] | None = None
+
+
+def simulated_ancestry(read: Iterable[frozenset[str] | None]) -> frozenset[str] | None:
+    """A simulated line's ancestry: Spark Open's, and that of every reply it read (unknown if
+    any reply's is)."""
+    return union([frozenset({SPARK_OPEN}), *read])
 
 
 class SimModel(Protocol):
@@ -44,6 +61,13 @@ class ChatTransport(Protocol):
     """A client for the dev API. `cleared` marks a cleared session."""
 
     def send(self, session_id: str, text: str, *, cleared: bool) -> str: ...
+
+
+class ReplyAncestry(Protocol):
+    """The recorded ancestry of the reply ``send`` just returned in a session (``None`` when
+    unknown)."""
+
+    def of_reply(self, session_id: str) -> frozenset[str] | None: ...
 
 
 def prompt_text() -> str:
@@ -107,6 +131,7 @@ def simulate_day(
     *,
     model: SimModel,
     transport: ChatTransport,
+    replies: ReplyAncestry | None = None,
 ) -> list[Turn]:
     """Play one day. Only the visible part is read; every send is cleared."""
     system = build_system(person, day_index, seed)
@@ -115,6 +140,7 @@ def simulate_day(
     session = f"sim-{person.person_id}-d{day_index}"
     messages: list[dict[str, str]] = [{"role": "user", "content": "Begin the conversation."}]
     turns: list[Turn] = []
+    read: list[frozenset[str] | None] = []
     for n in range(budget):
         raw = model.complete(
             system,
@@ -124,9 +150,12 @@ def simulate_day(
         ).strip()
         if not raw or raw == END_MARKER or raw.startswith(END_MARKER):
             break
+        said = simulated_ancestry(read)
         reply = transport.send(session, raw, cleared=True)
-        turns.append(Turn("user", raw, day_index, len(turns)))
-        turns.append(Turn("assistant", reply, day_index, len(turns)))
+        heard = replies.of_reply(session) if replies is not None else None
+        read.append(heard)
+        turns.append(Turn("user", raw, day_index, len(turns), said))
+        turns.append(Turn("assistant", reply, day_index, len(turns), heard))
         # From the model's side it is the speaker: its own lines are "assistant".
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": reply})

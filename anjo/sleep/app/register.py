@@ -13,7 +13,9 @@ is byte for byte main's.
 - the prompt hook (``open_model_turn.TURN_HOOKS``): context C, or the cleared context;
 - the brief stores C reads (Task 5): the served brief for served turns, the training brief for
   cleared ones, and the adapter source: each person's promoted checkpoint serves them;
-- the delivery hold (``outreach.DELIVERY_HOLDS``): no pending note opens a cleared session.
+- the delivery hold (``outreach.DELIVERY_HOLDS``): no pending note opens a cleared session;
+- the sole-answer hook (``open_model_turn.SOLE_ANSWER_HOOKS``): no other model answers a turn in
+  a cleared session that Glimmer can't, unless it is a crisis turn.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from typing import Any
 from anjo.core import open_model_turn, outreach, talker_choice
 from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
+from anjo.sleep.app.cleared_sessions import in_cleared_session
 from anjo.sleep.app.delivery import held
 from anjo.sleep.app.flags import require_sleep_host, sleep_enabled_for
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
@@ -49,6 +52,7 @@ def register_hooks() -> None:
     _add(outreach.DELIVERY_HOLDS, held)
     set_context_setup(ContextSetup(served_briefs=ServedBriefs(brief_store), training_briefs=TrainingBriefs(brief_store)))
     set_adapter_source(_promoted_adapter)
+    _add(open_model_turn.SOLE_ANSWER_HOOKS, in_cleared_session)
     if HOST not in hosts.RUNTIMES:
         hosts.register_runtime(HOST, SleepRuntime)
     client.OFF_VOCABULARY_HOSTS.add(HOST)
@@ -62,6 +66,7 @@ def unregister_hooks() -> None:
         (talker_choice.MENU_OVERRIDES, sleep_enabled_for),
         (open_model_turn.TURN_HOOKS, sleep_turn_hook),
         (outreach.DELIVERY_HOLDS, held),
+        (open_model_turn.SOLE_ANSWER_HOOKS, in_cleared_session),
     ]
     for hooks, hook in added:
         while hook in hooks:

@@ -2,7 +2,9 @@
 
 ``extract_day`` reads the turns inside the window through ``history.get_history_between``, which
 already leaves out forgotten turns, exchanges and sessions. For a synthetic person it reads only
-their cleared sessions and imports nothing, so a filmed open never becomes evidence. For a real
+their cleared sessions and imports nothing, so a filmed open never becomes evidence; each simulated
+turn derives from Spark Open and every reply the simulator had read before it
+(``ancestry.simulated_sessions``), so one reply of unknown ancestry leaves what follows untrainable. For a real
 person it also imports their own stored corrections, read only through ``training_eligible``,
 and their explicit preferences, read through ``list_explicit_preferences``. It then records the
 day: new items enter the evidence store once and their mentions update the target store. Then it
@@ -19,10 +21,10 @@ from datetime import date, datetime
 
 from anjo.core.history import get_history_between
 from anjo.core.logger import logger
+from anjo.sleep.app.ancestry import simulated_sessions
 from anjo.sleep.app.cleared_sessions import cleared_sessions, is_synthetic
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.storage import evidence_store, extraction_log, target_store
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.evidence.extract import (
     ChatFn,
     Extraction,
@@ -34,9 +36,6 @@ from anjo.sleep.evidence.extract import (
     spark_open,
 )
 from anjo.sleep.types import Evidence
-
-# A simulated person's turns are Spark Open's words (Task 2); a real person's have no ancestor.
-_SIMULATED: frozenset[str] = frozenset({SPARK_OPEN})
 
 
 def own_imports(user_id: str) -> list[Imported]:
@@ -89,9 +88,12 @@ class HistorySource:
         rows = get_history_between(
             user_id, start, end, session_ids=cleared_sessions(user_id) if synthetic else None,
         )
-        ancestry = _SIMULATED if synthetic else frozenset()
+        lines = simulated_sessions(user_id, cleared_sessions(user_id)) if synthetic else {}
         turns = [
-            Turn(source=f"message:{row['id']}", role=row["role"], text=row["content"], ancestry=ancestry)
+            Turn(
+                source=f"message:{row['id']}", role=row["role"], text=row["content"],
+                ancestry=(lines[row["id"]].ancestry if row["id"] in lines else None) if synthetic else frozenset(),
+            )
             for row in rows
         ]
         read = [turn.source for turn in own_turns(turns)]
