@@ -219,9 +219,9 @@ At line 184, added by `feat: evidence store, targets and extraction [task3]`:
 +
 ```
 
-## `anjo/core/open_model_turn.py` (+12 -0)
+## `anjo/core/open_model_turn.py` (+19 -0)
 
-At line 59, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+At line 59, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`; `fix: cleared sessions never see frontier text [task4]`; `fix: cleared sessions skip the grounding rewrite and on-device path [task4]`:
 
 ```diff
 +# Rewrites of a turn before it runs: (turn, tool_defs, facts, session_id, pins) -> (turn, tool_defs).
@@ -232,18 +232,56 @@ At line 59, added by `feat: Glimmer serving on Modal, route override, cleared se
 +    tuple[AnjoTurnInput, Sequence[Mapping[str, Any]]],
 +]
 +TURN_HOOKS: list[TurnHook] = []
++# (user_id, session_id) -> whether only the open model answers it (Anjo Sleep's cleared sessions).
++SOLE_ANSWER_HOOKS: list[Callable[[str, str | None], bool]] = []
++
++
++def sole_answer(user_id: str, session_id: str | None, *, calm: bool) -> bool:
++    """No other model stands in when the open model can't answer, unless the turn isn't calm."""
++    return calm and any(hook(user_id, session_id) for hook in SOLE_ANSWER_HOOKS)
 +
 +
 ```
 
-At line 228, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+At line 235, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
 
 ```diff
 +    for hook in TURN_HOOKS:
 +        turn, tool_defs = hook(turn, tool_defs, facts, session_id, pins)
 ```
 
-## `anjo/core/surfacing.py` (+19 -0)
+## `anjo/core/outreach.py` (+13 -1)
+
+At line 20, added by `feat: night wiring on the sleep host, held-note delivery and the night command [task5]`:
+
+```diff
++from typing import TYPE_CHECKING, Callable
+```
+
+At line 677, added by `feat: night wiring on the sleep host, held-note delivery and the night command [task5]`:
+
+```diff
++# Hooks that hold the pending message back from the session being opened (Anjo Sleep: a cleared
++# session); the message stays pending for the next open.
++DELIVERY_HOLDS: list[Callable[[str], bool]] = []
++
++
++def queue_outreach(user_id: str, message: str, source: str) -> None:
++    """Queue ``message`` for the person's next open (Anjo Sleep's held note), lock-screen private."""
++    _save_pending(user_id, message, source=source, lock_screen_private=True)
++
++
+```
+
+At line 689, added by `feat: night wiring on the sleep host, held-note delivery and the night command [task5]`:
+
+```diff
+existing: def get_pending_outreach(user_id: str) -> str | None:
++    if any(hold(user_id) for hold in DELIVERY_HOLDS):
++        return None
+```
+
+## `anjo/core/surfacing.py` (+16 -0)
 
 At line 247, added by `feat: evidence store, targets and extraction [task3]`:
 
@@ -251,27 +289,24 @@ At line 247, added by `feat: evidence store, targets and extraction [task3]`:
 +    {"source_subsystem": "sleep_evidence", "evidence": "anjo/sleep/app/history_source.py extract_day + anjo/sleep/evidence (Anjo Sleep's evidence store, target log and extraction, only with ANJO_SLEEP_HOST=1)"},
 ```
 
-At line 982, added by `feat: evidence store, targets and extraction [task3]`; `fix: harden sleep export and cleared sessions [task3]`:
+At line 982, added by `fix: wrap the surfacing glue under the boundary's line cap [task5]`:
 
 ```diff
-+    FeltMomentRegistration(
-+        source_subsystem="sleep_evidence",
-+        surface="infra",
-+        trigger=(
-+            "Anjo Sleep's night, on the sleep host only, extracts the day's evidence from the "
-+            "person's own turns and records the plans and open topics it mentions as targets"
-+        ),
-+        confidence_gate="n/a",
-+        silent_infra=True,
-+        justification=(
-+            "Shows nothing itself, like cognitive_results; it shapes replies only through the organs "
-+            "that read it, like self_prediction: Anjo Sleep's served brief and evidence recall in "
-+            "context C, and the adapter trained nightly on cleared items. A target reaches the "
-+            "person only as the held note (session-open, notification), which registers its own "
-+            "moment in Task 5. Held-out items reach none of these. Exported as the sleep section "
-+            "(anjo/sleep/app/export.py); delete_account_data and factory_reset_user remove sleep/."
-+        ),
-+    ),
++    FeltMomentRegistration(source_subsystem="sleep_evidence", surface="infra", confidence_gate="n/a", silent_infra=True,
++        trigger="Anjo Sleep's night (sleep host only) extracts the day's evidence, and the plans and open topics it mentions as targets, from the person's own turns",
++        justification="Shows nothing itself, like cognitive_results; it shapes replies only through Anjo Sleep's served brief and evidence recall in context C and the adapter trained nightly "
++        "on cleared items. A target reaches the person only as the held note (sleep_held_note). Held-out items reach none of these. Exported as the sleep section; "
++        "delete_account_data and factory_reset_user remove sleep/."),
++    FeltMomentRegistration(source_subsystem="sleep_held_note", surface="session-open", copy_template="<her note>, then 'Sources:' and each source URL",
++        trigger="A finished night (promoted or rejected) whose chooser picked a note, or whose study found a verified result, queues one note (queue_outreach) for the next uncleared open",
++        confidence_gate="At most one a night, none on a failed night; homework facts cite their source; her model may decline; the reply-side crisis check declines a note it trips; "
++        "never delivered into a cleared session"),
++    FeltMomentRegistration(source_subsystem="sleep_held_note_push", surface="notification", copy_template="The existing generic outreach push copy; the note stays in-app",
++        trigger="The held note is queued for a person who turned notifications on and has a device (anjo/sleep/app/delivery.py)",
++        confidence_gate="send_outreach_push and every gate it has; a sleep note is never a push body, so only the generic copy shows"),
++    FeltMomentRegistration(source_subsystem="sleep_night_log", surface="inner-world", copy_template="Last night: <status>, gates <passed or which failed>, cost $<x>",
++        trigger="Each night writes its log (anjo/sleep/night/nightlog.py): steps, gates, choices and cost as ids and counts, never words; Task 13's readout shows it",
++        confidence_gate="Only with ANJO_SLEEP_HOST=1; a synthetic person's logs are published, a real person's stay private"),
 ```
 
 ## `anjo/core/talker_choice.py` (+6 -0)
@@ -309,6 +344,44 @@ At line 546, added by `feat: Glimmer serving on Modal, route override, cleared s
 +
 +    register_sleep(app)
 +
+```
+
+## `anjo/dashboard/routes/chat_routes.py` (+12 -2)
+
+At line 2905, added by `fix: cleared sessions skip the grounding rewrite and on-device path [task4]`:
+
+```diff
+existing: async def event_stream():
++            from anjo.core.open_model_turn import sole_answer
++
++            # Only Glimmer answers a cleared session (Anjo Sleep): no phone, stand-in or rewrite.
++            _sole = sole_answer(user_id, authoritative_session_id,
++                                calm=_tier == _NO_CRISIS and not state.get("session_in_distress"))
++            _on_device_turn = _handoff.hand_off and not _sole
+```
+
+At line 3953, added by `fix: cleared sessions never see frontier text [task4]`:
+
+```diff
+existing: def _producer():
++                    if _sole and _model_key != "gemma":
++                        raise RuntimeError("only the open model answers this session")
+```
+
+At line 3986, added by `fix: cleared sessions never see frontier text [task4]`:
+
+```diff
+existing: def _producer():
++                            if not _may_switch_model() or _sole:
+```
+
+At line 4321, added by `fix: cleared sessions skip the grounding rewrite and on-device path [task4]`:
+
+```diff
+existing: async def event_stream():
++                            if _sole and (grounding_guard.emptied or grounding_guard.final_text() == GROUNDING_FALLBACK):
++                                yield f"event: error\ndata: {json.dumps({'error': 'Service temporarily unavailable'})}\n\n"
++                                break  # Glimmer's reply can't stand: nothing replaces it, nothing is stored
 ```
 
 ## `pyproject.toml` (+20 -2)
