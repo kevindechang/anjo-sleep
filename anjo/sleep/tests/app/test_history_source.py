@@ -305,6 +305,50 @@ def test_an_accelerated_night_sees_the_targets_open_on_its_virtual_date() -> Non
     assert "the virtual cut" in virtual.sent()
 
 
+def test_a_two_day_accelerated_life_on_future_dates_keeps_retrieval_and_targets_consistent() -> None:
+    """Windows are wall time (October); the life's days are virtual (November, in the future)."""
+    from anjo.sleep.app.history_source import HistorySource
+    from anjo.sleep.app.storage import evidence_store, target_store
+    from anjo.sleep.types import Target
+
+    day_one, day_two = date(2026, 11, 3), date(2026, 11, 4)
+    night_one = datetime(2026, 11, 3, 23, tzinfo=timezone.utc)
+    night_two = datetime(2026, 11, 4, 23, tzinfo=timezone.utc)
+    first, second = (START, START + timedelta(hours=1)), (START + timedelta(hours=1), START + timedelta(hours=2))
+    _message(REAL, "user", "I'll lock the cut by Friday.", at=START + timedelta(minutes=10))
+    _message(REAL, "user", "Cut is locked, onto the score.", at=START + timedelta(minutes=70))
+    target_store(REAL).upsert(Target(  # first seen on day two
+        id="t-day-two", person_id=REAL, kind="thread", label="the day two score", check_after=None, status="open",
+        revision=1, acted_revision=0, confidence=None, last_mentioned=day_two))
+
+    def plan(messages: list[dict[str, Any]]) -> ChatResult:
+        sent = json.loads(messages[-1]["content"])
+        target = {"kind": "commitment", "label": "lock the cut", "check_after": "2026-11-06",
+                  "existing_id": None, "confidence": None} if sent["today"] == "2026-11-03" else None
+        item = {"turn": 0, "kind": "lesson", "text": "They are working on the cut.", "target": target}
+        return ChatResult(text=json.dumps({"items": [item]}), tool_calls=(), model=SPARK_OPEN,
+                          input_tokens=1, output_tokens=1, finish_reason="stop")
+
+    seen: list[list[str]] = []
+
+    def watching(messages: list[dict[str, Any]]) -> ChatResult:
+        seen.append([t["label"] for t in json.loads(messages[-1]["content"])["open_targets"]])
+        return plan(messages)
+
+    source = HistorySource(chat=watching)
+
+    [one] = source.extract_day(REAL, day_one, first, night_one)
+    [two] = source.extract_day(REAL, day_two, second, night_two)
+
+    assert seen == [[], ["lock the cut", "the day two score"]]  # day one: as of its date; day two: as of its own
+    assert one.created_at == first[1] and two.created_at == second[1]  # wall time, so never in the future
+    # Day two's chat-time and night-time retrieval sees day one's evidence, on the life's clock.
+    store = evidence_store(REAL)
+    assert [item.id for item in store.stored(day_two)] == [one.id, two.id]
+    assert {item.id for item in store.search("cut", night_two, 10)} == {one.id, two.id}
+    assert {item.id for item in store.search("cut", night_one, 10)} == {one.id, two.id}
+
+
 def test_extraction_needs_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app.flags import SleepHostOff
 
