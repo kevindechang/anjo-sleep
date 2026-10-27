@@ -98,3 +98,32 @@ def test_stats_in_a_score_file_show_the_ci_in_the_table(tmp_path: Path) -> None:
     (scores / "night-01.json").write_text(json.dumps({"night": "2026-11-03", "label": "development", "arms": arms}))
     assert "0.69 [0.41,0.93]/0.69 [0.41,0.93]" in results.table(["p1"], root=tmp_path)
     assert results.load("p1", tmp_path)[0].arms["4"]["knowledge"].wins == 5
+
+
+def _with_pairs(root: Path, person: str, date: str, number: int, label: str, ci: list[float]) -> None:
+    _night(root, person, date, number, label=label, scored=False)
+    stat = {"n": 8, "wins": 5, "ties": 1, "losses": 2, "score": 0.6875, "decisive_share": 5 / 7, "ci": ci}
+    arms = {arm: {"knowledge": stat, "overall": stat} for arm in ARMS}
+    pairs = {name: {"knowledge": stat, "interaction": stat, "overall": stat} for name in ("3_vs_3x", "4_vs_2C")}
+    scores = root / person / "scores"
+    scores.mkdir(exist_ok=True)
+    (scores / f"night-{number:02d}.json").write_text(
+        json.dumps({"night": date, "label": label, "arms": arms, "pairs": pairs}))
+
+
+def test_a_pairs_ci_in_the_file_appears_in_the_table(tmp_path: Path) -> None:
+    _with_pairs(tmp_path, "dev", "2026-11-03", 1, "development", [0.41, 0.93])
+    _with_pairs(tmp_path, "fin", "2026-11-05", 1, "final", [0.22, 0.77])
+    text = results.table(["dev", "fin"], root=tmp_path)
+    development, final = text[:text.index("== FINAL")], text[text.index("== FINAL"):]
+    for name in ("3_vs_3x", "4_vs_2C"):
+        assert name in development and name in final
+    assert "0.69 [0.41,0.93] share 0.71" in development and "[0.22,0.77]" not in development
+    assert "[0.22,0.77]" in final and "[0.41,0.93]" not in final
+    assert results.load("dev", tmp_path)[0].pairs["3_vs_3x"]["overall"].wins == 5
+
+
+def test_the_chart_names_the_headline_pairs_with_their_ci(tmp_path: Path) -> None:
+    _with_pairs(tmp_path, "dev", "2026-11-03", 1, "development", [0.41, 0.93])
+    svg = chart.render(["dev"], root=tmp_path, out=tmp_path / "c.svg").read_text(encoding="utf-8")
+    assert "3_vs_3x 0.69 [0.41,0.93]" in svg and "4_vs_2C" in svg

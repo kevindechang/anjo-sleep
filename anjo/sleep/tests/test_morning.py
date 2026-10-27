@@ -126,7 +126,7 @@ def test_the_score_file_is_what_the_results_table_reads(tmp_path: Path) -> None:
     (night / "summary.json").write_text(json.dumps({"status": "promoted", "night": NIGHT.isoformat(),
                                                     "label": "development", "gates": {}, "cost_usd": 0.0}))
     text = results.table(["p1"], root=rig.morning.root)
-    assert "arm 4" in text and "/" in text.splitlines()[-1]
+    assert "arm 4" in text and "pair 4_vs_2C" in text and "/" in next(row for row in text.splitlines() if row.startswith(NIGHT.isoformat() + " | promoted"))
 
 
 def test_a_donor_that_never_promoted_leaves_3x_unavailable_not_invented(tmp_path: Path) -> None:

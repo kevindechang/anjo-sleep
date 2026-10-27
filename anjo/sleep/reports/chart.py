@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep.reports.results import ARMS, LABELS, Night, dimensions, load
+from anjo.sleep.reports.results import ARMS, LABELS, OVERALL, Night, dimensions, load, pair_cell
 
 WIDTH: Final = 720
 PANEL_H: Final = 220
@@ -67,6 +67,12 @@ def _panel(label: str, people: Sequence[str], loaded: dict[str, list[Night]], to
         strip_top = y + PANEL_H + 24
         parts += _strip(nights, "general skills", strip_top) + _strip(nights, "safety", strip_top + STRIP_H + 6)
         y = strip_top + 2 * STRIP_H + 24
+        latest = next((n for n in reversed(nights) if n.pairs), None)
+        for name, stats in sorted(latest.pairs.items() if latest else ()):
+            stat = stats.get(OVERALL)
+            if stat is not None:
+                parts.append(f'<text x="{PAD}" y="{y:.0f}" font-size="11">{escape(name)} {escape(pair_cell(stat))}</text>')
+                y += 16
     return parts, y
 
 

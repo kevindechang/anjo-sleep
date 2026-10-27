@@ -8,6 +8,8 @@ It reads a person's results tree, ``<root>/<person>/``:
   stat}}}``, the six arms of §5.1 scored on the night's checkpoint. A ``stat`` is a plain score, or the
   full record the claim rules need: ``n``, ``wins``, ``ties``, ``losses``, ``score`` (tie-inclusive),
   ``decisive_share`` and the block-bootstrap ``ci`` ``[low, high]``. The table prints the CI beside it.
+  The same file's ``pairs`` (``3_vs_3x``, ``4_vs_2C``, ...) are the headline comparisons, in the same
+  shape; the table lists each under its night with its score, CI and decisive share.
 
 Development and final results are printed in separate sections and never mixed. A night whose
 summary carries no label is refused: an unlabeled result could be read as the other kind. The root
@@ -67,6 +69,7 @@ class Night:
     cost_usd: float
     gates: Mapping[str, Mapping[str, Any]]
     arms: Mapping[str, Mapping[str, Stat]]
+    pairs: Mapping[str, Mapping[str, Stat]]
 
 
 def results_root(root: Path | None = None) -> Path:
@@ -85,17 +88,20 @@ def _json(path: Path) -> dict[str, Any]:
     return found
 
 
-def _scores(folder: Path) -> dict[str, Mapping[str, Mapping[str, Stat]]]:
-    found: dict[str, Mapping[str, Mapping[str, Stat]]] = {}
+def _stats(raw: Any) -> dict[str, dict[str, Stat]]:
+    return {str(name): {str(d): _stat(v) for d, v in dims.items()} for name, dims in raw.items()}
+
+
+def _scores(folder: Path) -> dict[str, tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]]]]:
+    """Each scored night's arms and headline pairs."""
+    found: dict[str, tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]]]] = {}
     if not folder.is_dir():
         return found
     for path in sorted(folder.glob("night-*.json")):
         record = _json(path)
         if "night" not in record or not isinstance(record.get("arms"), dict):
             raise ResultsError(f"{path.name} lacks a night and its arms")
-        found[str(record["night"])] = {
-            str(arm): {str(d): _stat(v) for d, v in dims.items()} for arm, dims in record["arms"].items()
-        }
+        found[str(record["night"])] = (_stats(record["arms"]), _stats(record.get("pairs") or {}))
     return found
 
 
@@ -113,7 +119,7 @@ def load(person: str, root: Path | None = None) -> list[Night]:
         nights.append(Night(
             person=person, night=night, label=str(label), status=str(record.get("status", "?")),
             cost_usd=float(record.get("cost_usd", 0.0)), gates=record.get("gates") or {},
-            arms=scores.get(night, {}),
+            arms=scores.get(night, ({}, {}))[0], pairs=scores.get(night, ({}, {}))[1],
         ))
     return sorted(nights, key=lambda n: n.night)
 
@@ -128,6 +134,11 @@ def cell(night: Night, arm: str, dims: Sequence[str]) -> str:
     if not scored:
         return MISSING
     return "/".join(_shown(scored[d]) if d in scored else MISSING for d in dims) or MISSING
+
+
+def pair_cell(stat: Stat) -> str:
+    share = "n/a" if stat.decisive_share is None else f"{stat.decisive_share:.2f}"
+    return f"{_shown(stat)} share {share}"
 
 
 def _shown(stat: Stat) -> str:
@@ -156,6 +167,10 @@ def _section(label: str, people: Sequence[str], loaded: Mapping[str, list[Night]
             row = [n.night, n.status, *(cell(n, a, dims) for a in ARMS), gate_cell(n, "general"),
                    gate_cell(n, "safety"), f"${n.cost_usd:.2f}"]
             lines.append(" | ".join(row))
+        for n in nights:
+            for name, stats in sorted(n.pairs.items()):
+                shown = "; ".join(f"{d}: {pair_cell(stats[d])}" for d in (*dims, OVERALL) if d in stats)
+                lines.append(f"{n.night} | pair {name} | {shown}")
     return lines
 
 
