@@ -28,6 +28,10 @@ PREREG_REPO = "kevindechang/anjo-sleep"
 PREREG_BRANCH = "prereg"
 PREREG_PATH = "ledger.jsonl"
 GITHUB_API = "https://api.github.com"
+COMMIT_IDENTITY = {
+    "name": "Chang Chia Wei",
+    "email": "196453186+kevindechang@users.noreply.github.com",
+}
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 HEAD_FILE = "prereg_head"
 
@@ -281,6 +285,8 @@ def push_prereg(entries: Sequence[LedgerEntry], client: HttpClient | None = None
             ("\n".join(_line(e) for e in merged) + "\n").encode()
         ).decode(),
         "branch": PREREG_BRANCH,
+        "author": dict(COMMIT_IDENTITY),
+        "committer": dict(COMMIT_IDENTITY),
     }
     if remote_sha:
         payload["sha"] = remote_sha

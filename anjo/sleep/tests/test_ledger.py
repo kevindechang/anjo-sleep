@@ -208,3 +208,16 @@ def test_push_401_or_403_always_raises(path, monkeypatch, status):
     client.auth_status = status
     with pytest.raises(ledger.PushError):
         ledger.push_prereg([e], client)
+
+
+def test_push_put_body_carries_the_noreply_identity_and_no_other_email(path, monkeypatch):
+    import re
+
+    monkeypatch.setenv(ledger.TOKEN_ENV, "t")
+    e = ledger.register("a", H, "one")
+    client = FakeGithub()
+    ledger.push_prereg([e], client)
+    body = client.calls[-1][3]
+    ident = {"name": "Chang Chia Wei", "email": "196453186+kevindechang@users.noreply.github.com"}
+    assert body["author"] == ident and body["committer"] == ident
+    assert set(re.findall(r"[\w.+-]+@[\w.-]+", json.dumps(body))) == {ident["email"]}
