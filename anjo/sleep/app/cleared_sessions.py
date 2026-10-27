@@ -51,6 +51,11 @@ def cleared_sessions(user_id: str) -> frozenset[str]:
     return frozenset(record["session_id"] for record in _records(user_id) if record["kind"] == "cleared")
 
 
+def in_cleared_session(user_id: str, session_id: str | None) -> bool:
+    """Whether a turn is in one of the person's cleared sessions, which only Glimmer answers."""
+    return session_id is not None and session_id in cleared_sessions(user_id)
+
+
 def _has_stored_messages(user_id: str) -> bool:
     """Any stored turn at all, forgotten ones included."""
     from anjo.core.db import get_db

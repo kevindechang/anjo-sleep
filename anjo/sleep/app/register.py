@@ -10,7 +10,9 @@ is byte for byte main's.
   person while it is off everyone else's menu;
 - the ``sleep_modal`` runtime (``hosts.register_runtime``), a host off the N-PROC vocabulary
   (``client.OFF_VOCABULARY_HOSTS``);
-- the prompt hook (``open_model_turn.TURN_HOOKS``): context C, or the cleared context.
+- the prompt hook (``open_model_turn.TURN_HOOKS``): context C, or the cleared context;
+- the sole-answer hook (``open_model_turn.SOLE_ANSWER_HOOKS``): no other model answers a turn in
+  a cleared session that Glimmer can't, unless it is a crisis turn.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from typing import Any
 from anjo.core import open_model_turn, talker_choice
 from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
+from anjo.sleep.app.cleared_sessions import in_cleared_session
 from anjo.sleep.app.flags import require_sleep_host, sleep_enabled_for
 from anjo.sleep.app.prompt import sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, sleep_route
@@ -34,6 +37,7 @@ def register_hooks() -> None:
     _add(assignment.ROUTE_OVERRIDES, sleep_route)
     _add(talker_choice.MENU_OVERRIDES, sleep_enabled_for)
     _add(open_model_turn.TURN_HOOKS, sleep_turn_hook)
+    _add(open_model_turn.SOLE_ANSWER_HOOKS, in_cleared_session)
     if HOST not in hosts.RUNTIMES:
         hosts.register_runtime(HOST, SleepRuntime)
     client.OFF_VOCABULARY_HOSTS.add(HOST)
@@ -46,6 +50,7 @@ def unregister_hooks() -> None:
         (assignment.ROUTE_OVERRIDES, sleep_route),
         (talker_choice.MENU_OVERRIDES, sleep_enabled_for),
         (open_model_turn.TURN_HOOKS, sleep_turn_hook),
+        (open_model_turn.SOLE_ANSWER_HOOKS, in_cleared_session),
     ]
     for hooks, hook in added:
         while hook in hooks:
