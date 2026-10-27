@@ -188,6 +188,23 @@ def test_held_out_items_never_touch_targets() -> None:
     assert len(extraction.mentions) == 4
 
 
+def test_a_night_with_held_out_mentions_ingests_cleanly(tmp_path: Path) -> None:
+    """The held-out guard in record_mention never fires on extraction's own output."""
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    topic = {"kind": "thread", "label": "color grading", "check_after": None, "existing_id": None,
+             "confidence": 0.3}
+    items = [_item(0, "preference", f"They like grade {n}.", topic) for n in range(10)]
+
+    added = ingest(_run(FakeSparkOpen(items=items), _turns("grades")), evidence, targets)
+
+    held = [item for item in added if item.held_out]
+    assert len(held) == 2 and all(item.target_id is None for item in held)
+    assert [item.id for item in evidence.held_out(DAY)] == [item.id for item in held]
+    [target] = targets.open_targets(NOW)
+    assert target.revision == 8  # created by the first kept mention, raised by the other seven
+
+
 def test_target_ids_stable_across_nights(tmp_path: Path) -> None:
     evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
     targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)

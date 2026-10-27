@@ -11,8 +11,10 @@ sent: they carry Anjo's untagged memory in their context (§3).
 - **Imported items:** the person's own stored corrections and preferences, read by the app.
   Their ids come from their source alone, so each enters the store once across nights.
 - **Hold-out:** 20% of each day's new preferences (rounded half up) are held out for the sealed
-  tests, chosen by a hash seeded with the person and the day. A held-out item never names a
-  target, so nothing held out reaches her through the chooser.
+  tests, chosen by a hash seeded with the person and the day. Extraction strips the target from
+  an item it holds out and emits no mention for it, so nothing held out reaches her through the
+  chooser. ``record_mention`` still refuses a held-out item, but only as a guard: on
+  extraction's own output it never fires.
 - **Refusals:** a reply that isn't the JSON asked for raises ``ExtractionError``. A single item
   that breaks the contract is left out and listed in ``Extraction.refused``, never dropped
   silently.
@@ -170,7 +172,7 @@ def _finish(
     mentions: list[tuple[str, Mention]] = []
     for item, mention in fresh:
         if item.id in held:
-            items.append(replace(item, held_out=True))
+            items.append(replace(item, held_out=True, target_id=None))  # and no mention
             continue
         if mention is not None and item.kind in PERSON_KINDS:
             item = replace(item, target_id=mention.target_id)

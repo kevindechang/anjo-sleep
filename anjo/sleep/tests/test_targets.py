@@ -146,9 +146,18 @@ def test_homework_result_never_raises_revision(tmp_path: Path) -> None:
     assert store.get("t-edit") == target
 
 
+def _raise_to(store: EventLogTargetStore, revision: int) -> None:
+    """Mention t-edit until it reaches ``revision``: the only way a revision moves."""
+    current = store.get("t-edit")
+    assert current is not None
+    for n in range(current.revision, revision):
+        store.record_mention(_mention(), _evidence(id=f"e-raise-{n}"))
+
+
 def test_mark_acted_records_consumed_revision(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.upsert(_thread(revision=3))
+    store.upsert(_thread())
+    _raise_to(store, 3)
     store.mark_acted("t-edit", 2)
 
     target = store.get("t-edit")
@@ -159,21 +168,58 @@ def test_mark_acted_records_consumed_revision(tmp_path: Path) -> None:
         store.mark_acted("t-edit", 1)
     with pytest.raises(TargetStoreError, match="unknown"):
         store.mark_acted("t-missing", 1)
-    # A later upsert keeps what the night consumed.
-    store.upsert(_thread(revision=4, acted_revision=0))
+    # A later upsert or mention keeps what the night consumed.
+    store.upsert(dataclasses.replace(target, status="paused", acted_revision=0))
+    _raise_to(store, 4)
     kept = store.get("t-edit")
-    assert kept is not None and (kept.revision, kept.acted_revision) == (4, 2)
+    assert kept is not None and (kept.revision, kept.acted_revision, kept.status) == (4, 2, "paused")
 
 
-def test_upsert_never_lowers_revision_or_changes_kind(tmp_path: Path) -> None:
+def test_an_upsert_without_evidence_never_moves_revision_or_confidence(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.upsert(_thread(revision=2))
-    with pytest.raises(TargetStoreError, match="lower"):
-        store.upsert(_thread(revision=1))
+    store.upsert(_thread())
+    _raise_to(store, 2)
+    stored = store.get("t-edit")
+    assert stored is not None
+
+    for moved in (2 + 1, 2 - 1):
+        with pytest.raises(TargetStoreError, match="revision"):
+            store.upsert(dataclasses.replace(stored, revision=moved))
+    with pytest.raises(TargetStoreError, match="confidence"):
+        store.upsert(dataclasses.replace(stored, confidence=0.9))
     with pytest.raises(TargetStoreError, match="kind"):
         store.upsert(_commitment(id="t-edit", revision=2))
     with pytest.raises(TargetStoreError, match="person"):
         store.upsert(_thread(id="t-other", person_id="someone-else"))
+    # What an upsert may change: the label, the status and the date.
+    store.upsert(dataclasses.replace(stored, label="the final cut", status="closed"))
+    changed = store.get("t-edit")
+    assert changed is not None and (changed.label, changed.status, changed.revision) == (
+        "the final cut", "closed", 2,
+    )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"revision": 2}, {"revision": 0}, {"acted_revision": 1}, {"due_noted": True}],
+)
+def test_a_new_target_starts_unacted_at_revision_one(tmp_path: Path, changes: dict[str, Any]) -> None:
+    store = _store(tmp_path)
+    with pytest.raises(TargetStoreError, match="new target"):
+        store.upsert(_thread(**changes))
+    assert store.targets() == []
+
+
+def test_the_log_refuses_a_mention_that_skips_a_revision(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.upsert(_thread())
+    events = read_records(tmp_path / "targets.jsonl", PLAIN)
+    jump = {
+        "seq": 1, "op": "upsert", "evidence_id": "e-jump",
+        "target": {**events[0]["target"], "revision": 3},
+    }
+    with pytest.raises(TargetStoreError, match="by one"):
+        fold([events[0], jump])
 
 
 def test_confidence_rises_only_on_a_verified_source(tmp_path: Path) -> None:
@@ -181,6 +227,7 @@ def test_confidence_rises_only_on_a_verified_source(tmp_path: Path) -> None:
     store.upsert(_thread(confidence=0.4))
     store.add_result(_result(id="r-unverified", verified_sources=0))
     store.add_result(_result(id="r-evidence", homework_id=None, basis="evidence", verified_sources=2))
+    store.add_result(_result(id="r-no-homework", homework_id=None, verified_sources=2))
     unchanged = store.get("t-edit")
     assert unchanged is not None and unchanged.confidence == 0.4
 
@@ -210,6 +257,15 @@ def test_settle_consumes_results_and_notes_a_commitment(tmp_path: Path) -> None:
     assert thread is not None and not thread.due_noted
     with pytest.raises(TargetStoreError, match="unknown"):
         store.settle("t-missing")
+
+
+@pytest.mark.parametrize(("field", "value"), [("verified_sources", -1), ("user_cites", -2)])
+def test_a_result_count_below_zero_is_refused_by_name(tmp_path: Path, field: str, value: int) -> None:
+    store = _store(tmp_path)
+    store.upsert(_thread())
+    with pytest.raises(TargetStoreError, match=f"^{field} must be >= 0, got {value}$"):
+        store.add_result(_result(**{field: value}))
+    assert store.results() == []
 
 
 def test_results_need_a_known_target_and_a_new_id(tmp_path: Path) -> None:

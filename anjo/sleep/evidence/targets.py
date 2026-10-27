@@ -5,12 +5,15 @@ replay from scratch (``replay_digest``) must equal the live state (``digest``). 
 carries its sequence number, and a fold refuses a gap or a repeat.
 
 - Only the person's own evidence raises a target's ``revision``: ``record_mention`` takes an
-  item extracted from their turns, or imported from their own corrections and preferences, and
-  counts each item once. Her homework and practice never do, and neither does a result.
-- ``acted_revision`` moves only through ``mark_acted`` and ``due_noted`` only through ``settle``;
-  an upsert keeps both.
-- A research result with at least one verified source raises a thread's ``confidence`` by
-  ``CONFIDENCE_STEP``, recorded in the event so a replay never depends on today's policy.
+  item extracted from their turns, or imported from their own corrections and preferences,
+  counts each item once and moves the revision by exactly one. Her homework and practice never
+  do, and neither does a result. Every target starts at revision 1, unacted and not noted.
+- An ``upsert`` without evidence changes only a target's label, status or date: it is refused
+  if it would move the revision or the confidence. ``acted_revision`` moves only through
+  ``mark_acted`` and ``due_noted`` only through ``settle``; an upsert keeps both.
+- A homework result (``research``, with a homework id) with at least one verified source raises
+  a thread's ``confidence`` by ``CONFIDENCE_STEP``, recorded in the event so a replay never
+  depends on today's policy. An ``evidence`` result never does.
 - Times are the night's clock, virtual in accelerated runs: ``open_targets`` reads only the
   ``as_of`` it is given, against the day each target was first mentioned.
 """
@@ -177,8 +180,9 @@ def result_from_record(record: Mapping[str, Any]) -> Result:
         consumed=_bool(record["consumed"]), basis=_choice(record["basis"], _BASES),
         user_cites=_int(record["user_cites"]),
     )
-    if result.verified_sources < 0 or result.user_cites < 0:
-        raise ValueError("counts can't be negative")
+    for name, count in (("verified_sources", result.verified_sources), ("user_cites", result.user_cites)):
+        if count < 0:
+            raise TargetStoreError(f"{name} must be >= 0, got {count}")
     return result
 
 
@@ -235,20 +239,42 @@ def _with_target(state: TargetState, target: Target) -> TargetState:
     return replace(state, targets=MappingProxyType({**state.targets, target.id: target}))
 
 
+def _check_upsert(existing: Target | None, incoming: Target, *, mention: bool) -> None:
+    """What an upsert may do: start a target at revision 1, or, for an existing one, move the
+    revision by exactly one on a mention and not at all otherwise, never moving confidence."""
+    if existing is None:
+        if (incoming.revision, incoming.acted_revision, incoming.due_noted) != (1, 0, False):
+            raise TargetStoreError(
+                f"a new target starts at revision 1, unacted and not noted; got revision "
+                f"{incoming.revision}, acted {incoming.acted_revision}, due_noted {incoming.due_noted}"
+            )
+        return
+    if incoming.kind != existing.kind:
+        raise TargetStoreError(f"target {incoming.id} can't change its kind")
+    expected = existing.revision + 1 if mention else existing.revision
+    if incoming.revision != expected:
+        how = "a mention moves it by one" if mention else "only a mention moves it"
+        raise TargetStoreError(
+            f"target {incoming.id} can't go from revision {existing.revision} to "
+            f"{incoming.revision}: {how}"
+        )
+    if incoming.confidence != existing.confidence:
+        raise TargetStoreError(
+            f"target {incoming.id}'s confidence moves only through a verified homework result"
+        )
+
+
 def _upsert(state: TargetState, event: Mapping[str, Any]) -> TargetState:
     incoming = target_from_record(event["target"])
     evidence_id = event["evidence_id"]
     if evidence_id is not None and _str(evidence_id) in state.mentioned:
         raise TargetStoreError(f"evidence {evidence_id} was already counted")
     existing = state.targets.get(incoming.id)
+    _check_upsert(existing, incoming, mention=evidence_id is not None)
     first_seen = state.first_seen
     if existing is None:
         stored = incoming
         first_seen = MappingProxyType({**first_seen, incoming.id: incoming.last_mentioned})
-    elif incoming.kind != existing.kind:
-        raise TargetStoreError(f"target {incoming.id} can't change its kind")
-    elif incoming.revision < existing.revision:
-        raise TargetStoreError(f"target {incoming.id} can't lower its revision")
     else:
         stored = replace(incoming, acted_revision=existing.acted_revision, due_noted=existing.due_noted)
     mentioned = state.mentioned if evidence_id is None else state.mentioned | {evidence_id}
@@ -273,7 +299,9 @@ def _add_result(state: TargetState, event: Mapping[str, Any]) -> TargetState:
     step = event["confidence_step"]
     if not isinstance(step, (int, float)) or isinstance(step, bool):
         raise TypeError("confidence_step must be a number")
-    verified = result.basis == "research" and result.verified_sources >= 1
+    verified = (
+        result.basis == "research" and result.homework_id is not None and result.verified_sources >= 1
+    )
     if verified and target.kind == "thread" and target.confidence is not None:
         target = replace(target, confidence=min(1.0, round(target.confidence + step, 9)))
     return replace(_with_target(state, target), results=(*state.results, result))
@@ -398,6 +426,7 @@ class EventLogTargetStore:
             self._append(self._current(), event)
 
     def upsert(self, target: Target) -> None:
+        """Create a target at revision 1, or change an existing one's label, status or date."""
         if target.person_id != self.person_id:
             raise TargetStoreError(f"target {target.id} is another person's")
         self._commit({"op": "upsert", "target": target_record(target), "evidence_id": None})
