@@ -57,7 +57,7 @@ _MUSIC: Final = "indie music release"
 
 _DEVELOPMENT: Final = (
     _t("film-lens-room", "contradiction", _FILM, "the scene 4 shoot", (
-        "Scene 4 will be shot on an 85 mm lens at full frame, as a medium shot, for the compressed look.",
+        "Scene 4 will be shot on an 85 mm lens at full frame, as a medium shot, which needs about 3.5 metres between the camera and the actor.",
         "Scene 4 takes place in a kitchen that is 3 metres wide, and the camera operator works handheld "
         "with no room to back up.",
     ), "The hallway beside the kitchen is 4 metres deep and opens into the kitchen through a doorway.",
@@ -72,7 +72,7 @@ _DEVELOPMENT: Final = (
         "Six people are booked against five paid places; the unpaid cousin on Saturday fills the sixth, "
         "so scene 7 works only if the cousin joins."),
     _t("film-street-permit", "gap", _FILM, "the chase scene on Alder Street", (
-        "Scene 9 is a chase down Alder Street, and I'm shooting it on the 20th.",
+        "Scene 9 is a chase down Alder Street on the 20th, and the street will be closed to traffic for it.",
         "The city film office needs a street permit application ten working days before any shoot "
         "that closes a street.",
     ), "I haven't filed anything with the city film office for any scene.",
@@ -87,11 +87,12 @@ _DEVELOPMENT: Final = (
         "The violinist can record the piece in the booked church hall after the shoot wraps, "
         "any evening before ten, for free."),
     _t("film-camera-match", "reversal", _FILM, "the two camera bodies", (
-        "The footage from our second camera body looks green next to the footage from the first.",
-    ), "The colorist said the second body was set to a different white balance preset, and matching "
-       "the setting makes the two identical.",
+        "The footage from our second camera body looks blue next to the footage from the first.",
+    ), "The first camera body is set to the Daylight white balance preset and the second to the "
+       "Tungsten preset.",
         "Should I rent a third camera because the two we have don't match?",
-        "Not a problem: the green look was a white balance preset, fixed by matching the setting."),
+        "Not a problem: the bodies are set to different white balance presets, and matching the setting "
+        "makes the footage match."),
     _t("film-rehearsal-late", "decoy", _FILM, "the lead actor's rehearsal time", (
         "The lead actor arrived at 7:40 pm to Tuesday's rehearsal.",
         "The call sheet said 7:00 pm for everyone.",
@@ -128,8 +129,8 @@ _DEVELOPMENT: Final = (
         "Share the neighbour's skip bin for the rubble instead of hauling it to the tip."),
     _t("reno-damp-patch", "reversal", _RENO, "the hallway ceiling", (
         "A damp patch appeared on the hallway ceiling after Tuesday's rain.",
-    ), "The plumber found it was condensation from an uninsulated pipe, which he has since lagged, "
-       "and the patch dried within two days.",
+    ), "The plumber lagged an uninsulated cold pipe above the hallway ceiling on Thursday, and the "
+       "patch has been dry since.",
         "Do I need a roofer because of the damp patch in the hallway?",
         "Not a leak: condensation from an uninsulated pipe, already fixed by lagging it."),
     _t("reno-wiring-quote", "decoy", _RENO, "the electrician's quote", (
@@ -168,8 +169,8 @@ _DEVELOPMENT: Final = (
         "Sell the Sunday surplus croissants to the bookshop for its cafe corner."),
     _t("bake-rye-sales", "reversal", _BAKERY, "the rye loaf's sales", (
         "Sales of the rye loaf fell by half over the last two weeks.",
-    ), "The flour mill's deliveries stopped for two weeks because of road works, so the rye was out of "
-       "stock, and sales recovered once it returned.",
+    ), "The mill's rye deliveries stopped for two weeks because of road works, and the rye loaf was off "
+       "the shelf for those two weeks; it was back on the shelf last Monday.",
         "Should I drop the rye loaf because it stopped selling?",
         "Not falling demand: the loaf was out of stock for two weeks and sold normally on its return."),
     _t("bake-online-orders", "decoy", _BAKERY, "Monday's online orders", (
@@ -193,7 +194,7 @@ _HELD_OUT: Final = (
     ), "The 14 weeks include six weeks by sea; air freight would cut the total to nine weeks.",
         "Backers are asking when they'll get their copies. What do I tell them?",
         "Mid-January plus 14 weeks lands in late April; air freight brings it to about 20 March, "
-        "the only way to keep the promise."),
+        "which keeps the promise."),
     _t("board-safety-test", "gap", _BOARD, "the German shop launch", (
         "I start selling the game to shops in Germany on the 1st of next month.",
         "Selling a game in the EU needs a safety test report, and the test lab takes about six weeks.",
@@ -209,8 +210,8 @@ _HELD_OUT: Final = (
         "Sell the first-edition copies to the cafe in lots of 50 at wholesale."),
     _t("board-dice-reviews", "reversal", _BOARD, "the shop site reviews", (
         "Reviews on the shop site say the dice are too small.",
-    ), "The reviews are all about the prototype set, which used old dice; production dice are twice "
-       "the size.",
+    ), "The shop site's reviews were written when only the prototype set, with the old small dice, was "
+       "on sale; the production dice are twice the size.",
         "Do I need to redesign the dice because of the reviews?",
         "Not a problem: the reviews describe the prototype's old dice, and the production dice are larger."),
     _t("board-print-quote", "decoy", _BOARD, "the print run quote", (
@@ -218,7 +219,7 @@ _HELD_OUT: Final = (
         "Last year's run was 1,000 copies.",
     ), "This year's run is 2,000 copies with a linen finish added.",
         "Is the printer's quote this year out of line?",
-        "Not out of line: twice the copies with a finish added makes the per-copy price comparable."),
+        "Not out of line: 6,800 for 2,000 copies and 3,400 for 1,000 are both 3.40 a copy, with a finish added."),
     _t("garden-railing-load", "contradiction", _GARDEN, "the balcony planters", (
         "The balcony railing is rated to carry 150 kilograms in total.",
         "Three planters of about 60 kilograms each when wet will hang from the railing.",
@@ -246,8 +247,8 @@ _HELD_OUT: Final = (
         "Collect the cafe's coffee grounds each morning to feed the heap's missing nitrogen."),
     _t("garden-black-basil", "reversal", _GARDEN, "the basil plants", (
         "The basil leaves turned black overnight.",
-    ), "It was one cold night at 3 degrees; the nursery said the plants recover from the base, and new "
-       "shoots appeared a week later.",
+    ), "The temperature fell to 3 degrees on one night last week, and new shoots have appeared at the "
+       "base of the basil plants.",
         "Should I pull the basil out and start again?",
         "Not dead: one cold night blackened the leaves, and the plants regrew from the base."),
     _t("garden-water-bill", "decoy", _GARDEN, "this month's water bill", (

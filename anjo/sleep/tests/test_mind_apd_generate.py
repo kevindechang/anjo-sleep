@@ -179,7 +179,7 @@ def test_leak_windows_are_single_days_and_adjacent_pairs():
     item = problems.items[0]
     reader = FakeReader()
     gates.check(life, problems, reader=reader, auditor=FakeAuditor())
-    leaks = [body["days"] for body in reader.seen if len(body["days"]) <= 2]
+    leaks = [body["days"] for body in reader.seen if body.get("view") == "sessions"]
     before = (item.surface_day - life.days[0]).days
     singles = [w for w in leaks if len(w) == 1]
     pairs = [w for w in leaks if len(w) == 2]
@@ -210,7 +210,7 @@ def test_discoverability_reader_gets_the_prefix_and_topic_only():
     reader = FakeReader()
     gates.check(life, problems, reader=reader, auditor=FakeAuditor())
     item = problems.items[0]
-    finds = [b for b in reader.seen if b["topic"] == item.topic and len(b["days"]) > 2]
+    finds = [b for b in reader.seen if b["topic"] == item.topic and "view" not in b]
     assert finds and set(finds[0]) == {"topic", "days"}
     assert len(finds[0]["days"]) == (item.surface_day - life.days[0]).days
 
@@ -221,7 +221,9 @@ def test_a_failing_script_audit_fails_the_life():
     assert verdicts[-1].gate == "script_audit" and not verdicts[-1].passed
     auditor = FakeAuditor()
     gates.check(life, problems, reader=FakeReader(), auditor=auditor)
-    assert auditor.seen[0]["problem_file"][0]["resolution"] == problems.items[0].resolution
+    sealed = auditor.seen[-1]["problem_file"][0]
+    assert sealed["resolution"] == problems.items[0].resolution
+    assert sealed["origin_facts"] and sealed["disambiguating_fact"]  # the scheduled facts, not the extraction
 
 
 def test_an_unreadable_reader_reply_is_an_error_not_a_pass():
@@ -301,3 +303,171 @@ def test_the_held_out_draw_is_a_pure_function_of_its_seed(count):
 def test_the_held_out_draw_refuses_an_unregistered_size():
     with pytest.raises(ValueError):
         generate.draw_held_out("s", count=14)
+
+
+# ── Review fixes ─────────────────────────────────────────────────────────────
+
+import re  # noqa: E402
+from datetime import date as _date  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+ALL_TEMPLATES = (*families.TEMPLATES["development"], *families.TEMPLATES["held_out"])
+# Numbers a resolution may state that are sums or products of its facts' numbers.
+DERIVED = {
+    "film-crew-cap": {"6", "5"}, "reno-island-width": {"3.6", "1.4"}, "reno-floor-cabinets": {"15", "12"},
+    "bake-night-oven": {"960", "80", "12", "9", "7", "4"}, "bake-flour-discount": {"500", "300"},
+    "board-delivery-date": {"14", "20", "9"}, "garden-railing-load": {"180", "150", "60"},
+    "music-pressing-budget": {"1,200", "800", "700"}, "bake-registration": {"5", "1"},
+    "board-print-quote": {"6,800", "3,400", "3.40", "2,000", "1,000"}, "board-box-size": {"45", "40", "48"},
+    "garden-frost-date": {"10", "25"}, "music-mastering-date": {"12", "5", "3"},
+    "film-street-permit": {"20"}, "garden-hive-register": set(),
+}
+CONCLUSION_WORDS = ("problem", "conflict", "mismatch", "mistake", "fixed by", "fix ", "solution", "diagnos")
+
+
+def test_no_template_fact_states_a_conclusion():
+    for t in ALL_TEMPLATES:
+        for fact in (*t.origins, t.disambiguating):
+            assert not any(w in fact.lower() for w in CONCLUSION_WORDS), (t.id, fact)
+            assert t.resolution not in fact
+
+
+def test_every_resolution_follows_from_its_own_facts():
+    for t in ALL_TEMPLATES:
+        facts = " ".join((*t.origins, t.disambiguating)).replace(",", "")
+        for number in re.findall(r"\d+(?:[.,]\d+)*", t.resolution):
+            ok = number.replace(",", "") in facts or number in DERIVED.get(t.id, set())
+            assert ok, (t.id, number)
+
+
+def test_the_chase_closes_the_street_in_its_scheduled_facts():
+    template = next(t for t in ALL_TEMPLATES if t.id == "film-street-permit")
+    assert "closed" in " ".join(template.origins)
+
+
+@pytest.mark.parametrize("family", sorted(FAMILIES))
+def test_the_leak_reader_is_told_the_family_and_a_part_alone_is_no_leak(family):
+    template = next(t for t in ALL_TEMPLATES if t.family == family)
+    parts = [*template.origins, template.disambiguating]
+    life, problems = _life(prevalence=1, fams=(family,))
+    item = problems.items[0]
+    seen = []
+
+    def whole_item_reader(model, messages, tools, timeout_s, *, temperature=None):
+        body = json.loads(messages[-1]["content"])
+        seen.append((messages[0]["content"], body))
+        text = " ".join(d["text"] for d in body["days"])
+        return reply(json.dumps({"flag": all(p in text for p in parts)}))
+
+    for part in parts:  # one part alone, in any window: no leak
+        days = [{"date": "2026-09-08", "text": part}]
+        assert gates._leak(item, {"sessions": days}, whole_item_reader).passed
+    both = [{"date": "2026-09-08", "text": parts[0]}, {"date": "2026-09-09", "text": " ".join(parts[1:])}]
+    assert not gates._leak(item, {"sessions": both}, whole_item_reader).passed  # a window with the whole item
+    system, body = seen[0]
+    assert body["family"] == family and family in system and "resolution" not in body
+    assert items_blind(body, item)
+
+
+def items_blind(body, item):
+    return item.resolution not in json.dumps(body) and item.template not in json.dumps(body)
+
+
+def test_the_leak_reader_also_reads_the_arm_visible_evidence_and_targets():
+    spark = FakeSpark(conclude="CONCLUSION")
+    life, problems = _life(prevalence=1, chat=spark)
+    reader = FakeReader(leaks=("CONCLUSION",))
+    verdicts = gates.check(life, problems, reader=reader, auditor=FakeAuditor())
+    leak = next(v for v in verdicts if v.gate == "leak")
+    assert not leak.passed and leak.reason and leak.reason.startswith("evidence")
+    views = {body["view"] for body in reader.seen if "view" in body}
+    assert views == {"sessions", "evidence"}
+
+
+def test_an_empty_statement_finds_nothing_and_the_judge_is_not_asked():
+    life, problems = _life(prevalence=1)
+    auditor = FakeAuditor()
+    verdicts = gates.check(life, problems, reader=FakeReader(statement=" "), auditor=auditor)
+    assert not next(v for v in verdicts if v.gate == "discoverability").passed
+    assert auditor.judged == []
+
+
+def test_a_statement_the_judge_rejects_fails_discoverability():
+    life, problems = _life(prevalence=1)
+    auditor = FakeAuditor(matches=False)
+    verdicts = gates.check(life, problems, reader=FakeReader(), auditor=auditor)
+    assert not next(v for v in verdicts if v.gate == "discoverability").passed
+    judged = auditor.judged[0]
+    assert judged["statement"] == "found it" and judged["item"]["origin_facts"]
+
+
+def test_evidence_that_loses_a_number_fails_the_attempt():
+    with pytest.raises(generate.GenerationFailed):
+        _life(prevalence=1, chat=FakeSpark(strip_digits=True))
+
+
+def test_expresses_checks_numbers_and_names_not_wording():
+    assert generate._expresses("The oven takes 2,400 on Tuesdays.", "They said the oven costs 2400 on tuesday")
+    assert not generate._expresses("The oven takes 2,400 on Tuesdays.", "They said the oven costs 400 on tuesday")
+    assert not generate._expresses("It is in Alder Street.", "They said it is in Elm Street")
+
+
+@pytest.mark.parametrize("reply_text", [
+    '{"ok": true, "issues": ["x"]}', '{"ok": false, "issues": []}', '{"ok": true}',
+    '{"ok": true, "issues": "none"}', '{"ok": false, "issues": [3]}', '{"issues": []}',
+])
+def test_a_contradictory_audit_reply_is_an_error(reply_text):
+    life, problems = _life(prevalence=1)
+    with pytest.raises(gates.GateError):
+        gates.check(life, problems, reader=FakeReader(), auditor=FakeAuditor(audit_reply=reply_text))
+
+
+def test_the_audit_prompt_lives_in_a_registered_file():
+    assert gates.AUDIT_PATH.name == "audit_v1.md" and gates.AUDIT_PATH.read_text().startswith("# audit_v1")
+    assert gates.IDENTIFY_PATH.read_text().startswith("# identify_v1")
+
+
+# ── The Claude read ──────────────────────────────────────────────────────────
+
+
+def _cohort():
+    return tuple(_life(seed=n, prevalence=0)[0] for n in range(5))
+
+
+def _audit(cohort, count=4, **changes):
+    base = dict(life_ids=tuple(life.id for life in cohort[:count]), reviewer="claude", day=_date(2026, 10, 29),
+                ok=True, notes="read")
+    return gates.ClaudeAudit(**{**base, **changes})
+
+
+def test_a_cohort_is_not_released_without_a_claude_audit():
+    cohort = _cohort()
+    with pytest.raises(gates.CohortNotReleased):
+        gates.release_cohort(cohort, None)
+    assert gates.release_cohort(cohort, _audit(cohort)) == cohort
+
+
+@pytest.mark.parametrize("changes", [{"ok": False}, {"count": 3}])
+def test_a_failed_or_short_claude_audit_blocks_release(changes):
+    cohort = _cohort()
+    with pytest.raises(gates.CohortNotReleased):
+        gates.release_cohort(cohort, _audit(cohort, **changes))
+
+
+def test_a_claude_audit_of_a_life_outside_the_cohort_blocks_release():
+    cohort = _cohort()
+    with pytest.raises(gates.CohortNotReleased):
+        gates.release_cohort(cohort[:4], _audit(cohort, count=5))
+
+
+def test_the_claude_audit_record_round_trips_and_is_read_from_a_path(tmp_path: Path):
+    cohort = _cohort()
+    audit = _audit(cohort)
+    assert gates.ClaudeAudit.from_json(audit.to_json()) == audit
+    assert gates.read_claude_audit(tmp_path / "audit.json") is None
+    (tmp_path / "audit.json").write_text(audit.to_json())
+    assert gates.read_claude_audit(tmp_path / "audit.json") == audit
+    with pytest.raises(ValueError):
+        gates.ClaudeAudit.from_json("{}")
+    with pytest.raises(ValueError):
+        _audit(cohort, reviewer=" ")

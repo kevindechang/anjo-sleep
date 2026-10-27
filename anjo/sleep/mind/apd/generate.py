@@ -315,21 +315,42 @@ def _problem_file(built: Life, plans: Sequence[_Plan], spots: Mapping[str, str])
         if not item.held_out:
             by_source.setdefault(item.source, []).append(item.id)
 
-    def ids(beat: str) -> tuple[str, ...]:
+    texts = {item.id: item.text for item in built.evidence}
+
+    def ids(beat: str, fact: str) -> tuple[str, ...]:
         found = by_source.get(spots[beat], [])
         if not found:
             raise GenerationFailed("a planted fact left no evidence")
+        if not _expresses(fact, " ".join(texts[i] for i in found)):
+            raise GenerationFailed("a planted fact's evidence leaves out one of its numbers, names or dates")
         return tuple(found)
 
     items = []
     for number, step in enumerate(plans, start=1):
-        origin = tuple(i for k in range(1, len(step.origin_days) + 1) for i in ids(f"i{number}.o{k}"))
+        origin = tuple(
+            i for k, fact in enumerate(step.template.origins, start=1) for i in ids(f"i{number}.o{k}", fact))
         items.append(PlantedItem(
             id=f"{built.id}-i{number}", family=step.template.family, template=step.template.id,
             topic=step.template.topic, surface_day=built.days[step.surface_day], origin_ids=origin,
-            disambiguating_ids=ids(f"i{number}.d"), resolution=step.template.resolution,
+            disambiguating_ids=ids(f"i{number}.d", step.template.disambiguating), resolution=step.template.resolution,
         ))
     return ProblemFile(built.id, tuple(items))
+
+
+_NUMBER = re.compile(r"\d+(?:[.,:]\d+)*")
+_NAME = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-Z][a-z]+")
+
+
+def _key_terms(fact: str) -> set[str]:
+    """The numbers and capitalised names (not a sentence's first word) a fact states."""
+    names = {name.lower().removesuffix("s") for name in _NAME.findall(fact)}
+    return {n.replace(",", "") for n in _NUMBER.findall(fact)} | names
+
+
+def _expresses(fact: str, evidence_text: str) -> bool:
+    """Whether the evidence extracted for ``fact`` keeps every number, name and date in it."""
+    haystack = evidence_text.replace(",", "").lower()
+    return all(term.lower() in haystack for term in _key_terms(fact))
 
 
 # ── Regeneration ─────────────────────────────────────────────────────────────

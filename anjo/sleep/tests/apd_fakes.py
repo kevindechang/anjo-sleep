@@ -30,6 +30,8 @@ class FakeSpark:
     and extracts one lesson per message. ``drop`` names a beat the writer leaves unplaced."""
 
     drop: str | None = None
+    conclude: str | None = None  # the extractor adds this conclusion to every item
+    strip_digits: bool = False  # the extractor loses every number
     model: str = SPARK_OPEN
     writes: list[dict[str, Any]] = field(default_factory=list)
     extracts: int = 0
@@ -68,7 +70,9 @@ class FakeSpark:
             if "on the 20th" in text:
                 target = {"kind": "commitment", "label": "the 20th shoot", "check_after": "2026-09-20",
                           "existing_id": None, "confidence": None}
-            items.append({"turn": message["turn"], "kind": "lesson", "text": f"They said: {text}",
+            if self.strip_digits:
+                text = "".join(c for c in text if not c.isdigit())
+            items.append({"turn": message["turn"], "kind": "lesson", "text": f"They said: {text}" + (f" {self.conclude}" if self.conclude else ""),
                           "target": target})
         return reply(json.dumps({"items": items}))
 
@@ -80,6 +84,7 @@ class FakeReader:
 
     leaks: tuple[str, ...] = ()
     finds: bool = True
+    statement: str = "found it"
     misses: int = 0  # the first discoverability requests that find nothing
     seen: list[dict[str, Any]] = field(default_factory=list)
 
@@ -93,17 +98,28 @@ class FakeReader:
             return reply(json.dumps({"flag": any(mark in text for mark in self.leaks)}))
         assert system.startswith("# discover_v1")
         days = [day["date"] for day in body["days"]]
+        statement = self.statement
         missed, self.misses = self.misses > 0, max(0, self.misses - 1)
         found = self.finds and not missed
-        return reply(json.dumps({"found": found, "statement": "found it", "days": days}))
+        return reply(json.dumps({"found": found, "statement": statement, "days": days}))
 
 
 @dataclass
 class FakeAuditor:
+    """The auditor: the script audit (``audit_reply`` overrides its text) and the identify judge."""
+
     ok: bool = True
+    matches: bool = True
+    audit_reply: str | None = None
     seen: list[dict[str, Any]] = field(default_factory=list)
+    judged: list[dict[str, Any]] = field(default_factory=list)
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float,
                  *, temperature: float | None = None) -> ChatResult:
-        self.seen.append(payload(messages))
-        return reply(json.dumps({"ok": self.ok, "issues": [] if self.ok else ["x"]}), MUSE_SPARK)
+        body = payload(messages)
+        if messages[0]["content"].startswith("# identify_v1"):
+            self.judged.append(body)
+            return reply(json.dumps({"match": self.matches}), MUSE_SPARK)
+        self.seen.append(body)
+        text = self.audit_reply or json.dumps({"ok": self.ok, "issues": [] if self.ok else ["x"]})
+        return reply(text, MUSE_SPARK)

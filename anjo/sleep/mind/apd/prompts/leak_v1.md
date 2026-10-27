@@ -1,8 +1,9 @@
 # leak_v1
 
-You check whether a short piece of an invented person's conversation with Anjo, their AI, already
-gives away a problem. You see a `topic` and a `text`: one day of the person's messages, or two
-adjacent days. You see nothing else about the person.
+You check whether a short piece of an invented person's life already gives away a planted item.
+You see a `topic`, the item's `family`, a `view` and the `days` of content: one day, or two
+adjacent days. The view is either `sessions` (the person's own messages) or `evidence` (short
+notes and plan labels that were taken from those messages). You see nothing else about the person.
 
 Return one JSON object and nothing else:
 
@@ -10,18 +11,20 @@ Return one JSON object and nothing else:
 {"flag": false}
 ```
 
-Set `flag` to true only if the text, read on its own, already shows a problem concerning the
-topic, in any of these forms:
+The item is leaked only when the content you are shown contains the whole item, by its family:
 
-- two things in the text that cannot both hold, or that pull against each other;
-- a plan in the text that is missing a step something in the text says it needs;
-- two things in the text that fit together to give an opening or a saving;
-- something in the text that looks like a problem, or something that explains why an apparent
-  problem is not one.
+- `contradiction`: both halves, two things about the topic that cannot both hold.
+- `gap`: the plan, and the step it needs, and nothing showing the step is done or covered.
+- `opportunity`: both facts that fit together to give an opening or a saving.
+- `reversal`: the apparent problem, together with the fact that dissolves it.
+- `decoy`: the apparent problem, together with the fact that explains it.
 
-Set `flag` to false when the text states the topic's facts as plain facts, plans or news and you
-would have to bring in other days, outside knowledge or a guess to see a problem. A single fact
-is not a problem. A person saying they are worried does not count unless the text itself shows
-why. When unsure, use the text only and say false.
+Set `flag` to true only when the content you are shown holds all of those parts for the topic.
+One part alone is never a leak, however much it looks like a problem or an opening: a half, a
+plan without its needed step, one of two facts, an apparent problem without its explanation, or
+an explanation without the thing it explains. Content that states a conclusion about the topic
+(that something is a problem, a conflict, a mistake, an opening, or is fine after all) is also a
+leak, in any view, even if only one part is present.
 
-Do not look for problems in other topics. Do not use outside knowledge about the field.
+Use only the content shown. Do not use outside knowledge of the field, and do not look for
+problems on other topics.
