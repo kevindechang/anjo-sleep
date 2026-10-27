@@ -63,6 +63,8 @@ DOWNLOAD_TIMEOUT_S: Final = 300.0
 STOP_TIMEOUT_S: Final = 180.0
 LIST_TIMEOUT_S: Final = 120.0
 SESSION_PREFIX: Final = "anjo-sleep-"
+CLI_NOTE: Final = "[colab] "  # the CLI's own messages, such as an update notice
+NO_SESSIONS: Final = "No active sessions"
 _SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
 EXEC_MARGIN_S: Final = 60.0  # the CLI's own wait past the kernel's timeout
 MIN_EXEC_S: Final = 1800.0
@@ -110,10 +112,15 @@ def stop_leftover_sessions(cli: ColabCli) -> tuple[int, int]:
 
     Returns how many were stopped and how many other sessions are up: another tool's, or one this
     machine has no name for. Those are only counted. A list or a stop that fails raises, so a VM
-    that may run never goes unnoticed: stop it by hand before anything else.
+    that may run never goes unnoticed: stop it by hand before anything else. So does a list the
+    sweep can't read (the CLI's format changed), rather than finding nothing.
     """
-    listed = cli.call("sessions", timeout_s=LIST_TIMEOUT_S)
-    names = [m.group("name") for line in listed.splitlines() if (m := _SESSION_LINE.match(line.strip()))]
+    lines = [line.strip() for line in cli.call("sessions", timeout_s=LIST_TIMEOUT_S).splitlines() if line.strip()]
+    found = [(line, _SESSION_LINE.match(line)) for line in lines]
+    names = [match.group("name") for _, match in found if match]
+    unread = [line for line, match in found if match is None and not line.startswith(CLI_NOTE)]
+    if unread or not (names or any(NO_SESSIONS in line for line in lines)):
+        raise ColabError("colab sessions printed a list the sweep can't read; check for leftover VMs by hand")
     ours = [name for name in names if name.startswith(SESSION_PREFIX)]
     for name in ours:
         try:

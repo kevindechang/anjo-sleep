@@ -20,7 +20,7 @@ def never(*args: object) -> object:
 class Cli:
     """The night command's Colab CLI: no VM, no network. ``colab sessions`` lists ``listed``."""
 
-    def __init__(self, listed: str = "") -> None:
+    def __init__(self, listed: str = "[colab] No active sessions found on server.\n") -> None:
         self.listed = listed
         self.calls: list[tuple[str, ...]] = []
 

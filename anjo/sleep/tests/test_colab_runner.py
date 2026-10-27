@@ -256,3 +256,22 @@ def test_the_colab_hold_is_keyed_by_night_and_person_with_an_attempt(tmp_path: P
     jobs = [e["job"] for e in _events(ledger) if e["op"] == "reserve"]
     assert jobs == [f"{hold_base('2026-10-28', 'synthetic-1')}:a1", f"{hold_base('2026-10-28', 'synthetic-1')}:a2"]
     assert hold_base("2026-10-28", "synthetic-1").startswith("colab_train:2026-10-28:")
+
+
+@pytest.mark.parametrize("listed", [
+    "NAME  ENDPOINT  HARDWARE\nanjo-sleep-p-aaaaaaaaaaaa-n3  gpu-a100-s-1  A100\n",  # a new table format
+    '[{"name": "anjo-sleep-p-aaaaaaaaaaaa-n3"}]\n',  # a new JSON format
+    "",  # nothing at all
+])
+def test_a_session_list_the_sweep_cant_read_fails_loud(listed: str) -> None:
+    fake = Listing(listed)
+    with pytest.raises(ColabError, match="by hand"):
+        stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=fake))
+    assert [args[3] for args, _ in fake.calls] == ["sessions"]
+
+
+def test_a_cli_notice_beside_the_list_is_read_past() -> None:
+    notice = "[colab] Run 'uv tool upgrade google-colab-cli' to update.\n"
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing(
+        notice + "[colab] No active sessions found on server.\n"))) == (0, 0)
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing(notice + SESSIONS))) == (1, 2)

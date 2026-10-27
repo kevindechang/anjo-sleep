@@ -176,3 +176,32 @@ def test_the_simulated_day_holds_its_spark_spend_and_settles_what_it_metered(
     spent = (30_000 * 0.2 + 8_000 * 0.6) / 1e6  # $0.2/M in, $0.6/M out
     assert reserve["amount"] > spent  # the worst case covers the call made
     assert settle["op"] == "settle" and settle["amount"] == pytest.approx(spent)
+
+
+def test_a_simulated_day_on_its_own_holds_the_night_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.app import sim_transport
+    from anjo.sleep.budget import default_ledger
+    from anjo.sleep.night.sweep import NightBusy, swept_night
+
+    seen: list[str] = []
+
+    def run_day(person: Any, day_index: int, seed: int, **kw: Any) -> str:
+        assert len(default_ledger().open_holds()) == 1  # the day's own hold, open while it runs
+        try:
+            with swept_night(default_ledger(), lambda: (0, 0)):
+                seen.append("swept")
+        except NightBusy:
+            seen.append("busy")
+        assert len(default_ledger().open_holds()) == 1  # a night start never settles a live day's hold
+        return "day"
+
+    _night_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(sim_transport, "run_day", run_day)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
+    assert day == "day" and seen == ["busy"]
+    with swept_night(default_ledger(), lambda: (0, 0)):  # inside a night, the day runs under its lock
+        seen.clear()
+        inside: Any = sim_transport.simulate("synthetic-founder", "founder", 3, 7)
+    assert inside == "day" and seen == ["busy"]

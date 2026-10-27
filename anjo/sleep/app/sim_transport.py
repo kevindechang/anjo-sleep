@@ -7,7 +7,8 @@ when Glimmer is down for a cleared session) raises ``TurnFailed``: the day ends 
 
 ``simulate`` is what ``python -m anjo.sleep.night --day`` calls: one day per persona account,
 with ``NewestReply`` so each line Anjo answers carries its recorded ancestry. The day's Spark Open
-calls hold their worst case on ``baseten_sleep_usd`` first and settle the tokens they metered.
+calls hold their worst case on ``baseten_sleep_usd`` first and settle the tokens they metered,
+under the night lock (``night_lock``), so a night start never sweeps a live day's hold.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.storage import SLEEP_DIR, data_root
 from anjo.sleep.budget import LEDGER_NAME, Ledger
 from anjo.sleep.night.holds import held, spark_usd, spark_worst_usd, usd
+from anjo.sleep.night.sweep import night_lock
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.sim.day import DayRun, SparkSim, TurnFailed, run_day
 from anjo.sleep.sim.persona_sim import MAX_TURNS
@@ -80,6 +82,6 @@ def simulate(user_id: str, persona: str, day_index: int, seed: int) -> DayRun:
     transport = DevApiTransport(os.environ[DEV_URL_ENV], os.environ[SIM_TOKEN_ENV])
     model, price = SparkSim(), prices()
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
-    with held(ledger, f"sim:{user_id}:d{day_index}:s{seed}", ("baseten_sleep_usd",),
-              usd(spark_worst_usd(price, MAX_TURNS)), lambda: spark_usd(price, *model.tokens)):
+    with night_lock(ledger), held(ledger, f"sim:{user_id}:d{day_index}:s{seed}", ("baseten_sleep_usd",),
+                                  usd(spark_worst_usd(price, MAX_TURNS)), lambda: spark_usd(price, *model.tokens)):
         return run_day(person, day_index, seed, model=model, transport=transport, replies=NewestReply(user_id))
