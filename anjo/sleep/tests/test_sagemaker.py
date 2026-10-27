@@ -584,7 +584,7 @@ def test_iam_runtime_policy_is_least_privilege() -> None:
     assert actions == {
         "sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream",
         "sagemaker:DescribeInferenceComponent", "sagemaker:UpdateInferenceComponentRuntimeConfig",
-        "s3:GetObject", "s3:PutObject", "s3:ListBucket",
+        "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket",
     }
     endpoint = f"arn:aws:sagemaker:us-east-1:<ACCOUNT_ID>:endpoint/{settings.ENDPOINT}"
     component = f"arn:aws:sagemaker:us-east-1:<ACCOUNT_ID>:inference-component/{settings.COMPONENT}"

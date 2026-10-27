@@ -37,7 +37,7 @@ import math
 import re
 import subprocess
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import TracebackType
 from pathlib import Path
@@ -117,6 +117,26 @@ def hold_base(night: str, person_id: str) -> str:
     return f"colab_train:{night}:{person_id}"
 
 
+def _live_sessions(cli: ColabCli) -> list[str]:
+    """The names of every live session. A list the sweep can't read (the CLI's format changed)
+    raises, rather than finding nothing."""
+    lines = [line.strip() for line in cli.call("sessions", timeout_s=LIST_TIMEOUT_S).splitlines() if line.strip()]
+    found = [(line, _SESSION_LINE.match(line)) for line in lines]
+    names = [match.group("name") for _, match in found if match]
+    unread = [line for line, match in found if match is None and not line.startswith(CLI_NOTE)]
+    if unread or not (names or any(NO_SESSIONS in line for line in lines)):
+        raise ColabError("colab sessions printed a list the sweep can't read; check for leftover VMs by hand")
+    return names
+
+
+def _stop_each(cli: ColabCli, sessions: Sequence[str]) -> None:
+    for name in sessions:
+        try:
+            cli.call("stop", "-s", name, timeout_s=STOP_TIMEOUT_S)
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:
+            raise ColabError("stopping a leftover session failed; stop it by hand before anything else") from error
+
+
 def stop_leftover_sessions(cli: ColabCli) -> tuple[int, int]:
     """Stop every live session the runner made (``anjo-sleep-…``), as the night command's sweep.
 
@@ -125,19 +145,19 @@ def stop_leftover_sessions(cli: ColabCli) -> tuple[int, int]:
     that may run never goes unnoticed: stop it by hand before anything else. So does a list the
     sweep can't read (the CLI's format changed), rather than finding nothing.
     """
-    lines = [line.strip() for line in cli.call("sessions", timeout_s=LIST_TIMEOUT_S).splitlines() if line.strip()]
-    found = [(line, _SESSION_LINE.match(line)) for line in lines]
-    names = [match.group("name") for _, match in found if match]
-    unread = [line for line, match in found if match is None and not line.startswith(CLI_NOTE)]
-    if unread or not (names or any(NO_SESSIONS in line for line in lines)):
-        raise ColabError("colab sessions printed a list the sweep can't read; check for leftover VMs by hand")
+    names = _live_sessions(cli)
     ours = [name for name in names if name.startswith(SESSION_PREFIX)]
-    for name in ours:
-        try:
-            cli.call("stop", "-s", name, timeout_s=STOP_TIMEOUT_S)
-        except (ColabError, subprocess.TimeoutExpired, OSError) as error:
-            raise ColabError("stopping a leftover session failed; stop it by hand before anything else") from error
+    _stop_each(cli, ours)
     return len(ours), len(names) - len(ours)
+
+
+def stop_person_sessions(cli: ColabCli, person_id: str, adapters: Iterable[str]) -> int:
+    """Stop the live sessions training ``person_id`` (a delete, Task 9): one named for each of their
+    adapters, and their life's. Nobody else's is touched. Returns how many were stopped."""
+    wanted = {f"{SESSION_PREFIX}{name}" for name in adapters} | {_life_session(person_id)}
+    mine = [name for name in _live_sessions(cli) if name in wanted]
+    _stop_each(cli, mine)
+    return len(mine)
 
 
 def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:

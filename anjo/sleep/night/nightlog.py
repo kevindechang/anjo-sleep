@@ -8,7 +8,8 @@ verdicts, never a person's words.
   ``dataclasses.asdict`` can't copy it), with the night's receipts. Written once, atomically.
 
 A night run again on the same date gets its own folder (``<date>.2``, ``<date>.3``), so no log is
-ever overwritten. For a synthetic person the folders live under the results tree that is
+ever overwritten. A log whose folder was removed (the person deleted their data, Task 9) writes
+nothing and creates nothing again. For a synthetic person the folders live under the results tree that is
 published; for a real person, outside it.
 """
 from __future__ import annotations
@@ -72,6 +73,8 @@ def result_record(result: NightResult) -> dict[str, Any]:
 
 
 def _write_line(path: Path, record: Mapping[str, Any]) -> None:
+    if not path.parent.is_dir():
+        return  # the folder was removed by a delete (RF2): nothing is written after it
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         handle.flush()
@@ -105,6 +108,8 @@ class NightLog:
         return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line]
 
     def finish(self, result: NightResult, receipts: Mapping[str, Any]) -> None:
+        if not self.folder.is_dir():
+            return  # removed by a delete (RF2)
         pending = self.folder / f".{SUMMARY}.tmp"
         pending.write_text(json.dumps({**result_record(result), **receipts}, sort_keys=True, indent=1, default=str),
                            encoding="utf-8")
