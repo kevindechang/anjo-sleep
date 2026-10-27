@@ -17,7 +17,6 @@ from typing import Any, Protocol, get_args
 import pytest
 
 from anjo.sleep import types as t
-from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.mind import snapshot
 from anjo.sleep.mind.inquiry import ports
@@ -86,12 +85,25 @@ def _notice() -> it.NoticeOp:
     )
 
 
+def _start(**changes: Any) -> it.RunStart:
+    base = it.RunStart(
+        night=DAY, as_of=NOW, call="inquiry", rules=it.FULL_RULES, control="priority", focus="q1", budget=it.Budget(),
+    )
+    return dataclasses.replace(base, **changes)
+
+
 def _history() -> tuple[it.Step, ...]:
+    """A notice pass, then an inquiry run with a malformed reply and a rejected PREDICT."""
     return (
-        it.Step(seq=0, at=NOW, entry=it.Retrieved(None, "new_evidence", "", (_ref(), _ref("e-d5-3")))),
-        it.Step(seq=1, at=NOW, entry=_notice()),
-        it.Step(seq=2, at=NOW, entry=None, code="malformed"),
-        it.Step(seq=3, at=NOW, entry=it.PredictOp("q1", "x", {"q1.h1": 0.5, "q1.h2": 0.55}, 2), code="k2_not_discriminating"),
+        it.Step(seq=0, at=NOW, entry=_start(call="notice", focus=None)),
+        it.Step(seq=1, at=NOW, entry=it.Retrieved(None, "new_evidence", "", (_ref(), _ref("e-d5-3"))), tokens=300),
+        it.Step(seq=2, at=NOW, entry=_notice(), tokens=40),
+        it.Step(seq=3, at=NOW, entry=_start(budget=it.Budget(tokens_used=340))),
+        it.Step(seq=4, at=NOW, entry=None, code="malformed", cycle=0, focus="q1", tokens=120),
+        it.Step(
+            seq=5, at=NOW, entry=it.PredictOp("q1", "x", {"q1.h1": 0.5, "q1.h2": 0.55, "q1.else": 0.5}, 2),
+            code="k2_not_discriminating", cycle=1, focus="q1", tokens=150,
+        ),
     )
 
 
@@ -112,19 +124,21 @@ def _samples() -> dict[str, object]:
     reply = it.ModelReply(text='{"op": "PARK", "question_id": "q1"}', tokens=40, model="glimmer-fake")
     budget = it.Budget()
     decision = it.Decision(kind="continue", question_id="q1", reason=None, priorities=(_priority(),), budget=budget)
-    event = it.WorkspaceEvent(step=_history()[1], before="0" * 64, after="1" * 64)
+    event = it.WorkspaceEvent(step=_history()[2], before="0" * 64, after="1" * 64)
+    turn = it.Turn(seq=2, prompt="rendered", reply=reply)
     ws = _workspace()
     return {
         "Question": _question(), "Hypothesis": _set()[0], "Prediction": _prediction(), "Update": _update(),
-        "Finding": _finding(), "EvidenceRef": _ref(), "Retrieved": _history()[0].entry,
+        "Finding": _finding(), "EvidenceRef": _ref(), "Retrieved": _history()[1].entry, "RunStart": _start(),
+        "Edit": it.Edit("swap_lead", "q1", hypothesis_id="q1.h2"),
         "Answered": it.Answered("q1", "How long is an 85 mm lens's minimum distance?", "About 0.8 m"),
-        "Resolved": it.Resolved("p1", "false", (_ref("e-d6-1"),)), "Step": _history()[1],
+        "Resolved": it.Resolved("p1", "false", (_ref("e-d6-1"),)), "Step": _history()[2],
         "WorkspaceEvent": event, "Workspace": ws, "Applied": it.Applied(ws=ws, event=event),
         "Rejected": it.Rejected("k1_bucket"), "KernelRules": it.FULL_RULES, "Priority": _priority(),
         "Budget": budget, "Decision": decision, "ModelReply": reply,
         "Screened": it.Screened(allowed=True, tokens=12), "ResolverReply": it.ResolverReply("true", 30),
-        "Turn": it.Turn(prompt="rendered", reply=reply),
-        "InquiryRun": it.InquiryRun(ws=ws, events=(event,), decisions=(decision,), turns=(), budget=budget),
+        "Turn": turn,
+        "InquiryRun": it.InquiryRun(ws=ws, events=(event,), decisions=(decision,), turns=(turn,), budget=budget),
         "Alternative": it.Alternative("She will shoot from the courtyard", 0.3),
         **{type(op).__name__: op for op in _ops()},
     }
@@ -158,6 +172,8 @@ def test_literals_match_the_spec() -> None:
         "NOTICE", "HYPOTHESIZE", "PREDICT", "INVESTIGATE", "ASSESS", "CONCLUDE", "RETRACT", "PARK", "ABANDON",
     }
     assert set(it.OP_TYPES) == set(get_args(it.OpName))
+    assert set(get_args(it.EditKind)) == {"swap_lead", "delete_prediction", "inject_hypothesis"}
+    assert set(get_args(it.RunCall)) == {"notice", "inquiry"}
 
 
 def test_question_status_is_the_choosers_status() -> None:
@@ -171,7 +187,7 @@ def test_kernel_and_controller_numbers_are_the_specs() -> None:
     assert it.ASSESS_BUCKETS == (4.0, 2.0, 1.0, 0.5, 0.25)
     assert it.PROBABILITY_CLAMP == (0.05, 0.95)
     assert (it.MIN_SPREAD, it.RESOLVE_MIN, it.RETRACT_BELOW, it.SPLIT_MIN) == (0.3, 0.8, 0.5, 0.5)
-    assert (it.STALL_LIMIT, it.MIN_ALTERNATIVES, it.MAX_ALTERNATIVES, it.FINDING_CAP) == (3, 2, 4, 8)
+    assert (it.STALL_LIMIT, it.MIN_ALTERNATIVES, it.MAX_ALTERNATIVES) == (3, 2, 4)
     assert (it.CYCLE_CAP, it.TOKEN_CAP, it.RECENT_OPS) == (12, 20_000, 6)
     assert (it.PRIORITY_FLOOR, it.U_FLOOR, it.A_READY, it.A_WAITING) == (0.2, 0.2, 1.0, 0.3)
     assert (it.STAKE_DUE, it.STAKE_NONE, it.STAKE_WINDOW) == (2.0, 1.0, timedelta(days=7))
@@ -181,7 +197,10 @@ def test_rejection_codes_cover_every_rule_that_rejects() -> None:
     codes = it.REJECT_CODES
     for prefix in ("k1_", "k2_", "k3_", "k4_", "domain_"):
         assert any(code.startswith(prefix) for code in codes), prefix
-    assert {"hypothesize_once", "hypothesis_count", "finding_cap", "malformed", "no_targets"} <= codes
+    assert {"hypothesize_once", "hypothesis_count", "malformed", "no_targets"} <= codes
+    # The finding cap is APD's, per life (apd.types.FindingRegistry), so no wipe resets it and the
+    # live product has none.
+    assert "finding_cap" not in codes and not hasattr(it, "FINDING_CAP")
     with pytest.raises(ValueError):
         it.Rejected("stalled")  # type: ignore[arg-type]
 
@@ -225,6 +244,11 @@ def test_prediction_and_update_keep_read_only_copies_of_their_maps() -> None:
         dataclasses.replace(_update(), evidence_ids=())
 
 
+def test_undetermined_stays_pending_until_the_horizon_censors_it() -> None:
+    assert _prediction(outcome="undetermined").pending
+    assert not any(_prediction(outcome=outcome).pending for outcome in ("true", "false", "censored"))
+
+
 def test_finding_names_the_hypothesis_it_reports() -> None:
     with pytest.raises(ValueError, match="names the hypothesis"):
         _finding(hypothesis_id=None)
@@ -236,7 +260,7 @@ def test_finding_names_the_hypothesis_it_reports() -> None:
 def test_workspace_holds_two_to_four_alternatives_and_one_catch_all() -> None:
     assert it.Workspace().seq == 0
     ws = _workspace()
-    assert ws.seq == 4 and ws.question("q1") == _question() and ws.finding_of("q1") == _finding()
+    assert ws.seq == 6 and ws.question("q1") == _question() and ws.finding_of("q1") == _finding()
     assert len(ws.hypotheses_of("q1")) == 3
     for credences in ((0.8, 0.2), (0.2, 0.2, 0.2, 0.2, 0.1, 0.1)):  # one alternative; five
         with pytest.raises(ValueError, match="alternatives"):
@@ -255,29 +279,107 @@ def test_workspace_records_name_what_it_holds() -> None:
         _workspace(questions=(_question(), _question()))
     with pytest.raises(ValueError, match="one finding"):
         _workspace(findings=(_finding(), _finding(id="f2")))
-    with pytest.raises(ValueError, match="outside its question"):
+    with pytest.raises(ValueError, match="exactly its question's"):
         _workspace(predictions=(_prediction(p_true_given={"q2.h1": 0.5}),))
     with pytest.raises(ValueError, match="outside its question"):
         _workspace(findings=(_finding(hypothesis_id="q1.h7"),))
-    with pytest.raises(ValueError, match="without a gap"):
+
+
+def test_a_split_catch_all_leaves_every_prediction_naming_the_whole_set() -> None:
+    """HYPOTHESIZE's split: each new hypothesis inherits the catch-all's committed p_true_given."""
+    split = (*_set(credences=(0.5, 0.3, 0.1))[:-1], it.Hypothesis("q1.h3", "q1", "a third reading", 0.1),
+             it.Hypothesis("q1.else", "q1", it.CATCH_ALL, 0.1))
+    with pytest.raises(ValueError, match="exactly its question's"):
+        _workspace(hypotheses=split)
+    inherited = _prediction(p_true_given={**_prediction().p_true_given, "q1.h3": _prediction().p_true_given["q1.else"]})
+    assert _workspace(hypotheses=split, predictions=(inherited,)).hypotheses_of("q1") == split
+
+
+def test_history_starts_with_a_run_start_and_a_wipe_restarts_it() -> None:
+    with pytest.raises(ValueError, match="starts with a RunStart"):
         _workspace(history=_history()[1:])
+    with pytest.raises(ValueError, match="without a gap"):
+        _workspace(history=(*_history()[:2], *_history()[3:]))
+    later = tuple(dataclasses.replace(step, seq=step.seq + 7) for step in _history())
+    with pytest.raises(ValueError, match="wiped it"):
+        _workspace(history=later)
+    wiped = (dataclasses.replace(later[0], entry=_start(call="notice", focus=None, wipe=True)), *later[1:])
+    assert _workspace(history=wiped).seq == 13  # ids derive from log seqs, so a wipe can't reuse one
+    with pytest.raises(ValueError, match="only its first step"):
+        _workspace(history=(*_history()[:3], dataclasses.replace(_history()[3], entry=_start(wipe=True)), *_history()[4:]))
 
 
 def test_steps_log_applied_rejected_and_malformed_operations() -> None:
-    observed, notice, malformed, rejected = _history()
+    start, observed, notice, _, malformed, rejected = _history()
     assert notice.applied and not rejected.applied and not malformed.applied and not observed.applied
+    assert not start.applied
     with pytest.raises(ValueError, match="malformed"):
         it.Step(seq=0, at=NOW, entry=None)
-    with pytest.raises(ValueError, match="only an operation"):
-        it.Step(seq=0, at=NOW, entry=_ref(), code="k1_bucket")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="entry"):
+        it.Step(seq=0, at=NOW, entry=_ref())  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="only an operation"):
         it.Step(seq=0, at=NOW, entry=observed.entry, code="k1_bucket")
+    with pytest.raises(ValueError, match="only an operation"):
+        it.Step(seq=0, at=NOW, entry=_start(), code="k1_bucket")
     with pytest.raises(ValueError, match="seq"):
         it.Step(seq=-1, at=NOW, entry=_notice())
     with pytest.raises(ValueError, match="belongs to no question"):
         it.Retrieved("q1", "new_evidence", "", ())
     with pytest.raises(ValueError, match="belongs to no question"):
         it.Retrieved(None, "evidence_search", "courtyard", ())
+
+
+def test_cycle_steps_name_their_focus_and_marks_charge_nothing() -> None:
+    """K5's stall count and a resume's budget are rebuilt from cycle, focus and tokens alone."""
+    _, observed, _, _, malformed, rejected = _history()
+    assert (malformed.cycle, malformed.focus, rejected.cycle) == (0, "q1", 1)
+    assert observed.cycle is None and observed.tokens == 300  # the notice pass's tokens, no cycle
+    with pytest.raises(ValueError, match="in focus"):
+        it.Step(seq=0, at=NOW, entry=None, code="malformed", cycle=0)
+    with pytest.raises(ValueError, match="cycle"):
+        it.Step(seq=0, at=NOW, entry=None, code="malformed", cycle=-1, focus="q1")
+    with pytest.raises(ValueError, match="tokens"):
+        it.Step(seq=0, at=NOW, entry=_notice(), tokens=-5)
+    for changes in ({"tokens": 10}, {"cycle": 0, "focus": "q1"}, {"focus": "q1"}):
+        with pytest.raises(ValueError, match="a mark"):
+            it.Step(seq=0, at=NOW, entry=_start(), **changes)
+
+
+def test_run_start_records_what_a_fold_and_a_resume_need() -> None:
+    start = _start(rules=it.NO_KERNEL, control="newest", wipe=True)
+    assert (start.rules, start.control, start.wipe, start.budget) == (it.NO_KERNEL, "newest", True, it.Budget())
+    with pytest.raises(ValueError, match="no focus"):
+        _start(call="notice")
+    with pytest.raises(ValueError, match="call"):
+        _start(call="dream")
+    with pytest.raises(ValueError, match="control"):
+        _start(control="random")
+    with pytest.raises(TypeError, match="KernelRules"):
+        _start(rules=None)
+
+
+def test_edit_names_exactly_what_it_changes() -> None:
+    assert it.Edit("inject_hypothesis", "q1", statement="She means the rooftop").statement == "She means the rooftop"
+    assert it.Edit("delete_prediction", "q1", prediction_id="p1").prediction_id == "p1"
+    for kind, changes in (
+        ("swap_lead", {}), ("swap_lead", {"hypothesis_id": "q1.h2", "prediction_id": "p1"}),
+        ("delete_prediction", {"hypothesis_id": "q1.h2"}), ("inject_hypothesis", {}),
+    ):
+        with pytest.raises(ValueError, match="no other target"):
+            it.Edit(kind, "q1", **changes)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="statement"):
+        it.Edit("inject_hypothesis", "q1", statement=" ")
+    with pytest.raises(ValueError, match="kind"):
+        it.Edit("rewrite", "q1")  # type: ignore[arg-type]
+
+
+def test_turns_are_indexed_to_logged_steps() -> None:
+    reply = it.ModelReply(text="", tokens=12, model="glimmer-fake")  # a failed call: empty text, tokens kept
+    event = it.WorkspaceEvent(step=_history()[4], before="0" * 64, after="1" * 64)
+    run = it.InquiryRun(ws=_workspace(), events=(event,), decisions=(), turns=(it.Turn(4, "p", reply),), budget=it.Budget())
+    assert run.turns[0].seq == run.events[0].step.seq
+    with pytest.raises(ValueError, match="logged step"):
+        dataclasses.replace(run, turns=(it.Turn(9, "p", reply),))
 
 
 # ── The controller's values ───────────────────────────────────────────────────
@@ -298,6 +400,9 @@ def test_budget_spends_into_a_new_value_and_names_its_cap() -> None:
     spent = budget.spend(cycles=12, tokens=900)
     assert budget.cycles_used == 0 and spent.cycles_used == 12 and spent.stop_reason == "cycle_cap"
     assert budget.spend(tokens=20_000).stop_reason == "token_cap"
+    assert (budget.tokens_left, it.Budget(tokens_used=19_500).tokens_left, budget.spend(tokens=21_000).tokens_left) == (
+        20_000, 500, 0,
+    )
     with pytest.raises(ValueError):
         it.Budget(tokens_used=-1)
 
@@ -417,10 +522,10 @@ def test_codec_errors_never_repeat_the_models_text() -> None:
 # ── Ports ─────────────────────────────────────────────────────────────────────
 
 PORTS: dict[str, dict[str, tuple[str, ...]]] = {
-    "Thinker": {"propose": ("rendered",)},
-    "ScreenPort": {"screen": ("text", "purpose")},
-    "EvidenceSearch": {"search": ("query", "as_of", "k")},
-    "WorldQuery": {"ask": ("text",)},
+    "Thinker": {"propose": ("rendered", "max_tokens")},
+    "ScreenPort": {"screen": ("text", "purpose", "max_tokens")},
+    "EvidenceSearch": {"search": ("query", "as_of", "k"), "get": ("ids", "as_of")},
+    "WorldQuery": {"ask": ("text", "max_tokens")},
     "Research": {"research": ("question_id", "query")},
     "PredictionResolver": {"resolve": ("claim", "evidence")},
     "WorkspaceLog": {"append": ("event",), "events": ()},
@@ -441,12 +546,11 @@ def test_port_is_a_checkable_protocol_with_its_methods(name: str) -> None:
     assert isinstance(stub(), port) and not isinstance(object(), port)
 
 
-def test_the_evidence_store_is_evidence_search_as_it_is(tmp_path: Path) -> None:
-    search: ports.EvidenceSearch = JsonlEvidenceStore(
-        tmp_path / "evidence.jsonl", "p1", codec=PLAIN, guard=NO_GUARD,
-    )
-    assert isinstance(search, ports.EvidenceSearch)
-    assert list(search.search("courtyard", NOW, 5)) == []
+def test_the_evidence_stores_search_fits_evidence_search() -> None:
+    """``search`` is the store's as it is; ``get`` (fetch by id, time-masked) is 17-core's to add."""
+    store = inspect.signature(JsonlEvidenceStore.search)
+    port = inspect.signature(ports.EvidenceSearch.search)
+    assert tuple(store.parameters) == tuple(port.parameters)
 
 
 def test_research_is_absent_outside_the_live_night() -> None:
@@ -459,7 +563,7 @@ def test_research_is_absent_outside_the_live_night() -> None:
 
 # ── Purity and the boundary ───────────────────────────────────────────────────
 
-PURE = ("types.py", "ops.py", "_check.py", "ports.py")
+PURE = ("types.py", "ops.py", "steps.py", "_check.py", "ports.py")
 STDLIB_OK = frozenset({"__future__", "math", "collections.abc", "dataclasses", "datetime", "types", "typing"})
 IMPURE_NAMES = frozenset({"now", "utcnow", "today", "getenv", "environ", "open", "connect", "urlopen", "time"})
 

@@ -5,29 +5,37 @@ call or environment read; every time is passed in, on the night's clock. Collect
 and mappings are copied into read-only mappings and left out of the hash.
 
 This module is the contract's one import point. The nine operations, what the thinker emits and
-the reference JSON codec live in ``anjo.sleep.mind.inquiry.ops`` and are re-exported here;
-``anjo.sleep.mind.inquiry.ports`` holds the ports and ``InquiryPorts``.
+the reference JSON codec live in ``anjo.sleep.mind.inquiry.ops``, and the log's entries in
+``anjo.sleep.mind.inquiry.steps``; both are re-exported here. ``anjo.sleep.mind.inquiry.ports``
+holds the ports and ``InquiryPorts``.
 
-**The workspace is a fold of its log.** Every operation the thinker proposes, applied or
-rejected, and every tool result that enters the workspace is one ``Step``. Each is appended to the
-log as a ``WorkspaceEvent`` that carries the workspace's digest before and after it (K6). The
-``Workspace`` keeps its steps, so the controller and the render read everything from the workspace
-alone, and folding the log from an empty workspace rebuilds it exactly. Tool results enter as
-observations (``Retrieved``, ``Answered``, ``Resolved``), not as operations: the nine operations are
-what the thinker may propose, and an observation is what the loop saw when it ran a tool.
+**The workspace is a fold of its log.** Every loop call opens with a ``RunStart`` step, and every
+operation the thinker proposes (applied or rejected), every tool result and every intervention
+edit is one more ``Step``. Each is appended to the log as a ``WorkspaceEvent`` carrying the
+workspace's digest before and after it (K6). The ``Workspace`` keeps its steps since it began or
+was last wiped, so the controller and the render read everything from the workspace alone, and
+folding the log from ``Workspace()`` rebuilds every arm's workspace exactly: M-kernel's rules,
+M-persist's wipes and an intervention's edit are all steps in it.
+
+**Ids the kernel assigns** (questions, alternatives, predictions, findings) derive from the seq of
+the step that creates them, so they are unique across a whole log, wipes included.
 
 Cross-slot interfaces (frozen 2026-10-28)
 -----------------------------------------
 17-core builds these. 17-eval (the M arms, interventions, kill-resume), Task 17b (replay) and the
 night glue call them. Only the two ``loop`` functions drive ports; the rest are pure.
 
-- ``kernel.apply(ws: Workspace, op: Op, *, at: datetime, rules: KernelRules = FULL_RULES) -> Applied | Rejected``:
-  validates one operation against K1-K4, hypothesize-once, the domain denylist and the finding
-  cap, and returns the next workspace with its event, stamped ``at`` (``opened_at``,
-  ``committed_at``); the LLM screen is the loop's, not the kernel's.
-- ``kernel.fold(events: Iterable[WorkspaceEvent]) -> Workspace``: rebuilds the workspace from
-  ``Workspace()``, and raises ``ValueError`` when an event's ``before`` isn't the digest so far or
-  its ``after`` isn't the digest it produces.
+- ``kernel.apply(ws: Workspace, step: Step, *, rules: KernelRules = FULL_RULES) -> Applied | Rejected``:
+  the one transition; ``step.seq`` is ``ws.seq``. An operation step without a code is checked
+  against K1-K4, hypothesize-once and the domain denylist, then applied, or returned as
+  ``Rejected(code)``, and the loop logs the same step with that code. Every other step (an
+  observation, a rejected or malformed step, a ``RunStart``, an ``Edit``) is recorded with its
+  effect (a ``Resolved`` outcome, a wipe, an edit; an edit that can't apply raises
+  ``ValueError``). The returned event's step is ``step``; the LLM screen is the loop's.
+- ``kernel.fold(events: Iterable[WorkspaceEvent]) -> Workspace``: applies each event's step from
+  ``Workspace()`` under the rules of the latest ``RunStart``, and raises ``ValueError`` when an
+  event's ``before`` isn't the digest so far, its ``after`` isn't the digest it produces, or a
+  step logged as applied is rejected.
 - ``kernel.digest(ws: Workspace) -> str``: the SHA-256 hex digest of the canonical workspace,
   history included; K6's ``before`` and ``after``.
 - ``controller.priority(ws: Workspace, question_id: str, *, targets: Sequence[Target], as_of: datetime) -> Priority``:
@@ -36,30 +44,43 @@ night glue call them. Only the two ``loop`` functions drive ports; the rest are 
 - ``controller.decide(ws: Workspace, budget: Budget, *, focus: str | None, targets: Sequence[Target], as_of: datetime, control: ControlMode = "priority") -> Decision``:
   continue on ``focus``, investigate (switch to) another question, park a stalled one (K5) or
   stop (a cap, or no priority clearing ``PRIORITY_FLOOR``), with every priority it compared.
+  K5's count is read from ``ws.history``: the run's latest cycles (``Step.cycle``) focused on the
+  question (``Step.focus``) without progress.
 - ``render.render(ws: Workspace, focus: str, evidence: Sequence[Evidence]) -> str``: the thinker's
   whole input for one cycle: the focal question, its hypotheses and credences (labeled heuristic),
-  open predictions, the last ``RECENT_OPS`` operations and ``evidence``; never the conversation.
+  open predictions, the last ``RECENT_OPS`` operations and ``evidence`` (fetched by id with
+  ``EvidenceSearch.get``, so a resumed run renders the same); never the conversation.
 - ``parse.parse_op(text: str) -> Op | Rejected``: the one operation in the thinker's raw text, or
   ``Rejected("malformed")``.
-- ``loop.notice(ws: Workspace, new: Sequence[Evidence], ports: InquiryPorts, budget: Budget, *, targets: Sequence[Target], as_of: datetime) -> InquiryRun``:
-  night step 2b: logs ``new`` as a ``Retrieved("new_evidence")`` observation, then one thinker
-  pass that may open questions; it acts on nothing else.
-- ``loop.run_inquiry(ws: Workspace, ports: InquiryPorts, budget: Budget, *, targets: Sequence[Target], as_of: datetime, focus: str | None = None, rules: KernelRules = FULL_RULES, control: ControlMode = "priority") -> InquiryRun``:
-  cycles under ``decide`` until it stops, appending every event to ``ports.log`` as it happens
-  (so a kill loses nothing logged), with every tool time-masked to ``as_of``. ``focus`` is the
-  question the chooser picked (``inquire``); ``None`` lets the controller pick (APD).
+- ``loop.notice(ws: Workspace, new: Sequence[Evidence], ports: InquiryPorts, budget: Budget, *, night: date, targets: Sequence[Target], as_of: datetime, wipe: bool = False) -> InquiryRun``:
+  night step 2b. Logs its ``RunStart``, makes one thinker pass over ``new``, logs ``new`` as a
+  ``Retrieved("new_evidence")`` step carrying that pass's tokens, then each NOTICE it emitted as
+  its own step (a reply that isn't an array of NOTICE objects logs one malformed step). Its tokens
+  count against the cap; it uses no cycle and acts on nothing else.
+- ``loop.run_inquiry(ws: Workspace, ports: InquiryPorts, budget: Budget, *, night: date, targets: Sequence[Target], as_of: datetime, focus: str | None = None, rules: KernelRules = FULL_RULES, control: ControlMode = "priority", wipe: bool = False) -> InquiryRun``:
+  logs its ``RunStart``, then cycles under ``decide`` until it stops, appending every event to
+  ``ports.log`` as it happens, so a kill loses nothing logged. Every tool is time-masked to
+  ``as_of``. Every capped call gets ``max_tokens=budget.tokens_left``, and a failed call's tokens
+  are charged like any other. ``focus`` is the question the chooser picked (``inquire``); ``None``
+  lets the controller pick (APD). ``wipe`` is M-persist's, on a night's first call.
 
-**Replay hooks (Task 17b).** A night's start state is ``kernel.fold`` of the events whose
-``step.at`` falls on or before that night; ``catch_all_id`` names the hypothesis a branch's
-additions are scored into; ``InquiryRun.turns`` holds each cycle's rendered input and the
-thinker's raw reply, with the model that wrote it, for the replay dataset.
+**Kill-resume.** ``kernel.fold(log.events())`` rebuilds the workspace. The budget is the latest
+``RunStart``'s plus one cycle per distinct ``Step.cycle`` and every ``Step.tokens`` logged since.
+The focus is the last ``Step.focus`` since then (else the ``RunStart``'s). The same loop function
+is then called again with the ``RunStart``'s ``night``, ``as_of``, ``rules`` and ``control``.
+
+**Replay hooks (Task 17b).** Night n starts at the seq of the first ``RunStart`` naming it, so the
+workspace at the end of night n is ``kernel.fold`` of the events before night n+1's start (all of
+them after the last night). ``catch_all_id`` names the hypothesis a branch's additions are scored
+into. ``Turn`` holds each thinker call's rendered input and raw reply with the model that wrote
+it, indexed to its step's seq, in ``InquiryRun.turns`` and APD's ``ArmRun.turns``.
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Final, Literal, get_args
 
 from anjo.sleep.mind.inquiry._check import (
@@ -94,47 +115,45 @@ from anjo.sleep.mind.inquiry.ops import RetractOp as RetractOp
 from anjo.sleep.mind.inquiry.ops import Tool as Tool
 from anjo.sleep.mind.inquiry.ops import op_from_json as op_from_json
 from anjo.sleep.mind.inquiry.ops import op_to_json as op_to_json
+from anjo.sleep.mind.inquiry.steps import CYCLE_CAP as CYCLE_CAP
+from anjo.sleep.mind.inquiry.steps import FULL_RULES as FULL_RULES
+from anjo.sleep.mind.inquiry.steps import NO_KERNEL as NO_KERNEL
+from anjo.sleep.mind.inquiry.steps import REJECT_CODES as REJECT_CODES
+from anjo.sleep.mind.inquiry.steps import TOKEN_CAP as TOKEN_CAP
+from anjo.sleep.mind.inquiry.steps import Answered as Answered
+from anjo.sleep.mind.inquiry.steps import Budget as Budget
+from anjo.sleep.mind.inquiry.steps import ControlMode as ControlMode
+from anjo.sleep.mind.inquiry.steps import Edit as Edit
+from anjo.sleep.mind.inquiry.steps import EditKind as EditKind
+from anjo.sleep.mind.inquiry.steps import EvidenceRef as EvidenceRef
+from anjo.sleep.mind.inquiry.steps import KernelRules as KernelRules
+from anjo.sleep.mind.inquiry.steps import Mark as Mark
+from anjo.sleep.mind.inquiry.steps import Observation as Observation
+from anjo.sleep.mind.inquiry.steps import PredictionOutcome as PredictionOutcome
+from anjo.sleep.mind.inquiry.steps import RejectCode as RejectCode
+from anjo.sleep.mind.inquiry.steps import Resolved as Resolved
+from anjo.sleep.mind.inquiry.steps import RetrieveTool as RetrieveTool
+from anjo.sleep.mind.inquiry.steps import Retrieved as Retrieved
+from anjo.sleep.mind.inquiry.steps import RunCall as RunCall
+from anjo.sleep.mind.inquiry.steps import RunStart as RunStart
+from anjo.sleep.mind.inquiry.steps import Step as Step
+from anjo.sleep.mind.inquiry.steps import WorkspaceEvent as WorkspaceEvent
 # Re-exported: the workspace's statuses are the chooser's (QuestionView), one Literal for both.
 from anjo.sleep.types import QuestionStatus as QuestionStatus
 
 # ── Vocabularies ──────────────────────────────────────────────────────────────
 
-PredictionOutcome = Literal["true", "false", "undetermined", "censored"]
 Verdict = Literal["true", "false", "undetermined"]  # what the resolver may answer
 UpdateSource = Literal["resolved_prediction", "assessed_evidence"]
 FindingKind = Literal["suspicion", "resolution", "retraction"]
-RetrieveTool = Literal["new_evidence", "evidence_search", "research"]
 ScreenPurpose = Literal["question", "hypothesis", "research_query"]
 DecisionKind = Literal["continue", "investigate", "park", "stop"]
 DecisionReason = Literal["stalled", "cycle_cap", "token_cap", "below_floor"]
-ControlMode = Literal["priority", "newest"]  # "newest" is M-control: 12 cycles on the newest question
-RejectCode = Literal[
-    "malformed",              # not one well-formed operation (parse, or a field of the wrong shape)
-    "unknown_ref",            # names a question, hypothesis, prediction, target or item she doesn't hold
-    "not_live",               # acts on a question that isn't open or active
-    "no_targets",             # NOTICE naming no target: a question's subject is a plan or topic
-    "unavailable",            # INVESTIGATE with a tool this run lacks (research outside the live night)
-    "k1_hypotheses",          # p_true_given, likelihoods or credences don't name exactly the question's set
-    "k1_bucket",              # an ASSESS likelihood that isn't one of ASSESS_BUCKETS
-    "k1_not_returned",        # ASSESS on an item no search or verified research returned for the question
-    "k1_evidence_used",       # the item already updated this question, by either route
-    "k1_direct_credence",     # ASSESS writing credences while K1 is on (only M-kernel may)
-    "k2_not_discriminating",  # PREDICT whose p_true_given spread is under MIN_SPREAD
-    "k3_citations",           # a contradiction without two items from different days, or no item at all
-    "k4_not_ready",           # a resolution under RESOLVE_MIN, or with no update from outside its origin
-    "hypothesize_once",       # a second HYPOTHESIZE while the catch-all holds SPLIT_MIN or less
-    "hypothesis_count",       # a first set that isn't 2-4 alternatives, or a split past 4
-    "domain_denylist",        # a person-diagnosis term from the kernel's denylist
-    "domain_screen",          # ScreenPort refused it: its subject is the person or a named third party
-    "finding_cap",            # a distinct finding past FINDING_CAP
-]
-# K5 and K6 never reject an operation. K5 acts through the controller (a Decision with reason
-# "stalled"); K6 is every event's before and after digest, which kernel.fold checks.
 
 QUESTION_STATUSES: Final = frozenset(get_args(QuestionStatus))
 LIVE_STATUSES: Final = frozenset({"open", "active"})
 FINDING_KINDS: Final = frozenset(get_args(FindingKind))
-REJECT_CODES: Final = frozenset(get_args(RejectCode))
+PENDING_OUTCOMES: Final = frozenset({None, "undetermined"})  # a prediction the resolver may still be asked about
 
 # ── The spec's numbers ────────────────────────────────────────────────────────
 
@@ -148,9 +167,6 @@ STALL_LIMIT: Final = 3  # K5: cycles without progress before the controller park
 MIN_ALTERNATIVES: Final = 2  # per question, plus the catch-all
 MAX_ALTERNATIVES: Final = 4
 CATCH_ALL: Final = "something else"
-FINDING_CAP: Final = 8  # distinct findings; updating one in place is free
-CYCLE_CAP: Final = 12  # a night
-TOKEN_CAP: Final = 20_000  # a night: thinker, world_query and screen tokens, retries included
 PRIORITY_FLOOR: Final = 0.2  # the controller stops when no priority clears it
 U_FLOOR: Final = 0.2  # u: normalized entropy, floored
 A_READY: Final = 1.0  # a: a next step is ready
@@ -228,8 +244,12 @@ class Hypothesis:
 @dataclass(frozen=True)
 class Prediction:
     """A test committed before its outcome exists: ``p_true_given`` holds P(claim | hypothesis)
-    for every hypothesis in the set when it was committed. ``outcome`` is ``None`` while it is
-    pending. ``resolved_by`` is the evidence the resolver was shown for its last verdict."""
+    for every hypothesis in the question's set. When a later HYPOTHESIZE splits the catch-all,
+    each new hypothesis inherits the catch-all's committed value, so every prediction keeps naming
+    the whole set (K1). ``outcome`` is ``None`` until the resolver answers; ``undetermined`` stays
+    pending (the resolver may be asked again on later evidence) until the horizon passes, when it
+    becomes ``censored``. ``resolved_by`` is the evidence the resolver was shown for its last
+    verdict."""
 
     id: str
     question_id: str
@@ -255,7 +275,7 @@ class Prediction:
 
     @property
     def pending(self) -> bool:
-        return self.outcome is None
+        return self.outcome in PENDING_OUTCOMES
 
 
 @dataclass(frozen=True)
@@ -307,127 +327,19 @@ class Finding:
             check_text("hypothesis_id", self.hypothesis_id)
 
 
-# ── Observations: what entered the workspace from a tool ──────────────────────
-
-
-@dataclass(frozen=True)
-class EvidenceRef:
-    """An evidence item as the workspace keeps it: its id and its times, never its text."""
-
-    id: str
-    day: date
-    created_at: datetime
-
-    def __post_init__(self) -> None:
-        check_text("id", self.id)
-
-
-@dataclass(frozen=True)
-class Retrieved:
-    """Items that reached her: the night's new evidence (``new_evidence``, no question), or what
-    ``evidence_search`` or ``research`` returned for a question (research: verified sources only)."""
-
-    question_id: str | None
-    tool: RetrieveTool
-    query: str
-    items: tuple[EvidenceRef, ...]
-
-    def __post_init__(self) -> None:
-        check_one_of("tool", self.tool, frozenset(get_args(RetrieveTool)))
-        if (self.question_id is None) != (self.tool == "new_evidence"):
-            raise ValueError("new evidence belongs to no question; a search or research to one")
-        if self.question_id is not None:
-            check_text("question_id", self.question_id)
-        freeze_tuple(self, "items", EvidenceRef)
-
-
-@dataclass(frozen=True)
-class Answered:
-    """A ``world_query`` answer: kept for the render, and never moves credence."""
-
-    question_id: str
-    query: str
-    answer: str
-
-    def __post_init__(self) -> None:
-        check_text("question_id", self.question_id)
-        check_text("query", self.query)
-
-
-@dataclass(frozen=True)
-class Resolved:
-    """A prediction's outcome: the resolver's verdict on ``seen`` (the evidence after its
-    ``committed_at`` it was shown), or ``censored`` once the horizon passed unresolved."""
-
-    prediction_id: str
-    outcome: PredictionOutcome
-    seen: tuple[EvidenceRef, ...]
-
-    def __post_init__(self) -> None:
-        check_text("prediction_id", self.prediction_id)
-        check_one_of("outcome", self.outcome, frozenset(get_args(PredictionOutcome)))
-        freeze_tuple(self, "seen", EvidenceRef)
-
-
-Observation = Retrieved | Answered | Resolved
-
-# ── The log ───────────────────────────────────────────────────────────────────
-
-_OBSERVATION_CLASSES: Final = (Retrieved, Answered, Resolved)
-
-
-@dataclass(frozen=True)
-class Step:
-    """One logged entry: an operation (applied when ``code`` is ``None``, rejected otherwise) or
-    an observation, at ``seq`` on the night's clock ``at``. A rejection costs its cycle and is
-    logged like any other step; thinker output that isn't an operation is logged with no entry
-    and ``code="malformed"``."""
-
-    seq: int
-    at: datetime
-    entry: Op | Observation | None
-    code: RejectCode | None = None
-
-    def __post_init__(self) -> None:
-        check_count("seq", self.seq)
-        if self.code is not None:
-            check_one_of("code", self.code, REJECT_CODES)
-            if self.entry is not None and not isinstance(self.entry, OP_CLASSES):
-                raise ValueError("only an operation is rejected")
-        if self.entry is None and self.code != "malformed":
-            raise ValueError("a step without an entry is malformed thinker output")
-        if self.entry is not None and not isinstance(self.entry, (*OP_CLASSES, *_OBSERVATION_CLASSES)):
-            raise TypeError("a step's entry is an operation or an observation")
-
-    @property
-    def applied(self) -> bool:
-        return self.code is None and isinstance(self.entry, OP_CLASSES)
-
-
-@dataclass(frozen=True)
-class WorkspaceEvent:
-    """One record of the workspace log: a step and the workspace's digest before and after it
-    (K6). The log is encrypted and folded like Task 3's target log."""
-
-    step: Step
-    before: str
-    after: str
-
-    def __post_init__(self) -> None:
-        check_text("before", self.before)
-        check_text("after", self.after)
-
-
 # ── The workspace ─────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class Workspace:
-    """Her workspace: the records and every step that made them. ``Workspace()`` is empty.
+    """Her workspace: the records and every step since it began or was last wiped.
+    ``Workspace()`` is empty.
 
     Checked on construction: ids are unique, every record names a question it holds, a question
-    has at most one finding, and a question with hypotheses has 2-4 alternatives plus exactly one
-    catch-all, with credences summing to 1. ``history`` runs from seq 0 without a gap.
+    has at most one finding, a question with hypotheses has 2-4 alternatives plus exactly one
+    catch-all with credences summing to 1, and each prediction names exactly its question's set.
+    ``history`` starts with a ``RunStart``, at seq 0 unless that ``RunStart`` wiped the workspace
+    (M-persist), and runs without a gap.
     """
 
     questions: tuple[Question, ...] = ()
@@ -452,8 +364,20 @@ class Workspace:
             if len(ids) != len(set(ids)):
                 raise ValueError(f"a {label} id appears twice")
         self._check_references()
-        if [step.seq for step in self.history] != list(range(len(self.history))):
-            raise ValueError("history runs from seq 0 without a gap")
+        self._check_history()
+
+    def _check_history(self) -> None:
+        if not self.history:
+            return
+        first = self.history[0]
+        if not isinstance(first.entry, RunStart):
+            raise ValueError("history starts with a RunStart")
+        if first.seq != 0 and not first.entry.wipe:
+            raise ValueError("history starts at seq 0, or at the RunStart that wiped it")
+        if [step.seq for step in self.history] != list(range(first.seq, first.seq + len(self.history))):
+            raise ValueError("history runs without a gap")
+        if any(isinstance(step.entry, RunStart) and step.entry.wipe for step in self.history[1:]):
+            raise ValueError("a wipe empties the history, so only its first step can be one")
 
     def _check_references(self) -> None:
         sets = {q.id: frozenset(h.id for h in self.hypotheses_of(q.id)) for q in self.questions}
@@ -467,8 +391,8 @@ class Workspace:
         for question_id in sets:
             _check_set(question_id, self.hypotheses_of(question_id))
         for prediction in self.predictions:
-            if not set(prediction.p_true_given) <= sets[prediction.question_id]:
-                raise ValueError(f"prediction {prediction.id} names a hypothesis outside its question")
+            if set(prediction.p_true_given) != sets[prediction.question_id]:
+                raise ValueError(f"prediction {prediction.id} doesn't name exactly its question's hypotheses")
         for update in self.updates:
             if not set(update.likelihoods) <= sets[update.question_id]:
                 raise ValueError(f"an update on {update.question_id} names a hypothesis outside it")
@@ -481,8 +405,8 @@ class Workspace:
 
     @property
     def seq(self) -> int:
-        """The next event's seq: the number of steps so far."""
-        return len(self.history)
+        """The next step's seq in the log."""
+        return self.history[-1].seq + 1 if self.history else 0
 
     def question(self, question_id: str) -> Question | None:
         return next((q for q in self.questions if q.id == question_id), None)
@@ -511,7 +435,7 @@ def _check_set(question_id: str, hypotheses: tuple[Hypothesis, ...]) -> None:
         raise ValueError(f"question {question_id}'s credences sum to {total}, not 1")
 
 
-# ── What the kernel returns, and its switches ─────────────────────────────────
+# ── What the kernel returns ───────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -524,26 +448,14 @@ class Applied:
 
 @dataclass(frozen=True)
 class Rejected:
-    """Why an operation can't apply. It is logged as a step and costs the cycle."""
+    """Why an operation can't apply. The loop logs the step with this code, and it costs the
+    cycle."""
 
     code: RejectCode
 
     def __post_init__(self) -> None:
         check_one_of("code", self.code, REJECT_CODES)
 
-
-@dataclass(frozen=True)
-class KernelRules:
-    """Which kernel rules hold. Every arm but M-kernel runs ``FULL_RULES``; M-kernel switches K1,
-    K2 and K4 off, so the thinker writes credences directly (``AssessOp.credences``)."""
-
-    k1: bool = True
-    k2: bool = True
-    k4: bool = True
-
-
-FULL_RULES: Final = KernelRules()
-NO_KERNEL: Final = KernelRules(k1=False, k2=False, k4=False)
 
 # ── The controller ────────────────────────────────────────────────────────────
 
@@ -573,34 +485,6 @@ class Priority:
     @property
     def value(self) -> float:
         return self.stake if self.ready else self.stake * self.u * self.a
-
-
-@dataclass(frozen=True)
-class Budget:
-    """The night's inquiry budget and what it has used. ``spend`` returns a new budget."""
-
-    cycles_used: int = 0
-    tokens_used: int = 0
-    cycle_cap: int = CYCLE_CAP
-    token_cap: int = TOKEN_CAP
-
-    def __post_init__(self) -> None:
-        for name in ("cycles_used", "tokens_used", "cycle_cap", "token_cap"):
-            check_count(name, getattr(self, name))
-
-    def spend(self, *, cycles: int = 0, tokens: int = 0) -> Budget:
-        return Budget(
-            cycles_used=self.cycles_used + cycles, tokens_used=self.tokens_used + tokens,
-            cycle_cap=self.cycle_cap, token_cap=self.token_cap,
-        )
-
-    @property
-    def stop_reason(self) -> Literal["cycle_cap", "token_cap"] | None:
-        if self.cycles_used >= self.cycle_cap:
-            return "cycle_cap"
-        if self.tokens_used >= self.token_cap:
-            return "token_cap"
-        return None
 
 
 @dataclass(frozen=True)
@@ -635,8 +519,9 @@ class Decision:
 
 @dataclass(frozen=True)
 class ModelReply:
-    """A thinker or ``world_query`` reply: the raw text, the tokens it cost (retries included)
-    and the model that wrote it."""
+    """A thinker or ``world_query`` reply: the raw text, the tokens it generated (retries and
+    failed attempts included; prompts aren't charged) and the model that wrote it. A call that
+    failed after its retries returns empty text with the tokens it spent."""
 
     text: str
     tokens: int
@@ -649,7 +534,8 @@ class ModelReply:
 
 @dataclass(frozen=True)
 class Screened:
-    """The screen's verdict on one text, and the tokens it cost (they count against the cap)."""
+    """The screen's verdict on one text, and the tokens it generated (they count against the
+    cap). A screen call that failed refuses (``allowed=False``) and still reports its tokens."""
 
     allowed: bool
     tokens: int
@@ -672,16 +558,31 @@ class ResolverReply:
 
 @dataclass(frozen=True)
 class Turn:
-    """One thinker call: the rendered input and the raw reply (Task 17b's trajectories)."""
+    """One thinker call, indexed to the log: ``seq`` is the step that carries its tokens (the
+    cycle's operation or malformed step; in the notice pass, its ``Retrieved("new_evidence")``),
+    ``prompt`` the rendered input and ``reply`` the raw reply with its model (Task 17b's
+    trajectories)."""
 
+    seq: int
     prompt: str
     reply: ModelReply
+
+    def __post_init__(self) -> None:
+        check_count("seq", self.seq)
+
+
+def check_turns(turns: tuple[Turn, ...], events: tuple[WorkspaceEvent, ...]) -> None:
+    """Every turn names a logged step, in log order."""
+    seqs = [turn.seq for turn in turns]
+    if seqs != sorted(set(seqs)) or not set(seqs) <= {event.step.seq for event in events}:
+        raise ValueError("each turn names a logged step, in log order")
 
 
 @dataclass(frozen=True)
 class InquiryRun:
     """What ``loop.notice`` or ``loop.run_inquiry`` did: the final workspace, the events it
-    appended (in order), every decision, every thinker turn and the budget after it.
+    appended (in order, its ``RunStart`` first), every decision, every thinker turn and the budget
+    after it.
     ``resolver_tokens`` sit outside the cap; ``research_calls`` are Wonder's, debited apart."""
 
     ws: Workspace
@@ -696,5 +597,6 @@ class InquiryRun:
         freeze_tuple(self, "events", WorkspaceEvent)
         freeze_tuple(self, "decisions", Decision)
         freeze_tuple(self, "turns", Turn)
+        check_turns(self.turns, self.events)
         check_count("resolver_tokens", self.resolver_tokens)
         check_count("research_calls", self.research_calls)

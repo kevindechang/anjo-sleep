@@ -41,14 +41,14 @@ def _life(**changes: Any) -> apd.Life:
     base = apd.Life(
         id="life-1", field="indie film", seed=7, split="development", days=DAYS,
         sessions=(apd.Session(DAY0, "We talked about the kitchen set.", "spark-open-fake"),),
-        evidence=(_evidence(),), targets=(_target(),),
+        evidence=(_evidence(),), targets={day: (_target(),) for day in DAYS},
     )
     return dataclasses.replace(base, **changes)
 
 
 def _item(**changes: Any) -> apd.PlantedItem:
     base = apd.PlantedItem(
-        id="i1", family="contradiction", template="lens-vs-room", surface_day=DAYS[7],
+        id="i1", family="contradiction", template="lens-vs-room", topic="scene 4's shoot", surface_day=DAYS[7],
         origin_ids=("e-d2-1", "e-d5-3"), disambiguating_ids=("e-d4-2",),
         resolution="The 85 mm can't fit the kitchen; the scene moves to the courtyard.",
     )
@@ -70,18 +70,22 @@ def _run(**changes: Any) -> apd.ArmRun:
 
 
 def _event() -> it.WorkspaceEvent:
-    step = it.Step(seq=0, at=NOW, entry=it.ParkOp("q1"), code="unknown_ref")
+    step = it.Step(seq=0, at=NOW, entry=it.ParkOp("q1"), code="unknown_ref", cycle=0, focus="q1", tokens=30)
     return it.WorkspaceEvent(step=step, before="0" * 64, after="0" * 64)
 
 
+def _turn(seq: int = 0) -> it.Turn:
+    return it.Turn(seq=seq, prompt="rendered", reply=it.ModelReply(text='{"op": "PARK"}', tokens=30, model="fake"))
+
+
 class _Port:
-    def propose(self, rendered: str) -> it.ModelReply:
+    def propose(self, rendered: str, max_tokens: int) -> it.ModelReply:
         return it.ModelReply(text=rendered, tokens=1, model="fake")
 
-    def ask(self, text: str) -> it.ModelReply:
+    def ask(self, text: str, max_tokens: int) -> it.ModelReply:
         return it.ModelReply(text=text, tokens=1, model="fake")
 
-    def screen(self, text: str, purpose: it.ScreenPurpose) -> it.Screened:
+    def screen(self, text: str, purpose: it.ScreenPurpose, max_tokens: int) -> it.Screened:
         return it.Screened(allowed=True, tokens=1)
 
     def resolve(self, claim: str, evidence: Any) -> it.ResolverReply:
@@ -96,7 +100,7 @@ def _samples() -> dict[str, object]:
         "ArmRun": _run(), "ItemScore": apd.ItemScore("i1", "gap", "f1", apd.SUSPECTED),
         "UnmatchedScore": apd.UnmatchedScore("f2", apd.WRONG),
         "LifeScore": apd.LifeScore("life-1", "M", "audited", (), ()),
-        "SignTest": apd.SignTest(wins=9, losses=3, ties=4, p=0.073), "Edit": apd.Edit("swap_lead", "q1"),
+        "SignTest": apd.SignTest(wins=9, losses=3, ties=4, p=0.073), "FindingRegistry": apd.FindingRegistry((_report(),)),
         "GateVerdict": apd.GateVerdict("script_audit", None, passed=True),
     }
 
@@ -120,7 +124,8 @@ def test_protocol_numbers_are_the_pre_registered_ones() -> None:
     assert (apd.LIFE_DAYS, apd.MAX_PREVALENCE, apd.HALF_GAP_DAYS) == (10, 6, 3)
     assert (apd.DEVELOPMENT_LIVES, apd.HELD_OUT_LIVES, apd.HELD_OUT_LIVES_CUT, apd.EMPTY_HELD_OUT_LIVES) == (8, 16, 12, 2)
     assert (apd.WIN_P, apd.INTERVENTION_SNAPSHOTS, apd.KILL_RESUME_LIVES) == (0.05, 30, 3)
-    assert apd.FINDING_CAP == it.FINDING_CAP == 8
+    assert apd.FINDING_CAP == 8  # per arm and life, the registry's; the inquiry kernel has no cap
+    assert apd.Edit is it.Edit and apd.EditKind is it.EditKind  # an edit is a logged inquiry step
 
 
 def test_scoring_points_follow_each_family() -> None:
@@ -154,6 +159,16 @@ def test_planted_item_keeps_origin_and_disambiguation_apart() -> None:
         _item(family="riddle")
 
 
+def test_planted_item_carries_a_neutral_topic_for_the_discoverability_gate() -> None:
+    assert _item().topic == "scene 4's shoot"
+    with pytest.raises(ValueError, match="topic"):
+        _item(topic="")
+    with pytest.raises(ValueError, match="neutral"):
+        _item(topic="lens-vs-room")
+    with pytest.raises(ValueError, match="neutral"):
+        _item(topic=_item().resolution)
+
+
 def test_problem_file_holds_up_to_six_distinct_items() -> None:
     items = tuple(_item(id=f"i{n}") for n in range(apd.MAX_PREVALENCE))
     assert len(apd.ProblemFile("life-1", items).items) == 6
@@ -171,15 +186,15 @@ def test_life_is_consecutive_days_with_its_own_model_written_evidence() -> None:
     with pytest.raises(ValueError, match="consecutive"):
         _life(days=(DAYS[0], DAYS[2]))
     with pytest.raises(ValueError, match="at least one day"):
-        _life(days=(), sessions=(), evidence=())
+        _life(days=(), sessions=(), evidence=(), targets={})
     with pytest.raises(ValueError, match="doesn't record the model"):
         _life(evidence=(_evidence(model=None),))
     with pytest.raises(ValueError, match="isn't this life's"):
         _life(evidence=(_evidence(person_id="life-2"),))
     with pytest.raises(ValueError, match="isn't this life's"):
         _life(evidence=(_evidence(day=DAYS[-1] + timedelta(days=1)),))
-    with pytest.raises(ValueError, match="target"):
-        _life(targets=(_target(person_id="life-2"),))
+    with pytest.raises(ValueError, match="this life's"):
+        _life(targets={day: (_target(person_id="life-2"),) for day in DAYS})
     with pytest.raises(ValueError, match="session"):
         _life(sessions=(apd.Session(DAY0 - timedelta(days=1), "before the life", "spark-open-fake"),))
     with pytest.raises(ValueError, match="split"):
@@ -187,6 +202,22 @@ def test_life_is_consecutive_days_with_its_own_model_written_evidence() -> None:
 
 
 # ── What an arm reports ───────────────────────────────────────────────────────
+
+
+def test_targets_are_dated_so_a_night_never_sees_a_later_plan() -> None:
+    """Stake reads targets[night]; a commitment first mentioned on day 7 is absent before it."""
+    due = _target(id="t-thursday", kind="commitment", check_after=NOW + timedelta(days=8), last_mentioned=DAYS[6])
+    targets = {day: (_target(), *((due,) if day >= DAYS[6] else ())) for day in DAYS}
+    life = _life(targets=targets)
+    assert life.targets[DAYS[2]] == (_target(),) and life.targets[DAYS[6]] == (_target(), due)
+    with pytest.raises(ValueError, match="mentioned by that day"):
+        _life(targets={day: (_target(), due) for day in DAYS})
+    with pytest.raises(ValueError, match="every day"):
+        _life(targets={DAYS[0]: (_target(),)})
+    with pytest.raises(TypeError, match="Target"):
+        _life(targets={day: ("t-scene4",) for day in DAYS})
+    with pytest.raises(TypeError):
+        life.targets[DAYS[0]] = ()  # type: ignore[index]
 
 
 def test_finding_report_checks_its_fields() -> None:
@@ -197,6 +228,22 @@ def test_finding_report_checks_its_fields() -> None:
         _report(kind="hunch")
     with pytest.raises(ValueError, match="seq"):
         _report(seq=-1)
+
+
+def test_registry_caps_distinct_findings_per_life_for_every_arm() -> None:
+    """The cap lives in report_finding's registry, across nights, so M-persist's wipes can't reset it."""
+    registry = apd.FindingRegistry()
+    for n in range(apd.FINDING_CAP):
+        assert registry.accepts(f"f{n}")
+        registry = registry.add(_report(f"f{n}", n))
+    assert not registry.accepts("f8") and registry.accepts("f0")
+    updated = registry.add(_report("f0", 8, kind="resolution", p=0.9))
+    assert len(updated.reports) == 9 and updated.finding_ids == registry.finding_ids
+    with pytest.raises(ValueError, match="at most 8 distinct"):
+        registry.add(_report("f8", 9))
+    with pytest.raises(ValueError, match="seq order"):
+        registry.add(_report("f0", 3))
+    assert len(registry.reports) == 8  # add returns a new registry
 
 
 def test_arm_run_caps_distinct_findings_but_updates_in_place_are_free() -> None:
@@ -211,10 +258,15 @@ def test_arm_run_caps_distinct_findings_but_updates_in_place_are_free() -> None:
         _run(reports=(_report("f1", 1), _report("f2", 1)))
 
 
-def test_only_mind_arms_carry_a_workspace_log() -> None:
-    assert _run(arm="M", events=(_event(),)).events == (_event(),)
+def test_only_mind_arms_carry_a_workspace_log_and_its_turns() -> None:
+    run = _run(arm="M", events=(_event(),), turns=(_turn(),))
+    assert run.events == (_event(),) and run.turns == (_turn(),)
     with pytest.raises(ValueError, match="keeps no workspace"):
         _run(arm="B", events=(_event(),))
+    with pytest.raises(ValueError, match="keeps no workspace"):
+        _run(arm="A", turns=(_turn(),))
+    with pytest.raises(ValueError, match="logged step"):
+        _run(arm="M-persist", events=(_event(),), turns=(_turn(5),))
     with pytest.raises(ValueError, match="arm"):
         _run(arm="M-persistent")
     with pytest.raises(ValueError, match="tokens"):
@@ -270,17 +322,7 @@ def test_sign_test_reports_lives_and_the_estimate() -> None:
         apd.SignTest(wins=1, losses=0, ties=0, p=1.5)
 
 
-# ── Interventions and gates ───────────────────────────────────────────────────
-
-
-def test_only_an_injection_carries_a_statement() -> None:
-    assert apd.Edit("inject_hypothesis", "q1", "She means the rooftop").statement == "She means the rooftop"
-    with pytest.raises(ValueError, match="injection"):
-        apd.Edit("inject_hypothesis", "q1")
-    with pytest.raises(ValueError, match="injection"):
-        apd.Edit("delete_prediction", "q1", "stray")
-    with pytest.raises(ValueError, match="statement"):
-        apd.Edit("inject_hypothesis", "q1", " ")
+# ── Gates ─────────────────────────────────────────────────────────────────────
 
 
 def test_script_audit_judges_the_life_and_other_gates_an_item() -> None:
@@ -308,9 +350,13 @@ def test_every_apd_type_is_frozen_and_immutable(name: str) -> None:
 
 def test_sequences_are_copied_into_tuples() -> None:
     item = _item(origin_ids=["e-d2-1", "e-d5-3"])
-    life = _life(days=list(DAYS), sessions=list(_life().sessions), evidence=[_evidence()], targets=[_target()])
+    life = _life(
+        days=list(DAYS), sessions=list(_life().sessions), evidence=[_evidence()],
+        targets={day: [_target()] for day in DAYS},
+    )
     assert item.origin_ids == ("e-d2-1", "e-d5-3")
-    assert all(isinstance(getattr(life, name), tuple) for name in ("days", "sessions", "evidence", "targets"))
+    assert all(isinstance(getattr(life, name), tuple) for name in ("days", "sessions", "evidence"))
+    assert all(isinstance(held, tuple) for held in life.targets.values())
 
 
 def test_apd_contract_imports_only_the_engine_core() -> None:

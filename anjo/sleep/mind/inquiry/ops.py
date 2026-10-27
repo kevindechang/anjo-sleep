@@ -80,7 +80,10 @@ class NoticeOp:
 class HypothesizeOp:
     """Set a question's hypotheses once: 2-4 mutually exclusive alternatives, each with a prior,
     and the catch-all's prior; the kernel clamps and normalizes. A second one only splits the
-    catch-all's mass, while it holds more than ``SPLIT_MIN``.
+    catch-all, while it holds more than ``SPLIT_MIN`` and the set stays within 4 alternatives:
+    ``hypotheses`` and ``catch_all`` then share the catch-all's current credence in proportion,
+    and each new hypothesis inherits the catch-all's ``p_true_given`` in every prediction already
+    committed on the question.
 
     {"op": "HYPOTHESIZE", "question_id": "q1", "hypotheses": [{"statement": "The plan assumes room for an 85 mm lens that the kitchen lacks", "credence": 0.5}, {"statement": "She will shoot through the window from the courtyard", "credence": 0.3}], "catch_all": 0.2}
     """
