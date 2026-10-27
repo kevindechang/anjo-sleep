@@ -54,7 +54,111 @@ def test_deleting_a_private_file_is_a_violation(tmp_path: Path) -> None:
     trunk = make_trunk(tmp_path)
     trunk.commit("chore: drop a file", {"anjo/dashboard/auth.py": None})
 
-    assert _found(trunk.path) == {("anjo/dashboard/auth.py", "private_path")}
+    assert _found(trunk.path) == {
+        ("anjo/dashboard/auth.py", "private_path"),
+        ("anjo/dashboard/auth.py", "not_modified_in_place"),
+    }
+
+
+def test_deleting_an_outside_file_is_a_violation(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    trunk.commit("chore: drop chat", {"anjo/core/chat.py": None})
+
+    assert _found(trunk.path) == {("anjo/core/chat.py", "not_modified_in_place")}
+
+
+def test_symlink_swap_outside_is_a_violation(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    git(trunk.path, "rm", "-q", "anjo/core/chat.py")
+    (trunk.path / "anjo/core").mkdir(exist_ok=True)
+    (trunk.path / "anjo/core/chat.py").symlink_to("../sleep/README.md")
+    git(trunk.path, "add", "anjo/core/chat.py")
+    git(trunk.path, "commit", "-q", "-m", "fix: point chat elsewhere")
+
+    assert _found(trunk.path) == {("anjo/core/chat.py", "not_modified_in_place")}
+
+
+def test_moving_private_code_into_a_published_folder_is_a_violation(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    git(trunk.path, "mv", "anjo/core/chat.py", "anjo/sleep/x.py")
+    git(trunk.path, "commit", "-q", "-m", "refactor: move chat")
+
+    assert _found(trunk.path) == {
+        ("anjo/sleep/x.py", "moved_private_code"),
+        ("anjo/core/chat.py", "moved_private_code"),
+        ("anjo/core/chat.py", "not_modified_in_place"),
+    }
+
+
+def test_copying_private_code_into_a_published_folder_is_a_violation(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    trunk.commit("feat: a copy", {"mobile/features/sleep/chat.py": trunk.read("anjo/core/chat.py")})
+
+    assert _found(trunk.path) == {("mobile/features/sleep/chat.py", "moved_private_code")}
+
+
+def test_copying_a_file_main_added_after_the_branch_point_is_a_violation(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    later = "".join(f"PRIVATE_LATER_{i} = {i}\n" for i in range(10))
+    git(trunk.path, "switch", "-q", BASE)
+    trunk.commit("feat: main moves on", {"anjo/core/later.py": later})
+    git(trunk.path, "switch", "-q", "hackathon/sleep")
+    trunk.commit("feat: a copy", {"anjo/sleep/later.py": later})
+
+    assert _found(trunk.path) == {("anjo/sleep/later.py", "moved_private_code")}
+
+
+def test_a_stock_license_text_is_not_moved_code(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    license_text = "Apache License\nVersion 2.0, January 2004\n" + "Terms and conditions.\n" * 5
+    git(trunk.path, "switch", "-q", BASE)
+    trunk.commit("chore: vendored", {"third_party/lib/LICENSE": license_text})
+    git(trunk.path, "switch", "-q", "hackathon/sleep")
+    trunk.commit("chore: license", {"anjo/sleep/LICENSE": license_text})
+
+    assert _found(trunk.path) == set()
+
+
+def test_tiny_common_files_are_not_moved_code(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    # An empty __init__.py matches the base's empty anjo/__init__.py; it carries no code.
+    trunk.commit("feat: a subpackage", {"anjo/sleep/night/__init__.py": ""})
+
+    assert _found(trunk.path) == set()
+
+
+def test_one_80k_character_line_is_glue_too_big(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    chat = trunk.read("anjo/core/chat.py")
+    trunk.commit("fix: long", {"anjo/core/chat.py": chat + "x=1;" * 20000 + "\n"})
+
+    assert _found(trunk.path) == {("anjo/core/chat.py", "glue_too_big")}
+
+
+def test_a_line_over_300_bytes_is_glue_too_big(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    chat = trunk.read("anjo/core/chat.py")
+    trunk.commit("fix: ok", {"anjo/core/chat.py": chat + "#" * 300 + "\n"})
+    assert _found(trunk.path) == set()
+
+    trunk.commit("fix: long", {"anjo/core/chat.py": trunk.read("anjo/core/chat.py") + "#" * 301 + "\n"})
+
+    assert _found(trunk.path) == {("anjo/core/chat.py", "glue_too_big")}
+
+
+def test_added_bytes_over_6_kb_per_file_is_glue_too_big(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 20 lines of at most 300 bytes stay under 6 KB, so lift the line cap to test the file cap.
+    monkeypatch.setattr(boundary, "GLUE_LINE_BYTE_CAP", 10_000)
+    trunk = make_trunk(tmp_path)
+    chat = trunk.read("anjo/core/chat.py")
+    trunk.commit("fix: wide", {"anjo/core/chat.py": chat + ("#" * 700 + "\n") * 8})
+    assert _found(trunk.path) == set()
+
+    trunk.commit("fix: wider", {"anjo/core/chat.py": trunk.read("anjo/core/chat.py") + "#" * 700 + "\n"})
+
+    assert _found(trunk.path) == {("anjo/core/chat.py", "glue_too_big")}
 
 
 @pytest.mark.parametrize(
@@ -80,6 +184,25 @@ def test_deleting_a_private_file_is_a_violation(tmp_path: Path) -> None:
         "anjo/core/age_lock.py",
         "anjo/dashboard/routes/age_lock_routes.py",
         "tests/test_crisis_detection.py",
+        "scripts/env_flip.sh",
+        "scripts/server_setup.sh",
+        "scripts/release_manager.sh",
+        "scripts/restore_full_state.sh",
+        "scripts/preflight.sh",
+        "scripts/ios_internal_build.sh",
+        "scripts/pre_submission_check.sh",
+        "scripts/build_release_bundle.py",
+        "mobile/ios/ci_scripts/ci_post_clone.sh",
+        "mobile/ios/bump_build.sh",
+        "sync-to-public.sh",
+        "ops/monitoring/anjo_monitor.sh",
+        "anjo/evals/local_floor.py",
+        "anjo/evals/local_floor_sets.py",
+        "anjo/evals/launch_safety_cases.py",
+        "anjo/evals/medical_gate.py",
+        "anjo/core/safety.py",
+        "tests/network_guard.py",
+        "mobile/app/(app)/safety.tsx",
     ],
 )
 def test_private_paths_cover_each_named_area(path: str) -> None:
@@ -87,7 +210,15 @@ def test_private_paths_cover_each_named_area(path: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "path", ["anjo/core/chat_completions.py", "anjo/core/outreach.py", "pyproject.toml"]
+    "path",
+    [
+        "anjo/core/chat_completions.py",
+        "anjo/core/outreach.py",
+        "pyproject.toml",
+        "anjo/dashboard/session_store.py",
+        "anjo/dashboard/session_admission.py",
+        "tests/conftest.py",
+    ],
 )
 def test_ordinary_app_files_are_not_private(path: str) -> None:
     assert not boundary.is_private(path)

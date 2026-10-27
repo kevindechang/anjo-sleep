@@ -26,12 +26,11 @@ FindingKind = Literal[
     "commit_format", "identity",
 ]
 
-MIN_ENV_VALUE_LEN = 8  # shorter values (flags, ports, "production") are not secrets
+MIN_ENV_VALUE_LEN = 8  # shorter values (flags, ports, modes) are not secrets
 COMMIT_TYPES = ("feat", "fix", "refactor", "docs", "test", "chore", "perf", "ci", "merge")
 _SUBJECT = re.compile(rf"^(?:{'|'.join(COMMIT_TYPES)})(?:\([^()\s]+\))?!?: \S")
 # git's own merge subjects carry only branch names, so they pass too.
 _GIT_MERGE = re.compile(r"^Merge (?:remote-tracking )?branch '[\w./-]+'(?: into [\w./-]+)?$")
-_NUMERIC = re.compile(r"^[0-9.:]+$")
 _SUBMODULE_MODE = "160000"
 
 
@@ -47,33 +46,41 @@ class Finding:
 
 @dataclass(frozen=True)
 class EnvValues:
-    """The env file's values worth searching for, keyed by name. Never printed."""
+    """The env file's values worth searching for, keyed by name. Values are never printed.
+
+    ``skipped_short`` and ``skipped_by_flag`` name the keys left out, for the report.
+    """
 
     values: Mapping[str, bytes]
-    skipped_short: int
+    skipped_short: tuple[str, ...] = ()
+    skipped_by_flag: tuple[str, ...] = ()
 
 
 def load_env_values(path: Path, skip_keys: frozenset[str]) -> EnvValues:
     values: dict[str, bytes] = {}
-    short = 0
+    short: list[str] = []
+    flagged: list[str] = []
     for raw in path.read_text(errors="replace").splitlines():
         line = raw.strip()
         if line.startswith("export "):
             line = line[len("export "):].lstrip()
         key, sep, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if not sep or not key or key.startswith("#") or key in skip_keys:
+        if not sep or not key or key.startswith("#"):
+            continue
+        if key in skip_keys:
+            flagged.append(key)
             continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
         elif " #" in value:
             # An unquoted value ends at an inline comment; the shorter prefix only adds hits.
             value = value.split(" #", 1)[0].rstrip()
-        if len(value) < MIN_ENV_VALUE_LEN or _NUMERIC.match(value):
-            short += 1
+        if len(value) < MIN_ENV_VALUE_LEN:
+            short.append(key)
             continue
         values.setdefault(key, value.encode())
-    return EnvValues(values, short)
+    return EnvValues(values, tuple(dict.fromkeys(short)), tuple(dict.fromkeys(flagged)))
 
 
 def load_terms(path: Path) -> list[str]:
@@ -137,17 +144,6 @@ def _history_entries(repo: Path) -> list[tuple[str, str, str | None]]:
     return entries
 
 
-def _sizes(repo: Path, blobs: Iterable[str]) -> dict[str, int]:
-    ids = list(blobs)
-    if not ids:
-        return {}
-    raw = _git.run(
-        repo, "cat-file", "--batch-check=%(objectname) %(objectsize)",
-        input_bytes="".join(f"{i}\n" for i in ids).encode(),
-    ).decode()
-    return {name: int(size) for name, size in (line.split() for line in raw.splitlines())}
-
-
 def _scan_files(repo: Path, matcher: _Matcher) -> list[Finding]:
     findings: list[Finding] = []
     first_seen: dict[str, tuple[str, str]] = {}
@@ -161,7 +157,7 @@ def _scan_files(repo: Path, matcher: _Matcher) -> list[Finding]:
         if path.lower().endswith(REFUSED_EXTENSIONS):
             findings.append(Finding("refused_extension", "refused extension", where))
         findings += [Finding("deny_term", f"{h} in a file path", where) for h in matcher.hits(path.encode())]
-    sizes = _sizes(repo, first_seen)
+    sizes = _git.blob_sizes(repo, list(first_seen))
     small = [blob for blob in first_seen if sizes[blob] <= MAX_FILE_BYTES]
     for blob in first_seen:
         if sizes[blob] > MAX_FILE_BYTES:
@@ -258,7 +254,7 @@ def check_commits(
 
     Messages are checked after the replace-message rules, as they will be published.
     """
-    matcher = _Matcher(EnvValues({}, 0), terms)
+    matcher = _Matcher(EnvValues({}), terms)
     findings: list[Finding] = []
     commits = _git.text(repo, "rev-list", f"{since}..{head}").split()
     for commit, raw in read_objects(repo, commits).items():

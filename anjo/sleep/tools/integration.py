@@ -14,19 +14,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
-from anjo.sleep.tools import _git, boundary
+from anjo.sleep.tools import _git, boundary, diffs
 
 INDEX_PATH = "anjo/sleep/INTEGRATION.md"
 
-_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _SIGNATURE = re.compile(
     r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:def|class|function)\b"
 )
 _BLAME_HEADER = re.compile(r"^([0-9a-f]{40}) \d+ \d+(?: \d+)?$")
-_DIFF = ("diff", "-U0", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color")
 
 _INTRO = """# Integration index
 
@@ -42,40 +39,18 @@ predates the hackathon, and its body stays private.
 _NOTHING = "No changes outside the published folders yet.\n"
 
 
-@dataclass(frozen=True)
-class Hunk:
-    start: int  # line number of the first added line in HEAD's version, 1-based
-    added: tuple[str, ...]
-
-
-def _hunks(repo: Path, since: str, path: str) -> list[Hunk]:
-    raw = _git.run(repo, *_DIFF, since, "HEAD", "--", path).decode("utf-8", "replace")
-    hunks: list[Hunk] = []
-    lines: list[str] = []
-    start, in_hunk = 0, False
-    for line in raw.split("\n"):
-        header = _HUNK_HEADER.match(line)
-        if header:
-            if lines:
-                hunks.append(Hunk(start, tuple(lines)))
-            start, lines, in_hunk = int(header.group(1)), [], True
-        elif in_hunk and line.startswith("+"):
-            lines.append(line[1:])
-    if lines:
-        hunks.append(Hunk(start, tuple(lines)))
-    return hunks
-
-
 def _indent(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
-def _enclosing_signature(head_lines: list[str], hunk: Hunk, added: set[int]) -> str | None:
+def _enclosing_signature(
+    head_lines: list[str], hunk: diffs.Hunk, added: set[int]
+) -> str | None:
     """The nearest existing ``def``/``class`` line that encloses the hunk, or None."""
     first = next((line for line in hunk.added if line.strip()), None)
     if first is None:
         return None
-    target = _indent(first)
+    target = _indent(first.decode("utf-8", "replace"))
     for number in range(hunk.start - 1, 0, -1):
         line = head_lines[number - 1]
         if number in added or not line.strip() or _indent(line) >= target:
@@ -86,7 +61,7 @@ def _enclosing_signature(head_lines: list[str], hunk: Hunk, added: set[int]) -> 
     return None
 
 
-def _blame_subjects(repo: Path, since: str, path: str, hunk: Hunk) -> list[str]:
+def _blame_subjects(repo: Path, since: str, path: str, hunk: diffs.Hunk) -> list[str]:
     """The subjects of the branch commits that added the hunk's lines, in order."""
     raw = _git.text(
         repo, "blame", "--porcelain", "-L", f"{hunk.start},+{len(hunk.added)}",
@@ -122,7 +97,7 @@ def _file_section(
     if change.added is None:
         return f"## `{change.path}` (binary)\n\nA binary file; its contents are not listed.\n"
     out = [f"## `{change.path}` (+{change.added} -{change.removed})\n"]
-    hunks = _hunks(repo, since, change.path)
+    hunks = diffs.added_hunks(repo, since, change.path)
     if not hunks:
         out.append("No added lines.\n")
         return "\n".join(out)
@@ -136,7 +111,7 @@ def _file_section(
         signature = _enclosing_signature(lines, hunk, added)
         if signature:
             body_lines.append(f"existing: {signature}")
-        body_lines.extend(f"+{line}" for line in hunk.added)
+        body_lines.extend("+" + line.decode("utf-8", "replace") for line in hunk.added)
         body = "\n".join(body_lines)
         fence = _fence(body)
         out.append(f"At line {hunk.start}, added by {by}:\n\n{fence}diff\n{body}\n{fence}\n")

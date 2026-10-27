@@ -42,6 +42,17 @@ def ok(repo: Path, *args: str) -> bool:
     return done.returncode == 0
 
 
+def blob_sizes(repo: Path, ids: list[str]) -> dict[str, int]:
+    """Object sizes by id, from one ``git cat-file --batch-check`` call."""
+    if not ids:
+        return {}
+    raw = run(
+        repo, "cat-file", "--batch-check=%(objectname) %(objectsize)",
+        input_bytes="".join(f"{i}\n" for i in ids).encode(),
+    ).decode()
+    return {name: int(size) for name, size in (line.split() for line in raw.splitlines())}
+
+
 def merge_base(repo: Path, base: str, head: str = "HEAD") -> str:
     return text(repo, "merge-base", base, head)
 

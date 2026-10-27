@@ -3,8 +3,9 @@
 1. Boundary check (``boundary.check``); any violation stops the publish.
 2. Regenerate ``anjo/sleep/INTEGRATION.md`` and commit it when it changed.
 3. With ``--export-from <data_dir> --synthetic-ids <file>``, export synthetic results into
-   ``anjo/sleep/results/`` and commit them. New content from steps 2 and 3 is scanned
-   before it is committed, so a hit never lands in the trunk's history.
+   ``anjo/sleep/results/`` and commit them. The commits from steps 2 and 3 are first made
+   in the throwaway clone, with a pinned identity and date; they reach the trunk only after
+   steps 4-6 pass, as byte-identical commits, so a refused publish leaves the trunk as it was.
 4. Commit check: every commit since the branch point has a ``<type>: ...`` subject and no
    denylist term (after the replace-message rules).
 5. Filter a ``git clone --no-local`` of the trunk with ``git filter-repo``: the two published
@@ -18,9 +19,9 @@
    is accepted only when a strip list changed since the last publish.
 8. Report the head, the file count, the scan result and what changed since the last publish.
 
-``--dry-run`` runs steps 1-6 and plans step 7 without committing on the trunk or pushing:
-the index and results are committed only inside the throwaway clone, with dates pinned to
-the trunk head so the reported head is stable. The ``prereg`` branch is never touched.
+``--dry-run`` runs steps 1-6 and plans step 7 without committing on the trunk or pushing.
+Its head is the head a real publish of the same trunk would push. The ``prereg`` branch is
+never touched.
 
 The private inputs live in ``ops/sleep/`` (see its README): the denylist and the message
 replacements must be untracked, and the script refuses to run if either is tracked.
@@ -155,7 +156,7 @@ def _load_env(repo: Path, opts: Options, warnings: list[str]) -> scan.EnvValues:
     if not opts.dry_run:
         raise PublishRefused(f"the env file {env_file} is missing; a real publish scans its values")
     warnings.append(f"no env file at {env_file}; env values were not checked")
-    return scan.EnvValues({}, 0)
+    return scan.EnvValues({})
 
 
 def _load_config(repo: Path, opts: Options) -> Config:
@@ -245,8 +246,8 @@ def _stage(repo: Path, opts: Options, cfg: Config, staging: Path) -> bool:
     return index_changed
 
 
-def _pinned_env(repo: Path) -> dict[str, str]:
-    date = _git.text(repo, "log", "-1", "--format=%cI", "HEAD")
+def _pinned_env(date: str) -> dict[str, str]:
+    """A fixed identity and date, so the trunk commit is byte-identical to the rehearsed one."""
     return {
         **os.environ,
         "GIT_AUTHOR_NAME": "anjo-sleep publish", "GIT_AUTHOR_EMAIL": NOREPLY_EMAIL,
@@ -255,26 +256,54 @@ def _pinned_env(repo: Path) -> dict[str, str]:
     }
 
 
-def _commit_staged(target: Path, staging: Path, *, pinned: bool) -> list[str]:
-    """Copy the staged files into ``target`` and commit each group that changed."""
+def _staged_files(staging: Path, rel: str) -> list[str]:
+    source = staging / rel
+    if source.is_file():
+        return [rel]
+    if not source.is_dir():
+        return []
+    return sorted(p.relative_to(staging).as_posix() for p in source.rglob("*") if p.is_file())
+
+
+def _commit_staged(target: Path, staging: Path, env: dict[str, str]) -> list[str]:
+    """Copy the staged files into ``target`` and commit each group that changed.
+
+    Only the staged files are added and committed (never a whole folder), with hooks and
+    signing off and the pinned identity, so the same input gives the same commit anywhere.
+    """
     groups = ((integration.INDEX_PATH, INDEX_MESSAGE), (RESULTS_DIR, RESULTS_MESSAGE))
     made: list[str] = []
     for rel, message in groups:
-        source = staging / rel
-        if not source.exists():
+        files = _staged_files(staging, rel)
+        if not files:
             continue
-        if source.is_dir():
-            shutil.copytree(source, target / rel, dirs_exist_ok=True)
-        else:
-            (target / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target / rel)
-        _git.run(target, "add", "--", rel)
-        if _git.ok(target, "diff", "--cached", "--quiet", "--", rel):
+        for name in files:
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(staging / name, target / name)
+        _git.run(target, "add", "-f", "--", *files)
+        if _git.ok(target, "diff", "--cached", "--quiet", "--", *files):
             continue
-        env = _pinned_env(target) if pinned else None
-        flags = ("-c", "commit.gpgsign=false", "commit", "--no-verify") if pinned else ("commit",)
-        _git.run(target, *flags, "-q", "-m", message, "--", rel, env=env)
+        _git.run(
+            target, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-q", "-m", message,
+            "--", *files, env=env,
+        )
         made.append(_git.text(target, "rev-parse", "HEAD"))
+    return made
+
+
+def _commit_to_trunk(
+    repo: Path, staging: Path, env: dict[str, str], parent: str, rehearsed: str
+) -> list[str]:
+    """Commit the checked index and results on the trunk; they must match the rehearsal."""
+    if _git.text(repo, "rev-parse", "HEAD") != parent:
+        raise PublishRefused("the trunk moved during the publish; nothing was committed or pushed")
+    made = _commit_staged(repo, staging, env)
+    head = _git.text(repo, "rev-parse", "HEAD")
+    if head != rehearsed:
+        raise PublishRefused(
+            f"the trunk commit {head[:12]} differs from the rehearsed {rehearsed[:12]}; "
+            "nothing was pushed. Inspect the trunk's newest commits before publishing again."
+        )
     return made
 
 
@@ -385,7 +414,8 @@ def _since_last(clone: Path, cfg: Config, head: str) -> str:
 
 def _report(opts: Options, cfg: Config, clone: Path, head: str, plan: PushPlan, index: str) -> str:
     files = len(_git.text(clone, "ls-tree", "-r", "--name-only", head).splitlines())
-    skipped = ", ".join(sorted(opts.env_skip_keys)) or "none"
+    short = ", ".join(cfg.env.skipped_short) or "none"
+    flagged = ", ".join(cfg.env.skipped_by_flag) or "none"
     lines = [
         f"publish report{' (dry run)' if opts.dry_run else ''}",
         f"head {head}",
@@ -394,8 +424,9 @@ def _report(opts: Options, cfg: Config, clone: Path, head: str, plan: PushPlan, 
         f"push: {_describe_push(plan, opts)}",
         f"since the last publish: {_since_last(clone, cfg, head)}",
         f"integration index: {index}",
-        f"env scan: {len(cfg.env.values)} value(s) checked, {cfg.env.skipped_short} too short "
-        f"to be secrets, keys skipped by flag: {skipped}",
+        f"env scan: {len(cfg.env.values)} value(s) checked; under "
+        f"{scan.MIN_ENV_VALUE_LEN} characters, not checked: {short}; "
+        f"skipped by --env-skip-key: {flagged}",
     ]
     lines += [f"WARNING: {warning}" for warning in cfg.warnings]
     return "\n".join(lines)
@@ -419,7 +450,7 @@ def _index_note(changed: bool, made: list[str], dry_run: bool) -> str:
     if not changed:
         return "unchanged"
     if dry_run:
-        return "regenerated and committed in the throwaway clone only (dry run)"
+        return "regenerated; a real publish commits it on the trunk with this same head"
     return f"committed on the trunk as {made[0][:12]}" if made else "unchanged"
 
 
@@ -431,18 +462,25 @@ def run(opts: Options) -> str:
     _check_boundary(repo, opts.base)
     branch = _branch(repo)
     since = _git.merge_base(repo, opts.base)
+    parent = _git.text(repo, "rev-parse", "HEAD")
+    env = _pinned_env(_git.text(repo, "log", "-1", "--format=%cI", "HEAD"))
     with _workspace(opts.workdir) as work:
         staging, clone = work / "staging", work / "clone"
         index_changed = _stage(repo, opts, cfg, staging)
-        made = [] if opts.dry_run else _commit_staged(repo, staging, pinned=False)
         _clone(repo, branch, clone)
-        if opts.dry_run:
-            _commit_staged(clone, staging, pinned=True)
+        if _git.text(clone, "rev-parse", "HEAD") != parent:
+            raise PublishRefused("the trunk moved while it was cloned; nothing was committed")
+        # Rehearse the trunk commits inside the clone; the trunk gets them only once
+        # every check below has passed.
+        _commit_staged(clone, staging, env)
+        rehearsed = _git.text(clone, "rev-parse", "HEAD")
         _refuse_findings("the commit check", scan.check_commits(clone, since, "HEAD", cfg.terms, cfg.rules))
         head = _filter(clone, work, cfg)
         _refuse_findings("the scan", scan.scan_history(clone, cfg.env, cfg.terms, expected_email=NOREPLY_EMAIL))
         plan = _plan_push(clone, opts, head)
+        made: list[str] = []
         if not opts.dry_run:
+            made = _commit_to_trunk(repo, staging, env, parent, rehearsed)
             _push(clone, opts.remote, head, plan)
             _save_state(repo, opts.remote, {
                 "head": head,

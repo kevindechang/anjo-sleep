@@ -32,6 +32,8 @@ NOREPLY = "196453186+kevindechang@users.noreply.github.com"
 PLANTED = "plantedvalue" + "zq" + "4217"
 DENY_TERM = "synthetic-deny" + "-term-91"
 FIVE_MB = 5 * 1024 * 1024
+TWELVE_DIGITS = "".join(str(d) for d in (4, 0, 1, 7, 2, 9, 3, 8, 5, 6, 1, 2))
+IP_PORT = ".".join(("10", "42", "7", "19")) + ":" + "5432"
 
 
 @pytest.fixture(autouse=True)
@@ -473,12 +475,40 @@ def test_env_values_skip_short_values_and_inline_comments(tmp_path: Path) -> Non
         f"export QUOTED='{PLANTED}'\n"
         f"COMMENTED={PLANTED}x # set by hand\n"
         f"SKIPPED={PLANTED}y\n"
+        f"ACCOUNT_NUMBER={TWELVE_DIGITS}\n"
     )
 
     env = scan.load_env_values(env_file, frozenset({"SKIPPED"}))
 
-    assert env.values == {"QUOTED": PLANTED.encode(), "COMMENTED": (PLANTED + "x").encode()}
-    assert env.skipped_short == 2
+    assert env.values == {
+        "QUOTED": PLANTED.encode(),
+        "COMMENTED": (PLANTED + "x").encode(),
+        "ACCOUNT_NUMBER": TWELVE_DIGITS.encode(),
+    }
+    assert env.skipped_short == ("FLAG", "MODE")
+    assert env.skipped_by_flag == ("SKIPPED",)
+
+
+@needs_publish_tools
+@pytest.mark.parametrize("value", [TWELVE_DIGITS, IP_PORT], ids=["12-digit", "ip-port"])
+def test_scan_blocks_long_numeric_and_ip_port_env_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    trunk = make_trunk(tmp_path)
+    trunk.commit("feat: a setting [t1]", {"anjo/sleep/where.py": f"WHERE = '{value}'\n"})
+    remote, _ = make_remote(tmp_path)
+    env = {"SERVICE_ADDRESS": value}
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys, "--dry-run", env=env)
+    assert rc == 1
+    assert "SERVICE_ADDRESS" in out and value not in out
+
+    # The explicit escape hatch, and the report names the key it skipped.
+    rc, out = _publish(
+        trunk, remote, tmp_path, capsys, "--dry-run", "--env-skip-key", "SERVICE_ADDRESS", env=env
+    )
+    assert rc == 0, out
+    assert "skipped by --env-skip-key: SERVICE_ADDRESS" in out
 
 
 @needs_publish_tools
@@ -534,6 +564,116 @@ def test_gitleaks_finding_blocks_publish(
     assert rc == 1
     assert "gitleaks" in out and "anjo/sleep/cloud.py" in out
     assert token not in out
+
+
+def _commit_as(trunk: Repo, name: str, email: str, message: str, rel: str) -> None:
+    (trunk.path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (trunk.path / rel).write_text("X = 1\n")
+    git(trunk.path, "add", "--", rel)
+    git(trunk.path, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "-m", message)
+
+
+@needs_publish_tools
+def test_published_identities_are_the_noreply_address(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = make_trunk(tmp_path)
+    _commit_as(trunk, "Person One", "One@Example.invalid", "feat: one [t1]", "anjo/sleep/one.py")
+    _commit_as(trunk, "Person Two", "two@laptop.local", "feat: two [t1]", "anjo/sleep/two.py")
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys)
+
+    assert rc == 0, out
+    assert set(git(remote, "log", "--all", "--format=%ae%n%ce").splitlines()) == {NOREPLY}
+    names = set(git(remote, "log", "--all", "--format=%an").splitlines())
+    assert {"Person One", "Person Two"} <= names  # names stay; only emails are rewritten
+    log = git(remote, "log", "--all", "--format=%B%n%an <%ae>")
+    assert "Example.invalid" not in log and "laptop.local" not in log
+
+
+@needs_publish_tools
+@pytest.mark.parametrize("planted", ["deny", "env"])
+def test_author_name_with_a_private_term_blocks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], planted: str
+) -> None:
+    trunk = make_trunk(tmp_path)
+    name = f"bob {DENY_TERM}" if planted == "deny" else f"ab{PLANTED}"
+    _commit_as(trunk, name, "bob@example.invalid", "feat: a [t1]", "anjo/sleep/a.py")
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys, "--dry-run")
+
+    assert rc == 1
+    assert DENY_TERM not in out and PLANTED not in out
+
+
+@needs_publish_tools
+def test_renamed_away_path_with_a_denylist_term_blocks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = make_trunk(tmp_path)
+    trunk.commit("feat: a [t1]", {f"anjo/sleep/{DENY_TERM}.py": "X = 1\n"})
+    git(trunk.path, "mv", f"anjo/sleep/{DENY_TERM}.py", "anjo/sleep/b.py")
+    git(trunk.path, "commit", "-q", "-m", "refactor: rename [t1]")
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys, "--dry-run")
+
+    assert rc == 1
+    assert "(path withheld)" in out and DENY_TERM not in out
+
+
+@needs_publish_tools
+def test_tags_are_not_published(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    trunk = make_trunk(tmp_path)
+    git(trunk.path, "tag", "-a", "-m", f"note {PLANTED}", "v1")
+    trunk.commit("feat: a [t1]", {"anjo/sleep/a.py": "X = 1\n"})
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys)
+
+    assert rc == 0, out
+    assert git(remote, "tag", "-l") == ""
+
+
+@needs_publish_tools
+def test_moving_private_code_blocks_publish(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = make_trunk(tmp_path)
+    git(trunk.path, "mv", "anjo/core/chat.py", "anjo/sleep/chat.py")
+    git(trunk.path, "commit", "-q", "-m", "refactor: move [t1]")
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys, "--dry-run")
+
+    assert rc == 1
+    assert "moved_private_code" in out
+
+
+@needs_publish_tools
+@pytest.mark.parametrize("failure", ["scan", "commit-check"])
+def test_refused_real_publish_leaves_no_trunk_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], failure: str
+) -> None:
+    trunk = make_trunk(tmp_path)
+    chat = trunk.read("anjo/core/chat.py")
+    trunk.commit("feat: hook [t1]", {"anjo/core/chat.py": chat + "HOOK = 1\n"})  # index changes
+    if failure == "scan":
+        trunk.commit("feat: settings [t1]", {"anjo/sleep/settings.py": f"VALUE = '{PLANTED}'\n"})
+    else:
+        trunk.commit("added settings", {"anjo/sleep/settings.py": "VALUE = ''\n"})
+    before = trunk.head()
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys)
+
+    assert rc == 1
+    assert trunk.head() == before
+    assert git(trunk.path, "status", "--porcelain", "--", "anjo/sleep") == ""
+    assert not (trunk.path / "ops" / "sleep" / "publish_state.json").exists()
+    assert remote_ref(remote, "refs/heads/main") is None
 
 
 # ── Private config: the denylist and the message list stay out of git ─────────
