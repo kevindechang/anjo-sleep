@@ -17,7 +17,7 @@ Some things look like problems and aren't: something said elsewhere explains the
 - `report_finding`: report what you found, with:
   - the problem, in one sentence
   - your conclusion
-  - `p`, your probability that the problem is real
+  - `p`, your probability that your conclusion is true (for a retraction: that the problem is indeed gone)
   - `cites`, the ids of the items it rests on
   - its kind: `suspicion` while you are unsure; `resolution` once items beyond the ones that raised it settle it; `retraction` to withdraw a finding that later items dissolved
 

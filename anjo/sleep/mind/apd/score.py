@@ -8,17 +8,19 @@ that night); never the arm. A finding is matched when any of its judged states m
 state at an item's cutoff, or its latest.
 
 **One canonical state per item:** at the item's cutoff, the end of the day before its surface
-day, the matched finding updated last (by night; ties go to the higher ``p``, then the later
-report). Other matched findings are duplicates: they score nothing and still count toward the
-cap.
+day, the matched finding updated last, in report order (night, then seq); ``p`` breaks only a
+true tie, which one registry's seqs never leave. Other matched findings are duplicates: they score
+nothing and still count toward the cap.
 
 **Points** (``ITEM_POINTS``), from the canonical state and whether the judge rules its
 conclusion true against the sealed resolution (``holds``):
 
 - contradiction, gap, opportunity: a resolution that holds +1, one that doesn't -0.5, a
   suspicion +0.25, a retraction 0;
-- reversal: dismissed (a retraction, or a resolution that holds: not a problem) +1; still
-  standing as a problem (a suspicion, or a resolution that doesn't hold) -0.5;
+- reversal: dismissed +1, either retracted after a flag (an earlier suspicion or resolution of
+  the same finding, matched to the item, by the cutoff) or resolved as not a problem (a
+  resolution that holds); still standing as a problem (a suspicion, or a resolution that doesn't
+  hold) -0.5; a retraction with no flag before it 0;
 - decoy: still flagged (a suspicion, or a resolution that doesn't hold) -0.5; otherwise 0;
 - an item nothing matched in time: 0.
 
@@ -27,9 +29,9 @@ evidence alone: -0.5 while it stands (isn't retracted) unsupported, otherwise 0.
 one is reported apart.
 
 **Calibration** (Brier, lower is better) reads the same states: each canonical state and each
-standing unmatched finding, forecast ``p`` (a report's ``p`` is that the problem is real, so a
-retraction forecasts ``1 - p`` that its withdrawal holds) against the judge's ``holds``, plus each
-unreported planted problem item at forecast 0 and outcome 1.
+standing unmatched finding, forecast ``p`` against the judge's ``holds`` on its statement, for
+every kind (a report's ``p`` is the probability that its statement is true, as the brief says),
+plus each unreported planted problem item at forecast 0 and outcome 1.
 
 **Judge views.** ``audited`` is ``AuditedJudge``: Muse Spark and Gemini rule each pair, and where
 they differ Claude's blind audit stands. ``gemini`` is the Gemini judge alone. The caller passes
@@ -121,7 +123,7 @@ class AuditedJudge:
 def judge_prompt(report: FindingReport, evidence: Sequence[Evidence], item: PlantedItem | None) -> str:
     finding = "\n".join((
         f"Kind: {report.kind}", f"Problem: {report.problem}", f"Conclusion: {report.conclusion}",
-        f"Probability that the problem is real: {report.p:.2f}", f"Cites: {', '.join(report.cites) or 'nothing'}",
+        f"Probability that the conclusion is true: {report.p:.2f}", f"Cites: {', '.join(report.cites) or 'nothing'}",
     ))
     planted = (
         "No planted problem to compare. Judge the finding against the items above alone." if item is None
@@ -208,12 +210,24 @@ def _states_by(reports: Iterable[FindingReport], cutoff: date) -> tuple[FindingR
 
 def _canonical(item: PlantedItem, reports: Sequence[FindingReport], rulings: _Rulings) -> FindingReport | None:
     matched = [state for state in _states_by(reports, _cutoff(item)) if rulings.matches(state, item)]
-    return max(matched, key=lambda state: (state.day, state.p, state.seq), default=None)
+    return max(matched, key=lambda state: (state.day, state.seq, state.p), default=None)
 
 
-def _points(family: Family, state: FindingReport, holds: bool) -> float:
+def _flag_before(item: PlantedItem, state: FindingReport, reports: Sequence[FindingReport], rulings: _Rulings) -> bool:
+    """Whether ``state``'s finding flagged ``item`` (a suspicion or resolution matched to it)
+    before ``state`` and by the item's cutoff."""
+    return any(
+        report.finding_id == state.finding_id and report.seq < state.seq and report.day <= _cutoff(item)
+        and report.kind in ("suspicion", "resolution") and rulings.matches(report, item)
+        for report in reports
+    )
+
+
+def _points(family: Family, state: FindingReport, holds: bool, *, flagged_before: bool) -> float:
     flagged = state.kind == "suspicion" or (state.kind == "resolution" and not holds)
     if family == "reversal":
+        if state.kind == "retraction":
+            return RESOLVED if flagged_before else NOTHING
         return WRONG if flagged else RESOLVED
     if family == "decoy":
         return WRONG if flagged else NOTHING
@@ -221,7 +235,7 @@ def _points(family: Family, state: FindingReport, holds: bool) -> float:
 
 
 def _forecast(source: str, state: FindingReport, holds: bool) -> Forecast:
-    return Forecast(source, 1.0 - state.p if state.kind == "retraction" else state.p, int(holds))
+    return Forecast(source, state.p, int(holds))
 
 
 def _score_items(
@@ -237,7 +251,11 @@ def _score_items(
                 forecasts = (*forecasts, Forecast(item.id, 0.0, 1))
             continue
         holds = rulings.of(state, item).holds
-        scores = (*scores, ItemScore(item.id, item.family, state.finding_id, _points(item.family, state, holds)))
+        flagged_before = (
+            item.family == "reversal" and state.kind == "retraction" and _flag_before(item, state, reports, rulings)
+        )
+        points = _points(item.family, state, holds, flagged_before=flagged_before)
+        scores = (*scores, ItemScore(item.id, item.family, state.finding_id, points))
         forecasts = (*forecasts, _forecast(item.id, state, holds))
     return scores, forecasts
 

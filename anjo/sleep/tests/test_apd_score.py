@@ -98,9 +98,13 @@ def test_item_scored_once_from_standing_state() -> None:
 
 def test_reversal_rewards_retraction() -> None:
     reversal = item("i2", "reversal", resolution="The early worry dissolves: the grant covers it")
-    judge = Judge(same=frozenset({("f2", "i2")}), holds=frozenset({"right", "not a problem"}))
+    judge = Judge(same=frozenset({("f2", "i2"), ("f1", "i2")}), holds=frozenset({"right", "not a problem"}))
     cases = {
-        "retracted after a flag": (run(rep("f2", 2), rep("f2", 5, "retraction", 0.1)), apd.RESOLVED),
+        "retracted after a flag": (run(rep("f2", 2), rep("f2", 5, "retraction", 0.9)), apd.RESOLVED),
+        "retracted with no flag before": (run(rep("f2", 5, "retraction", 0.9)), apd.NOTHING),
+        "retracted after an unmatched flag": (run(rep("f2", 2, cites=("e-03-2",)), rep("f2", 5, "retraction", 0.9)),
+                                              apd.NOTHING),
+        "retracted after another finding's flag": (run(rep("f1", 2), rep("f2", 5, "retraction", 0.9)), apd.NOTHING),
         "resolved as not a problem": (run(rep("f2", 4, "resolution", 0.9, conclusion="not a problem")), apd.RESOLVED),
         "still standing": (run(rep("f2", 2, p=0.7)), apd.WRONG),
         "resolved as a problem": (run(rep("f2", 4, "resolution", 0.9, conclusion="a problem")), apd.WRONG),
@@ -153,10 +157,12 @@ def test_one_canonical_state_per_item() -> None:
     assert sheet.score.items == (apd.ItemScore("i1", "contradiction", "f2", apd.RESOLVED),)
     assert sheet.score.unmatched == ()  # f1 and f3 are duplicates: they score nothing and aren't unmatched
     assert [f.source for f in sheet.forecasts] == ["i1"]  # calibration reads the canonical state only
-    same_day = run(rep("f1", 5, p=0.7), rep("f2", 5, "resolution", 0.5, conclusion="right"))
-    tie = scored([item()], same_day, judge)
-    assert tie.score.items[0].canonical == "f1" and tie.score.items[0].points == apd.SUSPECTED  # higher p
-    assert tie.forecasts == (score.Forecast("i1", 0.7, 0),)  # f1 says "c", which the judge rules untrue
+    same_night = run(rep("f1", 5, p=0.9), rep("f2", 5, "resolution", 0.5, conclusion="right"))
+    later = scored([item()], same_night, judge)
+    assert later.score.items[0].canonical == "f2" and later.score.items[0].points == apd.RESOLVED  # not the higher p
+    assert later.forecasts == (score.Forecast("i1", 0.5, 1),)
+    updated = run(rep("f1", 3, p=0.6), rep("f2", 4, p=0.9), rep("f1", 5, "resolution", 0.7, conclusion="right"))
+    assert scored([item()], updated, judge).score.items[0].canonical == "f1"  # f1 was updated last
 
 
 def test_unreported_items_enter_calibration_at_zero() -> None:
@@ -173,6 +179,15 @@ def test_unreported_items_enter_calibration_at_zero() -> None:
     }  # no entry for the unreported decoy or the retracted unmatched finding
     assert score.brier(sheet.forecasts) == pytest.approx((0.04 + 1.0 + 0.09) / 3)
     assert score.brier(()) is None
+
+
+def test_calibration_forecasts_p_as_reported_for_every_kind() -> None:
+    reversal = item("i2", "reversal")
+    judge = Judge(same=frozenset({("f2", "i2"), ("f1", "i1")}), holds=frozenset({"right", "gone"}))
+    arm_run = run(rep("f2", 2), rep("f2", 5, "retraction", 0.85, conclusion="gone"),
+                  rep("f1", 4, "resolution", 0.7, conclusion="wrong"))
+    sheet = scored([item(), reversal], arm_run, judge)
+    assert set(sheet.forecasts) == {score.Forecast("i2", 0.85, 1), score.Forecast("i1", 0.7, 0)}
 
 
 # ── Unmatched findings and counts ─────────────────────────────────────────────
