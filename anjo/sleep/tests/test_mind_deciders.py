@@ -328,7 +328,7 @@ def test_night_without_estimator_or_synthetic_person_records_less(tmp_path: Path
     assert _points(done["p1"].log_path) == []  # only a synthetic life's nights are recorded
 
 
-# ── Review fixes: the night's clock ───────────────────────────────────────────
+# ── Review fixes: the night's clock, the offers, D1's study and complete records ──
 
 
 def test_accelerated_night_decides_on_the_virtual_clock(tmp_path: Path) -> None:
@@ -347,3 +347,51 @@ def test_accelerated_night_decides_on_the_virtual_clock(tmp_path: Path) -> None:
     assert homework.studied == ["u1-t1"]  # the target first seen on the virtual date is open on it
     [made] = fake.world.targets("u1").expectations()
     assert (made.made_at, made.horizon) == (end, end + timedelta(days=7))
+
+
+def test_a_point_without_an_offer_allows_nothing_and_every_replay_holds_to_it(tmp_path: Path) -> None:
+    world, _ = _world(tmp_path)
+    result = run_night_batch_with(world.deps(), {"p1": NIGHT})["p1"]  # no homework: no result, no second offer
+    pre, post = _points(result.log_path)
+    assert post.choice is None and post.ctx.allowed_actions == frozenset()
+    labels = _labels(post.raw)
+    chat = FakeChat({"action": "note", "target_id": "p1-t1"})
+    late = replay_point(post, labels, chat=chat)
+    assert "Allowed now: silence." in chat.prompts[-1]
+    assert all(c is None or c.want is None for c in late.choices.values())
+    picks = night_picks(replay_point(pre, labels, chat=FakeChat({"action": "silence", "target_id": None})), late)
+    assert picks.notes["D1"] is None  # D1 gets no contact chance D0 lacked
+    # a recorded choice its own point didn't allow is refused, not scored
+    want = Want(id="share:p1-t1", kind="share", target_id="p1-t1", action="hold_note",
+                priority_class="active_thread", strength=0.7)
+    forged = replace(post, choice=choose("away", (want,), NOTE_ONLY))
+    with pytest.raises(ValueError, match="allow"):
+        replay_point(forged, labels, chat=None)
+
+
+def _two_targets(state: QuestionState, first: str, second: str) -> QuestionState:
+    return QuestionState(view=replace(state.view, target_ids=(first, second)), parts=state.parts)
+
+
+def test_d1_study_takes_an_offered_question_on_its_first_target() -> None:
+    raw = _raw(_thread("t1", revision=2), _thread("t2", revision=1),
+               questions=(_question("q1", "t1", "open"), _two_targets(_question("q2", "t9", "open"), "t1", "t2")))
+    inquire_only = replace(CTX, allowed_actions=frozenset({"inquire", "hold_note"}))
+    chat = FakeChat({"action": "study", "target_id": "t1"})
+    replay = replay_point(_point(raw, ctx=inquire_only, d0=False), _labels(raw), chat=chat, lesions={})
+    choice = replay.choices["D1"]
+    assert choice is not None and (choice.action, choice.question_id) == ("inquire", "q1")
+    assert points.study_target(choice, raw) == "t1"
+    assert "Allowed now: study, note, silence." in chat.prompts[0]
+    # the question comes first when both are offered; homework when no offered question starts with it
+    both = replace(CTX, allowed_actions=frozenset({"inquire", "revisit_thread"}))
+    first = replay_point(_point(raw, ctx=both, d0=False), _labels(raw), chat=chat, lesions={}).choices["D1"]
+    assert first is not None and first.action == "inquire"
+    other = FakeChat({"action": "study", "target_id": "t2"})  # q2 holds t2 second: not its first target
+    homework = replay_point(_point(raw, ctx=both, d0=False), _labels(raw), chat=other, lesions={}).choices["D1"]
+    assert homework is not None and homework.action == "revisit_thread"
+    held = replay_point(_point(raw, ctx=inquire_only, d0=False), _labels(raw), chat=other, lesions={}).choices["D1"]
+    assert held is not None and held.want is None
+    parked = _raw(_thread("t1", revision=2), questions=(_question("q1", "t1", "parked"),))
+    asleep = replay_point(_point(parked, ctx=inquire_only, d0=False), _labels(parked), chat=chat, lesions={})
+    assert asleep.choices["D1"] is not None and asleep.choices["D1"].want is None

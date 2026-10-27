@@ -3,7 +3,8 @@
 - **D0, her chooser:** the choice the night recorded. It is the only one that ever ran.
 - **D1, a plain model:** Spark Open with ``decider_v1.md`` at temperature 0, through a ``ChatFn``
   port. It answers a target id from the snapshot with ``study`` or ``note``, or silence, which is a
-  normal, unpenalized answer. It reads only the render, which never holds her choice.
+  normal, unpenalized answer. It reads only the render, which never holds her choice. A study goes
+  through an offered, live question whose first target it names, else through homework.
 - **D2, no confidence:** her chooser without the (1 - ``confidence``) multiplier on ``understand``,
   and with the inquiry priority's uncertainty factor fixed at 1.0, so the lesion still bites when
   ``understand`` acts through ``inquire``.
@@ -11,14 +12,16 @@
   with no unacted revision gets one unit of new evidence, so her own homework and time can wake it,
   and a parked question wakes without new evidence.
 - **D4, earliest due:** the open commitment with the earliest ``check_after``, else the open thread
-  mentioned longest ago.
+  mentioned longest ago, studied the way D1's study is.
 
 D2 and D3 change the raw input and replay it through ``snapshot.build``, ``derive_wants`` and
 ``choose``; D4 reads ``snapshot.build``'s dates and picks by rule. All three are pure, and the
 serving chooser has no lesion switch: a lesion lives here and nowhere else. Every decider gets the
 same ``DeciderInput`` at a point: the same raw snapshot, its one render, the same context (policy,
-allowance and offered actions) and the same contact rules, which ``choose`` applies to each answer.
-Nothing here executes a choice; the replay only returns what each would have done.
+allowance and the actions the point really offered, none at a night's missing second offer) and the
+same contact rules, which ``choose`` applies to each answer; a replay refuses any choice its point
+didn't allow. A decider not asked at a point (D1 without a chat port) is not observed there, which is
+never silence. Nothing here executes a choice; the replay only returns what each would have done.
 """
 from __future__ import annotations
 
@@ -36,8 +39,9 @@ from anjo.sleep.context.template import render as fill
 from anjo.sleep.mind import points, wants
 from anjo.sleep.mind.choose import choose
 from anjo.sleep.mind.points import STUDY_ACTIONS, DecisionPoint, Phase, QuestionState, RawSnapshot
+from anjo.sleep.mind.snapshot import LIVE_QUESTION
 from anjo.sleep.mind.wants import COMMITMENT_CLASS, THREAD_CLASS
-from anjo.sleep.types import Action, Choice, ChoiceContext, Result, Target, Want, WantKind
+from anjo.sleep.types import Action, Choice, ChoiceContext, QuestionView, Result, Target, Want, WantKind
 
 DECIDERS: Final = ("D0", "D1", "D2", "D3", "D4")
 CONTACTED: Final = ("D0", "D1")  # the deciders whose notes are compared (contact discipline)
@@ -121,7 +125,7 @@ def _question_line(state: QuestionState) -> str:
 
 def _allowed(ctx: ChoiceContext) -> list[str]:
     allowed = []
-    if any(ctx.allows(action) for action in STUDY_ACTIONS):
+    if any(ctx.allows(action) for action in STUDY_ACTIONS) or ctx.allows("inquire"):
         allowed.append("study")
     if ctx.allows("hold_note"):
         allowed.append("note")
@@ -181,7 +185,21 @@ def _plain_choice(inp: DeciderInput, action: D1Action, target_id: str | None) ->
     target = next((t for t in inp.raw.targets if t.id == target_id), None)
     if action == "silence" or target is None:
         return choose("away", (), inp.ctx)
-    return choose("away", (_rule_want(target, note=action == "note"),), inp.ctx)
+    want = _rule_want(target, note=True) if action == "note" else _study_want(target, inp.raw, inp.ctx)
+    return choose("away", (want,), inp.ctx)
+
+
+def _study_want(target: Target, raw: RawSnapshot, ctx: ChoiceContext) -> Want:
+    """A study of ``target``: an offered inquiry into a live question whose first target it is, else
+    homework (which ``choose`` holds back when the point doesn't offer it)."""
+    question = _first_question(target.id, raw) if ctx.allows("inquire") else None
+    homework = _rule_want(target, note=False)
+    return homework if question is None else replace(homework, action="inquire", question_id=question.id)
+
+
+def _first_question(target_id: str, raw: RawSnapshot) -> QuestionView | None:
+    live = [q.view for q in raw.questions if q.view.status in LIVE_QUESTION and q.view.target_ids[0] == target_id]
+    return min(live, key=lambda q: (-q.priority, q.id), default=None)
 
 
 def _rule_want(target: Target, *, note: bool) -> Want:
@@ -243,7 +261,7 @@ def earliest_due(inp: DeciderInput) -> Choice:
         pick = min(threads, key=lambda row: (row[0], row[1]))[2]
     else:
         return choose("away", (), inp.ctx)
-    return choose("away", (_rule_want(pick, note=False),), inp.ctx)
+    return choose("away", (_study_want(pick, inp.raw, inp.ctx),), inp.ctx)
 
 
 LESIONS: Final[Mapping[str, Decider]] = MappingProxyType({
@@ -267,8 +285,8 @@ def replay_point(
     point: DecisionPoint, labels: Mapping[str, str], *, chat: ChatFn | None,
     lesions: Mapping[str, Decider] = LESIONS,
 ) -> Replay:
-    """Replay ``point``: D0 is its recorded choice; D1 is asked through ``chat`` (``None`` skips
-    it); each lesion gets the same input."""
+    """Replay ``point``: D0 is its recorded choice; D1 is asked through ``chat`` (``None`` leaves
+    it unobserved); each lesion gets the same input. Every choice is held to what the point allowed."""
     inp = input_of(point, labels)
     choices: dict[str, Choice | None] = {"D0": point.choice}
     answer = None if chat is None else ask(inp, chat)
@@ -276,6 +294,9 @@ def replay_point(
         choices["D1"] = answer.choice
     for name, decide in lesions.items():
         choices[name] = decide(inp)
+    for name, choice in choices.items():
+        if choice is not None and choice.want is not None and not point.ctx.allows(choice.want.action):
+            raise ValueError(f"{name} chose {choice.want.action}, which its point didn't allow")
     return Replay(input=inp, choices=MappingProxyType(choices), d1=answer)
 
 

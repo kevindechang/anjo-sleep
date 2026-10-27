@@ -23,7 +23,8 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 9. ``promote``: every gate passed, or the night is rejected and the previous checkpoint serves.
 10. ``note``: a ``hold_note`` choice, or a second offer (``allowed_actions={"hold_note"}``) after a
     result with a verified source; at most one note, which the writer may decline. A synthetic life
-    records this offer's decision point too, before the note settles its target, offered or not.
+    records this offer's decision point too, before the note settles its target, offered or not: a
+    night with no second offer records one that allows nothing.
 11. ``finish``: the ``NightResult`` and every receipt.
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
@@ -579,8 +580,9 @@ class NightRunner:
         if not (offer or self.deps.is_synthetic(p.uid)):
             return None
         raw = self._raw(p)
+        allowed = frozenset({"hold_note"}) if offer else frozenset()  # what this point really offered
         ctx = ChoiceContext(policy=self.deps.policy, allowance=p.wonder.allowance(max(0, p.actions_left)),
-                            allowed_actions=frozenset({"hold_note"}))
+                            allowed_actions=allowed)
         if not offer:
             self._point(p, "post_result", raw, ctx, None)
             return None
