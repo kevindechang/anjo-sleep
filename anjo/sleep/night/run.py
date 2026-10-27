@@ -43,6 +43,7 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.mind import receipt, snapshot
+from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.note.hold import Fact, write_note
@@ -68,7 +69,7 @@ from anjo.sleep.types import (
 Window = tuple[datetime, datetime]
 PERSON_KINDS: Final = frozenset({"lesson", "correction", "preference", "tone_request"})
 USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
-    "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
+    "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
     "probes": ("new", None), "choose": ("new", None), "brief": ("new", None),
     "practice": ("new", None), "dataset": ("new", None), "train": ("new", None),
     "gates": ("existing", "crisis check"), "promote": ("new", None), "note": ("existing", "outreach"),
@@ -133,9 +134,16 @@ class NightRunner:
 
     def run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None = None,
+        days: Mapping[str, DayRun] | None = None,
     ) -> dict[str, NightResult]:
-        people = [self._start(uid, night, (windows or {}).get(uid) or day_window(night)) for uid, night in nights.items()]
+        days = days or {}
+        windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}
+        people = [self._start(uid, night, windows.get(uid) or day_window(night)) for uid, night in nights.items()]
         for p in people:
+            if p.uid in days:  # a short day (a turn Glimmer couldn't answer) is recorded, never an error
+                day = days[p.uid]
+                p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
+                           failed_turns=day.failed, short_day=day.short)
             for step, fn in (("close_day", self._close_day), ("extract", self._extract), ("notice", self._notice),
                              ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
                 self._do(p, step, fn)
@@ -518,13 +526,14 @@ def _inside(summary: Mapping[str, Any], end: datetime, span: timedelta) -> bool:
 
 def run_night_batch_with(
     deps: NightDeps, nights: Mapping[str, date], *, windows: Mapping[str, Window] | None = None,
-    accelerated: bool = False,
+    accelerated: bool = False, days: Mapping[str, DayRun] | None = None,
 ) -> dict[str, NightResult]:
     """``run_night_batch`` over the given ports. ``accelerated`` runs pass each simulated day's
-    window; the steps are the same."""
-    if accelerated and not windows:
+    window; the steps are the same. ``days`` are simulated days run just before the night: each
+    one's window is the night's, and its log starts with the day's counts."""
+    if accelerated and not (windows or days):
         raise ValueError("an accelerated run passes each person's simulated window")
-    return NightRunner(deps).run_batch(nights, windows)
+    return NightRunner(deps).run_batch(nights, windows, days)
 
 
 _DEFAULT: list[Callable[[], NightDeps]] = []

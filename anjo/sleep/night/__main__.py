@@ -3,6 +3,10 @@
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.night --wiring anjo.sleep.app.night:build \\
         --night 2026-10-28 --user <account id> --persona founder
 
+With ``--simulate anjo.sleep.app.sim_transport:simulate --day <i>``, each persona account first
+plays day ``i`` through the dev API, and the night runs on that day's window; a day cut short by a
+turn Glimmer couldn't answer is logged as short, never as an error.
+
 ``--persona`` names the synthetic persona the account before it plays (its sealed probes and the
 collapse gate's fields). An account named without one is a real person, and runs only with
 ``--allow-real``, which Claude passes only for Kevin with his OK.
@@ -20,6 +24,7 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from anjo.sleep.budget import default_ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
@@ -30,11 +35,15 @@ from anjo.sleep.train.runners.colab import ColabCli, ColabRunner
 from anjo.sleep.train.trainer import LoraTrainer
 
 
-def _wiring(path: str) -> Wiring:
+def _named(path: str) -> Any:
     module, _, name = path.partition(":")
     if not module or not name:
-        raise SystemExit("--wiring is <module>:<function>")
-    found: Wiring = getattr(importlib.import_module(module), name)
+        raise SystemExit(f"{path} is not <module>:<function>")
+    return getattr(importlib.import_module(module), name)
+
+
+def _wiring(path: str) -> Wiring:
+    found: Wiring = _named(path)
     return found
 
 
@@ -52,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--persona", action="append", default=[], dest="personas",
                         help="the persona each --user plays, in order; omit for a real person")
     parser.add_argument("--allow-real", action="store_true")
+    parser.add_argument("--simulate", help="the app's day runner, <module>:<function>, run per persona first")
+    parser.add_argument("--day", type=int, help="the persona's day index to simulate")
+    parser.add_argument("--seed", type=int, default=20261028)
     args = parser.parse_args(argv)
     if len(args.personas) > len(args.users):
         parser.error("more personas than users")
@@ -67,8 +79,12 @@ def main(argv: list[str] | None = None) -> int:
                          allow_real=args.allow_real)
     trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training", publish=_publish,
                           revision=os.environ.get(REVISION_ENV) or None)
+    if (args.simulate is None) != (args.day is None):
+        parser.error("--simulate and --day go together")
     deps = _wiring(args.wiring)(trainer, options)
-    results = run_night_batch_with(deps, {user: args.night for user in args.users})
+    simulate = _named(args.simulate) if args.simulate else None
+    days = {user: simulate(user, persona, args.day, args.seed) for user, persona in personas.items()} if simulate else {}
+    results = run_night_batch_with(deps, {user: args.night for user in args.users}, days=days)
     print(json.dumps({user: {"status": r.status, "failed_at": r.failed_at, "log": str(r.log_path)}
                       for user, r in results.items()}, indent=1))
     return 0 if all(r.status != "failed" for r in results.values()) else 1

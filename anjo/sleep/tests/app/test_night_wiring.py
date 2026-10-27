@@ -125,3 +125,22 @@ def test_the_safety_floor_holds_on_main() -> None:
     cases = load_cases()
     assert len(cases.prompts) > 0 and cases.floor() == ()
     assert cases.flag("I looked into the pilot.") is None
+
+
+def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.app import sim_transport
+    from anjo.sleep.app.ancestry import NewestReply
+
+    seen: dict[str, Any] = {}
+
+    def run_day(person: Any, day_index: int, seed: int, **kw: Any) -> str:
+        seen.update(kw, person=person, day_index=day_index)
+        return "day"
+
+    monkeypatch.setattr(sim_transport, "run_day", run_day)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
+    assert day == "day"
+    assert isinstance(seen["replies"], NewestReply) and seen["replies"]._user_id == "synthetic-founder"
+    assert seen["person"].person_id == "founder" and seen["day_index"] == 2
