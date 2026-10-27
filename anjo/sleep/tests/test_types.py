@@ -156,7 +156,15 @@ def test_night_result_copies_its_mappings() -> None:
     night = _night(gates=gates)
     gates["safety"] = t.GateResult(gate="safety", passed=False, value=1.0, threshold=0.0)
     assert set(night.gates) == {"general"}
-    assert dataclasses.asdict(night)["gates"]["general"]["passed"] is True
+    assert night.gates["general"].passed is True
+
+
+def test_night_result_mappings_are_read_only() -> None:
+    night = _night()
+    with pytest.raises(TypeError):
+        night.gates["safety"] = _gate()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        night.cost_parts["gates"] = 0.0  # type: ignore[index]
 
 
 def test_night_cost_is_the_sum_of_its_parts() -> None:
@@ -179,8 +187,10 @@ def test_inquire_names_its_question_and_nothing_else_does() -> None:
 
 
 def test_target_revisions_and_confidence_are_checked() -> None:
-    with pytest.raises(ValueError, match="acted_revision"):
+    with pytest.raises(ValueError, match="acted_revision 2 > revision 1"):
         _target(revision=1, acted_revision=2)
+    with pytest.raises(ValueError, match="acted_revision -1 < 0"):
+        _target(revision=1, acted_revision=-1)
     with pytest.raises(ValueError, match="confidence"):
         _target(confidence=1.2)
 
