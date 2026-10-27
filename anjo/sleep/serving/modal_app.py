@@ -4,18 +4,24 @@
 
 Modal only serves; training runs on Colab (Task 5). Three things live here:
 
-- ``download_weights``: fetches the pinned Glimmer revision onto the weights volume, once.
+- ``download_weights``: fetches the pinned Glimmer revision onto the weights volume, once. It
+  holds no secret unless the deploy names a Hugging Face one (the repo isn't gated).
 - ``Serve``: vLLM's OpenAI-compatible server on one GPU at the precision ``config.SERVING``
-  names, with LoRA on, so the base model and every personal adapter share it. It scales to zero
-  after ten idle minutes, and every function has a timeout.
+  names, with LoRA on, so the base model and every personal adapter share it. It holds only the
+  serving secret (VLLM_API_KEY). It scales to zero after ten idle minutes, and every function has
+  a timeout.
 - ``put_adapter`` and the ``upload_adapter`` entrypoint: put one checked adapter folder on the
-  adapters volume under its name. A running container sees a new adapter after its next start.
+  adapters volume under its name, never over an adapter already there. A running container sees a
+  new adapter after its next start.
 
-Deploying and calling cost money, so only the coordinator runs them, on Kevin's go:
+Deploying and calling cost money, so only the coordinator runs them, on Kevin's go (the pinned
+commit is in deploy/dev_host.md). Loading this file without a pinned revision raises, so a deploy
+without one fails before anything is built:
 
     ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py
-    modal run anjo/sleep/serving/modal_app.py::download_weights
-    modal run anjo/sleep/serving/modal_app.py::upload_adapter --folder <dir> --name p-<hash>-n<night>
+    ANJO_SLEEP_GLIMMER_REVISION=<commit> modal run anjo/sleep/serving/modal_app.py::download_weights
+    ANJO_SLEEP_GLIMMER_REVISION=<commit> modal run anjo/sleep/serving/modal_app.py::upload_adapter \
+        --folder <dir> --name p-<hash>-n<night>
 
 The deploy-time settings (``config.ServeConfig.from_env``) are baked into the image's environment,
 so the container reads the same values. The image carries only this file and ``config.py``.
@@ -27,27 +33,28 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Final
 
 from anjo.sleep.serving import config
 
 modal: Any = importlib.import_module("modal")  # only the deploying machine has the package
 
 SETTINGS = config.ServeConfig.from_env()
+REVISION: Final = SETTINGS.pinned_revision()  # at load: no deploy without a pinned revision
 _HERE = Path(__file__).resolve().parent
 _HEALTH_POLL_S = 5.0
 
 
 def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
     """The deploy's settings as the container's environment, so ``from_env`` reads them there."""
-    env = {config.VLLM_VERSION_ENV: settings.vllm_version}
-    if settings.revision is not None:
-        env[config.REVISION_ENV] = settings.revision
+    env = {config.VLLM_VERSION_ENV: settings.vllm_version, config.REVISION_ENV: settings.pinned_revision()}
     if settings.tool_parser is not None:
         env[config.TOOL_PARSER_ENV] = settings.tool_parser
     if settings.gpu_snapshot:
         env[config.SNAPSHOT_ENV] = "1"
+    if settings.hf_secret is not None:
+        env[config.HF_SECRET_ENV] = settings.hf_secret
     return env
 
 
@@ -63,7 +70,8 @@ image = (
 app = modal.App(config.APP_NAME, image=image)
 weights = modal.Volume.from_name(config.WEIGHTS_VOLUME, create_if_missing=True)
 adapters = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
-secret = modal.Secret.from_name(config.SECRET_NAME)
+serve_secret = modal.Secret.from_name(config.SECRET_NAME)
+download_secrets = [] if SETTINGS.hf_secret is None else [modal.Secret.from_name(SETTINGS.hf_secret)]
 
 # Modal's GPU memory snapshot, tried to cut the cold start; the wake time with and without it is
 # measured and recorded in deploy/dev_host.md.
@@ -75,15 +83,15 @@ _SNAPSHOT_OPTIONS: dict[str, Any] = (
 
 
 @app.function(
-    volumes={config.WEIGHTS_DIR: weights}, secrets=[secret], timeout=config.DOWNLOAD_TIMEOUT_S,
+    volumes={config.WEIGHTS_DIR: weights}, secrets=download_secrets, timeout=config.DOWNLOAD_TIMEOUT_S,
 )
 def download_weights() -> str:
-    """Fetch the pinned revision onto the weights volume; HF_TOKEN comes from the secret."""
+    """Fetch the pinned revision onto the weights volume, with HF_TOKEN only when the deploy named
+    a Hugging Face secret."""
     from huggingface_hub import snapshot_download
 
-    revision = SETTINGS.pinned_revision()
-    path = config.weights_path(revision)
-    snapshot_download(config.MODEL, revision=revision, local_dir=path)
+    path = config.weights_path(REVISION)
+    snapshot_download(config.MODEL, revision=REVISION, local_dir=path)
     weights.commit()
     return path
 
@@ -107,7 +115,7 @@ def _wait_until_healthy(process: subprocess.Popen[bytes], timeout_s: float) -> N
 @app.cls(
     gpu=SETTINGS.precision.gpu,
     volumes={config.WEIGHTS_DIR: weights, config.ADAPTERS_DIR: adapters},
-    secrets=[secret],
+    secrets=[serve_secret],
     timeout=config.SERVE_TIMEOUT_S,
     scaledown_window=config.SCALEDOWN_S,
     **_SNAPSHOT_OPTIONS,
@@ -130,10 +138,13 @@ class Serve:
 
 def put_adapter(folder: Path, name: str) -> None:
     """Upload one adapter folder under its name. It is checked first, and a name already on the
-    volume is refused rather than overwritten: each night's adapter has its own name."""
+    volume is refused rather than overwritten, so a pinned night's adapter never changes. Modal's
+    own upload refuses to overwrite as well (force=False), for two uploads racing."""
     config.check_adapter(folder, name)
     volume = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
-    with volume.batch_upload() as batch:
+    if name in {PurePosixPath(entry.path).name for entry in volume.listdir("/")}:
+        raise config.ServeConfigError(f"adapter {name} is already on the volume; a night's adapter never changes")
+    with volume.batch_upload(force=False) as batch:
         batch.put_directory(str(folder), f"/{name}")
 
 

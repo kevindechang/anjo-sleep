@@ -26,8 +26,11 @@ from typing import Final
 APP_NAME: Final = "anjo-sleep-serve"
 WEIGHTS_VOLUME: Final = "anjo-sleep-weights"
 ADAPTERS_VOLUME: Final = "anjo-sleep-adapters"
-# The Modal secret holds VLLM_API_KEY (the bearer token the dev host sends) and HF_TOKEN.
+# The serving secret holds VLLM_API_KEY (the bearer token the dev host sends) and nothing else.
+# Downloading needs no secret, since the Glimmer repo isn't gated: a deploy that wants HF_TOKEN
+# anyway names a second Modal secret in HF_SECRET_ENV, and only download_weights gets it.
 SECRET_NAME: Final = "anjo-sleep-serve"
+HF_SECRET_ENV: Final = "ANJO_SLEEP_HF_SECRET"
 WEIGHTS_DIR: Final = "/weights"
 ADAPTERS_DIR: Final = "/adapters"
 PORT: Final = 8000
@@ -52,8 +55,13 @@ CONCURRENT_REQUESTS: Final = 16
 
 MAX_MODEL_LEN: Final = 32_768
 MAX_OUTPUT_TOKENS: Final = 4096
-MAX_LORA_RANK: Final = 64
-MAX_LORAS: Final = 4
+# LoRA sizing (the memory math is in deploy/dev_host.md). Task 5 trains rank 16, and Meta's
+# recipe ranges up to 32, so the server takes rank 32 at most. About 6 to 8 adapters are live at
+# once (Kevin, Tessa, three lives and the arm-3x donors): all 8 fit on the GPU, and the CPU keeps
+# 16 warm so a ninth swaps in without reading the volume. vLLM queues a request past these.
+MAX_LORA_RANK: Final = 32
+MAX_LORAS: Final = 8
+MAX_CPU_LORAS: Final = 16
 GPU_MEMORY_UTILIZATION: Final = 0.92
 
 ADAPTER_NAME = re.compile(r"p-[0-9a-f]{8,64}-n[0-9]{1,5}")
@@ -62,6 +70,7 @@ MAX_ADAPTER_BYTES: Final = 2 * 1024**3
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _PARSER = re.compile(r"[a-z0-9_]{1,40}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+_SECRET = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 class ServeConfigError(ValueError):
@@ -87,14 +96,16 @@ SERVING: Final = FP8_L40S  # the fallback is BF16_A100: change this line, then r
 @dataclass(frozen=True)
 class ServeConfig:
     """The deploy-time settings. ``revision`` is the Glimmer commit the weights are pinned to,
-    ``tool_parser`` vLLM's tool-call parser for Glimmer (None serves without tools), and
-    ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start."""
+    ``tool_parser`` vLLM's tool-call parser for Glimmer (None serves without tools),
+    ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
+    ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without)."""
 
     precision: Precision
     revision: str | None
     tool_parser: str | None
     gpu_snapshot: bool
     vllm_version: str
+    hf_secret: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:
@@ -108,9 +119,13 @@ class ServeConfig:
         version = env.get(VLLM_VERSION_ENV, "").strip() or DEFAULT_VLLM_VERSION
         if not _VERSION.fullmatch(version):
             raise ServeConfigError(f"{VLLM_VERSION_ENV} is a release such as {DEFAULT_VLLM_VERSION}")
+        hf_secret = env.get(HF_SECRET_ENV, "").strip() or None
+        if hf_secret is not None and not _SECRET.fullmatch(hf_secret):
+            raise ServeConfigError(f"{HF_SECRET_ENV} names a Modal secret, never its value")
         return cls(
             precision=SERVING, revision=revision, tool_parser=parser,
             gpu_snapshot=env.get(SNAPSHOT_ENV, "").strip() == "1", vllm_version=version,
+            hf_secret=hf_secret,
         )
 
     def pinned_revision(self) -> str:
@@ -135,6 +150,7 @@ def vllm_command(config: ServeConfig) -> list[str]:
         "--max-model-len", str(MAX_MODEL_LEN),
         "--gpu-memory-utilization", str(GPU_MEMORY_UTILIZATION),
         "--enable-lora", "--max-lora-rank", str(MAX_LORA_RANK), "--max-loras", str(MAX_LORAS),
+        "--max-cpu-loras", str(MAX_CPU_LORAS),
     ]
     if config.precision.quantization is not None:
         command += ["--quantization", config.precision.quantization]

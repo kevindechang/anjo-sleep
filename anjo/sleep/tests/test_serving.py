@@ -24,7 +24,7 @@ ADAPTER = "p-1a2b3c4d-n3"
 def _settings(**changes: Any) -> ServeConfig:
     base = {
         "precision": config.SERVING, "revision": REVISION, "tool_parser": None,
-        "gpu_snapshot": False, "vllm_version": config.DEFAULT_VLLM_VERSION,
+        "gpu_snapshot": False, "vllm_version": config.DEFAULT_VLLM_VERSION, "hf_secret": None,
     }
     return ServeConfig(**{**base, **changes})
 
@@ -36,7 +36,9 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert command[:3] == ["vllm", "serve", f"/weights/{config.MODEL}/{REVISION}"]
     assert command[command.index("--quantization") + 1] == "fp8"
     assert command[command.index("--served-model-name") + 1] == config.MODEL
-    assert "--enable-lora" in command and command[command.index("--max-lora-rank") + 1] == "64"
+    assert "--enable-lora" in command
+    sizes = {flag: command[command.index(flag) + 1] for flag in ("--max-lora-rank", "--max-loras", "--max-cpu-loras")}
+    assert sizes == {"--max-lora-rank": "32", "--max-loras": "8", "--max-cpu-loras": "16"}
     assert "--enable-auto-tool-choice" not in command  # no parser: turns run without tools
     assert not any("KEY" in part or "TOKEN" in part for part in command)
     env = config.vllm_env()
@@ -61,9 +63,13 @@ def test_a_tool_call_parser_turns_tool_calls_on() -> None:
 def test_settings_come_from_the_environment_and_are_checked() -> None:
     read = ServeConfig.from_env({
         config.REVISION_ENV: REVISION, config.TOOL_PARSER_ENV: "llama3_json", config.SNAPSHOT_ENV: "1",
+        config.HF_SECRET_ENV: "anjo-sleep-hf",
     })
     assert (read.revision, read.tool_parser, read.gpu_snapshot) == (REVISION, "llama3_json", True)
-    assert ServeConfig.from_env({}).revision is None
+    assert read.hf_secret == "anjo-sleep-hf"
+    assert (ServeConfig.from_env({}).revision, ServeConfig.from_env({}).hf_secret) == (None, None)
+    with pytest.raises(ServeConfigError, match="secret"):
+        ServeConfig.from_env({config.HF_SECRET_ENV: "HF_TOKEN=abc"})
     with pytest.raises(ServeConfigError, match="commit"):
         ServeConfig.from_env({config.REVISION_ENV: "main"})
     with pytest.raises(ServeConfigError, match="parser"):
@@ -118,6 +124,7 @@ class _Recorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.uploads: list[tuple[str, str]] = []
+        self.on_volume: set[str] = set()
 
     def decorator(self, name: str) -> Callable[..., Callable[[Any], Any]]:
         def make(*_args: Any, **kwargs: Any) -> Callable[[Any], Any]:
@@ -162,13 +169,19 @@ def _fake_modal(recorder: _Recorder) -> types.ModuleType:
 
         def put_directory(self, local: str, remote: str) -> None:
             recorder.uploads.append((local, remote))
+            recorder.on_volume.add(remote.strip("/"))
 
     class Volume:
         @staticmethod
         def from_name(name: str, **_kwargs: Any) -> Volume:
             return Volume()
 
-        def batch_upload(self) -> Batch:
+        def listdir(self, path: str, *, recursive: bool = False) -> list[Any]:
+            assert (path, recursive) == ("/", False)
+            return [types.SimpleNamespace(path=name) for name in sorted(recorder.on_volume)]
+
+        def batch_upload(self, force: bool = False) -> Batch:
+            recorder.calls.append(("batch_upload", {"force": force}))
             return Batch()
 
     class App:
@@ -231,6 +244,7 @@ def test_the_gpu_snapshot_is_tried_only_when_its_flag_is_set(
 ) -> None:
     recorder = _Recorder()
     monkeypatch.setitem(sys.modules, "modal", _fake_modal(recorder))
+    monkeypatch.setenv(config.REVISION_ENV, REVISION)
     monkeypatch.setenv(config.SNAPSHOT_ENV, "1")
     monkeypatch.delitem(sys.modules, "anjo.sleep.serving.modal_app", raising=False)
     try:
@@ -253,7 +267,60 @@ def test_an_adapter_is_put_on_the_volume_under_its_name(
     module.put_adapter(folder, ADAPTER)
     assert recorder.uploads == [(str(folder), f"/{ADAPTER}")]
 
+    assert recorder.by("batch_upload") == [{"force": False}]  # Modal itself refuses to overwrite too
+
     (folder / "extra.bin").write_bytes(b"\0")
     with pytest.raises(ServeConfigError):
-        module.put_adapter(folder, ADAPTER)
+        module.put_adapter(folder, "p-1a2b3c4d-n4")
     assert len(recorder.uploads) == 1  # a refused folder never reaches the volume
+
+
+def test_a_pinned_nights_adapter_can_never_change(
+    modal_app: tuple[types.ModuleType, _Recorder], tmp_path: Path,
+) -> None:
+    module, recorder = modal_app
+    folder = _adapter(tmp_path)
+    module.put_adapter(folder, ADAPTER)
+
+    with pytest.raises(ServeConfigError, match="already on the volume"):
+        module.put_adapter(folder, ADAPTER)
+    assert len(recorder.uploads) == 1
+
+
+def _import_app(monkeypatch: pytest.MonkeyPatch, recorder: _Recorder) -> types.ModuleType:
+    monkeypatch.setitem(sys.modules, "modal", _fake_modal(recorder))
+    monkeypatch.delitem(sys.modules, "anjo.sleep.serving.modal_app", raising=False)
+    try:
+        return importlib.import_module("anjo.sleep.serving.modal_app")
+    finally:
+        sys.modules.pop("anjo.sleep.serving.modal_app", None)
+
+
+def test_the_app_refuses_to_load_without_a_pinned_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checked at import, so ``modal deploy`` fails before anything is built, not at the first wake."""
+    monkeypatch.delenv(config.REVISION_ENV, raising=False)
+    recorder = _Recorder()
+
+    with pytest.raises(ServeConfigError, match=config.REVISION_ENV):
+        _import_app(monkeypatch, recorder)
+    assert recorder.by("cls") == [] and recorder.by("function") == []
+
+
+@pytest.mark.parametrize("hf_secret", [None, "anjo-sleep-hf"])
+def test_each_function_gets_only_its_own_secret(
+    monkeypatch: pytest.MonkeyPatch, hf_secret: str | None,
+) -> None:
+    """Serving holds only VLLM_API_KEY's secret. Downloading needs none (the repo isn't gated), or
+    only the Hugging Face one the deploy names."""
+    monkeypatch.setenv(config.REVISION_ENV, REVISION)
+    if hf_secret is None:
+        monkeypatch.delenv(config.HF_SECRET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(config.HF_SECRET_ENV, hf_secret)
+    recorder = _Recorder()
+    _import_app(monkeypatch, recorder)
+
+    (serve,) = recorder.by("cls")
+    (download,) = recorder.by("function")
+    assert serve["secrets"] == [config.SECRET_NAME]
+    assert download["secrets"] == ([] if hf_secret is None else [hf_secret])

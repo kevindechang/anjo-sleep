@@ -13,7 +13,9 @@ the bearer token, naming the person's adapter as the model, or the base model wh
 yet. It refuses a request whose person's words trip Anjo's crisis floor, the last of four checks
 (the chat route's floor, the harness's no-model tiers and the prompt hook come first). A refusal,
 a cold or stopped server and any error before the first token end the call with an error, so the
-chat route's existing fallback answers with the frontier talker (RF3).
+chat route's existing fallback answers with the frontier talker (RF3). Modal holds a request
+through a cold start of up to 20 minutes, so the runtime calls it under a short deadline of its
+own (``REPLY_DEADLINE_S``), apart from the container's three-hour limit.
 
 **The route.** ``sleep_route`` is the route override: a flagged person who chose the open-model
 talker gets a route pinned to ``sleep_modal``; everyone else's route is unchanged.
@@ -28,6 +30,8 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+import httpx
+
 from anjo.core.anjo_model.assignment import OVERRIDE_CAUSE, ROUTE_ANJO, ModelRoute, QualifiedPin
 from anjo.core.anjo_model.hosted_runtime import ChatCompletionsRuntime, bearer
 from anjo.core.anjo_model.pin import (
@@ -40,7 +44,7 @@ from anjo.core.anjo_model.pin import (
     ThinkingControl,
 )
 from anjo.core.anjo_model.runtime import RequestNotSent
-from anjo.core.anjo_model.transport import Transport
+from anjo.core.anjo_model.transport import HttpTransport, Transport
 from anjo.core.best_effort import best_effort
 from anjo.core.crisis import NO_CRISIS
 from anjo.core.floor import FloorRules, check_message, normalize_message
@@ -67,6 +71,11 @@ CONTROL_TOKENS: Final = (
     "<|eot_id|>", "<|eom_id|>", "<|python_tag|>", "<|finetune_right_pad_id|>",
 )
 MAX_TOOLS: Final = 16
+# Modal must answer, and each later read arrive, within REPLY_DEADLINE_S. Past it the call ends
+# through the transient-error path (httpx's timeout, then TransportError), so a cold, stopped or
+# stalled server is answered by the frontier talker (RF3), well inside a turn's patience.
+REPLY_DEADLINE_S: Final = 20.0
+CONNECT_DEADLINE_S: Final = 5.0
 _URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?")
 _REVISION_ID = re.compile(r"rv-[0-9a-f]{16}")
 
@@ -149,6 +158,13 @@ def carries_crisis(request: ModelRequest) -> bool:
     return bool(decision.tier != NO_CRISIS)
 
 
+def deadline_transport(inner: httpx.BaseTransport | None = None) -> HttpTransport:
+    """The transport the sleep runtime calls Modal over, under the reply deadline. ``inner`` is
+    the httpx transport underneath (tests pass httpx.MockTransport)."""
+    timeout = httpx.Timeout(REPLY_DEADLINE_S, connect=CONNECT_DEADLINE_S)
+    return HttpTransport(client=httpx.Client(transport=inner, timeout=timeout, follow_redirects=False))
+
+
 def holds_words(request: ModelRequest) -> bool:
     """Whether the call is a tool round, whose words the loop holds back until the round ends
     cleanly (anjo/agent/loop.py); any other call's words are shown as they stream."""
@@ -163,7 +179,7 @@ class SleepRuntime(ChatCompletionsRuntime):
     def __init__(self, pin: HostPin, *, transport: Transport | None = None) -> None:
         if not isinstance(pin, GlimmerPin):
             raise PinError(f"the {HOST} runtime serves a Glimmer pin")
-        super().__init__(pin, transport=transport)
+        super().__init__(pin, transport=transport or deadline_transport())
         self._glimmer = pin
 
     def stream(
