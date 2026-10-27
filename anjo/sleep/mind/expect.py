@@ -2,11 +2,14 @@
 
 Engine core, and pure: every time is passed in, on the night's clock (virtual in accelerated runs).
 
-- **The horizon** is the target's ``check_after`` or seven days, whichever comes first. A date at or
-  before the moment she chose leaves seven days: a date that has passed proves nothing.
+- **The horizon** is the target's ``check_after`` or seven days, whichever comes first, whenever the
+  target has a date. A date at or before the moment she chose ends the horizon there: the study
+  resolves ``not_needed`` at once and nothing later can make it needed.
 - **The estimator** is a logistic of the want kind (``follow_up`` or ``understand``), the target's
-  unacted revisions and the days to its ``check_after`` (seven for a thread, or a plan with no date).
-  ``fit`` fits it on development lives only; its coefficients are registered before the freeze.
+  unacted revisions and the signed days to its ``check_after``, unclipped. A target with no date (a
+  thread, or a plan with none) reads ``undated_days``, which is part of the registered
+  ``Coefficients``, so the fill is fixed with them. ``fit`` fits it on development lives only; its
+  coefficients are registered before the freeze.
 - **Resolution comes from the person's side only.** ``needed`` when, inside ``[made_at, horizon)``,
   the person's own evidence returns to the target or a held-out item the frozen relevance labels mark
   relevant arrives; ``not_needed`` once the horizon has passed without either; ``censored`` whenever
@@ -28,7 +31,7 @@ from typing import Final, Literal
 from anjo.sleep.types import Evidence, Expectation, ExpectationOutcome, Target, WantKind
 
 HORIZON: Final = timedelta(days=7)
-THREAD_DAYS: Final = 7.0  # days to check_after for a thread, or a plan with no date
+THREAD_DAYS: Final = 7.0  # the default registered fill for a target with no date
 STUDY_KINDS: Final = frozenset({"follow_up", "understand"})  # the wants a study comes from
 # Evidence from the person: their turns, or their own stored corrections and preferences.
 PERSON_KINDS: Final = frozenset({"lesson", "correction", "preference", "tone_request"})
@@ -42,9 +45,10 @@ Split = Literal["development", "held_out"]
 @dataclass(frozen=True)
 class Coefficients:
     """The registered estimator: log-odds = ``intercept`` + ``understand`` (for an ``understand``
-    want; 0 for ``follow_up``) + ``unacted`` x unacted revisions + ``days`` x days to its date.
-    ``base_rate`` is the development lives' share of resolved expectations that were needed (the
-    constant-rate forecast) and ``n`` how many resolved expectations the fit saw."""
+    want; 0 for ``follow_up``) + ``unacted`` x unacted revisions + ``days`` x signed days to its
+    date, or x ``undated_days`` for a target with none. ``base_rate`` is the development lives'
+    share of resolved expectations that were needed (the constant-rate forecast) and ``n`` how many
+    resolved expectations the fit saw."""
 
     intercept: float
     understand: float
@@ -52,6 +56,7 @@ class Coefficients:
     days: float
     base_rate: float
     n: int
+    undated_days: float = THREAD_DAYS
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.base_rate <= 1.0:
@@ -60,11 +65,12 @@ class Coefficients:
 
 @dataclass(frozen=True)
 class Features:
-    """What the estimator reads: about her study and its target, never about the person."""
+    """What the estimator reads: about her study and its target, never about the person. ``days``
+    is ``None`` for a target with no date; the coefficients say what that reads as."""
 
     understand: bool
     unacted: int
-    days: float
+    days: float | None
 
 
 @dataclass(frozen=True)
@@ -76,12 +82,12 @@ class FitRow:
     split: Split
 
 
-def days_to_check(target: Target, made_at: datetime) -> float:
-    """Days from ``made_at`` to the target's date, inside [0, 7]; seven when it has none."""
+def days_to_check(target: Target, made_at: datetime) -> float | None:
+    """Signed days from ``made_at`` to the target's date (negative once it has passed), or ``None``
+    when it has none."""
     if target.check_after is None:
-        return THREAD_DAYS
-    days = (target.check_after - made_at) / timedelta(days=1)
-    return min(THREAD_DAYS, max(0.0, days))
+        return None
+    return (target.check_after - made_at) / timedelta(days=1)
 
 
 def features(kind: WantKind, target: Target, made_at: datetime) -> Features:
@@ -91,9 +97,10 @@ def features(kind: WantKind, target: Target, made_at: datetime) -> Features:
 
 
 def horizon(target: Target, made_at: datetime) -> datetime:
-    """The target's date or seven days, whichever comes first; a date already passed leaves seven."""
+    """The target's date or seven days, whichever comes first. A date at or before ``made_at`` ends
+    the horizon there, so the expectation resolves at once and never as needed."""
     week = made_at + HORIZON
-    if target.check_after is None or target.check_after <= made_at:
+    if target.check_after is None:
         return week
     return min(target.check_after, week)
 
@@ -147,31 +154,34 @@ def fit_row(
     return FitRow(features(kind, target, made_at), outcome == "needed", split)
 
 
-def fit(rows: Sequence[FitRow], *, ridge: float = RIDGE) -> Coefficients:
+def fit(rows: Sequence[FitRow], *, ridge: float = RIDGE, undated_days: float = THREAD_DAYS) -> Coefficients:
     """Fit the estimator on development lives' resolved expectations (Newton's method with an L2
-    penalty, so it stays finite when one outcome dominates). A held-out row is refused."""
+    penalty, so it stays finite when one outcome dominates). A held-out row is refused. An undated
+    row reads ``undated_days``, which the coefficients keep."""
     if not rows:
         raise ValueError("the estimator needs at least one resolved development expectation")
     if any(row.split != "development" for row in rows):
         raise ValueError("the estimator is fitted on development lives only")
     weights = [0.0, 0.0, 0.0, 0.0]
     for _ in range(MAX_ITERATIONS):
-        step = _newton_step(rows, weights, ridge)
+        step = _newton_step(rows, weights, ridge, undated_days)
         weights = [w - s for w, s in zip(weights, step, strict=True)]
         if max(abs(s) for s in step) < TOLERANCE:
             break
     intercept, understand, unacted, days = weights
     needed = sum(row.needed for row in rows)
-    return Coefficients(intercept, understand, unacted, days, base_rate=needed / len(rows), n=len(rows))
+    return Coefficients(intercept, understand, unacted, days, base_rate=needed / len(rows), n=len(rows),
+                        undated_days=undated_days)
 
 
-def _vector(features: Features) -> tuple[float, float, float, float]:
-    return 1.0, 1.0 if features.understand else 0.0, float(features.unacted), features.days
+def _vector(features: Features, undated_days: float) -> tuple[float, float, float, float]:
+    days = undated_days if features.days is None else features.days
+    return 1.0, 1.0 if features.understand else 0.0, float(features.unacted), days
 
 
 def _log_odds(coefficients: Coefficients, features: Features) -> float:
     terms = (coefficients.intercept, coefficients.understand, coefficients.unacted, coefficients.days)
-    return math.fsum(w * x for w, x in zip(terms, _vector(features), strict=True))
+    return math.fsum(w * x for w, x in zip(terms, _vector(features, coefficients.undated_days), strict=True))
 
 
 def _logistic(z: float) -> float:
@@ -181,13 +191,13 @@ def _logistic(z: float) -> float:
     return tail / (1.0 + tail)
 
 
-def _newton_step(rows: Sequence[FitRow], weights: list[float], ridge: float) -> list[float]:
+def _newton_step(rows: Sequence[FitRow], weights: list[float], ridge: float, undated_days: float) -> list[float]:
     """H^-1 g for the penalized log-likelihood (H negative definite), so ``w - step`` climbs it."""
     size = len(weights)
     gradient = [-ridge * w if k else 0.0 for k, w in enumerate(weights)]
     hessian = [[-ridge if (k == j and k) else 0.0 for j in range(size)] for k in range(size)]
     for row in rows:
-        x = _vector(row.features)
+        x = _vector(row.features, undated_days)
         p = _logistic(math.fsum(w * v for w, v in zip(weights, x, strict=True)))
         for k in range(size):
             gradient[k] += (float(row.needed) - p) * x[k]

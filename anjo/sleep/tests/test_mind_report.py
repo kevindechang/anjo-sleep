@@ -195,7 +195,7 @@ def test_expectation_fields_never_describe_the_person() -> None:
     ]
     assert [f.name for f in dataclasses.fields(expect.Features)] == ["understand", "unacted", "days"]
     assert [f.name for f in dataclasses.fields(expect.Coefficients)] == [
-        "intercept", "understand", "unacted", "days", "base_rate", "n",
+        "intercept", "understand", "unacted", "days", "base_rate", "n", "undated_days",
     ]
     assert list(inspect.signature(expect.estimate).parameters) == ["coefficients", "features"]
     made = expect.expectation(_thread(), "understand", _at(2), COEFFICIENTS)
@@ -221,7 +221,7 @@ def test_fit_learns_the_direction_and_refuses_held_out_rows() -> None:
     target = _thread()
     assert expect.fit_row(target, "understand", _at(1), "censored", "development") is None
     row = expect.fit_row(target, "understand", _at(1), "needed", "development")
-    assert row == expect.FitRow(expect.Features(True, 2, 7.0), True, "development")
+    assert row == expect.FitRow(expect.Features(True, 2, None), True, "development")
 
 
 def test_demand_forecasting_brier_against_the_development_rate() -> None:
@@ -280,3 +280,43 @@ def test_stationary_bootstrap_keeps_constant_sequences() -> None:
         assert len(indices) == n and all(0 <= i < n for i in indices)
     life = _life("h1", tuple(_night(day, {"D0": "t1"}) for day in range(4)), {"w1": 5}, {("t1", "w1")})
     assert _report(life).lives[0].anticipation["D0"].interval == (1.0, 1.0)
+
+
+# ── Review fixes: the horizon and the date feature ────────────────────────────
+
+
+def test_a_passed_date_resolves_not_needed_at_once_and_never_counts_later() -> None:
+    made_at, end = _at(5), _at(30)
+    for date_at in (_at(3), made_at):  # passed, or due at the moment she chose
+        plan = _thread("c1", kind="commitment", check_after=date_at, revision=1, acted_revision=0)
+        assert expect.horizon(plan, made_at) == date_at
+        made = expect.expectation(plan, "follow_up", made_at, COEFFICIENTS)
+        assert made.horizon == date_at
+        assert expect.resolve(made, returns=(), arrivals=(), life_end=end, as_of=made_at) == "not_needed"
+        later = (made_at, _at(6), _at(9))  # the person comes back, and relevant work arrives, afterwards
+        assert expect.resolve(made, returns=later, arrivals=later, life_end=end, as_of=end) == "not_needed"
+        life = _life("h1", (), {}, set(), last_day=29, expectations=(made,), returns={"c1": (START + timedelta(days=6),)})
+        demand = _report(life).demand
+        assert (demand.n, demand.censored) == (1, 0)
+        assert demand.brier == pytest.approx(made.p_needed ** 2)  # scored as not needed, never as a hit
+
+
+def test_days_to_its_date_are_not_clipped_and_the_undated_value_is_registered() -> None:
+    made_at = _at(0)
+    far = _thread("c1", kind="commitment", check_after=_at(12), revision=1, acted_revision=0)
+    passed = replace(far, check_after=_at(-3))
+    assert expect.days_to_check(far, made_at) == 12.0 and expect.days_to_check(passed, made_at) == -3.0
+    assert expect.days_to_check(_thread(), made_at) is None
+    undated = expect.features("understand", _thread(), made_at)
+    assert undated.days is None
+    assert COEFFICIENTS.undated_days == expect.THREAD_DAYS == 7.0
+    assert expect.estimate(COEFFICIENTS, undated) == pytest.approx(
+        expect.estimate(COEFFICIENTS, replace(undated, days=7.0)))
+    moved = replace(COEFFICIENTS, undated_days=2.0)  # the value an undated target reads is the registered one
+    assert expect.estimate(moved, undated) == pytest.approx(expect.estimate(COEFFICIENTS, replace(undated, days=2.0)))
+    assert expect.estimate(COEFFICIENTS, expect.features("follow_up", far, made_at)) != pytest.approx(
+        expect.estimate(COEFFICIENTS, expect.features("follow_up", replace(far, check_after=_at(7)), made_at)))
+    rows = [expect.FitRow(expect.Features(True, n, None if n % 2 else float(n)), n >= 3, "development")
+            for n in range(6)] * 4
+    assert expect.fit(rows, undated_days=5.0).undated_days == 5.0
+    assert expect.fit(rows, undated_days=5.0) != expect.fit(rows)  # the fill is part of what was fitted
