@@ -344,22 +344,19 @@ def test_only_tonights_pairs_are_kept(tmp_path: Path) -> None:
 # ── in the night ──────────────────────────────────────────────────────────────
 
 
-def test_the_night_holds_full_practices_worst_case_and_logs_its_counts(tmp_path: Path) -> None:
+def _full_night(tmp_path: Path, critic: Spark) -> tuple[Any, Any, Any]:
     from anjo.sleep.budget import Ledger
     from anjo.sleep.context.brief_store import TrainingBriefs
     from anjo.sleep.context.builder import RecallSettings
     from anjo.sleep.context.recall_bm25 import Bm25Recall
     from anjo.sleep.context.training import TrainingContext
-    from anjo.sleep.evidence.jsonl import read_records
-    from anjo.sleep.night.holds import spark_worst_usd
     from anjo.sleep.night.run import run_night_batch_with
     from anjo.sleep.tests.night_fakes import NIGHT as NIGHT_DATE
-    from anjo.sleep.tests.night_fakes import World, step
+    from anjo.sleep.tests.night_fakes import World
 
     world = World(tmp_path)
     world.plan("p1", NIGHT_DATE)
     world.spark.scenes = SCENES_ASKED
-    critic = Spark(_scenes(), scored(4, (5, 6, 8), lambda t: False))
 
     def spark(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
         content = messages[-1]["content"]
@@ -375,10 +372,36 @@ def test_the_night_holds_full_practices_worst_case_and_logs_its_counts(tmp_path:
 
     ledger = Ledger(tmp_path / "budget.jsonl")
     deps = world.deps(spark_chat=spark, practice=practice, ledger=ledger)
-    result = run_night_batch_with(deps, {"p1": NIGHT_DATE})["p1"]
+    return run_night_batch_with(deps, {"p1": NIGHT_DATE})["p1"], deps, ledger
+
+
+def test_the_night_holds_full_practices_worst_case_and_logs_its_counts(tmp_path: Path) -> None:
+    from anjo.sleep.evidence.jsonl import read_records
+    from anjo.sleep.night.holds import spark_worst_usd
+    from anjo.sleep.tests.night_fakes import step
+
+    result, deps, ledger = _full_night(tmp_path, Spark(_scenes(), scored(4, (5, 6, 8), lambda t: False)))
     assert result.status == "promoted"
     done = step(result.log_path, "practice")
     assert done["scenes"] == 16 and done["pairs"] == 16 and done["teacher_targets"] == 0
     assert done["critic_unreadable"] == 0
+    assert done["targets"] == {"teacher": 0, "glimmer": 16, "teacher_share": 0.0} and done["teacher_alarm"] is False
     [held] = [e for e in read_records(ledger.path, PLAIN) if e["op"] == "reserve" and e["job"].startswith("night:practice:")]
     assert held["amount"] == pytest.approx(spark_worst_usd(deps.prices, 1 + 2 * 16))
+
+
+def test_the_night_flags_a_teacher_heavy_practice(tmp_path: Path) -> None:
+    from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
+    from anjo.sleep.tests.night_fakes import step
+
+    result, _, _ = _full_night(tmp_path, Spark(_scenes(), scored(9, (5, 6, 7), lambda t: t.startswith("GLIMMER"))))
+    done = step(result.log_path, "practice")
+    assert done["targets"] == {"teacher": 16, "glimmer": 0, "teacher_share": 1.0}
+    assert TEACHER_ALARM_SHARE == 0.5 and done["teacher_alarm"] is True
+
+
+def test_a_pair_whose_sides_match_is_dropped(tmp_path: Path) -> None:
+    same = _pair(1, "Start with the strongest image.", "Start with the strongest image.")
+    data, _ = _dataset(tmp_path, [same, _pair(2, "Begin with sound.", "Start anywhere.")], dropout=0.0)
+    assert {e.id for e in data.examples} == {"pr-01", "pr-02"} and [p.id for p in data.pairs] == ["pr-02"]
+    assert data.pairs_dropped["identical"] == 1

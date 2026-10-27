@@ -179,3 +179,36 @@ def test_a_stalled_lookup_stops_at_the_time_limit() -> None:
     finally:
         released.set()
     assert web.requests == []
+
+
+def test_an_unknown_charset_falls_back_to_utf8() -> None:
+    web = FakeWeb()
+    web.respond(STUDY_URL, lambda request: httpx.Response(
+        200, headers={"content-type": "text/html; charset=bogus"}, content=STUDY_HTML.encode()))
+    page = web.fetcher().fetch(STUDY_URL)
+    assert STUDY_QUOTE in page.text
+
+
+def test_the_search_reads_a_reply_with_an_unknown_charset() -> None:
+    from anjo.sleep.homework.tools import JSON_TYPES, WikipediaSearch
+
+    web = FakeWeb()
+    web.dns["en.wikipedia.org"] = [PUBLIC]
+    reply = {"query": {"search": [{"title": "Optical sorting", "snippet": "sorts <b>film</b>"}]}}
+    web.respond("https://en.wikipedia.org/w/api.php", lambda request: httpx.Response(
+        200, headers={"content-type": "application/json; charset=bogus"}, json=reply))
+    [hit] = WikipediaSearch(web.fetcher(types=JSON_TYPES)).search("optical sorting", 3)
+    assert hit.url == "https://en.wikipedia.org/wiki/Optical_sorting" and hit.snippet == "sorts film"
+
+
+def test_a_slow_drip_stops_at_the_time_limit() -> None:
+    import time
+
+    web = FakeWeb()
+    web.respond(STUDY_URL, lambda request: httpx.Response(
+        200, headers={"content-type": "text/html"},
+        content=chunks([b"<p>drip</p>"] * 6, lambda: time.sleep(0.35))))
+    started = time.monotonic()
+    with pytest.raises(FetchFailed, match="time"):
+        web.fetcher(timeout_s=0.4).fetch(STUDY_URL)
+    assert time.monotonic() - started <= 0.4 + 0.15  # never a whole extra read past the limit

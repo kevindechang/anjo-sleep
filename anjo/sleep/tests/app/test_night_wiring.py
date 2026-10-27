@@ -124,8 +124,16 @@ def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice
     homework: Any = deps.homework
     assert isinstance(homework, WonderHomework) and homework.available  # Task 5's no-op is replaced
     assert isinstance(homework._wonder, MetaWonder) and homework._ledger is deps.ledger
+    from anjo.sleep.app.names import person_names
+
+    assert homework._names is person_names  # the search screen knows the person's names
     practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
     assert isinstance(practice, FullPractice) and practice.max_spark_calls == 1 + 2 * 16
+    assert (deps.settings.practice_scenes, deps.settings.practice_teacher) == (16, True)
+    chosen = night.build(NoTrainer(), NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"},
+                                                   practice_scenes=20, practice_teacher=False))
+    assert (chosen.settings.practice_scenes, chosen.settings.practice_teacher) == (20, False)
+    assert chosen.practice(lambda *a, **k: None, date(2026, 10, 28)).max_spark_calls == 1 + 20  # type: ignore[arg-type]
 
 
 def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

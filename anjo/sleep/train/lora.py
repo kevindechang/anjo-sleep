@@ -157,7 +157,7 @@ def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str 
         "max_seq_length": cfg.max_seq_length, "packing": cfg.packing,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": cfg.batch_size,
         "warm_start": warm, "revision": revision, "objective": cfg.objective,
-        "dpo_beta": cfg.dpo_beta, "dpo_learning_rate": cfg.dpo_lr,
+        "dpo_beta": cfg.dpo_beta, "dpo_learning_rate": cfg.dpo_lr, "min_optimizer_steps": cfg.min_optimizer_steps,
     }
 
 

@@ -282,7 +282,8 @@ def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -
     }
     sft = colab_train.build_settings(colab_train.load_config(json.dumps({**base, "objective": "sft"})))
     assert "dpo" not in sft
-    raw = json.dumps({**base, "objective": "sft_dpo", "dpo_beta": 0.1, "dpo_learning_rate": 5e-7})
+    raw = json.dumps({**base, "objective": "sft_dpo", "dpo_beta": 0.1, "dpo_learning_rate": 5e-7,
+                      "min_optimizer_steps": 8})
     settings = colab_train.build_settings(colab_train.load_config(raw))
     dpo = settings["dpo"]
     assert dpo["beta"] == 0.1 and dpo["learning_rate"] == 5e-7
@@ -299,3 +300,16 @@ def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -
              "rejected": [{"role": "assistant", "content": "b"}]}]
     sft_rows, pair_rows = colab_train.split_rows(rows)
     assert sft_rows == rows[:1] and pair_rows == rows[1:]
+
+
+def test_the_dpo_pass_keeps_the_minimum_optimizer_steps() -> None:
+    cfg = LoraCfg(objective="sft_dpo")
+    sent = training_config(cfg, 12, warm=False, revision=REVISION)
+    assert sent["min_optimizer_steps"] == cfg.min_optimizer_steps
+    loaded = colab_train.load_config(json.dumps(sent))
+    for pairs in (1, 3, 8, 20, 40, 200):
+        plan = plan_steps(pairs, cfg)
+        assert colab_train.dpo_plan(pairs, loaded) == (plan.accumulation, plan.epochs), pairs
+    without = {key: value for key, value in sent.items() if key != "min_optimizer_steps"}
+    with pytest.raises(ValueError):
+        colab_train.load_config(json.dumps(without))

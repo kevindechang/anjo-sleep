@@ -13,10 +13,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from anjo.sleep.context.recall_bm25 import Bm25Recall
 from anjo.sleep.homework.agent import WonderHomework
 from anjo.sleep.meta_api import PINNED_MODELS
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tests.homework_fakes import (
     GUIDE_QUOTE,
     STUDY_QUOTE,
@@ -152,3 +156,45 @@ def test_a_month_with_less_than_one_call_left_stops_the_study_without_spending_a
     choose = step(result.log_path, "choose")
     assert choose["study"]["stopped"] == "budget" and choose["receipt"]["outcome"] == "budget"
     assert summary(result.log_path)["paid_actions"] == 0
+
+
+class _Failing:
+    """A homework port whose study debits one call and then fails with ``error``."""
+
+    available = True
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def study(self, user_id: str, target: Any, night: date, meter: Any, **kw: Any) -> Any:
+        meter.debit(0.1)
+        raise self.error
+
+
+@pytest.mark.parametrize("error", [
+    ModelApiError("Meta Model API chat with muse-wonder-1.0 returned HTTP 503"),
+    BudgetStop("meta_usd can't hold the worst case"),
+    ValueError("a homework request can't fit inside its input bound"),
+    LookupError("unknown encoding: bogus"),
+])
+def test_a_homework_failure_stays_in_its_step(tmp_path: Path, error: Exception) -> None:
+    world, _ = _world(tmp_path)
+    result = _one(world, homework=_Failing(error))
+    assert result.status == "promoted"  # brief, practice, training and promotion still ran
+    choose = step(result.log_path, "choose")
+    assert choose["study"]["stopped"] == "failed" and choose["study"]["error"] == type(error).__name__
+    assert choose["receipt"]["outcome"] == "failed"
+    [target] = world.targets("p1").open_targets(window(NIGHT)[1])
+    assert target.acted_revision != target.revision  # the want stays
+    assert world.targets("p1").results() == []
+    assert summary(result.log_path)["wonder_usd"] == pytest.approx(0.1)  # the debit is kept
+
+
+def test_a_wonder_error_mid_study_keeps_the_night_and_its_debit(tmp_path: Path) -> None:
+    world, _ = _world(tmp_path)
+    wonder = FakeWonder(research_script(), fail_at=2)
+    result = _one(world, homework=_homework(world, wonder))
+    assert result.status == "promoted"
+    choose = step(result.log_path, "choose")
+    assert choose["study"]["stopped"] == "failed" and choose["study"]["error"] == "ModelApiError"
+    assert summary(result.log_path)["wonder_calls"] == 2

@@ -10,6 +10,16 @@ citing pages and a quote from each.
 page's text once both are normalized (case, whitespace, typographic quotes and dashes). Unverified
 sources are dropped, a claim left without one is removed, and the artifact links only verified
 pages, under their final URL. Links or brackets inside a claim's own text are neutralized.
+**A limit:** verification proves the quote is on the page, not that it supports the claim or is
+the page's own content. A quote of boilerplate (a cookie banner, a footer, a site's tagline) found
+on every page of a site passes the check, so a claim can cite text that says nothing about it.
+
+**What can leave.** Wonder reads the person's evidence, so the tools keep it from leaving through
+the web. ``fetch_page`` fetches only a URL the search returned, exactly, or a link found on a page
+this study already fetched, with its query string dropped; anything else is refused, so a page
+that tells Wonder to fetch an address carrying what the person said gets nothing. A search query
+is refused when it carries an ``@``, a URL or domain, a run of five or more digits, or any word of
+the person's names (``screen_query``).
 
 **Spend.** Each Wonder call holds its worst case on ``meta_usd`` first (``night/holds.py``):
 ``MAX_INPUT_TOKENS`` in and ``MAX_OUTPUT_TOKENS`` out at Wonder's list price. The request is kept
@@ -93,6 +103,10 @@ TOOL_SPECS: Final[list[dict[str, Any]]] = [
         "description": "The text of one public http or https page.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
 ]
+_URL_OR_DOMAIN: Final = re.compile(
+    r"(?i)[a-z][a-z0-9+.-]*://|\bwww\.|\b[a-z0-9-]+\.(?:com|org|net|io|edu|gov|dev|ai|co|uk|de|info|me|app|xyz)\b")
+_DIGIT_RUN: Final = re.compile(r"\d{5,}")
+_WORD: Final = re.compile(r"\w+")
 _URL_IN_TEXT: Final = re.compile(r"(?:https?|ftp|file|javascript|data):\S*", re.IGNORECASE)
 _TYPOGRAPHY: Final = str.maketrans({
     "‘": "'", "’": "'", "‛": "'", "′": "'", "“": '"', "”": '"', "„": '"',
@@ -172,13 +186,37 @@ def _url_key(url: str) -> str | None:
         return None
 
 
+def _without_query(url: str) -> str:
+    return str(httpx.URL(url).copy_with(query=None))
+
+
+def screen_query(query: str, names: Sequence[str]) -> str | None:
+    """Why ``query`` can't go to the search, or None: it may not carry an ``@``, a URL or domain,
+    a run of five or more digits, or any word of the person's names (two letters or more)."""
+    if "@" in query:
+        return "an @"
+    if _URL_OR_DOMAIN.search(query):
+        return "a URL"
+    if _DIGIT_RUN.search(query):
+        return "a run of five or more digits"
+    words = set(_WORD.findall(query.casefold()))
+    if any(part in words for name in names for part in _WORD.findall(name.casefold()) if len(part) >= 2):
+        return "the person's name"
+    return None
+
+
 @dataclass
 class _Tools:
-    """The study's two tools, and every page it fetched (keyed by asked and final URL)."""
+    """The study's two tools, and every page it fetched (keyed by fetched and final URL).
+    ``searched`` holds the URLs the search returned, ``linked`` the links on fetched pages
+    (without their query strings): ``fetch_page`` fetches nothing else."""
 
     search: WebSearch
     fetcher: PageFetcher
+    names: Sequence[str] = ()
     pages: dict[str, Page] = field(default_factory=dict)
+    searched: set[str] = field(default_factory=set)
+    linked: set[str] = field(default_factory=set)
     searches: int = 0
     fetched: int = 0
     refused: int = 0
@@ -208,27 +246,49 @@ class _Tools:
         return self._search(value) if call.name == "web_search" else self._fetch(value)
 
     def _search(self, query: str) -> str:
+        flat = " ".join(query.split())[:QUERY_CHARS]
+        why = screen_query(flat, self.names)
+        if why is not None:
+            self.refused += 1
+            return f"refused: a search query may not carry {why}; search with topic terms only"
         self.searches += 1
         try:
-            hits = self.search.search(" ".join(query.split())[:QUERY_CHARS], SEARCH_HITS)
+            hits = self.search.search(flat, SEARCH_HITS)
         except (FetchFailed, FetchRefused) as error:
             return f"search failed: {error}"
+        self.searched |= {key for key in (_url_key(h.url) for h in hits) if key is not None}
         return json.dumps([{"title": h.title[:TITLE_CHARS], "url": h.url, "snippet": h.snippet[:300]} for h in hits])
 
+    def _allowed(self, url: str) -> str | None:
+        """What ``fetch_page`` may fetch for ``url``: a URL the search returned, exactly, or a link
+        on a fetched page, without its query string. None for anything else."""
+        key = _url_key(url)
+        if key is None:
+            return None
+        if key in self.searched:
+            return key
+        bare = _without_query(key)
+        return bare if bare in self.linked else None
+
     def _fetch(self, url: str) -> str:
+        allowed = self._allowed(url)
+        if allowed is None:
+            self.refused += 1
+            return "refused: only a page the search returned, or a link on a page this study fetched, is fetched"
         if self.fetched >= MAX_FETCHES:
             return f"skipped: this study already fetched {MAX_FETCHES} pages"
         self.fetched += 1
         try:
-            page = self.fetcher.fetch(url.strip())
+            page = self.fetcher.fetch(allowed)
         except FetchRefused as error:
             self.refused += 1
             return f"refused: {error}"
         except FetchFailed as error:
             return f"failed: {error}"
-        for key in (_url_key(url), _url_key(page.final_url)):
+        for key in (allowed, _url_key(page.final_url)):
             if key is not None:
                 self.pages[key] = page
+        self.linked |= {_without_query(key) for key in (_url_key(link) for link in page.links) if key is not None}
         return f"{page.title}\n{page.final_url}\n\n{page.text[:PAGE_CHARS]}"
 
 
@@ -413,18 +473,19 @@ class _Call:
 def do_homework(
     user_id: str, night: date, target: Target, action: str, evidence: Sequence[Evidence], *,
     wonder: WonderClient, search: WebSearch, fetcher: PageFetcher, meter: WonderMeter,
-    ledger: Ledger | None = None, timeout_s: float = CALL_TIMEOUT_S,
+    ledger: Ledger | None = None, timeout_s: float = CALL_TIMEOUT_S, names: Sequence[str] = (),
 ) -> Homework:
     """Wonder studies ``target`` for ``action`` from the person's ``evidence`` on it (module
-    docstring). Raises ``WonderSpent`` when not one call fits the meter, and lets a failed call's
-    ``ModelApiError`` through after debiting it."""
+    docstring); ``names`` are the person's names, which no search query may carry. Raises
+    ``WonderSpent`` when not one call fits the meter, and lets a failed call's ``ModelApiError``
+    through after debiting it."""
     _check(user_id, target, action, evidence)
     worst = call_worst_usd()
     planned = _affordable(meter, worst)
     if planned < 1:
         raise WonderSpent("Wonder's calls or dollars left can't cover one homework call at its worst case")
     call = _Call(wonder, meter, ledger, f"night:homework:{user_id}:{night.isoformat()}:{target.id}", timeout_s)
-    tools = _Tools(search, fetcher)
+    tools = _Tools(search, fetcher, names=tuple(names))
     messages = _opening(target, action, evidence, planned)
     used, text = 0, ""
     while (left := min(planned - used, _affordable(meter, worst))) >= 1:
@@ -457,8 +518,10 @@ class WonderHomework:
     def __init__(
         self, *, wonder: WonderClient, search: WebSearch, fetcher: PageFetcher,
         evidence: Callable[[str], StoredEvidence], ledger: Ledger | None = None,
+        names: Callable[[str], Sequence[str]] = lambda user_id: (),
     ) -> None:
         self._wonder = wonder
+        self._names = names
         self._search = search
         self._fetcher = fetcher
         self._evidence = evidence
@@ -469,7 +532,8 @@ class WonderHomework:
         own = [item for item in self._evidence(user_id).stored(night)
                if item.target_id == target.id and item.kind in PERSON_KINDS and not item.held_out]
         homework = do_homework(user_id, night, target, action, own, wonder=self._wonder, search=self._search,
-                               fetcher=self._fetcher, meter=meter, ledger=self._ledger)
+                               fetcher=self._fetcher, meter=meter, ledger=self._ledger,
+                               names=self._names(user_id))
         items: tuple[Evidence, ...] = ()
         if homework.sources:
             items = (Evidence(

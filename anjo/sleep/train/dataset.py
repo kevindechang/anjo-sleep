@@ -52,8 +52,9 @@ DEFAULT_MAX_SEQ_TOKENS: Final = 8192
 ROLE_OVERHEAD_TOKENS: Final = 8  # the chat template's markers around each message, over-counted
 DropReason = Literal["probe", "hosted", "truncated", "over_cap", "missing"]
 DROP_REASONS: Final[tuple[DropReason, ...]] = ("probe", "hosted", "truncated", "over_cap", "missing")
-PairDropReason = Literal["probe", "truncated", "example"]  # ``example``: its example was dropped
-PAIR_DROP_REASONS: Final[tuple[PairDropReason, ...]] = ("probe", "truncated", "example")
+# ``example``: its example was dropped; ``identical``: chosen and rejected are the same text
+PairDropReason = Literal["probe", "truncated", "example", "identical"]
+PAIR_DROP_REASONS: Final[tuple[PairDropReason, ...]] = ("probe", "truncated", "example", "identical")
 _URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+|\b[a-z0-9-]+\.(?:com|org|net|io|edu|gov|dev|ai)\b")
 _MONTHS = (
     "january|february|march|april|may|june|july|august|september|october|november|december"
@@ -264,8 +265,12 @@ def build_night_dataset(
         if not paired:
             continue
         pair = _pair(transcript, example)
-        if rejected_leaked[index] or pair.tokens > max_seq_tokens:
-            pairs_dropped["probe" if rejected_leaked[index] else "truncated"] += 1
+        why: PairDropReason | None = (
+            "probe" if rejected_leaked[index] else "identical" if pair.chosen == pair.rejected
+            else "truncated" if pair.tokens > max_seq_tokens else None
+        )
+        if why is not None:
+            pairs_dropped[why] += 1
         else:
             pairs.append(pair)
     data = Dataset(examples=tuple(kept), tokens=used, dropped=dropped, pairs=tuple(pairs), pairs_dropped=pairs_dropped)

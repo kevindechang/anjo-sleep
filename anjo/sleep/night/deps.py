@@ -247,6 +247,8 @@ class NightSettings:
     homework_call_cap: int = 12
     wonder_usd_month: float = 3.0
     rolling_actions: int = 4
+    practice_scenes: int = 16  # full practice's scenes a night, 16 to 20
+    practice_teacher: bool = True  # full practice's Spark Open teacher candidate
 
 
 @dataclass(frozen=True)
@@ -291,11 +293,14 @@ class NightDeps:
 class NightOptions:
     """What the command line (``python -m anjo.sleep.night``) hands the app's wiring with the
     trainer: the batch's night, and each synthetic person's persona (their sealed probes and the
-    collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``."""
+    collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``.
+    ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7)."""
 
     night: date
     personas: Mapping[str, str]
     allow_real: bool = False
+    practice_scenes: int = 16
+    practice_teacher: bool = True
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]

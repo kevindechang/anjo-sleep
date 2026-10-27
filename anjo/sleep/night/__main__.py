@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--persona", action="append", default=[], dest="personas",
                         help="the persona each --user plays, in order; omit for a real person")
     parser.add_argument("--allow-real", action="store_true")
+    parser.add_argument("--practice-scenes", type=int, default=16, help="full practice's scenes, 16 to 20")
+    parser.add_argument("--no-teacher", action="store_true", help="full practice without the teacher candidate")
     parser.add_argument("--simulate", help="the app's day runner, <module>:<function>, run per persona first")
     parser.add_argument("--day", type=int, help="the persona's day index to simulate")
     parser.add_argument("--seed", type=int, default=20261028)
@@ -81,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     if real and not args.allow_real:
         parser.error("a user without a persona is a real person: pass --allow-real only with their OK")
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
-    options = NightOptions(night=args.night, personas=personas, allow_real=args.allow_real)
+    options = NightOptions(night=args.night, personas=personas, allow_real=args.allow_real,
+                           practice_scenes=args.practice_scenes, practice_teacher=not args.no_teacher)
     # Colab trains only the people named with a persona (the wiring refuses a persona on an account
     # that isn't registered synthetic), and anyone else only with --allow-real.
     cli, ledger = _colab_cli(), default_ledger()

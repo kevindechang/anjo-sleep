@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Final
@@ -64,6 +65,7 @@ from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
+from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.full import FullPractice
@@ -156,17 +158,20 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
             raise ValueError(f"{persona} runs only on an account registered as synthetic")
     registry = checkpoint_registry()
     client = VllmClient(_env(URL_ENV), _env(TOKEN_ENV))
-    night_settings, night_prices = settings(), prices()
+    night_settings = replace(settings(), practice_scenes=options.practice_scenes,
+                             practice_teacher=options.practice_teacher)
+    night_prices = prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
 
     def practice(chat: ChatFn, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
-                            seed=night_settings.seed)
+                            seed=night_settings.seed, scenes=night_settings.practice_scenes,
+                            teacher=night_settings.practice_teacher)
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
-                              evidence=evidence_store, ledger=ledger)
+                              evidence=evidence_store, ledger=ledger, names=person_names)
 
     return NightDeps(
         extractor=lambda chat: HistorySource(chat=chat), extract_chat=spark_open,

@@ -46,8 +46,10 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
+from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.mind import receipt, snapshot
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
@@ -87,6 +89,9 @@ PROBES_WORST_USD: Final = 0.50  # Muse Spark writing a real person's night probe
 NOTE_MAX_S: Final = 300.0  # one Glimmer call on the serving GPU, inside the client's request timeout
 
 GPU_STEPS: Final = ("practice", "dataset", "train", "gates", "promote")
+# A study that fails this way stops the study, not the night: a Wonder error or timeout, a meta_usd
+# hold with no room, a request that can't fit its bound, a page in an unknown encoding.
+STUDY_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, LookupError)
 
 
 def day_window(night: date) -> Window:
@@ -342,7 +347,8 @@ class NightRunner:
         outcome: receipt.Outcome | None = None
         if action in STUDY_ACTIONS:
             done.update(self._study(p, state, choice))
-            outcome = "budget" if p.study is not None and p.study.stopped == "budget" else "ran"
+            stopped = p.study.stopped if p.study is not None else None
+            outcome = "budget" if stopped == "budget" else "failed" if stopped == "failed" else "ran"
         elif action == "inquire":
             done.update(self._inquire(p, choice))
             outcome = "ran"
@@ -362,10 +368,12 @@ class NightRunner:
             outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.end)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
-        if outcome.stopped == "budget" and p.wonder.calls == calls_before:  # it never started: no action spent
+        except STUDY_FAILURES as error:  # the study failed, not the night: its calls stay debited
+            outcome = StudyOutcome(result=None, stopped="failed", receipt={"error": type(error).__name__})
+        if outcome.stopped is not None and p.wonder.calls == calls_before:  # it never started: no action spent
             p.actions_left += 1
             p.paid_actions -= 1
-        if outcome.stopped is None:  # a study the budget stopped didn't run: the want stays
+        if outcome.stopped is None:  # a study the budget stopped, or that failed, didn't run: the want stays
             p.targets.mark_acted(target.id, target.revision)
         if outcome.evidence:
             p.store.add(list(outcome.evidence))
@@ -419,9 +427,13 @@ class NightRunner:
             run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
+        share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
         return {"scenes": len(run.transcripts), "dropped_cued": run.dropped_cued, "dropped_cut": run.dropped_cut,
                 "f_items": len(run.f_ids), "pairs": run.pairs, "teacher_targets": run.teacher_targets,
                 "critic_unreadable": run.critic_unreadable,
+                "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
+                            "teacher_share": round(share, 4)},
+                "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
                 "homework": None, "seconds": self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:

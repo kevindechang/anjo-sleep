@@ -23,6 +23,7 @@ The receipt holds counts and timings only.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import time
@@ -35,6 +36,8 @@ MIN_SEQ_LENGTH = 8192
 RECEIPT = "receipt.json"
 OBJECTIVES = ("sft", "sft_dpo")
 MAX_DPO_LR = 1e-5
+MAX_ACCUMULATION = 16
+MAX_EPOCHS = 4
 _KEYS = (
     "r", "alpha", "dropout", "target_modules", "learning_rate", "seed", "max_seq_length", "packing",
     "accumulation", "epochs", "batch_size", "warm_start", "revision", "objective",
@@ -75,6 +78,7 @@ def load_config(raw: str) -> dict[str, Any]:
     if cfg["objective"] == "sft_dpo":
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
+        _int(cfg, "min_optimizer_steps", 1, 10_000)
     if not isinstance(cfg["revision"], str) or not cfg["revision"]:
         raise ValueError("the base model's revision is pinned")
     return cfg
@@ -111,6 +115,19 @@ def build_settings(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "logging_steps": 1, "save_strategy": "no", "report_to": "none",
         }
     return settings
+
+
+def dpo_plan(n_pairs: int, cfg: dict[str, Any]) -> tuple[int, int]:
+    """The DPO pass's accumulation and epochs, by the SFT rule (``lora.plan_steps``): at least
+    ``min_optimizer_steps`` updates, accumulation shrinking to ``n // min_optimizer_steps`` (1 to
+    16) and, if that still falls short, epochs rising to at most 4."""
+    if n_pairs < 1:
+        raise ValueError("a DPO pass has at least one pair")
+    steps = cfg["min_optimizer_steps"]
+    accumulation = max(1, min(MAX_ACCUMULATION, n_pairs // steps))
+    per_epoch = math.ceil(n_pairs / (cfg["batch_size"] * accumulation))
+    epochs = 1 if per_epoch >= steps else min(MAX_EPOCHS, math.ceil(steps / per_epoch))
+    return accumulation, epochs
 
 
 def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -178,7 +195,11 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM
     )
     started = time.monotonic()
     trainer.train()
-    dpo_steps = _dpo(trainer.model, tokenizer, pairs, settings["dpo"], out) if pairs else 0
+    dpo_steps = 0
+    if pairs:
+        accumulation, epochs = dpo_plan(len(pairs), cfg)
+        dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
+        dpo_steps = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out)
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     receipt = {

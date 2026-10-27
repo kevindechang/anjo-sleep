@@ -12,7 +12,10 @@
   lookup can't swap in a private address. Redirects are followed by hand, at most five, and every
   hop is checked the same way.
 - **Limits:** at most ``max_bytes`` of body are read (a compressed reply is inflated only up to the
-  same limit), and the whole fetch, redirects included, stops at ``timeout_s``.
+  same limit), and the whole fetch, redirects included, stops at ``timeout_s``. The lookup and each
+  body read wait at most the time left, on a worker thread, so neither a stalled resolver nor a
+  server that drips one byte at a time can outlast the limit. A body in an unknown charset is read
+  as UTF-8.
 - **Nothing private is sent:** each hop is one bare request on a transport, with no client, so no
   cookie jar, no environment proxy or ``.netrc`` and no ``Authorization``. Its only headers are
   ``Host``, ``User-Agent``, ``Accept`` and ``Accept-Encoding: identity``.
@@ -25,6 +28,7 @@ Wikipedia's public search API through a ``SafeFetcher`` that accepts JSON.
 """
 from __future__ import annotations
 
+import codecs
 import ipaddress
 import json
 import socket
@@ -90,6 +94,7 @@ class Page:
     title: str
     text: str
     truncated: bool
+    links: tuple[str, ...] = ()  # the page's http(s) links, absolute, without fragments
 
 
 @dataclass(frozen=True)
@@ -258,13 +263,14 @@ class SafeFetcher:
 
     def fetch(self, url: str) -> Page:
         raw = self.get(url)
-        text = raw.body.decode(raw.charset or "utf-8", errors="replace")
+        text = decode(raw.body, raw.charset)
         if raw.content_type == "text/plain":
-            title, body = "", " ".join(text.split())
+            title, body, hrefs = "", " ".join(text.split()), []
         else:
-            title, body = html_text(text)
+            parsed = _parse(text)
+            title, body, hrefs = parsed.title_text(), parsed.body_text(), parsed.links
         return Page(url=raw.url, final_url=raw.final_url, title=title, text=body[: self._max_bytes],
-                    truncated=raw.truncated)
+                    truncated=raw.truncated, links=_absolute(raw.final_url, hrefs))
 
     def get(self, url: str) -> Raw:
         """The body at ``url`` after at most ``max_redirects`` checked redirects."""
@@ -352,17 +358,41 @@ class SafeFetcher:
                    charset=charset, truncated=truncated)
 
     def _read(self, chunks: Iterable[bytes], deadline: float) -> tuple[bytes, bool]:
+        """The body up to ``max_bytes``. Each read waits on a worker thread for at most the time
+        left; past the deadline the hop's ``finally`` closes the response, which ends the read."""
         kept = bytearray()
-        for chunk in chunks:
-            self._in_time(deadline)
-            room = self._max_bytes - len(kept)
-            kept += chunk[:room]
-            if len(chunk) > room:
-                return bytes(kept), True
-        return bytes(kept), False
+        stream = iter(chunks)
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            while True:
+                self._in_time(deadline)
+                try:
+                    chunk = pool.submit(next, stream, None).result(timeout=max(0.001, deadline - self._clock()))
+                except FutureTimeout:
+                    raise FetchFailed(f"the fetch passed its {self._timeout_s:g}s time limit") from None
+                if chunk is None:
+                    return bytes(kept), False
+                room = self._max_bytes - len(kept)
+                kept += chunk[:room]
+                if len(chunk) > room:
+                    return bytes(kept), True
+        finally:
+            pool.shutdown(wait=False)
 
 
 # ── page text ─────────────────────────────────────────────────────────────────
+
+
+MAX_LINKS: Final = 300
+
+
+def decode(body: bytes, charset: str | None) -> str:
+    """``body`` as text in its declared charset, or as UTF-8 when that charset is unknown."""
+    try:
+        codecs.lookup(charset or "utf-8")
+    except LookupError:
+        charset = None
+    return body.decode(charset or "utf-8", errors="replace")
 
 
 class _Text(HTMLParser):
@@ -370,10 +400,22 @@ class _Text(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title: list[str] = []
+        self.links: list[str] = []
         self._skip = 0
         self._in_title = False
 
+    def title_text(self) -> str:
+        return " ".join("".join(self.title).split())
+
+    def body_text(self) -> str:
+        lines = (" ".join(line.split()) for line in "".join(self.parts).splitlines())
+        return "\n".join(line for line in lines if line)
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a" and len(self.links) < MAX_LINKS:
+            href = dict(attrs).get("href")
+            if href:
+                self.links.append(href.strip())
         if tag == "title":
             self._in_title = True
         elif tag in _SKIPPED_TAGS:
@@ -396,13 +438,30 @@ class _Text(HTMLParser):
             self.parts.append(data)
 
 
-def html_text(html: str) -> tuple[str, str]:
-    """A page's title and its visible text (no scripts or styles), whitespace collapsed per line."""
+def _parse(html: str) -> _Text:
     parser = _Text()
     parser.feed(html)
     parser.close()
-    lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
-    return " ".join("".join(parser.title).split()), "\n".join(line for line in lines if line)
+    return parser
+
+
+def html_text(html: str) -> tuple[str, str]:
+    """A page's title and its visible text (no scripts or styles), whitespace collapsed per line."""
+    parser = _parse(html)
+    return parser.title_text(), parser.body_text()
+
+
+def _absolute(base: str, hrefs: Iterable[str]) -> tuple[str, ...]:
+    """``hrefs`` resolved against ``base``: http(s) only, without fragments, each once."""
+    found: dict[str, None] = {}
+    for href in hrefs:
+        try:
+            url = httpx.URL(base).join(href).copy_with(fragment=None)
+        except (httpx.InvalidURL, TypeError, ValueError):
+            continue
+        if url.scheme in DEFAULT_PORTS:
+            found[str(url)] = None
+    return tuple(found)
 
 
 # ── search ────────────────────────────────────────────────────────────────────
@@ -423,7 +482,7 @@ class WikipediaSearch:
                f"&srlimit={max(1, min(k, 10))}&srsearch={quote(query)}")
         raw = self._fetcher.get(url)
         try:
-            found = json.loads(raw.body.decode(raw.charset or "utf-8", errors="replace"))["query"]["search"]
+            found = json.loads(decode(raw.body, raw.charset))["query"]["search"]
             return [
                 SearchHit(title=str(hit["title"]), url=WIKIPEDIA_PAGE + quote(str(hit["title"]).replace(" ", "_")),
                           snippet=html_text(str(hit.get("snippet", "")))[1])

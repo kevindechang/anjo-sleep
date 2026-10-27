@@ -60,6 +60,7 @@ GLIMMER_CANDIDATES: Final = 3
 CANDIDATE_TEMPERATURE: Final = 1.0  # registered sampling, as for every arm
 CRITIC_TEMPERATURE: Final = 0.0
 LABELS: Final = "ABCD"
+TEACHER_ALARM_SHARE: Final = 0.5  # a night whose targets are more often the teacher's is flagged
 Adapter = Callable[[str], CheckpointRef | None]
 
 
