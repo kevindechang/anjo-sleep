@@ -1,12 +1,15 @@
 """Append-only JSON Lines files, one record per line, each line passed through a codec.
 
 The app's codec encrypts every line with the same at-rest encryption as chat history; the plain
-codec is for tests and the public example. A line is only ever appended. A write killed
-mid-line leaves a torn last line: readers ignore it, and the next append cuts it off first.
-Any other line that can't be read refuses the whole file, so nothing is skipped silently.
+codec is for tests and the public example. A line is only ever appended, by one writer at a time:
+an append holds an exclusive ``flock`` on the file, across processes, whatever guard the caller
+holds. A write killed mid-line leaves a torn last line: readers ignore it, and the next append cuts
+it off first. Any other line that can't be read refuses the whole file, so nothing is skipped
+silently. Creating a file or its folder syncs the directory entry too.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from collections.abc import Callable, Iterable, Mapping
@@ -66,31 +69,43 @@ def read_records(path: Path, codec: Codec) -> list[dict[str, Any]]:
 
 
 def append_records(path: Path, codec: Codec, records: Iterable[Mapping[str, Any]]) -> None:
-    """Append records as whole lines. The caller holds the file's writer guard."""
+    """Append records as whole lines under the file's lock. A caller that reads before it writes
+    (to skip what is stored) holds its writer guard around both."""
     lines = [codec.encode(canonical(record)) for record in records]
     if any("\n" in line for line in lines):
         raise ValueError("an encoded record must fit on one line")
     if not lines:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _cut_torn_tail(path)
     data = "".join(line + "\n" for line in lines).encode("utf-8")
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    new_folder = not path.parent.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not path.exists()
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # released when fd closes
+        _cut_torn_tail(fd)
         view = memoryview(data)
         while view:
             view = view[os.write(fd, view):]
         os.fsync(fd)
     finally:
         os.close(fd)
+    if new_file:
+        _sync_folder(path.parent)
+    if new_folder:
+        _sync_folder(path.parent.parent)
 
 
-def _cut_torn_tail(path: Path) -> None:
-    if not path.exists() or path.stat().st_size == 0:
+def _cut_torn_tail(fd: int) -> None:
+    size = os.fstat(fd).st_size
+    if size == 0 or os.pread(fd, 1, size - 1) == _NEWLINE:
         return
-    with path.open("r+b") as handle:
-        handle.seek(-1, os.SEEK_END)
-        if handle.read(1) == _NEWLINE:
-            return
-        handle.seek(0)
-        handle.truncate(handle.read().rfind(_NEWLINE) + 1)
+    os.ftruncate(fd, os.pread(fd, size, 0).rfind(_NEWLINE) + 1)
+
+
+def _sync_folder(folder: Path) -> None:
+    fd = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)

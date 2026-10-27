@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep import ports
-from anjo.sleep.evidence.jsonl import read_records, PLAIN
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN, read_records
 from anjo.sleep.evidence.targets import (
     CONFIDENCE_STEP,
     EventLogTargetStore,
@@ -28,7 +28,7 @@ NOW = datetime(2026, 10, 29, 2, 0, tzinfo=timezone.utc)
 
 
 def _store(tmp_path: Path) -> EventLogTargetStore:
-    return EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    return EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
 
 
 def _thread(**changes: Any) -> Target:

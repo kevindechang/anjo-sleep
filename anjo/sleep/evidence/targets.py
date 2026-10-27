@@ -27,7 +27,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, get_args
 
-from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN, Codec, Guard, append_records, canonical, read_records
+from anjo.sleep.evidence.jsonl import Codec, Guard, append_records, canonical, read_records
 from anjo.sleep.types import (
     EvidenceKind,
     Evidence,
@@ -396,9 +396,10 @@ def state_digest(state: TargetState) -> str:
 
 class EventLogTargetStore:
     """The ``TargetStore`` port over one log file. Before each read or write it folds in any
-    events another writer appended; ``guard`` serializes writers across processes."""
+    events another writer appended; ``guard`` serializes writers across processes. The codec and
+    the guard are always named, so a caller can't write plain text by leaving one out."""
 
-    def __init__(self, path: Path, person_id: str, *, codec: Codec = PLAIN, guard: Guard = NO_GUARD) -> None:
+    def __init__(self, path: Path, person_id: str, *, codec: Codec, guard: Guard) -> None:
         self.path = path
         self.person_id = person_id
         self._codec = codec

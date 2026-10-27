@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,8 @@ import pytest
 
 from anjo.sleep import ports
 from anjo.sleep.baseten_api import SPARK_OPEN
-from anjo.sleep.evidence.jsonl import LogError
-from anjo.sleep.evidence.store import JsonlEvidenceStore
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN, LogError
+from anjo.sleep.evidence.store import EvidenceConflict, JsonlEvidenceStore, evidence_record
 from anjo.sleep.meta_api import PINNED_MODELS
 from anjo.sleep.provenance import GLIMMER, may_train
 from anjo.sleep.types import Evidence
@@ -33,7 +34,7 @@ def _item(**changes: Any) -> Evidence:
 
 
 def _store(tmp_path: Path, **kwargs: Any) -> JsonlEvidenceStore:
-    return JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, **kwargs)
+    return JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD, **kwargs)
 
 
 def test_the_store_satisfies_its_port(tmp_path: Path) -> None:
@@ -71,7 +72,7 @@ def test_trainable_refuses_unknown_and_uncleared_ancestry(tmp_path: Path) -> Non
     ]
     cleared_only = _store(tmp_path)
     cleared_only.add(items)
-    with_hosted = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, hosted_in_training=True)
+    with_hosted = _store(tmp_path, hosted_in_training=True)
 
     assert [item.id for item in cleared_only.trainable(DAY)] == ["e-own", "e-spark-open", "e-glimmer"]
     assert [item.id for item in with_hosted.trainable(DAY)] == [
@@ -87,13 +88,32 @@ def test_may_train_is_an_allowlist() -> None:
     assert not may_train(frozenset({"gemini-3.8-flash"}), hosted_in_training=True)
 
 
-def test_add_stores_an_id_once(tmp_path: Path) -> None:
+def test_add_stores_an_exact_copy_once(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.add([_item(id="e-1"), _item(id="e-1", text="A second copy in one batch.")])
-    store.add([_item(id="e-1", text="The same id on a later night.")])
+    store.add([_item(id="e-1"), _item(id="e-1")])
+    store.add([_item(id="e-1")])
 
     assert [item.text for item in store.for_day(DAY)] == ["They prefer long takes."]
     assert len((tmp_path / "evidence.jsonl").read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("later", [False, True])
+def test_add_refuses_the_same_id_with_other_content(later: bool, tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    changed = _item(id="e-1", text="A private changed sentence.")
+    if later:
+        store.add([_item(id="e-1")])
+        batch = [_item(id="e-2"), changed]
+    else:
+        batch = [_item(id="e-1"), _item(id="e-2"), changed]
+
+    with pytest.raises(EvidenceConflict) as refused:
+        store.add(batch)
+
+    assert "e-1" in str(refused.value)
+    assert "private" not in str(refused.value) and "long takes" not in str(refused.value)
+    # Nothing from the refused batch is written.
+    assert [item.id for item in store.for_day(DAY)] == (["e-1"] if later else [])
 
 
 def test_add_refuses_another_persons_items(tmp_path: Path) -> None:
@@ -147,6 +167,26 @@ def test_an_unreadable_line_refuses_the_log(tmp_path: Path) -> None:
         _store(tmp_path).for_day(DAY)
 
 
+def _write_record(tmp_path: Path, **changes: Any) -> None:
+    record = {**evidence_record(_item()), **changes}
+    (tmp_path / "evidence.jsonl").write_text(json.dumps(record) + "\n")
+
+
+def test_a_string_ancestry_is_refused(tmp_path: Path) -> None:
+    _write_record(tmp_path, ancestry=SPARK_OPEN)
+
+    with pytest.raises(LogError, match="evidence.jsonl line 1"):
+        _store(tmp_path).trainable(DAY)
+
+
+def test_an_unknown_kind_is_reported_by_its_line_only(tmp_path: Path) -> None:
+    _write_record(tmp_path, kind="a-private-kind")
+
+    with pytest.raises(LogError, match="evidence.jsonl line 1") as refused:
+        _store(tmp_path).for_day(DAY)
+    assert "private" not in str(refused.value)
+
+
 def test_export_lists_every_item(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.add([_item(id="e-1"), _item(id="e-2", held_out=True, ancestry=None)])
@@ -155,3 +195,15 @@ def test_export_lists_every_item(tmp_path: Path) -> None:
     assert [record["id"] for record in exported["evidence"]] == ["e-1", "e-2"]
     assert exported["evidence"][0]["ancestry"] == [SPARK_OPEN]
     assert exported["evidence"][1]["ancestry"] is None
+
+
+@pytest.mark.parametrize("missing", ["codec", "guard"])
+def test_both_stores_need_an_explicit_codec_and_guard(missing: str, tmp_path: Path) -> None:
+    from anjo.sleep.evidence.targets import EventLogTargetStore
+
+    given: dict[str, Any] = {"codec": PLAIN, "guard": NO_GUARD}
+    del given[missing]
+    factories: tuple[Any, ...] = (JsonlEvidenceStore, EventLogTargetStore)
+    for factory in factories:
+        with pytest.raises(TypeError, match=missing):
+            factory(tmp_path / "log.jsonl", PERSON, **given)

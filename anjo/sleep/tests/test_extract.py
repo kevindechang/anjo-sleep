@@ -22,6 +22,7 @@ from anjo.sleep.evidence.extract import (
     held_out_count,
     ingest,
 )
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore, target_id_for
 from anjo.sleep.model_api import ChatResult
@@ -144,7 +145,7 @@ def test_ancestry_is_transitive_and_unknown_is_refused(tmp_path: Path) -> None:
     assert derived.ancestry == frozenset({SPARK_OPEN, hosted})
     assert unknown.ancestry is None
 
-    store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
+    store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     store.add([
         real,
         _with_id(simulated, "e-sim"),
@@ -190,8 +191,8 @@ def test_held_out_items_never_touch_targets() -> None:
 
 def test_a_night_with_held_out_mentions_ingests_cleanly(tmp_path: Path) -> None:
     """The held-out guard in record_mention never fires on extraction's own output."""
-    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
-    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     topic = {"kind": "thread", "label": "color grading", "check_after": None, "existing_id": None,
              "confidence": 0.3}
     items = [_item(0, "preference", f"They like grade {n}.", topic) for n in range(10)]
@@ -206,8 +207,8 @@ def test_a_night_with_held_out_mentions_ingests_cleanly(tmp_path: Path) -> None:
 
 
 def test_target_ids_stable_across_nights(tmp_path: Path) -> None:
-    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
-    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     plan = {"kind": "commitment", "label": "Festival submission", "check_after": "2026-11-03",
             "existing_id": None, "confidence": None}
 
@@ -265,8 +266,8 @@ def test_imported_items_enter_once() -> None:
 
 
 def test_ingest_is_idempotent(tmp_path: Path) -> None:
-    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
-    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     topic = {"kind": "thread", "label": "pacing", "check_after": None, "existing_id": None,
              "confidence": 0.4}
     extraction = _run(FakeSparkOpen(items=[_item(0, "lesson", "Pacing drags.", topic)]),
