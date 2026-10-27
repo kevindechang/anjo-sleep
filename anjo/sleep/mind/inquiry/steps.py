@@ -6,7 +6,7 @@ and ``Budget`` live here because a ``RunStart`` records them.
 
 **A step is one of four things:** an operation the thinker proposed (applied, or rejected with a
 code), an observation of a tool (``Retrieved``, ``Answered``, ``Resolved``), a mark the harness
-made (``RunStart``, ``Edit``), or a thinker reply that held no operation (no entry, code
+made (``RunStart``, ``Edit``, ``Wake``), or a thinker reply that held no operation (no entry, code
 ``malformed``). Each step also records the cycle of its run, the question in focus and the capped
 tokens charged with it. So the log alone rebuilds every arm's workspace (the rules and wipes are
 in it), K5's stall counts (cycle and focus) and the budget left (tokens).
@@ -26,7 +26,8 @@ from anjo.sleep.mind.inquiry._check import (
 from anjo.sleep.mind.inquiry.ops import OP_CLASSES, Op
 
 PredictionOutcome = Literal["true", "false", "undetermined", "censored"]
-RetrieveTool = Literal["new_evidence", "evidence_search", "research"]
+RetrieveTool = Literal["new_evidence", "held_evidence", "evidence_search", "research"]
+UNASKED: Final = frozenset({"new_evidence", "held_evidence"})  # what arrives for no question
 ControlMode = Literal["priority", "newest"]  # "newest" is M-control: 12 cycles on the newest question
 RunCall = Literal["notice", "inquiry"]  # which loop function a RunStart opens
 EditKind = Literal["swap_lead", "delete_prediction", "inject_hypothesis"]
@@ -113,22 +114,27 @@ class Budget:
 
 @dataclass(frozen=True)
 class EvidenceRef:
-    """An evidence item as the workspace keeps it: its id and its times, never its text. The
-    text is fetched again by id (``EvidenceSearch.get``), so a resumed run sees the same."""
+    """An evidence item as the workspace keeps it: its id, its times and the target it names,
+    never its text. The text is fetched again by id (``EvidenceSearch.get``), so a resumed run sees
+    the same. ``target_id`` is what wakes a parked question (``Wake``)."""
 
     id: str
     day: date
     created_at: datetime
+    target_id: str | None = None
 
     def __post_init__(self) -> None:
         check_text("id", self.id)
+        if self.target_id is not None:
+            check_text("target_id", self.target_id)
 
 
 @dataclass(frozen=True)
 class Retrieved:
-    """Items that reached her: the night's new evidence (``new_evidence``, no question), or what
-    ``evidence_search`` or ``research`` returned for a question (research: verified sources only,
-    already stored as evidence)."""
+    """Items that reached her: the night's new evidence (``new_evidence``, no question), earlier
+    items the notice pass recalled from the store that the workspace didn't hold (``held_evidence``,
+    no question: after an M-persist wipe), or what ``evidence_search`` or ``research`` returned for
+    a question (research: verified sources only, already stored as evidence)."""
 
     question_id: str | None
     tool: RetrieveTool
@@ -137,8 +143,8 @@ class Retrieved:
 
     def __post_init__(self) -> None:
         check_one_of("tool", self.tool, frozenset(get_args(RetrieveTool)))
-        if (self.question_id is None) != (self.tool == "new_evidence"):
-            raise ValueError("new evidence belongs to no question; a search or research to one")
+        if (self.question_id is None) != (self.tool in UNASKED):
+            raise ValueError("new or held evidence belongs to no question; a search or research to one")
         if self.question_id is not None:
             check_text("question_id", self.question_id)
         freeze_tuple(self, "items", EvidenceRef)
@@ -194,8 +200,11 @@ class RunStart:
     - ``focus`` is the question it was given (``None``: the controller picks; always ``None`` for
       the notice pass).
     - ``wipe`` empties the workspace first, history included, leaving only this step (M-persist,
-      on each night's first call). Ids the kernel assigns derive from step seqs, so they stay
+      on each night's first call). The op counter that ids derive from survives it, so ids stay
       unique across a wipe.
+    - ``denylist`` names the version of the kernel's domain denylist the call checked under, so a
+      fold checks every operation under the terms it was admitted with. ``None`` is the first
+      version (a log written before versions were recorded).
     """
 
     night: date
@@ -206,9 +215,12 @@ class RunStart:
     focus: str | None
     budget: Budget
     wipe: bool = False
+    denylist: str | None = None
 
     def __post_init__(self) -> None:
         check_one_of("call", self.call, frozenset(get_args(RunCall)))
+        if self.denylist is not None:
+            check_text("denylist", self.denylist)
         check_one_of("control", self.control, frozenset(get_args(ControlMode)))
         if not isinstance(self.rules, KernelRules) or not isinstance(self.budget, Budget):
             raise TypeError("a RunStart records its KernelRules and its Budget")
@@ -253,11 +265,29 @@ class Edit:
 _EDIT_FIELD: Final[dict[str, str]] = {
     "swap_lead": "hypothesis_id", "delete_prediction": "prediction_id", "inject_hypothesis": "statement",
 }
-Mark = RunStart | Edit
+@dataclass(frozen=True)
+class Wake:
+    """A parked question set live again, because new evidence names one of its targets. The loop
+    logs it right after the notice pass's ``Retrieved("new_evidence")`` step; ``items`` are the
+    new items on the question's targets. The question goes back to ``active`` if it has
+    hypotheses, else ``open``. ``kernel.apply`` raises ``ValueError`` unless the question is parked
+    and every item names one of its targets."""
+
+    question_id: str
+    items: tuple[EvidenceRef, ...]
+
+    def __post_init__(self) -> None:
+        check_text("question_id", self.question_id)
+        freeze_tuple(self, "items", EvidenceRef)
+        if not self.items:
+            raise ValueError("a wake names the new items that woke the question")
+
+
+Mark = RunStart | Edit | Wake
 
 # ── The log ───────────────────────────────────────────────────────────────────
 
-_ENTRY_CLASSES: Final = (*OP_CLASSES, Retrieved, Answered, Resolved, RunStart, Edit)
+_ENTRY_CLASSES: Final = (*OP_CLASSES, Retrieved, Answered, Resolved, RunStart, Edit, Wake)
 
 
 @dataclass(frozen=True)
@@ -300,7 +330,7 @@ class Step:
                 raise ValueError("a cycle step names the question in focus")
         if self.focus is not None:
             check_text("focus", self.focus)
-        if isinstance(self.entry, (RunStart, Edit)) and (self.cycle is not None or self.focus or self.tokens):
+        if isinstance(self.entry, (RunStart, Edit, Wake)) and (self.cycle is not None or self.focus or self.tokens):
             raise ValueError("a mark belongs to no cycle and charges nothing")
 
     @property

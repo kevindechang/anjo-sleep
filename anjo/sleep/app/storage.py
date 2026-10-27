@@ -82,6 +82,7 @@ def target_store(user_id: str) -> EventLogTargetStore:
     require_sleep_host()
     return EventLogTargetStore(
         sleep_dir(user_id) / TARGETS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id),
+        workspace=workspace_log(user_id),
     )
 
 

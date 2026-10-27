@@ -41,8 +41,8 @@ ITEMS = (LOOK, WINDOW, KITCHEN, LOCKED)
 THURSDAY = commitment(SCENE, "Shoot scene 4 on Thursday", due=noon(7), n=2)
 TARGETS = (THURSDAY,)
 
-Q = "q6"  # opened by the night-5 notice, the log's seventh step
-H = [f"{Q}.h8a", f"{Q}.h8b", f"{Q}.h8c", f"{Q}.else"]  # kitchen lacks room, courtyard, wider lens, else
+Q = "q1"  # opened by the night-5 notice, the life's first applied operation
+H = [f"{Q}.h2a", f"{Q}.h2b", f"{Q}.h2c", f"{Q}.else"]  # kitchen lacks room, courtyard, wider lens, else
 FIXES = ("Scene 4's 85 mm medium shot needs about 3 m the kitchen doesn't have, and the courtyard is locked on "
          "Thursday: shoot it on a 50 mm from the doorway, or keep the 85 mm and frame a close-up.")
 
@@ -178,5 +178,38 @@ def test_signature_demo_survives_a_kill_mid_inquiry() -> None:
     _night_6(killed)
     ours, theirs = whole.ws.finding_of(Q), killed.ws.finding_of(Q)
     assert ours is not None and theirs is not None
-    assert (theirs.kind, theirs.hypothesis_id, theirs.statement, round(theirs.p, 9)) == (
-        ours.kind, ours.hypothesis_id, ours.statement, round(ours.p, 9))
+    assert (theirs.id, theirs.kind, theirs.hypothesis_id, theirs.statement) == (
+        ours.id, ours.kind, ours.hypothesis_id, ours.statement)
+    assert kernel.records_digest(killed.ws) == kernel.records_digest(whole.ws)  # same records, same ids
+
+
+class _FailsOnce(FakeResolver):
+    """The day-6 resolver call fails once (a timeout), then answers."""
+
+    failed = False
+
+    def resolve(self, claim: str, evidence: Sequence[Evidence]) -> it.ResolverReply:
+        if not self.failed:
+            self.failed = True
+            self.calls.append((claim, tuple(evidence)))
+            return it.ResolverReply("undetermined", 200, failed=True)
+        return super().resolve(claim, evidence)
+
+
+def test_signature_demo_resolves_after_one_failed_resolver_call() -> None:
+    whole = Life(MemoryWorkspaceLog())
+    _through_night_5(whole)
+    whole.inquire(5, list(NIGHT_5))
+    _night_6(whole)
+
+    flaky = Life(MemoryWorkspaceLog())
+    flaky.resolver = _FailsOnce({"locked": "false"})
+    _through_night_5(flaky)
+    flaky.inquire(5, list(NIGHT_5))
+    _night_6(flaky)
+    assert len(flaky.resolver.calls) == 2 and flaky.ws.predictions[0].outcome == "false"
+    ours, theirs = whole.ws.finding_of(Q), flaky.ws.finding_of(Q)
+    assert ours is not None and theirs is not None
+    assert (theirs.id, theirs.kind, theirs.hypothesis_id) == (ours.id, "resolution", H[0])
+    assert theirs.p == pytest.approx(ours.p)
+    assert sorted((u.source, u.ref) for u in flaky.ws.updates) == sorted((u.source, u.ref) for u in whole.ws.updates)

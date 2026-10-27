@@ -33,16 +33,16 @@ AS_OF = night(6)
 
 
 def _resolved(*, cites: tuple[str, ...], kind: ConclusionKind = "resolution", research: bool = False) -> Ws:
-    """q2 on scene 4, its leader at 0.96 on a hit found after hypothesizing, then concluded."""
+    """q1 on scene 4, its leader at 0.96 on a hit found after hypothesizing, then concluded."""
     w = Ws()
     w.start(5)
     w.arrive(E1, E2)
     w.ok(notice_op([E1.id, E2.id], targets=(SCENE,)))
-    w.ok(hypothesize("q2", 0.6, 0.2))
+    w.ok(hypothesize("q1", 0.6, 0.2))
     hit = SOURCE if research else E3
-    w.found("q2", hit, tool="research" if research else "evidence_search")
-    w.ok(it.AssessOp("q2", hit.id, likelihoods=dict(zip(w.ids("q2"), (4.0, 0.25, 0.25), strict=True))))
-    w.ok(it.ConcludeOp("q2", w.ids("q2")[0], kind, "The kitchen can't hold an 85 mm medium shot", cites))
+    w.found("q1", hit, tool="research" if research else "evidence_search")
+    w.ok(it.AssessOp("q1", hit.id, likelihoods=dict(zip(w.ids("q1"), (4.0, 0.25, 0.25), strict=True))))
+    w.ok(it.ConcludeOp("q1", w.ids("q1")[0], kind, "The kitchen can't hold an 85 mm medium shot", cites))
     return w
 
 
@@ -56,42 +56,42 @@ def test_person_kinds_match_task3() -> None:
 def test_finding_anchor_rules_for_share() -> None:
     cited = (E1, E2, E3)
     w = _resolved(cites=(E1.id, E2.id, E3.id))
-    result = findings.share_result(w.ws, "q2", cited=cited, targets=(DUE,), results=(), as_of=AS_OF)
-    assert result == Result(id="f6.resolution", target_id=SCENE, homework_id=None, verified_sources=0, created_at=AS_OF,
+    result = findings.share_result(w.ws, "q1", cited=cited, targets=(DUE,), results=(), as_of=AS_OF)
+    assert result == Result(id="f4.resolution", target_id=SCENE, homework_id=None, verified_sources=0, created_at=AS_OF,
                             consumed=False, basis="evidence", user_cites=3)
     built = snapshot.build([DUE], [result], AS_OF, None)
     assert built.results == (result,)
 
     one_cite = _resolved(cites=(E1.id,))
-    assert findings.share_result(one_cite.ws, "q2", cited=(E1,), targets=(DUE,), results=(), as_of=AS_OF) is None
+    assert findings.share_result(one_cite.ws, "q1", cited=(E1,), targets=(DUE,), results=(), as_of=AS_OF) is None
     held = replace(E2, held_out=True)
     two = _resolved(cites=(E1.id, E2.id))
-    assert findings.share_result(two.ws, "q2", cited=(E1, held), targets=(DUE,), results=(), as_of=AS_OF) is None
+    assert findings.share_result(two.ws, "q1", cited=(E1, held), targets=(DUE,), results=(), as_of=AS_OF) is None
     for target in (replace(DUE, due_noted=True), replace(DUE, check_after=noon(20)), thread(SCENE, "scene 4"),
                    replace(DUE, status="closed")):
-        assert findings.share_result(w.ws, "q2", cited=cited, targets=(target,), results=(), as_of=AS_OF) is None
-    assert findings.share_result(w.ws, "q2", cited=cited, targets=(DUE,), results=(result,), as_of=AS_OF) is None
+        assert findings.share_result(w.ws, "q1", cited=cited, targets=(target,), results=(), as_of=AS_OF) is None
+    assert findings.share_result(w.ws, "q1", cited=cited, targets=(DUE,), results=(result,), as_of=AS_OF) is None
 
 
 def test_research_source_is_the_first_anchor_until_consumed() -> None:
     w = _resolved(cites=(SOURCE.id, E1.id), research=True)
     open_thread = thread(SCENE, "scene 4")
-    result = findings.share_result(w.ws, "q2", cited=(SOURCE, E1), targets=(open_thread,), results=(), as_of=AS_OF)
+    result = findings.share_result(w.ws, "q1", cited=(SOURCE, E1), targets=(open_thread,), results=(), as_of=AS_OF)
     assert result is not None and (result.basis, result.homework_id, result.verified_sources) == ("research", SOURCE.id, 1)
     assert snapshot.build([open_thread], [result], AS_OF, None).results == (result,)
 
     consumed = Result(id="r-old", target_id=SCENE, homework_id=SOURCE.id, verified_sources=1, created_at=night(4),
                       consumed=True)
-    assert findings.share_result(w.ws, "q2", cited=(SOURCE, E1), targets=(open_thread,), results=(consumed,),
+    assert findings.share_result(w.ws, "q1", cited=(SOURCE, E1), targets=(open_thread,), results=(consumed,),
                                  as_of=AS_OF) is None
 
 
 def test_only_suspicions_and_resolutions_raise_share() -> None:
     suspicion = _resolved(cites=(E1.id, E2.id), kind="suspicion")
-    assert findings.share_result(suspicion.ws, "q2", cited=(E1, E2), targets=(DUE,), results=(), as_of=AS_OF) is not None
-    suspicion.ok(it.RetractOp("q2", "the courtyard plan settles it", (E3.id,)))
-    assert suspicion.ws.finding_of("q2").kind == "retraction"  # type: ignore[union-attr]
-    assert findings.share_result(suspicion.ws, "q2", cited=(E1, E2), targets=(DUE,), results=(), as_of=AS_OF) is None
+    assert findings.share_result(suspicion.ws, "q1", cited=(E1, E2), targets=(DUE,), results=(), as_of=AS_OF) is not None
+    suspicion.ok(it.RetractOp("q1", "the courtyard plan settles it", (E3.id,)))
+    assert suspicion.ws.finding_of("q1").kind == "retraction"  # type: ignore[union-attr]
+    assert findings.share_result(suspicion.ws, "q1", cited=(E1, E2), targets=(DUE,), results=(), as_of=AS_OF) is None
     assert findings.share_result(Ws().ws, "q9", cited=(), targets=(DUE,), results=(), as_of=AS_OF) is None
 
 
@@ -100,7 +100,7 @@ def test_only_suspicions_and_resolutions_raise_share() -> None:
 
 def test_sourceless_finding_never_trainable() -> None:
     def made(w: Ws, cited: tuple[Evidence, ...]) -> Evidence | None:
-        return findings.artifact(w.ws, "q2", cited=cited, person_id=PERSON, night=day(6), at=AS_OF, model=GLIMMER)
+        return findings.artifact(w.ws, "q1", cited=cited, person_id=PERSON, night=day(6), at=AS_OF, model=GLIMMER)
 
     assert made(_resolved(cites=(E1.id, E2.id, E3.id)), (E1, E2, E3)) is None
     assert made(_resolved(cites=(SOURCE.id,), kind="suspicion", research=True), (SOURCE,)) is None
@@ -135,7 +135,7 @@ def test_jsonl_workspace_log_round_trips_and_replays(tmp_path: Path) -> None:
         log.append(replace(w.events[-1], step=replace(w.events[-1].step, seq=len(w.events))))
     exported = log.export()["workspace"]
     assert isinstance(exported, dict) and len(exported["events"]) == len(w.events)
-    assert exported["state"]["findings"][0]["id"] == "f6"
+    assert exported["state"]["findings"][0]["id"] == "f4"
 
 
 def test_store_get_is_time_masked_and_keeps_the_order_asked(tmp_path: Path) -> None:

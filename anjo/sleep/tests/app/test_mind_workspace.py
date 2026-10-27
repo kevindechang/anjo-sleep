@@ -61,7 +61,7 @@ def test_workspace_is_encrypted_and_replays_to_its_digest() -> None:
     raw = (sleep_dir(user_id) / WORKSPACE_FILE).read_bytes()
     assert b"SECRET" not in raw and all(line.startswith(b"enc1:") for line in raw.splitlines())
     reread = workspace_log(user_id)
-    assert reread.events() == tuple(_events()) and reread.workspace().questions[0].id == "q2"
+    assert reread.events() == tuple(_events()) and reread.workspace().questions[0].id == "q1"
     assert reread.digest() == reread.replay_digest() == _events()[-1].after
 
 

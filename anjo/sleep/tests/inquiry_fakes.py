@@ -45,7 +45,7 @@ def ev(
 
 
 def ref(item: Evidence) -> it.EvidenceRef:
-    return it.EvidenceRef(id=item.id, day=item.day, created_at=item.created_at)
+    return it.EvidenceRef(id=item.id, day=item.day, created_at=item.created_at, target_id=item.target_id)
 
 
 def commitment(id: str, label: str, *, due: datetime | None, n: int = 0, due_noted: bool = False) -> Target:

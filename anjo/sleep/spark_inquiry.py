@@ -12,7 +12,8 @@ it charges the reply's generated tokens. A call that fails returns empty text ch
 cap: its usage is unknown, and the night's token cap is hard, so a failure is never counted as
 free. The failure is logged by its ``model_api`` message, which names the provider, the model and
 the HTTP status and never a body or a key. A resolver whose call fails, or whose reply isn't one
-of its three verdicts, says ``undetermined``.
+of its three verdicts, says ``undetermined`` with ``failed`` set: the loop then marks nothing
+seen and asks again on a later cycle.
 
 **The resolver is blind by construction:** it is called with the claim and the evidence items
 only, and its prompt names neither hypotheses nor questions.
@@ -74,12 +75,11 @@ def resolver_messages(claim: str, evidence: Sequence[Evidence]) -> list[dict[str
     ]
 
 
-def parse_verdict(text: str) -> Verdict:
-    """``{"verdict": ...}`` anywhere in the reply, or the reply as one bare word; else
-    ``undetermined``."""
+def parse_verdict(text: str) -> Verdict | None:
+    """``{"verdict": ...}`` anywhere in the reply, or the reply as one bare word; else None."""
     value = field_value(text, "verdict")
     word = value if isinstance(value, str) else text if value is None else ""
-    return _VERDICTS.get(word.strip().strip(".").strip().casefold(), "undetermined")
+    return _VERDICTS.get(word.strip().strip(".").strip().casefold())
 
 
 @dataclass(frozen=True)
@@ -111,4 +111,7 @@ class SparkResolver:
 
     def resolve(self, claim: str, evidence: Sequence[Evidence]) -> ResolverReply:
         reply = call(self.chat, resolver_messages(claim, evidence), RESOLVE_MAX_TOKENS)
-        return ResolverReply(verdict=parse_verdict(reply.text), tokens=reply.tokens)
+        verdict = parse_verdict(reply.text)
+        if verdict is None:
+            return ResolverReply(verdict="undetermined", tokens=reply.tokens, failed=True)
+        return ResolverReply(verdict=verdict, tokens=reply.tokens)

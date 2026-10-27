@@ -7,6 +7,11 @@ and writer guard the caller names: the app passes the account's encryption and g
 ``NO_GUARD``. An append is refused unless its step's seq is the log's next and its ``before`` is
 the log's last ``after``, so the log stays one unbroken chain. The live digest is the last event's
 ``after``; ``replay_digest`` folds the whole log from scratch, and the two must agree.
+``records_digest`` covers her records alone, without the run history: the part of the person's
+digest a resumed night must reproduce.
+
+The export folds under the denylist each run recorded; a log no longer foldable (a version this
+build doesn't know) still exports its events, with ``state`` None.
 """
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from typing import Any, Final
 
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.mind.inquiry.codec import CodecError, event_from_json, event_to_json, records_document
-from anjo.sleep.mind.inquiry.kernel import digest, fold
+from anjo.sleep.mind.inquiry.kernel import digest, fold, records_digest
 from anjo.sleep.mind.inquiry.types import Workspace, WorkspaceEvent
 
 EMPTY_DIGEST: Final = digest(Workspace())
@@ -34,7 +39,11 @@ def _check_next(events: tuple[WorkspaceEvent, ...], event: WorkspaceEvent) -> No
 
 
 def _export(events: tuple[WorkspaceEvent, ...]) -> dict[str, object]:
-    return {"workspace": {"events": [event_to_json(e) for e in events], "state": records_document(fold(events))}}
+    try:
+        state: dict[str, object] | None = records_document(fold(events))
+    except ValueError:
+        state = None  # her events are still hers to take
+    return {"workspace": {"events": [event_to_json(e) for e in events], "state": state}}
 
 
 class MemoryWorkspaceLog:
@@ -51,6 +60,9 @@ class MemoryWorkspaceLog:
 
     def events(self) -> tuple[WorkspaceEvent, ...]:
         return self._events
+
+    def records_digest(self) -> str:
+        return records_digest(fold(self._events))
 
 
 class JsonlWorkspaceLog:
@@ -88,6 +100,10 @@ class JsonlWorkspaceLog:
     def replay_digest(self) -> str:
         """The digest of the log folded from scratch; it must equal ``digest``."""
         return digest(fold(self.events()))
+
+    def records_digest(self) -> str:
+        """The digest of her records alone, folded from scratch (``kernel.records_digest``)."""
+        return records_digest(fold(self.events()))
 
     def export(self) -> dict[str, object]:
         return _export(self.events())

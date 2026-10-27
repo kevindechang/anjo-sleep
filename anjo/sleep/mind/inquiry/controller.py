@@ -11,7 +11,9 @@
   retraction ready), else ``A_WAITING``.
 
 A question ready to resolve or retract scores ``stake x 1.0``, so a settled belief isn't starved
-by its low entropy.
+by its low entropy. A concluded question is in the running only when something new bears on its
+resolution (``reopened``): a retraction ready, a pending prediction with evidence the resolver
+hasn't seen, or a search hit since it concluded that isn't assessed.
 
 ``decide`` stays on its ``focus`` while that question is live, not stalled and above
 ``PRIORITY_FLOOR``; otherwise it switches to the live question with the top priority (a tie goes
@@ -19,10 +21,9 @@ to the older question), or stops at a cap or when nothing clears the floor. **K5
 whose latest ``STALL_LIMIT`` cycles tonight made no progress gets a ``park`` decision (reason
 ``stalled``), and ``decide`` passes over it for the rest of the night. Progress is an item
 assessed, a prediction committed or resolved true or false, or a hypothesis added, whatever it
-does to entropy, so counter-evidence counts. The park changes no status: the workspace can't wake
-a parked question on new evidence about its targets (``EvidenceRef`` names no target), so the
-guard sets it aside for the night instead, and the next night counts afresh. Only the thinker's
-``PARK`` parks a question. M-control (``control="newest"``) works the newest live question for
+does to entropy, so counter-evidence counts. The park changes no status: the guard sets the
+question aside for the night, and the next night counts afresh. Only the thinker's ``PARK`` parks
+a question, and a ``Wake`` on new evidence about its targets sets it live again. M-control (``control="newest"``) works the newest live question for
 the whole budget, with neither the floor nor K5.
 """
 from __future__ import annotations
@@ -44,6 +45,7 @@ from anjo.sleep.mind.inquiry.types import (
     U_FLOOR,
     AssessOp,
     Budget,
+    ConcludeOp,
     ControlMode,
     Decision,
     DecisionKind,
@@ -78,7 +80,35 @@ def uncertainty(hypotheses: Sequence[Hypothesis]) -> float:
     return min(1.0, max(U_FLOOR, entropy / math.log(len(hypotheses))))
 
 
+def _concluded_at(ws: Workspace, question_id: str) -> int:
+    """The seq of the step that concluded the question (-1 if it isn't in the history)."""
+    return next(
+        (
+            step.seq for step in reversed(ws.history)
+            if step.applied and isinstance(step.entry, ConcludeOp) and step.entry.question_id == question_id
+            and step.entry.kind == "resolution"
+        ),
+        -1,
+    )
+
+
+def reopened(ws: Workspace, question: Question, as_of: datetime) -> bool:
+    """A concluded question that something new bears on: a retraction ready, a pending
+    prediction with unseen evidence, or an unassessed search hit since it concluded."""
+    if question.status != "concluded":
+        return False
+    if kernel.retraction_ready(ws, question.id):
+        return True
+    if any(p.question_id == question.id and p.pending and kernel.unseen(ws, p, as_of) for p in ws.predictions):
+        return True
+    used = kernel.used_items(ws, question.id)
+    since = kernel.hits(ws, question.id, after=_concluded_at(ws, question.id))
+    return any(item.id not in used for item in since)
+
+
 def _step_ready(ws: Workspace, question: Question, as_of: datetime) -> bool:
+    if question.status == "concluded":
+        return reopened(ws, question, as_of)
     hypotheses = ws.hypotheses_of(question.id)
     predictions = [p for p in ws.predictions if p.question_id == question.id]
     if not hypotheses or not predictions:
@@ -159,9 +189,11 @@ def decide(
     as_of: datetime,
     control: ControlMode = "priority",
 ) -> Decision:
-    """The next cycle's question, or stop, with every live question's priority and the budget."""
+    """The next cycle's question, or stop, with the priority of every live question (and every
+    reopened concluded one) and the budget."""
     live = [q for q in ws.questions if q.status in LIVE_STATUSES]
-    priorities = tuple(priority(ws, q.id, targets=targets, as_of=as_of) for q in live)
+    running = [q for q in ws.questions if q.status in LIVE_STATUSES or reopened(ws, q, as_of)]
+    priorities = tuple(priority(ws, q.id, targets=targets, as_of=as_of) for q in running)
 
     def made(kind: DecisionKind, question_id: str | None, reason: DecisionReason | None = None) -> Decision:
         return Decision(kind, question_id, reason, priorities, budget)
@@ -169,9 +201,11 @@ def decide(
     cap = budget.stop_reason
     if cap is not None:
         return made("stop", None, cap)
-    if not live:
+    if not running:
         return made("stop", None, "below_floor")
     if control == "newest":
+        if not live:
+            return made("stop", None, "below_floor")
         newest = live[-1].id
         return made("continue" if newest == focus else "investigate", newest)
     by_id = {p.question_id: p for p in priorities}

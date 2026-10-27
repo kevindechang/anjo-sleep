@@ -67,7 +67,8 @@ def test_a_failed_call_is_empty_text_charged_its_cap(caplog: pytest.LogCaptureFi
     chat = FakeChat(error=True)
     assert SparkThinker(chat).propose("r", 20_000) == it.ModelReply("", THINK_MAX_TOKENS, baseten_api.SPARK_OPEN)
     assert SparkWorldQuery(chat).ask("q", 250) == it.ModelReply("", 250, baseten_api.SPARK_OPEN)
-    assert SparkResolver(chat).resolve("claim", [LOCKED]) == it.ResolverReply("undetermined", RESOLVE_MAX_TOKENS)
+    assert SparkResolver(chat).resolve("claim", [LOCKED]) == it.ResolverReply(
+        "undetermined", RESOLVE_MAX_TOKENS, failed=True)
     assert "HTTP 503" in caplog.text
 
 
@@ -101,18 +102,22 @@ def test_resolver_sees_only_the_claim_and_the_evidence() -> None:
         assert word not in spark_inquiry.RESOLVE_PROMPT.casefold()
 
 
-@pytest.mark.parametrize(("text", "verdict"), [
-    ('{"verdict": "false"}', "false"),
-    ('```json\n{"verdict": "TRUE", "why": "the courtyard opened"}\n```', "true"),
-    ("Undetermined", "undetermined"),
-    (" false. ", "false"),
-    ("It is probably false", "undetermined"),
-    ('{"verdict": "maybe"}', "undetermined"),
-    ('{"answer": "true"}', "undetermined"),
-    ("", "undetermined"),
+@pytest.mark.parametrize(("text", "verdict", "failed"), [
+    ('{"verdict": "false"}', "false", False),
+    ('```json\n{"verdict": "TRUE", "why": "the courtyard opened"}\n```', "true", False),
+    ("Undetermined", "undetermined", False),
+    (" false. ", "false", False),
+    ("It is probably false", "undetermined", True),
+    ('{"verdict": "maybe"}', "undetermined", True),
+    ('{"answer": "true"}', "undetermined", True),
+    ("", "undetermined", True),
 ])
-def test_resolver_reads_its_verdict_leniently_and_doubts_anything_else(text: str, verdict: it.Verdict) -> None:
-    assert SparkResolver(FakeChat(reply=text)).resolve("claim", [LOCKED]).verdict == verdict
+def test_resolver_reads_its_verdict_leniently_and_counts_anything_else_failed(
+    text: str, verdict: it.Verdict, failed: bool,
+) -> None:
+    """Only a real verdict marks evidence seen; a reply out of form is a failed call, retried later."""
+    reply = SparkResolver(FakeChat(reply=text)).resolve("claim", [LOCKED])
+    assert (reply.verdict, reply.failed, reply.tokens) == (verdict, failed, 42)
 
 
 def test_the_default_chat_is_spark_open_on_baseten(monkeypatch: pytest.MonkeyPatch) -> None:

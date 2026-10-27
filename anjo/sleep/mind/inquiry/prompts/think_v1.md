@@ -44,3 +44,6 @@ Reply with exactly one JSON object: one operation, and nothing else.
   feelings or relationships, and never about a third party named in the evidence.
 - Use the ids exactly as they are shown. Cite only items you hold.
 - Credences are heuristic. Every update to them comes from evidence, never from your opinion.
+- A concluded question comes back to you only when new evidence bears on it: assess that
+  evidence, and RETRACT the finding if its hypothesis falls below 0.5. A parked question comes
+  back when new evidence names one of its targets.

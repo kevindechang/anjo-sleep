@@ -16,6 +16,10 @@ carries its sequence number, and a fold refuses a gap or a repeat.
   depends on today's policy. An ``evidence`` result never does.
 - Times are the night's clock, virtual in accelerated runs: ``open_targets`` reads only the
   ``as_of`` it is given, against the day each target was first mentioned.
+- The person's digest covers her MIND workspace too when the store is given its log
+  (``workspace``): ``digest`` and ``replay_digest`` then hash the targets' digest with the
+  workspace's records digest (Task 17), so a killed-and-resumed night and an uninterrupted one
+  agree on both.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, get_args
+from typing import Any, Final, Protocol, get_args
 
 from anjo.sleep.evidence.jsonl import Codec, Guard, append_records, canonical, read_records
 from anjo.sleep.types import (
@@ -394,16 +398,31 @@ def state_digest(state: TargetState) -> str:
 # ── The store ─────────────────────────────────────────────────────────────────
 
 
+class WorkspaceRecords(Protocol):
+    """What the person's digest reads of her MIND workspace log: its records' digest."""
+
+    def records_digest(self) -> str: ...
+
+
+def _with_workspace(targets_digest: str, workspace: WorkspaceRecords | None) -> str:
+    if workspace is None:
+        return targets_digest
+    return hashlib.sha256(f"{targets_digest}:{workspace.records_digest()}".encode("ascii")).hexdigest()
+
+
 class EventLogTargetStore:
     """The ``TargetStore`` port over one log file. Before each read or write it folds in any
     events another writer appended; ``guard`` serializes writers across processes. The codec and
     the guard are always named, so a caller can't write plain text by leaving one out."""
 
-    def __init__(self, path: Path, person_id: str, *, codec: Codec, guard: Guard) -> None:
+    def __init__(
+        self, path: Path, person_id: str, *, codec: Codec, guard: Guard, workspace: WorkspaceRecords | None = None,
+    ) -> None:
         self.path = path
         self.person_id = person_id
         self._codec = codec
         self._guard = guard
+        self._workspace = workspace
         self._state = EMPTY
 
     def _current(self) -> TargetState:
@@ -488,10 +507,10 @@ class EventLogTargetStore:
         return list(self._current().expectations)
 
     def digest(self) -> str:
-        return state_digest(self._current())
+        return _with_workspace(state_digest(self._current()), self._workspace)
 
     def replay_digest(self) -> str:
-        return state_digest(fold(read_records(self.path, self._codec)))
+        return _with_workspace(state_digest(fold(read_records(self.path, self._codec))), self._workspace)
 
     def export(self) -> dict[str, object]:
         return state_document(self._current())

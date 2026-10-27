@@ -28,6 +28,7 @@ from anjo.sleep.mind.inquiry.types import (
     Retrieved,
     RunStart,
     Step,
+    Wake,
     Workspace,
     WorkspaceEvent,
     op_from_json,
@@ -50,7 +51,9 @@ def canonical(document: Mapping[str, Any]) -> str:
 
 
 def _ref(ref: EvidenceRef) -> dict[str, Any]:
-    return {"id": ref.id, "day": ref.day.isoformat(), "created_at": ref.created_at.isoformat()}
+    return {
+        "id": ref.id, "day": ref.day.isoformat(), "created_at": ref.created_at.isoformat(), "target_id": ref.target_id,
+    }
 
 
 def _budget(budget: Budget) -> dict[str, Any]:
@@ -80,8 +83,10 @@ def entry_to_json(entry: Entry | None) -> dict[str, Any] | None:
             "type": "run_start", "night": entry.night.isoformat(), "as_of": entry.as_of.isoformat(),
             "call": entry.call, "control": entry.control, "focus": entry.focus, "wipe": entry.wipe,
             "rules": {"k1": entry.rules.k1, "k2": entry.rules.k2, "k4": entry.rules.k4},
-            "budget": _budget(entry.budget),
+            "budget": _budget(entry.budget), "denylist": entry.denylist,
         }
+    if isinstance(entry, Wake):
+        return {"type": "wake", "question_id": entry.question_id, "items": [_ref(item) for item in entry.items]}
     if isinstance(entry, Edit):
         return {
             "type": "edit", "kind": entry.kind, "question_id": entry.question_id,
@@ -144,8 +149,8 @@ def _prediction(p: Prediction) -> dict[str, Any]:
 
 
 def workspace_document(ws: Workspace) -> dict[str, Any]:
-    """The canonical workspace, history included: what ``kernel.digest`` hashes."""
-    return {**records_document(ws), "history": [step_to_json(step) for step in ws.history]}
+    """The canonical workspace, history and op counter included: what ``kernel.digest`` hashes."""
+    return {**records_document(ws), "history": [step_to_json(step) for step in ws.history], "ops": ws.ops}
 
 
 # ── Decoding ──────────────────────────────────────────────────────────────────
@@ -190,6 +195,7 @@ def _ref_from(value: object) -> EvidenceRef:
     return EvidenceRef(
         id=_str(data["id"], "id"), day=date.fromisoformat(_str(data["day"], "day")),
         created_at=datetime.fromisoformat(_str(data["created_at"], "created_at")),
+        target_id=_opt_str(data.get("target_id"), "target_id"),
     )
 
 
@@ -207,6 +213,7 @@ def _run_start(data: Mapping[str, Any]) -> RunStart:
         wipe=_bool(data["wipe"], "wipe"),
         rules=KernelRules(k1=_bool(rules["k1"], "k1"), k2=_bool(rules["k2"], "k2"), k4=_bool(rules["k4"], "k4")),
         budget=Budget(**{name: _int(budget[name], name) for name in _BUDGET_FIELDS}),
+        denylist=_opt_str(data.get("denylist"), "denylist"),
     )
 
 
@@ -237,6 +244,8 @@ def _entry_from(value: object) -> Entry | None:
         )
     if kind == "run_start":
         return _run_start(data)
+    if kind == "wake":
+        return Wake(question_id=_str(data["question_id"], "question_id"), items=_refs(data["items"], "items"))
     if kind == "edit":
         return Edit(
             kind=data["kind"], question_id=_str(data["question_id"], "question_id"),
