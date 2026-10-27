@@ -44,3 +44,20 @@ def test_the_wiring_gets_the_trainer_and_options(monkeypatch: pytest.MonkeyPatch
         main([*BASE, "--user", "u1", "--persona", "founder"])
     [(trainer, options)] = seen
     assert isinstance(trainer, LoraTrainer) and options.personas == {"u1": "founder"} and not options.allow_real
+
+
+def test_the_trainer_deletes_the_plain_text_dataset_even_on_failure(tmp_path: Path) -> None:
+    from datetime import date
+
+    from anjo.sleep.tests.test_lora import _examples
+    from anjo.sleep.train.trainer import LoraTrainer
+
+    class Failing:
+        def run(self, job: str, inputs: object, *, timeout_s: float) -> object:
+            raise RuntimeError("the VM went away")
+
+    dataset = _examples(3)
+    trainer = LoraTrainer(Failing(), root=tmp_path, publish=lambda folder, name: None, revision=None)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="went away"):
+        trainer.train("u1", date(2026, 10, 28), None, dataset, "p-aaaaaaaaaaaa-n1")
+    assert not list(tmp_path.rglob("dataset.jsonl"))
