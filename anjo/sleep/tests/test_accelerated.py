@@ -16,7 +16,9 @@ import pytest
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
+from anjo.sleep.probes.morning import MorningError
 from anjo.sleep.sim.day import DayRun
+from anjo.sleep.types import CheckpointRef
 from anjo.sleep.tests.accelerated_rig import FAKE_SHA, FakeAccelerated
 
 START = date(2026, 11, 3)
@@ -128,10 +130,13 @@ def test_the_git_sha_is_read_from_the_repo() -> None:
 def test_the_vm_record_and_day_lengths_pass_through_the_rig(tmp_path: Path) -> None:
     fake = FakeAccelerated(tmp_path)
     seen: list[tuple[str, float]] = []
+    scored: list[tuple[str, float]] = []
     rig = replace(fake.rig(), on_day=lambda uid, seconds: seen.append((uid, seconds)),
+                  on_scoring=lambda uid, seconds: scored.append((uid, seconds)),
                   vm_record=lambda uid, night: {"night": night, "vm_kept": False, "idle_s_before": None})
     results = run_accelerated("u1", FOUNDER, 2, START, rig=rig)
     assert [uid for uid, _ in seen] == ["u1", "u1"] and all(seconds > 0 for _, seconds in seen)
+    assert [uid for uid, _ in scored] == ["u1", "u1"] and all(seconds >= 0 for _, seconds in scored)
     assert _summary(results[0].log_path)["vm"] == {"night": START.isoformat(), "vm_kept": False, "idle_s_before": None}
 
 
@@ -153,3 +158,28 @@ def test_each_accelerated_night_is_scored_once_after_it_runs(tmp_path: Path) -> 
     bad.world.extract_fails["u1"] = RuntimeError("boom")
     run_accelerated("u1", FOUNDER, 1, START, rig=bad.rig())
     assert not bad.scores_dir("u1").exists()  # a failed night scores nothing
+
+
+def test_the_morning_scores_the_nights_own_checkpoint(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig())
+    record = json.loads((fake.scores_dir("u1") / "night-01.json").read_text(encoding="utf-8"))
+    assert record["checkpoint"] == fake.world.registry.last_promoted("u1").id  # type: ignore[union-attr]
+    assert record["checkpoint_basis"] == "promoted"
+
+
+def test_a_registry_change_between_the_night_and_the_morning_refuses_the_run(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    original = fake.score
+
+    class Moved:
+        def last_promoted(self, person_id: str) -> object:
+            return CheckpointRef("someone-elses-n9", person_id, START, "fake://elsewhere", None)
+
+    def moved(uid: str, night: date, label: str, result: object) -> object:
+        fake.world.registry = Moved()  # type: ignore[assignment]
+        return original(uid, night, label, result)  # type: ignore[arg-type]
+
+    with pytest.raises(MorningError, match="serving"):
+        run_accelerated("u1", FOUNDER, 1, START, rig=replace(fake.rig(), score=moved))
+    assert not fake.scores_dir("u1").exists()

@@ -317,12 +317,17 @@ class ColabLives:
         self._life_s = life_timeout_s
         self._lives: dict[str, _Life] = {}
         self._day_s: dict[str, float] = {}
+        self._scoring_s: dict[str, float] = {}
         self._done: dict[str, int] = {}
         self._records: dict[str, list[dict[str, object]]] = {}
 
     def note_day(self, person_id: str, seconds: float) -> None:
         """How long the person's latest simulated day took: the guess for the gap before their next night."""
         self._day_s[person_id] = seconds
+
+    def note_scoring(self, person_id: str, seconds: float) -> None:
+        """How long the person's latest morning probe run took: it idles the VM too."""
+        self._scoring_s[person_id] = seconds
 
     def records(self, person_id: str) -> list[dict[str, object]]:
         """Per night: whether the VM was kept after it, and the seconds it idled before it (content-free)."""
@@ -376,9 +381,12 @@ class ColabLives:
         elapsed = max(0.0, runner._clock() - night_started)
         done = self._done[person] = self._done.get(person, 0) + 1
         day_s = self._day_s.get(person)
-        keep = done > 1 and day_s is not None and day_s <= MAX_IDLE_BETWEEN_NIGHTS_S
+        scoring_s = self._scoring_s.get(person)
+        # the gap before the next night is a scoring run and a simulated day: both count
+        keep = done > 1 and day_s is not None and day_s + (scoring_s or 0.0) <= MAX_IDLE_BETWEEN_NIGHTS_S
         self._records.setdefault(person, []).append(
-            {"night": str(inputs["night"]), "vm_kept": keep, "idle_s_before": idle})
+            {"night": str(inputs["night"]), "vm_kept": keep, "idle_s_before": idle, "day_s": day_s,
+             "scoring_s": scoring_s})
         if keep:
             life.idle_since = runner._clock()
         else:

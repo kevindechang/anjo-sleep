@@ -98,11 +98,18 @@ class MuseJudge:
 Outcome = Literal["win", "tie", "loss"]
 
 
-def judge_both_orders(judge: PairwiseJudge, probe: Probe, reply_a: str, reply_b: str) -> Outcome:
-    """Arm A's outcome: judged with A first and again with B first; a flip is a tie."""
+def judge_orders(judge: PairwiseJudge, probe: Probe, reply_a: str, reply_b: str) -> tuple[Outcome, bool]:
+    """Arm A's outcome, and whether the two orders disagreed (which makes it a tie)."""
     seen_first = {"A": "win", "B": "loss", "tie": "tie"}[judge.verdict(probe, reply_a, reply_b)]
     seen_second = {"A": "loss", "B": "win", "tie": "tie"}[judge.verdict(probe, reply_b, reply_a)]
-    return seen_first if seen_first == seen_second else "tie"  # type: ignore[return-value]
+    if seen_first == seen_second:
+        return seen_first, False  # type: ignore[return-value]
+    return "tie", True
+
+
+def judge_both_orders(judge: PairwiseJudge, probe: Probe, reply_a: str, reply_b: str) -> Outcome:
+    """Arm A's outcome: judged with A first and again with B first; a flip is a tie."""
+    return judge_orders(judge, probe, reply_a, reply_b)[0]
 
 
 def taste_outcome(probe: Probe, reply_a: ArmReply, reply_b: ArmReply) -> Outcome:
@@ -319,6 +326,45 @@ def _grouped2(
     return groups
 
 
+@dataclass(frozen=True)
+class ProbeOutcome:
+    """One probe's outcome for arm A against arm B, with whether an order flip made it a tie."""
+
+    probe_id: str
+    kind: str
+    outcome: Outcome
+    flipped: bool
+
+
+def pair_outcomes(
+    probes: Sequence[Probe],
+    replies_a: Sequence[ArmReply],
+    replies_b: Sequence[ArmReply],
+    judge: PairwiseJudge,
+    *,
+    neutral: bool = False,
+    rewrite: Callable[[str], str] = neutral_rewrite,
+) -> list[ProbeOutcome]:
+    """Every probe's outcome for arm A against arm B. The three sequences line up by index."""
+    if not len(probes) == len(replies_a) == len(replies_b):
+        raise ValueError("probes, replies_a and replies_b must align one to one")
+    if neutral and any(p.kind not in NEUTRAL_KINDS for p in probes):
+        raise ValueError("neutral re-judging runs on new_work and vocab only")
+    found: list[ProbeOutcome] = []
+    for probe, reply_a, reply_b in zip(probes, replies_a, replies_b, strict=True):
+        if probe.kind == "taste_ab":
+            flip = reply_a.choice is not None and reply_b.choice is not None and (
+                reply_a.choice.flipped or reply_b.choice.flipped)
+            found.append(ProbeOutcome(probe.id, probe.kind, taste_outcome(probe, reply_a, reply_b), flip))
+            continue
+        text_a, text_b = reply_a.text, reply_b.text
+        if neutral:
+            text_a, text_b = rewrite(text_a), rewrite(text_b)
+        outcome, flip = judge_orders(judge, probe, text_a, text_b)
+        found.append(ProbeOutcome(probe.id, probe.kind, outcome, flip))
+    return found
+
+
 def score(
     probes: Sequence[Probe],
     replies_a: Sequence[ArmReply],
@@ -334,20 +380,15 @@ def score(
     ``rewrite`` is the style-neutral rewrite used when ``neutral`` is true (Muse Spark by
     default); ``bootstrap`` defaults to the registered thresholds.
     """
-    if not len(probes) == len(replies_a) == len(replies_b):
-        raise ValueError("probes, replies_a and replies_b must align one to one")
-    if neutral and any(p.kind not in NEUTRAL_KINDS for p in probes):
-        raise ValueError("neutral re-judging runs on new_work and vocab only")
+    found = pair_outcomes(probes, replies_a, replies_b, judge, neutral=neutral, rewrite=rewrite)
+    return score_outcomes(probes, [f.outcome for f in found], bootstrap=bootstrap)
+
+
+def score_outcomes(
+    probes: Sequence[Probe], outcomes: Sequence[Outcome], *, bootstrap: BootstrapConfig | None = None,
+) -> PairScore:
+    """The ``PairScore`` of per-probe outcomes (the second half of ``score``)."""
     config = bootstrap if bootstrap is not None else BootstrapConfig.from_thresholds()
-    outcomes: list[Outcome] = []
-    for probe, reply_a, reply_b in zip(probes, replies_a, replies_b, strict=True):
-        if probe.kind == "taste_ab":
-            outcomes.append(taste_outcome(probe, reply_a, reply_b))
-            continue
-        text_a, text_b = reply_a.text, reply_b.text
-        if neutral:
-            text_a, text_b = rewrite(text_a), rewrite(text_b)
-        outcomes.append(judge_both_orders(judge, probe, text_a, text_b))
     dims = dimension_of()
     total = _tally([o for p, o in zip(probes, outcomes, strict=True) if dims[p.kind] != REPORTED])
     if not probes:

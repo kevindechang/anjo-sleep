@@ -28,7 +28,7 @@ def _y(score: float) -> float:
 
 
 def _line(nights: Sequence[Night], arm: str, dim: str) -> str:
-    points = [(i, n.arms[arm][dim]) for i, n in enumerate(nights) if dim in n.arms.get(arm, {})]
+    points = [(i, n.arms[arm][dim].score) for i, n in enumerate(nights) if dim in n.arms.get(arm, {})]
     if not points:
         return ""
     coords = " ".join(f"{_x(i, len(nights)):.1f},{_y(v):.1f}" for i, v in points)

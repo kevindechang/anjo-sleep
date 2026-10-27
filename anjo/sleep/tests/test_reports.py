@@ -87,3 +87,14 @@ def test_chart_escapes_person_ids(tmp_path: Path) -> None:
     _night(tmp_path, "a<b&c", "2026-11-03", 1)
     svg = chart.render(["a<b&c"], root=tmp_path, out=tmp_path / "c.svg").read_text(encoding="utf-8")
     assert "a<b&c" not in svg and "a&lt;b&amp;c" in svg
+
+
+def test_stats_in_a_score_file_show_the_ci_in_the_table(tmp_path: Path) -> None:
+    _night(tmp_path, "p1", "2026-11-03", 1, scored=False)
+    stat = {"n": 8, "wins": 5, "ties": 1, "losses": 2, "score": 0.6875, "decisive_share": 5 / 7, "ci": [0.41, 0.93]}
+    arms = {arm: {"knowledge": stat, "interaction": stat, "overall": stat} for arm in ARMS}
+    scores = tmp_path / "p1" / "scores"
+    scores.mkdir()
+    (scores / "night-01.json").write_text(json.dumps({"night": "2026-11-03", "label": "development", "arms": arms}))
+    assert "0.69 [0.41,0.93]/0.69 [0.41,0.93]" in results.table(["p1"], root=tmp_path)
+    assert results.load("p1", tmp_path)[0].arms["4"]["knowledge"].wins == 5

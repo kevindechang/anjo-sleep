@@ -20,7 +20,7 @@ from anjo.sleep.probes.morning import Morning, run_morning
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.night_fakes import World
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy
-from anjo.sleep.types import CheckpointRef, Evidence, Probe
+from anjo.sleep.types import CheckpointRef, Evidence, NightResult, Probe
 
 FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
 CLOCK_START = datetime(2026, 10, 28, 8, 0, tzinfo=timezone.utc)
@@ -135,9 +135,9 @@ class FakeAccelerated:
                                      serve_gpu_per_hour=1.95),
                        root=self.root / "results")
 
-    def score(self, user_id: str, night: date, label: str) -> Any:
-        checkpoint = self.world.registry.last_promoted(user_id)
-        return run_morning(user_id, night, checkpoint, morning=self.morning(user_id), label=label)
+    def score(self, user_id: str, night: date, label: str, result: NightResult) -> Any:
+        return run_morning(user_id, night, result.checkpoint, morning=self.morning(user_id), label=label,
+                           promoted=result.status == "promoted")
 
     def rig(self, sha: str = FAKE_SHA) -> Rig:
         deps = self.world.deps(extractor=lambda chat: self)

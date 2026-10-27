@@ -263,7 +263,8 @@ def test_the_first_night_stops_the_vm_because_nothing_is_measured(tmp_path: Path
     with _lives(_runner(fake, ledger)) as lives:
         _run(lives, tmp_path, "synthetic-1", 1)
         assert fake.commands()[-1] == "stop"
-    assert lives.records("synthetic-1") == [{"night": "2026-11-01", "vm_kept": False, "idle_s_before": None}]
+    assert lives.records("synthetic-1") == [{"night": "2026-11-01", "vm_kept": False, "idle_s_before": None, "day_s": 60.0,
+                                                "scoring_s": None}]
 
 
 def test_a_short_simulated_day_keeps_the_vm_and_a_long_one_stops_it(tmp_path: Path) -> None:
@@ -313,3 +314,19 @@ def test_a_failing_finish_on_one_life_still_stops_the_others(tmp_path: Path) -> 
             runner._finish = flaky  # type: ignore[method-assign]
     assert len(calls) == 2  # both lives were tried
     assert fake.commands().count("stop") == 3  # the two first-night stops, and the second life's
+
+
+def test_the_morning_scoring_counts_toward_the_idle_gap(tmp_path: Path) -> None:
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    with _lives(_runner(fake, ledger)) as lives:
+        _run(lives, tmp_path, "synthetic-1", 1)
+        lives.note_day("synthetic-1", 400.0)
+        lives.note_scoring("synthetic-1", 150.0)  # 550 s in all: kept
+        _run(lives, tmp_path, "synthetic-1", 2)
+        assert fake.commands().count("stop") == 1
+        lives.note_day("synthetic-1", 400.0)
+        lives.note_scoring("synthetic-1", 300.0)  # each is under the limit, the sum is not: stopped
+        _run(lives, tmp_path, "synthetic-1", 3)
+        assert fake.commands()[-1] == "stop" and fake.commands().count("stop") == 2
+    records = lives.records("synthetic-1")
+    assert [(r["day_s"], r["scoring_s"], r["vm_kept"]) for r in records[1:]] == [(400.0, 150.0, True), (400.0, 300.0, False)]

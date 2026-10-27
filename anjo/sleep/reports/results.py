@@ -4,8 +4,10 @@ It reads a person's results tree, ``<root>/<person>/``:
 
 - ``nights/<date>/summary.json``: the night (its gates, status, cost), stamped by the accelerated
   runner with its label (``development`` or ``final``).
-- ``scores/night-NN.json``: ``{"night": "<date>", "arms": {"<arm>": {"<dimension>": score}}}``, the
-  six arms of §5.1 scored on the night's checkpoint.
+- ``scores/night-NN.json`` (``probes.morning``): ``{"night": "<date>", "arms": {"<arm>": {"<dimension>":
+  stat}}}``, the six arms of §5.1 scored on the night's checkpoint. A ``stat`` is a plain score, or the
+  full record the claim rules need: ``n``, ``wins``, ``ties``, ``losses``, ``score`` (tie-inclusive),
+  ``decisive_share`` and the block-bootstrap ``ci`` ``[low, high]``. The table prints the CI beside it.
 
 Development and final results are printed in separate sections and never mixed. A night whose
 summary carries no label is refused: an unlabeled result could be read as the other kind. The root
@@ -25,10 +27,35 @@ ARMS: Final = ("1", "2C", "2F", "3", "3x", "4")
 DIMENSIONS: Final = ("knowledge", "interaction")  # shown first, in this order; others follow alphabetically
 DATA_DIR_ENV: Final = "ANJO_DATA_DIR"
 MISSING: Final = "-"
+OVERALL: Final = "overall"  # the all-dimensions stat in a score file; the table shows the dimensions
 
 
 class ResultsError(ValueError):
     """A results file is missing a field the report needs."""
+
+
+@dataclass(frozen=True)
+class Stat:
+    """One arm's result in one dimension. Only ``score`` is always known."""
+
+    score: float
+    n: int | None = None
+    wins: int | None = None
+    ties: int | None = None
+    losses: int | None = None
+    decisive_share: float | None = None
+    ci: tuple[float, float] | None = None
+
+
+def _stat(raw: Any) -> Stat:
+    if not isinstance(raw, dict):
+        return Stat(float(raw))
+    ci = raw.get("ci")
+    return Stat(
+        score=float(raw["score"]), n=raw.get("n"), wins=raw.get("wins"), ties=raw.get("ties"),
+        losses=raw.get("losses"), decisive_share=raw.get("decisive_share"),
+        ci=None if ci is None else (float(ci[0]), float(ci[1])),
+    )
 
 
 @dataclass(frozen=True)
@@ -39,7 +66,7 @@ class Night:
     status: str
     cost_usd: float
     gates: Mapping[str, Mapping[str, Any]]
-    arms: Mapping[str, Mapping[str, float]]
+    arms: Mapping[str, Mapping[str, Stat]]
 
 
 def results_root(root: Path | None = None) -> Path:
@@ -58,8 +85,8 @@ def _json(path: Path) -> dict[str, Any]:
     return found
 
 
-def _scores(folder: Path) -> dict[str, Mapping[str, Mapping[str, float]]]:
-    found: dict[str, Mapping[str, Mapping[str, float]]] = {}
+def _scores(folder: Path) -> dict[str, Mapping[str, Mapping[str, Stat]]]:
+    found: dict[str, Mapping[str, Mapping[str, Stat]]] = {}
     if not folder.is_dir():
         return found
     for path in sorted(folder.glob("night-*.json")):
@@ -67,7 +94,7 @@ def _scores(folder: Path) -> dict[str, Mapping[str, Mapping[str, float]]]:
         if "night" not in record or not isinstance(record.get("arms"), dict):
             raise ResultsError(f"{path.name} lacks a night and its arms")
         found[str(record["night"])] = {
-            str(arm): {str(d): float(v) for d, v in dims.items()} for arm, dims in record["arms"].items()
+            str(arm): {str(d): _stat(v) for d, v in dims.items()} for arm, dims in record["arms"].items()
         }
     return found
 
@@ -92,7 +119,7 @@ def load(person: str, root: Path | None = None) -> list[Night]:
 
 
 def dimensions(nights: Sequence[Night]) -> tuple[str, ...]:
-    seen = {d for n in nights for dims in n.arms.values() for d in dims}
+    seen = {d for n in nights for dims in n.arms.values() for d in dims} - {OVERALL}
     return (*(d for d in DIMENSIONS if d in seen), *sorted(seen - set(DIMENSIONS)))
 
 
@@ -100,7 +127,13 @@ def cell(night: Night, arm: str, dims: Sequence[str]) -> str:
     scored = night.arms.get(arm)
     if not scored:
         return MISSING
-    return "/".join(f"{scored[d]:.2f}" if d in scored else MISSING for d in dims) or MISSING
+    return "/".join(_shown(scored[d]) if d in scored else MISSING for d in dims) or MISSING
+
+
+def _shown(stat: Stat) -> str:
+    if stat.ci is None:
+        return f"{stat.score:.2f}"
+    return f"{stat.score:.2f} [{stat.ci[0]:.2f},{stat.ci[1]:.2f}]"
 
 
 def gate_cell(night: Night, gate: str) -> str:

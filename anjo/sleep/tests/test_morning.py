@@ -58,9 +58,10 @@ class Rig:
         self.morning = Morning(arms=deps, sealed=lambda uid: self.probes, judge=self.judge, prices=PRICES,
                                ledger=ledger, root=tmp_path / "results")
 
-    def run(self, night: date = NIGHT, label: str = "development", serving: Any = "registry") -> Any:
+    def run(self, night: date = NIGHT, label: str = "development", serving: Any = "registry",
+            promoted: bool = True) -> Any:
         found = self.registry.adapters["p1"] if serving == "registry" else serving
-        return run_morning("p1", night, found, morning=self.morning, label=label)
+        return run_morning("p1", night, found, morning=self.morning, label=label, promoted=promoted)
 
     @property
     def scores(self) -> Path:
@@ -75,7 +76,8 @@ def test_morning_run_never_saved_to_history(tmp_path: Path) -> None:
     assert files == ["results/p1/scores/night-01.json"]
     body = done.path.read_text(encoding="utf-8")
     assert "reply from" not in body and all(p.prompt not in body for p in rig.probes)  # no reply or probe text
-    assert set(json.loads(body)) == {"night", "label", "checkpoint", "probes", "arms", "pairs", "unavailable"}
+    assert set(json.loads(body)) == {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable",
+                               "outcomes"}
 
 
 def test_morning_rerun_refused_once_scored(tmp_path: Path) -> None:
@@ -108,11 +110,12 @@ def test_every_arm_is_scored_on_both_dimensions(tmp_path: Path) -> None:
     rig = Rig(tmp_path)
     record = json.loads(rig.run(label="final").path.read_text(encoding="utf-8"))
     assert record["label"] == "final" and record["night"] == NIGHT.isoformat() and record["probes"] == 4
-    assert set(record["arms"]) == set(ARMS) and record["arms"]["1"] == {"knowledge": 0.5, "interaction": 0.5}
+    assert set(record["arms"]) == set(ARMS)
+    assert {d: v["score"] for d, v in record["arms"]["1"].items()} == {"knowledge": 0.5, "interaction": 0.5, "overall": 0.5}
     for arm in ARMS - {"1"}:
-        assert set(record["arms"][arm]) == {"knowledge", "interaction"}
+        assert set(record["arms"][arm]) == {"knowledge", "interaction", "overall"}
     assert set(record["pairs"]) == {"3_vs_3x", "4_vs_2C"}
-    assert rig.judge.calls > 0 and record["unavailable"] == {}
+    assert rig.judge.calls > 0 and record["unavailable"] == {} and record["checkpoint_basis"] == "promoted"
 
 
 def test_the_score_file_is_what_the_results_table_reads(tmp_path: Path) -> None:
@@ -129,7 +132,7 @@ def test_the_score_file_is_what_the_results_table_reads(tmp_path: Path) -> None:
 def test_a_donor_that_never_promoted_leaves_3x_unavailable_not_invented(tmp_path: Path) -> None:
     rig = Rig(tmp_path, donor=False)
     record = json.loads(rig.run().path.read_text(encoding="utf-8"))
-    assert "3x" not in record["arms"] and "3x" in record["unavailable"]
+    assert "3x" not in record["arms"] and record["unavailable"] == {"3x": "donor_unavailable"}  # a code, no text
     assert "3_vs_3x" not in record["pairs"] and "4_vs_2C" in record["pairs"]
 
 
@@ -156,4 +159,59 @@ def test_a_probe_of_another_person_is_refused(tmp_path: Path) -> None:
     rig.probes = [probe("q9", "new_work", person="someone-else")]
     with pytest.raises(MorningError, match="another person"):
         rig.run()
+    assert rig.model.calls == []
+
+
+STAT_KEYS = {"n", "wins", "ties", "losses", "score", "decisive_share", "ci"}
+
+
+def test_score_files_carry_the_statistics_the_claim_rules_need(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    for name, stats in [*((f"{a}_vs_1", record["arms"][a]) for a in ARMS - {"1"}), *record["pairs"].items()]:
+        assert set(stats) == {"knowledge", "interaction", "overall"}, name
+        for stat in stats.values():
+            assert set(stat) == STAT_KEYS and stat["n"] == stat["wins"] + stat["ties"] + stat["losses"]
+            low, high = stat["ci"]
+            assert 0.0 <= low <= stat["score"] <= high <= 1.0
+            assert stat["score"] == pytest.approx((stat["wins"] + 0.5 * stat["ties"]) / stat["n"])
+
+
+def test_per_probe_outcomes_recompute_the_counts(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    ids = {p.id for p in rig.probes}
+    for row in record["outcomes"]:
+        assert set(row) == {"probe", "pair", "kind", "outcome", "flip"}
+        assert row["probe"] in ids and row["outcome"] in {"win", "tie", "loss"} and isinstance(row["flip"], bool)
+    assert {row["pair"] for row in record["outcomes"]} == {f"{a}_vs_1" for a in ARMS - {"1"}} | set(record["pairs"])
+    mine = [r for r in record["outcomes"] if r["pair"] == "4_vs_2C" and r["kind"] != "pushback"]
+    stat = record["pairs"]["4_vs_2C"]["overall"]
+    assert [sum(r["outcome"] == o for r in mine) for o in ("win", "tie", "loss")] == [stat["wins"], stat["ties"], stat["losses"]]
+    text = json.dumps(record)
+    assert not any(p.prompt in text for p in rig.probes) and "reply from" not in text
+
+
+def test_the_results_table_reproduces_the_ci_from_the_file_alone(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    night = rig.morning.root / "p1" / "nights" / NIGHT.isoformat()  # type: ignore[operator]
+    night.mkdir(parents=True)
+    (night / "summary.json").write_text(json.dumps({"status": "promoted", "night": NIGHT.isoformat(),
+                                                    "label": "development", "gates": {}, "cost_usd": 0.0}))
+    text = results.table(["p1"], root=rig.morning.root)
+    low, high = record["arms"]["4"]["knowledge"]["ci"]
+    assert f"{record['arms']['4']['knowledge']['score']:.2f} [{low:.2f},{high:.2f}]" in text
+
+
+def test_a_night_that_promoted_nothing_scores_what_was_serving_and_says_so(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    record = json.loads(rig.run(serving=None, promoted=False).path.read_text(encoding="utf-8"))
+    assert record["checkpoint_basis"] == "not_promoted" and record["checkpoint"] == rig.registry.adapters["p1"].id
+
+
+def test_a_promoted_night_must_give_its_own_checkpoint(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    with pytest.raises(MorningError, match="promoted"):
+        rig.run(serving=None, promoted=True)
     assert rig.model.calls == []

@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -73,7 +74,11 @@ class Rig:
     vm_record: Callable[[str, str], Mapping[str, Any] | None] | None = None
     # The morning probe run after a night: ``score(user_id, night, label)`` scores every arm on the
     # checkpoint serving after it (``probes.morning``) and writes that night's score file.
-    score: Callable[[str, date, str], object] | None = None
+    # ``score(user_id, night, label, result)`` gets the night's own result, whose checkpoint it scores.
+    # ``on_scoring`` is told how long each scoring run took (seconds), as ``on_day`` is for the day.
+    score: Callable[[str, date, str, NightResult], object] | None = None
+    on_scoring: Callable[[str, float], None] | None = None
+    timer: Callable[[], float] = time.monotonic
 
 
 def git_sha(repo: Path = REPO) -> str:
@@ -144,7 +149,10 @@ def run_accelerated_batch(
         if rig.score is not None:
             for uid, result in results.items():
                 if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
-                    rig.score(uid, night, kind)
+                    began = rig.timer()
+                    rig.score(uid, night, kind, result)
+                    if rig.on_scoring is not None:
+                        rig.on_scoring(uid, max(0.0, rig.timer() - began))
     return out
 
 
@@ -222,10 +230,11 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     life_s = LIFE_NIGHT_TIMEOUT_S * (LIFE_NIGHTS_HELD + args.days)
     wiring, simulate, morning = _named(args.wiring), _named(args.simulate), _named(args.morning)
 
-    def score(uid: str, night: date, label: str) -> object:
-        """The morning probe run on the checkpoint serving after the night."""
+    def score(uid: str, night: date, label: str, result: NightResult) -> object:
+        """The morning probe run on the night's own checkpoint (the serving one if it promoted nothing)."""
         ports = morning(uid, personas[uid], night)
-        return run_morning(uid, night, ports.arms.adapters.last_promoted(uid), morning=ports, label=label)
+        return run_morning(uid, night, result.checkpoint, morning=ports, label=label,
+                           promoted=result.status == "promoted")
 
     try:
         with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept, \
@@ -234,7 +243,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                                   revision=os.environ.get(REVISION_ENV) or None)
             rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas)),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      on_day=lives.note_day, vm_record=lambda uid, night: _vm_record(lives, uid, night),
+                      on_day=lives.note_day, on_scoring=lives.note_scoring, vm_record=lambda uid, night: _vm_record(lives, uid, night),
                       score=score)
             results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
                                             label=args.label, sweep=swept)
