@@ -34,6 +34,7 @@ from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_ho
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
 from anjo.sleep.app.storage import brief_store, checkpoint_registry
 from anjo.sleep.context.brief_store import ServedBriefs, TrainingBriefs
+from anjo.sleep.types import CheckpointRef
 
 
 def _add(hooks: list[Any], hook: Any) -> None:
@@ -41,10 +42,9 @@ def _add(hooks: list[Any], hook: Any) -> None:
         hooks.append(hook)
 
 
-def _promoted_adapter(user_id: str) -> str | None:
+def _promoted_adapter(user_id: str) -> CheckpointRef | None:
     """The adapter that serves ``user_id``: their last promoted checkpoint, or none (the base)."""
-    promoted = checkpoint_registry().last_promoted(user_id)
-    return None if promoted is None else promoted.id
+    return checkpoint_registry().last_promoted(user_id)
 
 
 def register_hooks() -> None:

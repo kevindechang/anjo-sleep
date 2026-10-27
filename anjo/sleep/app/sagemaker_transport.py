@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from anjo.core.anjo_model.transport import TransportError, Upstream, sse_lines, sse_payloads
 from anjo.sleep.serving.sagemaker import settings
-from anjo.sleep.serving.sagemaker.invoke import InvokeError, Invoker, Stream, make_client
+from anjo.sleep.serving.sagemaker.invoke import InvokeError, Invoker, SageMakerPoster, Stream, make_client
 
 SCHEME: Final = "sagemaker"
 
@@ -89,3 +89,8 @@ def shared_client(read_s: float, connect_s: float) -> Any:
 
 def default_transport(read_s: float, connect_s: float) -> SageMakerTransport:
     return SageMakerTransport(Invoker(shared_client(read_s, connect_s), settings.ENDPOINT, settings.COMPONENT))
+
+
+def default_poster(read_s: float, connect_s: float) -> SageMakerPoster:
+    """The runtime's ``/tokenize`` calls, on the same shared client as its turns."""
+    return SageMakerPoster(Invoker(shared_client(read_s, connect_s), settings.ENDPOINT, settings.COMPONENT))

@@ -158,7 +158,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         logger.warning("%d remote cleanups are still outstanding", len(outstanding))
     registry = checkpoint_registry()
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
-    client = serving.client()
+    client = serving.client().on(options.night)  # prompts dated on the night's clock
     night_settings = replace(settings(), practice_scenes=options.practice_scenes,
                              practice_teacher=options.practice_teacher)
     night_prices = prices()

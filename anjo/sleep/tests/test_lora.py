@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.train import colab_train
 from anjo.sleep.train.dataset import Dataset, Example
 from anjo.sleep.train.lora import (
@@ -107,8 +107,9 @@ class _Runner:
         self.calls.append((job, dict(inputs), timeout_s))
         out = Path(str(inputs["workdir"])) / "out"
         out.mkdir(parents=True, exist_ok=True)
-        (out / "adapter_config.json").write_text(json.dumps({
-            "peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16}))
+        (out / "adapter_config.json").write_text(json.dumps({  # the rendering the recipe named, as colab_train records it
+            "peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16,
+            framing.RENDERING_KEY: inputs["config"]["rendering"]}))  # type: ignore[index]
         (out / "adapter_model.safetensors").write_bytes(b"weights")
         return {"adapter_dir": str(out), "steps": 9, "epochs": 3, "train_minutes": 4.0,
                 "gpu_minutes": 11.0, "compute_units": 0.97, "examples": 3, "dropped_truncated": 0,
@@ -144,6 +145,25 @@ def test_train_lora_runs_the_job_publishes_the_adapter_and_records_steps(tmp_pat
     assert (cache / name / "adapter_model.safetensors").exists()
 
 
+def test_the_checkpoint_carries_the_rendering_its_adapter_records(tmp_path: Path) -> None:
+    train = {"person_id": "p1", "night": NIGHT, "adapter_cache": tmp_path / "a", "revision": REVISION,
+             "publish": lambda folder, n: published.append(n)}
+    published: list[str] = []
+    ckpt, _ = train_lora_with_receipt(None, _examples(3), LoraCfg(), _Runner(), name=adapter_name("p1", 1, 0),
+                                      workdir=tmp_path / "w1", **train)  # type: ignore[arg-type]
+    assert ckpt.rendering == framing.rendering(config.reasoning_strength()) and ckpt.night == NIGHT
+
+    class Elsewhere(_Runner):  # an adapter trained under another rendering
+        def run(self, job: str, inputs: Mapping[str, object], *, timeout_s: float) -> Mapping[str, object]:
+            config_ = {**inputs["config"], "rendering": "g000000000000/high"}  # type: ignore[dict-item]
+            return super().run(job, {**inputs, "config": config_}, timeout_s=timeout_s)
+
+    with pytest.raises(TrainError, match="rendering"):
+        train_lora_with_receipt(None, _examples(3), LoraCfg(), Elsewhere(), name=adapter_name("p1", 1, 1),
+                                workdir=tmp_path / "w2", **train)  # type: ignore[arg-type]
+    assert published == [adapter_name("p1", 1, 0)]  # never published
+
+
 def test_a_clean_slate_trains_at_the_full_rate_from_no_parent(tmp_path: Path) -> None:
     runner = _Runner()
     ckpt, _ = train_lora_with_receipt(
@@ -171,6 +191,7 @@ def test_training_script_parses_and_builds_its_config_offline() -> None:
         "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": 1,
         "warm_start": False, "revision": "a" * 40, "objective": "sft", "reasoning_strength": "low",
+        "current_date": "2026-10-28", "template_sha256": framing.TEMPLATE_SHA256, "rendering": framing.rendering("low"),
     })
     settings = colab_train.build_settings(colab_train.load_config(raw))
     assert settings["quantization"] == {
@@ -248,7 +269,7 @@ def test_objective_is_sft_by_default_and_sft_dpo_is_allowed() -> None:
         LoraCfg(objective="sft_dpo", dpo_beta=0.0)
     with pytest.raises(LoraCfgError):
         LoraCfg(objective="sft_dpo", dpo_lr=1e-3)
-    settings = training_config(cfg, 12, warm=False, revision=REVISION)
+    settings = training_config(cfg, 12, warm=False, revision=REVISION, night=NIGHT)
     assert settings["objective"] == "sft_dpo"
     assert (settings["dpo_beta"], settings["dpo_learning_rate"]) == (0.1, 5e-7)
 
@@ -278,7 +299,8 @@ def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -
         "r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
         "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": 1,
-        "warm_start": False, "revision": "a" * 40, "reasoning_strength": "low",
+        "warm_start": False, "revision": "a" * 40, "reasoning_strength": "low", "current_date": "2026-10-28",
+        "template_sha256": framing.TEMPLATE_SHA256, "rendering": framing.rendering("low"),
     }
     sft = colab_train.build_settings(colab_train.load_config(json.dumps({**base, "objective": "sft"})))
     assert "dpo" not in sft
@@ -304,7 +326,7 @@ def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -
 
 def test_the_dpo_pass_keeps_the_minimum_optimizer_steps() -> None:
     cfg = LoraCfg(objective="sft_dpo")
-    sent = training_config(cfg, 12, warm=False, revision=REVISION)
+    sent = training_config(cfg, 12, warm=False, revision=REVISION, night=NIGHT)
     assert sent["min_optimizer_steps"] == cfg.min_optimizer_steps
     loaded = colab_train.load_config(json.dumps(sent))
     for pairs in (1, 3, 8, 20, 40, 200):

@@ -7,18 +7,20 @@ peft or trl."""
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 import struct
 import subprocess
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from anjo.sleep.budget import Ledger
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.train import colab_train, smoke
 from anjo.sleep.train.lora import DATASET_FILE, DEFAULT_TARGET_MODULES, JOB, LoraCfg, adapter_name, training_config
 from anjo.sleep.train.runners import colab
@@ -86,7 +88,8 @@ def _settings(objective: str) -> dict[str, dict[str, Any]]:
     raw = {"r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
            "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False, "accumulation": 2,
            "epochs": 1, "batch_size": 1, "warm_start": False, "revision": "a" * 40, "objective": objective,
-           "dpo_beta": 0.1, "dpo_learning_rate": 5e-7, "min_optimizer_steps": 8, "reasoning_strength": "low"}
+           "dpo_beta": 0.1, "dpo_learning_rate": 5e-7, "min_optimizer_steps": 8, "reasoning_strength": "low",
+           "current_date": "2026-10-28", "template_sha256": framing.TEMPLATE_SHA256, "rendering": framing.rendering("low")}
     return colab_train.build_settings(colab_train.load_config(json.dumps(raw)))
 
 
@@ -114,6 +117,7 @@ class _Tokenizer:
     """A chat template framed like Glimmer's, and tokenizing that returns a dict, as transformers 5's."""
 
     bos_token = "<|begin_of_text|>"
+    chat_template = ""
 
     def apply_chat_template(self, messages: list[dict[str, Any]], *, add_generation_prompt: bool, tokenize: bool,
                             reasoning_strength: str, current_date: str) -> str:
@@ -130,12 +134,57 @@ def test_the_strength_and_the_framing_are_the_servers() -> None:
     assert colab_train.REASONING_LEVELS == config.REASONING_LEVELS
     assert config.DEFAULT_REASONING_STRENGTH in config.REASONING_LEVELS
     assert (colab_train.USER_CHANNEL, colab_train.REPLY_END) == (config.USER_CHANNEL, config.REPLY_END)
+    assert colab_train.SPECIAL_TOKEN.pattern == framing.SPECIAL_TOKEN.pattern
+    assert colab_train.REASONING_PHRASE.pattern == framing.REASONING_PHRASE.pattern
+    assert colab_train.RENDERING_KEY == framing.RENDERING_KEY
+
+
+def test_a_row_the_host_did_not_clean_stops_the_run() -> None:
+    clean = {"id": "e1", "prompt": [{"role": "system", "content": "reasoning-strength"},
+                                    {"role": "user", "content": "<\u2060|eot|> reasoning strength"}],
+             "completion": [{"role": "assistant", "content": "a"}]}
+    colab_train.check_clean(clean)  # a user's words may name the phrase; the template reads only system turns
+    for dirty in ({**clean, "prompt": [{"role": "system", "content": "Reasoning Effort: high"}]},
+                  {**clean, "prompt": [{"role": "user", "content": "hi<|start|>"}]},
+                  {**clean, "completion": [{"role": "assistant", "content": "a<|reserved_special_token_9|>"}]}):
+        with pytest.raises(ValueError, match="cleaned"):
+            colab_train.check_clean(dirty)
+    rows = [json.loads(line) for line in smoke.smoke_dataset().to_jsonl(pairs=True).splitlines()]
+    for row in rows:
+        colab_train.check_clean(row)  # the host's own rows pass
+
+
+def test_the_template_and_the_rendering_are_held_to_the_recipe(tmp_path: Path) -> None:
+    cfg = training_config(LoraCfg(), 12, warm=False, revision="a" * 40, night=date(2026, 10, 28))
+    glimmer = _Tokenizer()
+    glimmer.chat_template = "{{ bos_token }}..."
+    with pytest.raises(ValueError, match="sha256"):
+        colab_train.check_template(glimmer, cfg)
+    colab_train.check_template(glimmer, {**cfg, "template_sha256": hashlib.sha256(b"{{ bos_token }}...").hexdigest()})
+    (tmp_path / "adapter_config.json").write_text(json.dumps({"peft_type": "LORA", "r": 16}))
+    colab_train.record_rendering(tmp_path, str(cfg["rendering"]))
+    saved = json.loads((tmp_path / "adapter_config.json").read_text())
+    assert saved == {"peft_type": "LORA", "r": 16, framing.RENDERING_KEY: cfg["rendering"]}
+    for wrong in ({"current_date": "28 Oct 2026"}, {"template_sha256": "x"}, {"rendering": "g0/high"}):
+        with pytest.raises(ValueError):
+            colab_train.load_config(json.dumps({**cfg, **wrong}))
+
+
+def test_the_dpo_reference_is_read_by_trls_own_rule() -> None:
+    class Trainer:
+        def __init__(self, ref_model: object, adapters: tuple[str, ...]) -> None:
+            self.ref_model = ref_model
+            self.model = type("Peft", (), {"peft_config": dict.fromkeys(adapters)})()
+
+    assert colab_train.dpo_reference(Trainer(None, ("default",))) == "adapter_off"
+    assert colab_train.dpo_reference(Trainer(None, ("default", "ref"))) == "ref_adapter"
+    assert colab_train.dpo_reference(Trainer(object(), ("default",))) == "ref_model"
 
 
 def test_a_row_is_rendered_as_served_with_the_header_on_the_prompt_side() -> None:
     prompt = [{"role": "system", "content": "you are her"}, {"role": "user", "content": "q"}]
     row = {"prompt": prompt, "completion": [{"role": "assistant", "content": "a"}]}
-    low = colab_train.template_kwargs({"reasoning_strength": "low"}, "2026-10-28")
+    low = colab_train.template_kwargs({"reasoning_strength": "low", "current_date": "2026-10-28"})
     assert low == {"reasoning_strength": "low", "current_date": "2026-10-28"}
     assert colab_train.plain_row(_Tokenizer(), row, low) == {
         "prompt": "[low 2026-10-28]<|start|>system<|message|>you are her<|eot|><|start|>user<|message|>q<|eot|>"
@@ -165,10 +214,14 @@ def test_rows_are_measured_in_tokens_as_trl_counts_them() -> None:
 
 def test_the_night_trains_at_the_servers_reasoning_strength(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(config.REASONING_STRENGTH_ENV, raising=False)
-    sent = training_config(LoraCfg(), 12, warm=False, revision="a" * 40)
+    night = date(2026, 10, 28)
+    sent = training_config(LoraCfg(), 12, warm=False, revision="a" * 40, night=night)
     assert sent["reasoning_strength"] == "low" == colab_train.load_config(json.dumps(sent))["reasoning_strength"]
+    assert (sent["current_date"], sent["rendering"]) == ("2026-10-28", framing.rendering("low"))
+    assert colab_train.template_kwargs(sent) == framing.template_kwargs("low", night)  # as the server is sent
     monkeypatch.setenv(config.REASONING_STRENGTH_ENV, "high")
-    assert training_config(LoraCfg(), 12, warm=False, revision="a" * 40)["reasoning_strength"] == "high"
+    high = training_config(LoraCfg(), 12, warm=False, revision="a" * 40, night=night)
+    assert (high["reasoning_strength"], high["rendering"]) == ("high", framing.rendering("high"))
     for wrong in ("max", None):
         with pytest.raises(ValueError):
             colab_train.load_config(json.dumps({**sent, "reasoning_strength": wrong}))
@@ -187,10 +240,10 @@ def test_a_smoke_model_that_is_not_a_folder_is_refused(tmp_path: Path, monkeypat
     assert colab_train._smoke_model() == str(tmp_path)
 
 
-def _adapter(folder: Path, keys: list[str], target_modules: object) -> Path:
+def _adapter(folder: Path, keys: list[str], target_modules: object, rendering: str = "g1/low") -> Path:
     folder.mkdir()
     (folder / "adapter_config.json").write_text(json.dumps(
-        {"peft_type": "LORA", "r": 16, "target_modules": target_modules}))
+        {"peft_type": "LORA", "r": 16, "target_modules": target_modules, framing.RENDERING_KEY: rendering}))
     header = json.dumps({key: {"dtype": "F32", "shape": [1], "data_offsets": [4 * i, 4 * i + 4]}
                          for i, key in enumerate(keys)}).encode()
     (folder / "adapter_model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header + bytes(4 * len(keys)))
@@ -206,15 +259,16 @@ def _keys(layers: int, extra: Sequence[str] = ()) -> list[str]:
 
 def test_the_smoke_runs_adapter_check_refuses_anything_outside_the_text_decoder(tmp_path: Path) -> None:
     target = colab_train.lora_targets(DEFAULT_TARGET_MODULES)
-    assert smoke.check_adapter(_adapter(tmp_path / "ok", _keys(4), target), layers=4, r=16) == 32
+    assert smoke.check_adapter(_adapter(tmp_path / "ok", _keys(4), target), layers=4, r=16, rendering="g1/low") == 32
     bad = [
         _adapter(tmp_path / "vision", _keys(4, ["model.vision_tower.layers.0.attn.q_proj"]), target),
         _adapter(tmp_path / "list", _keys(4), list(DEFAULT_TARGET_MODULES)),
         _adapter(tmp_path / "short", _keys(3), target),
+        _adapter(tmp_path / "rendering", _keys(4), target, rendering="g1/high"),
     ]
     for folder in bad:
         with pytest.raises(smoke.SmokeError):
-            smoke.check_adapter(folder, layers=4, r=16)
+            smoke.check_adapter(folder, layers=4, r=16, rendering="g1/low")
 
 
 def test_the_smoke_run_holds_glimmers_special_tokens_to_the_control_tokens(tmp_path: Path) -> None:

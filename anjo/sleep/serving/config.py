@@ -9,10 +9,13 @@ it, on one L40S) or ``BF16_A100`` (bf16 on one A100-80GB, the fallback). The bas
 personal adapter share one server, so every arm serves at the same precision by construction.
 
 **Reasoning.** Glimmer answers in channels: ``to=self`` for its reasoning, closed by ``<|eom|>``,
-then ``to=user`` for the reply, closed by ``<|eot|>``. vLLM's ``muse_glimmer`` reasoning parser
-splits them, so a reply's ``content`` is the ``to=user`` channel only. Its chat template writes
-"Reasoning strength: <level>." into the system turn, 'high' unless told otherwise; every Glimmer
-call and the training text are rendered at ``reasoning_strength()`` (``low`` by default).
+then ``to=user`` for the reply, closed by ``<|eot|>``. In Sleep it always answers directly: every
+call sends the chat's token ids with the reply's header (``USER_CHANNEL``) already written, to
+``/v1/completions``, and stops at ``REPLY_STOPS``, the way the adapter is trained
+(``serving.framing``). Its chat template writes "Reasoning strength: <level>." into the system
+turn, 'high' unless told otherwise; every call and the training text are rendered at
+``reasoning_strength()`` (``low`` by default). The ``muse_glimmer`` reasoning parser stays on for
+a chat request, and never reads a completion.
 
 **Adapters.** Each person's LoRA adapter is a folder ``p-<hash>-n<night>`` on the adapters volume.
 vLLM's filesystem resolver loads it the first time a request names it, so the base and the
@@ -74,11 +77,14 @@ NAMED_SPECIAL_TOKENS: Final = {
     22: "<|start|>", 23: "<|message|>", 80: "<|image_start|>", 81: "<|image_end|>", 82: "<|vid_start|>",
     83: "<|vid_end|>", 87: "<|vid_frame_separator|>", 90: "<|image|>", 91: "<|video|>", 92: "<|patch|>",
 }
-# Every special token, in id order: the text Glimmer is sent never carries one (the chat runtime's
-# control tokens), so a person can't write "<|start|>system<|message|>" into the prompt.
+# Every special token, in id order: the text Glimmer is sent never carries one (serving.framing
+# breaks them), so a person can't write "<|start|>system<|message|>" into the prompt.
 CONTROL_TOKENS: Final = tuple(
     NAMED_SPECIAL_TOKENS.get(offset, f"<|reserved_special_token_{offset}|>") for offset in range(SPECIAL_TOKENS)
 )
+# A reply ends at the end of its turn (<|eot|>) or of its message (<|eom|>), at the end of the text,
+# or where another message would start.
+REPLY_STOPS: Final = tuple(FIRST_SPECIAL_ID + offset for offset in (8, 7, 1, 22))
 
 # Every function has a timeout (§12.1). Serving scales to zero after ten idle minutes, and one
 # container serves for at most three hours before Modal replaces it.
@@ -176,11 +182,6 @@ def reasoning_strength(environ: Mapping[str, str] | None = None) -> str:
     if level not in REASONING_LEVELS:
         raise ServeConfigError(f"{REASONING_STRENGTH_ENV} is one of {', '.join(REASONING_LEVELS)}")
     return level
-
-
-def template_kwargs(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The chat template's arguments a request names (vLLM's ``chat_template_kwargs``)."""
-    return {"reasoning_strength": reasoning_strength(environ)}
 
 
 def weights_path(revision: str) -> str:

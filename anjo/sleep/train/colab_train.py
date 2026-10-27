@@ -11,11 +11,16 @@ on the completion (her reply) only, no packing, and every row longer than ``max_
 dropped and counted rather than cut. A warm start loads the previous adapter as trainable.
 
 **Train as served.** Each row goes to TRL as plain text, rendered the way the server renders a
-request: Glimmer's chat template at the night's ``reasoning_strength`` with the generation prompt
-(``<|start|>assistant``), then the reply's channel header ``" to=user<|message|>"`` on the prompt
-side, and the reply closed by ``<|eot|>``. So the loss falls on the reply and ``<|eot|>`` only.
-(TRL's conversational form would train the header too.) Before a step is taken, every row's tokens,
-as TRL prepared them, are checked against the template's own render (``_check_tokens``).
+request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` with the
+generation prompt (``<|start|>assistant``), then the reply's channel header ``" to=user<|message|>"``
+on the prompt side, and the reply closed by ``<|eot|>``. So the loss falls on the reply and
+``<|eot|>`` only. (TRL's conversational form would train the header too.) The host cleaned every
+text as the server's prompts are (``anjo.sleep.serving.framing``), and a row that still carries a
+special token's text, or the template's reasoning phrase in its system turn, stops the run. Before a
+step is taken, the tokenizer's chat template is checked against the recipe's ``template_sha256``,
+and every row's tokens, as TRL prepared them, against the template's own render (``_check_tokens``).
+The adapter records the recipe's ``rendering`` in its ``adapter_config.json`` (``anjo_rendering``),
+which vLLM and PEFT ignore and the host checks.
 
 Glimmer is multimodal (``MuseGlimmerForConditionalGeneration``, which transformers maps under
 ``AutoModelForImageTextToText``, not ``AutoModelForCausalLM``). Its vision tower has ``q_proj``,
@@ -28,15 +33,16 @@ The ``sft_dpo`` objective (Task 7) adds a DPO pass after SFT on the dataset's pa
 chosen, rejected), at Meta's TRL settings (beta 0.1, lr 5e-7). The trained PEFT model goes in with
 ``ref_model=None``, so no second model loads. TRL 1.x would copy the adapter as a frozen ``ref``
 adapter and use that copy as the reference; the copy is removed, so the reference is the same model
-with the adapter switched off. Pairs longer than ``max_seq_length`` on either side are dropped and
-counted.
+with the adapter switched off; the receipt's ``dpo_reference`` says which reference TRL used.
+Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
 ``receipt.json`` go) and, for a warm start, ``ANJO_TRAIN_PREV`` (the previous adapter's folder).
 The receipt holds counts and timings only. A fifth, ``ANJO_TRAIN_SMOKE_MODEL``, is set only by the
 CPU smoke run (``anjo.sleep.train.smoke``) and never by a runner: it names a tiny local model, which
-loads unquantized in fp32 on the CPU in place of Glimmer.
+loads unquantized in fp32 on the CPU in place of Glimmer, and the run then also writes the prompt ids
+TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against the server's.
 
 ``TRAIN_PACKAGES`` are the versions every runner installs (Colab's image brings its own torch), and
 ``TORCH`` the torch for a runner that brings none. They live here, in a file that imports only the
@@ -44,6 +50,7 @@ standard library, so a runner that copies this one file gets the pins with it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -75,12 +82,20 @@ MAX_EPOCHS = 4
 _KEYS = (
     "r", "alpha", "dropout", "target_modules", "learning_rate", "seed", "max_seq_length", "packing",
     "accumulation", "epochs", "batch_size", "warm_start", "revision", "objective", "reasoning_strength",
+    "current_date", "template_sha256", "rendering",
 )
-# Standalone copies of anjo.sleep.serving.config's (a test holds them equal): Glimmer's reasoning
-# levels, the reply's channel header after the generation prompt, and the end of its turn.
+# Standalone copies of anjo.sleep.serving.config's and framing's (a test holds them equal): Glimmer's
+# reasoning levels, the reply's channel header after the generation prompt, the end of its turn,
+# every special token's text, the template's reasoning phrase, and where an adapter records its rendering.
 REASONING_LEVELS = ("low", "medium", "high", "xhigh")
 USER_CHANNEL = " to=user<|message|>"
 REPLY_END = "<|eot|>"
+SPECIAL_TOKEN = re.compile(
+    r"<\|(?:reserved_special_token_[0-9]{1,4}|vid_frame_separator|finetune_right_pad|begin_of_text|end_of_text"
+    r"|image_start|image_end|vid_start|message|vid_end|start|image|video|patch|eom|eot)\|>")
+REASONING_PHRASE = re.compile(r"(?i)(reasoning)\s+(strength|effort)")
+RENDERING_KEY = "anjo_rendering"
+SMOKE_TOKENS = "smoke_tokens.json"
 # A 3% linear warmup: transformers 5 dropped ``warmup_ratio``, and ``warmup_steps`` under 1 is the share.
 WARMUP = 0.03
 SMOKE_ENV = "ANJO_TRAIN_SMOKE_MODEL"
@@ -129,6 +144,12 @@ def load_config(raw: str) -> dict[str, Any]:
         raise ValueError("the base model's revision is pinned")
     if cfg["reasoning_strength"] not in REASONING_LEVELS:
         raise ValueError(f"reasoning_strength is one of {', '.join(REASONING_LEVELS)}")
+    if not isinstance(cfg["current_date"], str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", cfg["current_date"]):
+        raise ValueError("current_date is the night's date, YYYY-MM-DD")
+    if not isinstance(cfg["template_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", cfg["template_sha256"]):
+        raise ValueError("template_sha256 is the chat template's sha256")
+    if not isinstance(cfg["rendering"], str) or not cfg["rendering"].endswith("/" + cfg["reasoning_strength"]):
+        raise ValueError("the rendering names the reasoning strength the rows are rendered at")
     return cfg
 
 
@@ -213,11 +234,22 @@ def _reply(side: Any) -> str:
     return str(side[0]["content"])
 
 
-def template_kwargs(cfg: dict[str, Any], today: str) -> dict[str, str]:
-    """The chat template's arguments for every row of the run: the night's reasoning strength and one
-    date. The template dates a prompt that has no system turn from the clock, so one date keeps the
-    rows of a night that crosses midnight alike."""
-    return {"reasoning_strength": cfg["reasoning_strength"], "current_date": today}
+def template_kwargs(cfg: dict[str, Any]) -> dict[str, str]:
+    """The chat template's arguments for every row of the run, as the server is sent them: the
+    night's reasoning strength and its date. The template dates a prompt that has no system turn
+    from the clock unless it is told, so the date never comes from the VM's clock."""
+    return {"reasoning_strength": cfg["reasoning_strength"], "current_date": cfg["current_date"]}
+
+
+def check_clean(row: dict[str, Any]) -> None:
+    """A row as the host cleaned it: no special token's text anywhere, and no reasoning phrase in a
+    system turn, which would stop the template writing the night's strength."""
+    for message in [*row["prompt"], *(message for side in _sides(row) for message in row[side])]:
+        text = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(text, str):
+            raise ValueError("every message of a row is text")
+        if SPECIAL_TOKEN.search(text) or (message.get("role") == "system" and REASONING_PHRASE.search(text)):
+            raise ValueError(f"row {row.get('id')} wasn't cleaned as the server's prompts are")
 
 
 def plain_row(tokenizer: Any, row: dict[str, Any], template: dict[str, str]) -> dict[str, str]:
@@ -226,6 +258,7 @@ def plain_row(tokenizer: Any, row: dict[str, Any], template: dict[str, str]) -> 
     each reply closed by ``<|eot|>``. TRL tokenizes plain text with the tokenizer's special tokens
     on, which puts the BOS first itself, so the template's own BOS is left off: one BOS, as the
     server has."""
+    check_clean(row)
     prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False, **template)
     if not isinstance(prompt, str) or not prompt.startswith(tokenizer.bos_token):
         raise ValueError("the chat template's prompt starts with the BOS")
@@ -263,16 +296,32 @@ def _check_tokens(tokenizer: Any, row: dict[str, Any], side: str, prompt_ids: Se
 
 
 def _check_sft(tokenizer: Any, kept: list[tuple[dict[str, Any], dict[str, str]]], prepared: Any,
-               template: dict[str, str]) -> int:  # pragma: no cover - needs the training stack
+               template: dict[str, str], prompts: list[dict[str, Any]]) -> int:  # pragma: no cover - needs the training stack
     """Every SFT row's tokens and labels, as TRL prepared them, against the template: the labels are
-    -100 (no loss) on the prompt and the tokens themselves from the reply's first token on."""
+    -100 (no loss) on the prompt and the tokens themselves from the reply's first token on. Each
+    row's prompt ids go into ``prompts``."""
     for (row, _), done in zip(kept, prepared, strict=True):
         ids, labels = list(done["input_ids"]), list(done["labels"])
         start = next((i for i, label in enumerate(labels) if label != -100), len(labels))
         if labels != [-100] * start + ids[start:]:
             raise ValueError("the loss falls on more than the reply")
         _check_tokens(tokenizer, row, "completion", ids[:start], ids[start:], template)
+        prompts.append({"id": row["id"], "prompt_ids": ids[:start]})
     return len(kept)
+
+
+def check_template(tokenizer: Any, cfg: dict[str, Any]) -> None:
+    """The tokenizer's chat template is the one the rendering names (by its sha256)."""
+    found = hashlib.sha256(str(tokenizer.chat_template).encode("utf-8")).hexdigest()
+    if found != cfg["template_sha256"]:
+        raise ValueError(f"the chat template's sha256 is {found}, not the rendering's {cfg['template_sha256']}")
+
+
+def record_rendering(out: Path, rendering: str) -> None:
+    """The rendering, written into the saved adapter's ``adapter_config.json``."""
+    meta_path = out / "adapter_config.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta_path.write_text(json.dumps({**meta, RENDERING_KEY: rendering}, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _smoke_model() -> str | None:
@@ -303,9 +352,18 @@ def _load_model(cfg: dict[str, Any], settings: dict[str, Any], smoke: str | None
     return prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
 
+def dpo_reference(trainer: Any) -> str:
+    """The reference TRL 1.16's DPOTrainer scores against, by its own rule: with no ``ref_model``, a
+    PEFT model's ``ref`` adapter if it has one, else the model with its adapters switched off."""
+    if trainer.ref_model is not None:
+        return "ref_model"
+    return "ref_adapter" if "ref" in trainer.model.peft_config else "adapter_off"
+
+
 def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str, str]]], settings: dict[str, Any],
-         out: Path, template: dict[str, str]) -> int:  # pragma: no cover - GPU VM only
-    """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off."""
+         out: Path, template: dict[str, str], prompts: list[dict[str, Any]]) -> tuple[int, str]:  # pragma: no cover - GPU VM only
+    """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off.
+    Returns the steps taken and the reference used."""
     from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
     from trl import DPOConfig, DPOTrainer  # type: ignore[import-not-found, unused-ignore]
 
@@ -315,12 +373,16 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
     for (row, _), done in zip(pairs, trainer.train_dataset, strict=True):
         for side in ("chosen", "rejected"):
             _check_tokens(tokenizer, row, side, done["prompt_ids"], done[f"{side}_ids"], template)
+        prompts.append({"id": row["id"], "prompt_ids": list(done["prompt_ids"])})
     # TRL 1.x adds a frozen copy of the trained adapter ("ref") and scores the reference with it. With
     # only the trained adapter left, it scores the reference with the adapter switched off.
     for name in [name for name in trainer.model.peft_config if name != "default"]:
         trainer.model.delete_adapter(name)
+    reference = dpo_reference(trainer)
+    if reference != "adapter_off":
+        raise ValueError(f"the DPO reference is {reference}, not the model with its adapter switched off")
     trainer.train()
-    return int(trainer.state.global_step)
+    return int(trainer.state.global_step), reference
 
 
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
@@ -344,7 +406,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     # TRL ends a plain-text reply with the tokenizer's EOS unless it ends with it already. Glimmer's
     # turn ends with <|eot|> (its EOS is <|end_of_text|>), and each reply is closed by it.
     tokenizer.eos_token = REPLY_END
-    template = template_kwargs(cfg, time.strftime("%Y-%m-%d"))
+    check_template(tokenizer, cfg)
+    template = template_kwargs(cfg)
     rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
@@ -359,23 +422,27 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         model=model, args=SFTConfig(output_dir=str(out / "run"), **settings["sft"]),
         train_dataset=data, processing_class=tokenizer, peft_config=peft_config,
     )
-    checked = _check_sft(tokenizer, kept, trainer.train_dataset, template)
+    prompts: list[dict[str, Any]] = []
+    checked = _check_sft(tokenizer, kept, trainer.train_dataset, template, prompts)
     started = time.monotonic()
     trainer.train()
-    dpo_steps = 0
+    dpo_steps, reference = 0, "none"
     if pairs:
         accumulation, epochs = dpo_plan(len(pairs), cfg)
         dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
-        dpo_steps = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template)
+        dpo_steps, reference = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template, prompts)
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
+    record_rendering(out, cfg["rendering"])
+    if smoke is not None:
+        (out / SMOKE_TOKENS).write_text(json.dumps(prompts), encoding="utf-8")
     receipt = {
         "steps": int(trainer.state.global_step), "epochs": cfg["epochs"], "train_minutes": minutes,
         "examples": len(kept), "dropped_truncated": len(rows) - len(kept),
         "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu", "objective": cfg["objective"],
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
-        "rows_checked": checked + len(pairs),
+        "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

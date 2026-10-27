@@ -90,7 +90,9 @@ class CheckpointRef:
     """A trained adapter, or a merged checkpoint, for one person and night.
 
     ``id`` is the adapter name (``p-<hash>-n<night>``), ``uri`` where the GPU runner stored it,
-    and ``parent_id`` the checkpoint it trained on top of (``None`` for a clean slate).
+    ``parent_id`` the checkpoint it trained on top of (``None`` for a clean slate), and
+    ``rendering`` the prompt rendering it was trained under (``serving.framing.rendering``; None
+    for one that recorded none, which is never served).
     """
 
     id: str
@@ -98,6 +100,7 @@ class CheckpointRef:
     night: date
     uri: str
     parent_id: str | None
+    rendering: str | None = None
 
 
 @dataclass(frozen=True)

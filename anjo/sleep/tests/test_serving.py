@@ -63,7 +63,7 @@ def test_a_tool_call_parser_turns_tool_calls_on() -> None:
 
 def test_every_call_is_rendered_at_one_reasoning_strength_low_unless_set() -> None:
     assert config.reasoning_strength({}) == "low" == config.DEFAULT_REASONING_STRENGTH
-    assert config.template_kwargs({config.REASONING_STRENGTH_ENV: " xhigh "}) == {"reasoning_strength": "xhigh"}
+    assert config.reasoning_strength({config.REASONING_STRENGTH_ENV: " xhigh "}) == "xhigh"
     for wrong in ("max", "LOW", "low."):
         with pytest.raises(ServeConfigError, match=config.REASONING_STRENGTH_ENV):
             config.reasoning_strength({config.REASONING_STRENGTH_ENV: wrong})
