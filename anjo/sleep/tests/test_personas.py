@@ -1,3 +1,4 @@
+# mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False
 import json
 from dataclasses import replace
 from pathlib import Path

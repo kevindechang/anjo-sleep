@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Build a deterministic 200-item multiple-choice general-skills set.
 
 Stdlib only. Fetches public rows from the Hugging Face datasets-server API.

@@ -1,3 +1,4 @@
+# mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False
 import json
 from dataclasses import replace
 
@@ -85,4 +86,4 @@ def test_expected_pair_count_is_enforced(tmp_path):
 
 def test_life_dataclass_is_frozen(pairs):
     with pytest.raises(AttributeError):
-        replace(pairs[0].lives[0]).id = "x"  # type: ignore[misc]
+        replace(pairs[0].lives[0]).id = "x"

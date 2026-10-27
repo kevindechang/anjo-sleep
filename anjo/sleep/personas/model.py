@@ -130,7 +130,7 @@ def _int(d: dict[str, Any], key: str, where: str) -> int:
     v = _req(d, key, where)
     if isinstance(v, bool) or not isinstance(v, int):
         raise PersonaError(f"{where}: '{key}' must be an integer")
-    return v
+    return int(v)
 
 
 def _persona_from(d: dict[str, Any]) -> Persona:

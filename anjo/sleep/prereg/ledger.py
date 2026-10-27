@@ -121,7 +121,7 @@ def register(
     p = path or ledger_path()
     existing = read_entries(p)
     verify_entries(existing)  # never extend a broken chain
-    body = {
+    body: dict[str, Any] = {
         "seq": len(existing),
         "ts": (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "kind": kind,
@@ -129,7 +129,15 @@ def register(
         "note": note,
         "prev_hash": existing[-1].entry_hash if existing else GENESIS,
     }
-    entry = LedgerEntry(**body, entry_hash=_hash_body(body))
+    entry = LedgerEntry(
+        seq=len(existing),
+        ts=str(body["ts"]),
+        kind=kind,
+        sha256=sha256,
+        note=note,
+        prev_hash=str(body["prev_hash"]),
+        entry_hash=_hash_body(body),
+    )
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(asdict(entry), sort_keys=True, ensure_ascii=False) + "\n")

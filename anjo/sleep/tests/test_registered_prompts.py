@@ -1,3 +1,4 @@
+# mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False
 from pathlib import Path
 
 from anjo.sleep.prereg import register_night1 as r
