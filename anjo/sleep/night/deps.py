@@ -166,6 +166,11 @@ class ProbeRegistrar(Protocol):
 
 
 class PracticeRunner(Protocol):
+    """Step 5. ``max_spark_calls`` bounds its Spark Open calls, for the step's hold."""
+
+    @property
+    def max_spark_calls(self) -> int: ...
+
     def run(
         self, user_id: str, night: date, evidence: Sequence[Evidence], hw: object | None, *, at: datetime,
     ) -> PracticeRun: ...

@@ -5,9 +5,10 @@ the composition root builds: the app never imports the training code (the import
 it off the serving path). Everything else is here:
 
 - evidence, targets, briefs and practice transcripts in the person's encrypted ``sleep/`` folder;
-- extraction through the history store (``HistorySource``) on Spark Open; briefs and practice
-  scenes on Spark Open; practice replies, the gates and the note on the Modal vLLM server at
-  serving precision (``VllmClient``), its spend held on ``modal_usd`` (``ReservedGpu``);
+- extraction through the history store (``HistorySource``) on Spark Open; briefs, practice scenes,
+  the teacher candidate and the critic on Spark Open; full practice's personal Glimmer candidates,
+  the gates and the note on the Modal vLLM server at serving precision (``VllmClient``), its spend
+  held on ``modal_usd`` (``ReservedGpu``);
 - homework (Task 7): Muse Wonder on the Meta Model API, searching Wikipedia's public API and
   fetching public pages only (``WonderHomework``), each call held on ``meta_usd``;
 - her chooser (``StateChooser``) with the registered policy and the outcome ledger's intentions;
@@ -65,7 +66,7 @@ from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
-from anjo.sleep.practice.run import MinimalPractice
+from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.serving.client import VllmClient
@@ -160,8 +161,9 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
 
-    def practice(chat: ChatFn, night: date) -> MinimalPractice:
-        return MinimalPractice(chat=chat, client=client, snapshot=context.snapshot, seed=night_settings.seed)
+    def practice(chat: ChatFn, night: date) -> FullPractice:
+        return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
+                            seed=night_settings.seed)
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger)

@@ -1,9 +1,14 @@
-"""The night's SFT dataset (Task 5, ``build_night_dataset``).
+"""The night's SFT dataset (Task 5, ``build_night_dataset``) and its preference pairs (Task 7).
 
 Every example is one practice transcript: its input is the snapshot of context C taken before
 tonight's practice plus the person's message, and its target is her reply, with the loss on the
-reply only (the rows are TRL's conversational prompt/completion form). Daytime replies never
-become examples (§3).
+reply only (the rows are TRL's conversational prompt/completion form). Each row names the
+target's provenance (``glimmer`` or ``teacher``). Daytime replies never become examples (§3).
+
+A new transcript that kept the critic's (best, worst) pair also gives a ``Pair`` on the same prompt
+as its example. Both sides go through the decontaminator: a probe in the chosen side drops the
+example and its pair, one in the rejected side drops the pair only (``pairs_dropped``). Pair rows
+are written only for the ``sft_dpo`` objective (``to_jsonl(pairs=True)``).
 
 In order, the builder:
 
@@ -14,7 +19,7 @@ In order, the builder:
 3. refuses any example whose transcript's ancestry isn't cleared, anywhere in its input, context
    or target (§3), and counts it;
 4. drops every example that carries a sealed probe, checked through the ``Decontaminator`` port,
-   and counts it (RF5);
+   and counts it (RF5), and every pair with a probe on either side;
 5. drops, and counts, any example longer than the training sequence, so nothing trains cut;
 6. keeps examples while they fit ``token_cap`` together;
 7. drops the whole of C from a seeded share of the examples (context dropout), chosen only among
@@ -47,6 +52,8 @@ DEFAULT_MAX_SEQ_TOKENS: Final = 8192
 ROLE_OVERHEAD_TOKENS: Final = 8  # the chat template's markers around each message, over-counted
 DropReason = Literal["probe", "hosted", "truncated", "over_cap", "missing"]
 DROP_REASONS: Final[tuple[DropReason, ...]] = ("probe", "hosted", "truncated", "over_cap", "missing")
+PairDropReason = Literal["probe", "truncated", "example"]  # ``example``: its example was dropped
+PAIR_DROP_REASONS: Final[tuple[PairDropReason, ...]] = ("probe", "truncated", "example")
 _URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+|\b[a-z0-9-]+\.(?:com|org|net|io|edu|gov|dev|ai)\b")
 _MONTHS = (
     "january|february|march|april|may|june|july|august|september|october|november|december"
@@ -70,32 +77,63 @@ class Example:
     context_dropped: bool
     tokens: int
     new: bool
+    teacher: bool = False  # the target is the Spark Open teacher's candidate (full practice)
+
+
+@dataclass(frozen=True)
+class Pair:
+    """One preference pair: the critic's best (``chosen``) and worst (``rejected``) replies on the
+    example's prompt, and where each came from."""
+
+    id: str
+    prompt: tuple[Message, ...]
+    chosen: str
+    rejected: str
+    chosen_from: str
+    rejected_from: str
+    tokens: int  # the prompt and the longer side
+
+
+def _messages(prompt: tuple[Message, ...]) -> list[dict[str, str]]:
+    return [{"role": role, "content": text} for role, text in prompt]
 
 
 @dataclass(frozen=True)
 class Dataset:
-    """The night's examples and how many were dropped for each reason."""
+    """The night's examples and pairs, and how many of each were dropped for each reason."""
 
     examples: tuple[Example, ...]
     tokens: int
     dropped: Mapping[str, int] = field(hash=False)
+    pairs: tuple[Pair, ...] = ()
+    pairs_dropped: Mapping[str, int] = field(default_factory=dict, hash=False)
 
     def __post_init__(self) -> None:
         counts: dict[str, int] = {reason: 0 for reason in DROP_REASONS}
         counts.update(self.dropped)
         object.__setattr__(self, "dropped", MappingProxyType(counts))
+        pair_counts: dict[str, int] = {reason: 0 for reason in PAIR_DROP_REASONS}
+        pair_counts.update(self.pairs_dropped)
+        object.__setattr__(self, "pairs_dropped", MappingProxyType(pair_counts))
 
-    def to_jsonl(self) -> str:
+    def to_jsonl(self, *, pairs: bool = False) -> str:
         """The rows the training script reads: conversational prompt/completion, so TRL puts the
-        loss on the completion only."""
-        return "".join(
-            json.dumps({
-                "id": example.id,
-                "prompt": [{"role": role, "content": text} for role, text in example.prompt],
-                "completion": [{"role": "assistant", "content": example.completion}],
-            }, ensure_ascii=False) + "\n"
+        loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
+        rejected) for the DPO pass."""
+        rows = [
+            {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
+             "prompt": _messages(example.prompt),
+             "completion": [{"role": "assistant", "content": example.completion}]}
             for example in self.examples
-        )
+        ]
+        if pairs:
+            rows += [
+                {"id": pair.id, "prompt": _messages(pair.prompt),
+                 "chosen": [{"role": "assistant", "content": pair.chosen}],
+                 "rejected": [{"role": "assistant", "content": pair.rejected}]}
+                for pair in self.pairs
+            ]
+        return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
 
 
 def quotes_url_or_date(text: str) -> bool:
@@ -129,11 +167,41 @@ def _example(transcript: PracticeTranscript, *, new: bool, drop_context: bool) -
     return Example(
         id=transcript.id, prompt=prompt, completion=transcript.reply,
         context_dropped=transcript.context is not None and drop_context, tokens=tokens, new=new,
+        teacher=transcript.target == "teacher",
     )
 
 
-def _full_text(transcript: PracticeTranscript) -> str:
-    return "\n".join(part for part in (transcript.context, transcript.message, transcript.reply) if part)
+def _pair(transcript: PracticeTranscript, example: Example) -> Pair:
+    assert transcript.rejected is not None
+    prompt = sum(estimate_tokens(text) + ROLE_OVERHEAD_TOKENS for _, text in example.prompt)
+    longer = max(estimate_tokens(transcript.reply), estimate_tokens(transcript.rejected))
+    return Pair(
+        id=transcript.id, prompt=example.prompt, chosen=transcript.reply, rejected=transcript.rejected,
+        chosen_from=transcript.target, rejected_from=transcript.rejected_from or "glimmer",
+        tokens=prompt + longer + ROLE_OVERHEAD_TOKENS,
+    )
+
+
+def _full_text(transcript: PracticeTranscript, reply: str | None = None) -> str:
+    parts = (transcript.context, transcript.message, transcript.reply if reply is None else reply)
+    return "\n".join(part for part in parts if part)
+
+
+def _leaks(
+    candidates: Sequence[tuple[PracticeTranscript, bool]], sealed: list[Probe], decontam: Decontaminator,
+) -> tuple[list[bool], list[bool]]:
+    """Per candidate: whether its example carries a sealed probe, and whether its pair's rejected
+    side does. Every text that could train goes through one check."""
+    texts = [_full_text(t) for t, _ in candidates]
+    sides = [i for i, (t, new) in enumerate(candidates) if new and t.rejected is not None]
+    texts += [_full_text(candidates[i][0], candidates[i][0].rejected) for i in sides]
+    flags = decontam.check(texts, sealed) if texts else ()
+    if len(flags) != len(texts):
+        raise ValueError("the decontaminator must return one flag per text")
+    rejected = [False] * len(candidates)
+    for i, flag in zip(sides, flags[len(candidates):], strict=True):
+        rejected[i] = bool(flag)
+    return [bool(flag) for flag in flags[: len(candidates)]], rejected
 
 
 def build_night_dataset(
@@ -169,27 +237,36 @@ def build_night_dataset(
             dropped["hosted"] += 1  # hosted or unknown ancestry, in the item or its transcript
         else:
             candidates.append((transcript, new))
-    flags = decontam.check([_full_text(t) for t, _ in candidates], sealed) if candidates else ()
-    if len(flags) != len(candidates):
-        raise ValueError("the decontaminator must return one flag per text")
+    leaked, rejected_leaked = _leaks(candidates, sealed, decontam)
     kept: list[Example] = []
+    pairs: list[Pair] = []
+    pairs_dropped: dict[str, int] = {reason: 0 for reason in PAIR_DROP_REASONS}
     used = 0
-    for (transcript, new), leaked in zip(candidates, flags, strict=True):
-        if leaked:
-            dropped["probe"] += 1
-            continue
+    for index, (transcript, new) in enumerate(candidates):
+        paired = new and transcript.rejected is not None  # only the night's new practice gives pairs
         drop = (
             transcript.context is not None and not quotes_url_or_date(transcript.reply)
             and _drops_context(seed, transcript.person_id, until, transcript.id, dropout)
         )
-        full = _example(transcript, new=new, drop_context=False)
-        if full.tokens > max_seq_tokens:
-            dropped["truncated"] += 1
-            continue
         example = _example(transcript, new=new, drop_context=drop)
-        if used + example.tokens > token_cap:
-            dropped["over_cap"] += 1
+        reason: DropReason | None = (
+            "probe" if leaked[index]
+            else "truncated" if _example(transcript, new=new, drop_context=False).tokens > max_seq_tokens
+            else "over_cap" if used + example.tokens > token_cap else None
+        )
+        if reason is not None:
+            dropped[reason] += 1
+            if paired:
+                pairs_dropped["probe" if reason == "probe" else "example"] += 1
             continue
         kept.append(example)
         used += example.tokens
-    return Dataset(examples=tuple(kept), tokens=used, dropped=dropped), dropped["probe"]
+        if not paired:
+            continue
+        pair = _pair(transcript, example)
+        if rejected_leaked[index] or pair.tokens > max_seq_tokens:
+            pairs_dropped["probe" if rejected_leaked[index] else "truncated"] += 1
+        else:
+            pairs.append(pair)
+    data = Dataset(examples=tuple(kept), tokens=used, dropped=dropped, pairs=tuple(pairs), pairs_dropped=pairs_dropped)
+    return data, dropped["probe"]

@@ -109,6 +109,25 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     assert deps.ledger is not None and deps.ledger.path.name == LEDGER_NAME and gpu._ledger is deps.ledger
 
 
+def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.homework.agent import MetaWonder, WonderHomework
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.practice.full import FullPractice
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    deps = night.build(NoTrainer(), NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"}))
+    homework: Any = deps.homework
+    assert isinstance(homework, WonderHomework) and homework.available  # Task 5's no-op is replaced
+    assert isinstance(homework._wonder, MetaWonder) and homework._ledger is deps.ledger
+    practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
+    assert isinstance(practice, FullPractice) and practice.max_spark_calls == 1 + 2 * 16
+
+
 def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import night
     from anjo.sleep.night.deps import NightOptions

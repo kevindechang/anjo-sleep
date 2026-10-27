@@ -83,7 +83,6 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
 # Worst cases for the paid steps' holds (holds.py): Spark Open calls per step, and the rest.
 EXTRACT_MAX_CALLS: Final = 2  # the day's one call, and one retry
 BRIEF_MAX_CALLS: Final = 2  # the served and the training brief
-SCENES_MAX_CALLS: Final = 1
 PROBES_WORST_USD: Final = 0.50  # Muse Spark writing a real person's night probes (about 8 calls)
 NOTE_MAX_S: Final = 300.0  # one Glimmer call on the serving GPU, inside the client's request timeout
 
@@ -416,12 +415,13 @@ class NightRunner:
         started = self._timer()
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
-        with self._metered(p, "practice", "practice", SCENES_MAX_CALLS):
+        with self._metered(p, "practice", "practice", runner.max_spark_calls):
             run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         return {"scenes": len(run.transcripts), "dropped_cued": run.dropped_cued, "dropped_cut": run.dropped_cut,
-                "f_items": len(run.f_ids),
+                "f_items": len(run.f_ids), "pairs": run.pairs, "teacher_targets": run.teacher_targets,
+                "critic_unreadable": run.critic_unreadable,
                 "homework": None, "seconds": self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:

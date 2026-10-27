@@ -10,9 +10,13 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
 - at least ``min_optimizer_steps`` updates: a tiny night with batch 1 and accumulation 16 would
   make one or two, so accumulation shrinks to ``n // min_optimizer_steps`` (between 1 and 16) and,
   if that still falls short, epochs rise to at most 4 (``plan_steps``);
-- ``max_seq_length`` at least 8,192 with ``packing=False``.
+- ``max_seq_length`` at least 8,192 with ``packing=False``;
+- ``objective``: ``sft`` (the default), or ``sft_dpo`` (Task 7), which adds a DPO pass on the
+  night's (best, worst) practice pairs after SFT, at Meta's TRL settings (beta 0.1, lr 5e-7), with
+  the adapter switched off as the reference so no second model loads. It's a development ablation,
+  registered at the freeze only if it wins.
 
-``train_lora`` writes the dataset, runs the ``train_lora`` job on a ``GpuRunner`` (Colab for the
+``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Colab for the
 night) under the training hard timeout, copies the finished adapter into the local adapter cache
 and onto the Modal volume through Task 4's upload, which refuses a name already there, and returns
 the ``CheckpointRef``. Adapter names are ``p-<hash>-n<night>`` and never reused.
@@ -45,7 +49,11 @@ TRAIN_SEED: Final = 20261028
 JOB: Final = "train_lora"
 DATASET_FILE: Final = "dataset.jsonl"
 VOLUME_URI: Final = f"modal-volume://{config.ADAPTERS_VOLUME}"
-Objective = Literal["sft"]  # Task 7 adds "sft_dpo" if the freeze registers it
+Objective = Literal["sft", "sft_dpo"]
+OBJECTIVES: Final[tuple[Objective, ...]] = ("sft", "sft_dpo")
+DPO_BETA: Final = 0.1
+DPO_LR: Final = 5e-7
+MAX_DPO_LR: Final = 1e-5
 
 
 class LoraCfgError(ValueError):
@@ -72,6 +80,8 @@ class LoraCfg:
     max_epochs: int = MAX_EPOCHS
     objective: Objective = "sft"
     warm_start: bool = True
+    dpo_beta: float = DPO_BETA
+    dpo_lr: float = DPO_LR
 
     def __post_init__(self) -> None:
         if isinstance(self.r, bool) or not isinstance(self.r, int) or not 1 <= self.r <= MAX_RANK:
@@ -90,8 +100,10 @@ class LoraCfg:
             raise LoraCfgError("at least one optimizer step, at batch 1")
         if not 1 <= self.max_accumulation <= MAX_ACCUMULATION or not 1 <= self.max_epochs <= MAX_EPOCHS:
             raise LoraCfgError(f"accumulation is 1 to {MAX_ACCUMULATION}, epochs 1 to {MAX_EPOCHS}")
-        if self.objective != "sft":
-            raise LoraCfgError("only sft until the freeze registers sft_dpo")
+        if self.objective not in OBJECTIVES:
+            raise LoraCfgError(f"the objective is one of {', '.join(OBJECTIVES)}")
+        if not 0 < self.dpo_beta <= 1 or not 0 < self.dpo_lr <= MAX_DPO_LR:
+            raise LoraCfgError(f"DPO's beta is in (0, 1] and its learning rate in (0, {MAX_DPO_LR:g}]")
 
     @property
     def alpha(self) -> int:
@@ -145,6 +157,7 @@ def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str 
         "max_seq_length": cfg.max_seq_length, "packing": cfg.packing,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": cfg.batch_size,
         "warm_start": warm, "revision": revision, "objective": cfg.objective,
+        "dpo_beta": cfg.dpo_beta, "dpo_learning_rate": cfg.dpo_lr,
     }
 
 
@@ -217,7 +230,7 @@ def train_lora_with_receipt(
     dataset_path = workdir / DATASET_FILE
     settings = training_config(cfg, len(data.examples), warm=warm, revision=revision)
     try:  # the dataset is the person's words in plain text: it never outlives the run
-        dataset_path.write_text(data.to_jsonl(), encoding="utf-8")
+        dataset_path.write_text(data.to_jsonl(pairs=cfg.objective == "sft_dpo"), encoding="utf-8")
         outputs = runner.run(JOB, {
             "person_id": person_id, "adapter_name": name, "night": night.isoformat(), "dataset_path": str(dataset_path),
             "config": settings, "prev_adapter_dir": None if prev_dir is None else str(prev_dir),
