@@ -38,7 +38,7 @@ from anjo.sleep.examples.synthetic.report import (
     Say,
     heading,
 )
-from anjo.sleep.examples.synthetic.services import ExampleError, Services
+from anjo.sleep.examples.synthetic.services import Activity, ExampleError, Services, TrackedGlimmer
 from anjo.sleep.examples.synthetic.world import open_world, store_day
 from anjo.sleep.types import CheckpointRef, Probe
 
@@ -115,10 +115,13 @@ def _night(
     options: Options, services: Services, person: people.ExamplePersona,
     day: tuple[people.DayTurn, ...], say: Say, input_fn: stages.Input, run_id: str,
 ) -> ExampleReport:
-    services = replace(services, glimmer=services.glimmer.on(person.day))  # prompts dated as the rows were
+    activity = Activity()
+    dated = services.glimmer.on(person.day)  # prompts dated as the rows were
+    services = replace(services, glimmer=TrackedGlimmer(dated, activity, services.clock))
     night = stages.Night(
         person=person, turns=day, world=open_world(options.workdir, person.person_id, person.day),
         services=services, workdir=options.workdir, say=say, run_id=run_id,
+        activity=activity,
     )
     donor = stages.donor_ref(options.donor, night)  # a bad name stops the run before it costs anything
     reused = stages.reused_ref(options.adapter, night)

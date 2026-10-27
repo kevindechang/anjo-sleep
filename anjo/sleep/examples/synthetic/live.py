@@ -7,6 +7,7 @@ value). ``--fake`` needs none of this.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
@@ -34,12 +35,16 @@ HELP: Final = (
 
 
 class ExampleServing(ModalServing):
-    """``ModalServing`` that can also say which adapters its volume holds."""
+    """``ModalServing`` that can also read an adapter's config from its volume."""
 
-    def has_adapter(self, name: str) -> bool:
+    def adapter_config(self, name: str) -> dict[str, Any] | None:
         modal: Any = importlib.import_module("modal")
         volume = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
-        return name in {PurePosixPath(entry.path).name for entry in volume.listdir("/")}
+        if name not in {PurePosixPath(entry.path).name for entry in volume.listdir("/")}:
+            return None
+        raw = b"".join(volume.read_file(f"/{name}/adapter_config.json"))
+        found = json.loads(raw)
+        return found if isinstance(found, dict) else None
 
 
 class MissingKeys(ExampleError):

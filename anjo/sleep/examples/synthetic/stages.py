@@ -21,7 +21,7 @@ from anjo.sleep.examples.synthetic.report import (
     format_table,
     score_row,
 )
-from anjo.sleep.examples.synthetic.services import ExampleError, Services
+from anjo.sleep.examples.synthetic.services import Activity, ExampleError, Services
 from anjo.sleep.examples.synthetic.world import RECALL, LatestTrained, World
 from anjo.sleep.mind import receipt, snapshot
 from anjo.sleep.mind.policy import PUBLIC_DEFAULT
@@ -32,7 +32,7 @@ from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, seal_probes
 from anjo.sleep.probes.score import MuseJudge, score
 from anjo.sleep.context.training import TrainingContext
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import ServingError
 from anjo.sleep.train.dataset import Dataset, build_night_dataset
 from anjo.sleep.train.lora import LoraCfg, fresh_adapter_name, train_lora_with_receipt
@@ -68,6 +68,7 @@ class Night:
     workdir: Path
     say: Say
     run_id: str
+    activity: Activity
 
     @property
     def now(self) -> datetime:
@@ -204,13 +205,33 @@ def train(night: Night, data: Dataset) -> CheckpointRef:
     return ckpt
 
 
+IDLE_MARGIN_S: Final = 60.0
+COUNTDOWN_S: Final = 60.0
+
+
+def wait_for_scale_down(night: Night) -> None:
+    """Let an idle server stop. Modal ends a container after ``SCALEDOWN_S`` with no request and
+    gives no way to restart one, so the example's last call to it starts the clock; an idle server
+    costs nothing, and the cold start that follows mounts the new adapter."""
+    services = night.services
+    idle = night.activity.idle_s(services.clock())
+    while idle is not None and idle < config.SCALEDOWN_S + IDLE_MARGIN_S:
+        left = config.SCALEDOWN_S + IDLE_MARGIN_S - idle
+        night.say(f"waiting {left:.0f} s for the idle server to scale down, so it restarts with the new adapter")
+        services.sleep(min(COUNTDOWN_S, left))
+        idle = night.activity.idle_s(services.clock())
+
+
 def ready(night: Night, ckpt: CheckpointRef) -> None:
     """Restart the server and wake it, so it loads the new adapter, then check that it serves it.
     A running container sees a new adapter only after its next start (the engine wakes Glimmer
     again before its gates for the same reason)."""
     serving = night.services.serving
     serving.sleep_now()
-    if not serving.wake().ok:
+    wait_for_scale_down(night)
+    woke = serving.wake().ok
+    night.activity.last = night.services.clock()
+    if not woke:
         raise ExampleError("Glimmer's server didn't wake in time after the adapter upload; run again")
     try:
         night.services.glimmer.complete(ckpt, [{"role": "user", "content": "Reply with one word."}], temperature=0.0)
@@ -223,37 +244,38 @@ def ready(night: Night, ckpt: CheckpointRef) -> None:
     night.say(f"serving {ckpt.id}")
 
 
-def reused_ref(name: str | None, night: Night) -> CheckpointRef | None:
-    """``--adapter``: an adapter already on the volume, checked before anything costs money."""
-    if name is None:
-        return None
+def _stored_ref(name: str, role: str, person_id: str, night: Night) -> CheckpointRef:
+    """An adapter already on the volume, as a checkpoint carrying the rendering its own
+    ``adapter_config.json`` records. All of it is checked before anything costs money: a bad name,
+    an adapter that isn't there, and one trained under another rendering than this run serves."""
     try:
         config.check_adapter_name(name)
     except config.ServeConfigError as error:
-        raise ExampleError(f"--adapter: {error}") from None
-    if not night.services.serving.has_adapter(name):
-        raise ExampleError(f"--adapter: no adapter {name} is on the server's volume")
-    person = night.person
+        raise ExampleError(f"{role}: {error}") from None
+    stored = night.services.serving.adapter_config(name)
+    if stored is None:
+        raise ExampleError(f"{role}: no adapter {name} is on the server's volume")
+    recorded = stored.get(framing.RENDERING_KEY)
+    served = night.services.glimmer.rendering
+    if recorded != served:
+        raise ExampleError(
+            f"{role}: adapter {name} was trained under rendering {recorded}, but this run serves "
+            f"{served}; an adapter is never served under another"
+        )
     return CheckpointRef(
-        id=name, person_id=person.person_id, night=person.day,
-        uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None,
-        rendering=night.services.glimmer.rendering,  # trained by this recipe, so under this rendering
+        id=name, person_id=person_id, night=night.person.day,
+        uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None, rendering=str(recorded),
     )
+
+
+def reused_ref(name: str | None, night: Night) -> CheckpointRef | None:
+    """``--adapter``: this person's adapter, already on the volume."""
+    return None if name is None else _stored_ref(name, "--adapter", night.person.person_id, night)
 
 
 def donor_ref(name: str | None, night: Night) -> CheckpointRef | None:
-    """Arm 3x's donor adapter, checked by name before anything runs; ``None`` without one."""
-    if name is None:
-        return None
-    try:
-        config.check_adapter_name(name)
-    except config.ServeConfigError as error:
-        raise ExampleError(f"--donor: {error}") from None
-    return CheckpointRef(
-        id=name, person_id=DONOR_PERSON, night=night.person.day,
-        uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None,
-        rendering=night.services.glimmer.rendering,  # trained by this recipe, so under this rendering
-    )
+    """Arm 3x's donor adapter, already on the volume; ``None`` without one."""
+    return None if name is None else _stored_ref(name, "--donor", DONOR_PERSON, night)
 
 
 def run_arms(

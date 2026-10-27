@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -212,6 +213,8 @@ class FakeGlimmer:
         return self
 
     def _check(self, adapter: CheckpointRef | None) -> None:
+        if self._serving is not None:
+            self._serving.touch()  # any request, even a refused one, keeps the container up
         if adapter is not None and adapter.rendering != self.rendering:
             raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
                                f"not {self.rendering}; it is never served under another")
@@ -264,44 +267,71 @@ class FakeGpu:
         }
 
 
-class FakeServing:
-    """A server that is always awake. An uploaded adapter is checked, refused if its name is already
-    on the volume, and becomes visible only after the server restarts (``sleep_now``), as on Modal."""
+class FakeClock:
+    """Time that moves only when something sleeps, so a ten-minute wait takes no time."""
 
-    def __init__(self, *, restarts: bool = True) -> None:
-        # the donor's adapter, trained by another run, is already served
-        self.on_volume: set[str] = {FAKE_DONOR}
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeServing:
+    """A Modal-like server. An uploaded adapter is checked, refused if its name is already on the
+    volume, and becomes visible only to a container that starts after it: ``sleep_now`` does nothing,
+    and the container is replaced only after ``config.SCALEDOWN_S`` with no request. With
+    ``scales_down=False`` it never goes idle."""
+
+    def __init__(self, clock: FakeClock | None = None, *, scales_down: bool = True) -> None:
+        self.clock = clock if clock is not None else FakeClock()
+        self._scales_down = scales_down
+        # the donor's adapter, trained by another run, is already on the volume and served
+        self.configs: dict[str, dict[str, Any]] = {FAKE_DONOR: _adapter_config(framing.rendering(config.reasoning_strength()))}
         self.visible: set[str] = {FAKE_DONOR}
-        self._restarts = restarts
+        self._last_call: float | None = self.clock()
+
+    @property
+    def on_volume(self) -> set[str]:
+        return set(self.configs)
+
+    def touch(self) -> None:
+        self._last_call = self.clock()
 
     def wake(self) -> WakeResult:
+        idle = None if self._last_call is None else self.clock() - self._last_call
+        if self._scales_down and (idle is None or idle >= config.SCALEDOWN_S):
+            self.visible = self.on_volume  # a cold start mounts every adapter on the volume
+        self.touch()
         return WakeResult(0.0, True)
 
     def sleep_now(self) -> None:
-        if self._restarts:
-            self.visible = set(self.on_volume)
+        return None  # as on Modal: nothing restarts a running container
 
-    def has_adapter(self, name: str) -> bool:
-        return name in self.on_volume
+    def adapter_config(self, name: str) -> dict[str, Any] | None:
+        return self.configs.get(name)
 
     def upload_adapter(self, folder: Path, name: str) -> None:
         config.check_adapter(folder, name)
-        if name in self.on_volume:
+        if name in self.configs:
             raise config.ServeConfigError(f"adapter {name} is already on the volume; a night's adapter never changes")
-        self.on_volume.add(name)
+        self.configs[name] = json.loads((folder / "adapter_config.json").read_text(encoding="utf-8"))
+
+
+def _adapter_config(rendering: str) -> dict[str, Any]:
+    return {"peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16, framing.RENDERING_KEY: rendering}
 
 
 def fake_services(chooser: Chooser | None = None, serving: FakeServing | None = None) -> Services:
     """Every service faked. ``chooser`` replaces her chooser (the tests wrap it to look inside);
-    ``serving`` replaces the server (the tests share one across runs, or make it never restart)."""
+    ``serving`` replaces the server (the tests share one across runs, or make it never go idle).
+    Time is the server's own virtual clock, so waiting for it to scale down takes no real time."""
     server = serving if serving is not None else FakeServing()
     base = Services(
         spark=fake_spark, judge=fake_judge, glimmer=FakeGlimmer(server), serving=server,
-        gpu=FakeGpu(), revision=FAKE_REVISION, fake=True,
+        gpu=FakeGpu(), revision=FAKE_REVISION, fake=True, clock=server.clock, sleep=server.clock.sleep,
     )
-    if chooser is None:
-        return base
-    return Services(
-        spark=base.spark, judge=base.judge, glimmer=base.glimmer, serving=base.serving, gpu=base.gpu,
-        revision=base.revision, chooser=chooser, fake=True,
-    )
+    return base if chooser is None else replace(base, chooser=chooser)

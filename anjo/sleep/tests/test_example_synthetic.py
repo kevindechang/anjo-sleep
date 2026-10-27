@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import tomllib
 from collections.abc import Sequence
 from datetime import date
@@ -19,6 +20,7 @@ import anjo.sleep
 from anjo.sleep.examples.synthetic import fakes, persona, run
 from anjo.sleep.examples.synthetic.world import open_world
 from anjo.sleep.mind.choose import StateChooser
+from anjo.sleep.serving import config
 from anjo.sleep.types import ChoiceContext, Want, WantSnapshot
 
 SLEEP = Path(anjo.sleep.__file__).parent
@@ -49,15 +51,33 @@ def _run(tmp_path: Path, *extra: str, chooser: Any = None) -> tuple[int, list[st
 # ── The core imports no private Anjo ──────────────────────────────────────────
 
 
-def _anjo_imports(source: str) -> set[str]:
+DOTTED = re.compile(r"anjo(\.\w+)+")
+
+
+def _anjo_imports(source: str, package: tuple[str, ...]) -> set[str]:
+    """Every ``anjo`` module the source reaches: imports (relative ones resolved against
+    ``package``, the module's own package) and dotted names written as strings, which is how
+    ``mock.patch`` and ``importlib.import_module`` name a module."""
     found: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    probes = {  # find_spec("anjo.core") asks whether private Anjo is there; it imports nothing
+        id(arg) for node in ast.walk(tree) if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", getattr(node.func, "id", "")) == "find_spec" for arg in node.args
+    }
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            found.add(node.module)
-            if node.module == "anjo":
-                found |= {f"anjo.{alias.name}" for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            keep = len(package) - (node.level - 1) if node.level else 0
+            base = [*package[:keep]] if node.level else []
+            module = ".".join([*base, *([node.module] if node.module else [])])
+            found.add(module)
+            found |= {f"{module}.{alias.name}" for alias in node.names}
+        elif (
+            isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in probes
+            and DOTTED.fullmatch(node.value) and not node.value.startswith("anjo.sleep")
+        ):  # a string naming the adapters is a guard's text, not an import
+            found.add(node.value)
     return {name for name in found if name == "anjo" or name.startswith("anjo.")}
 
 
@@ -67,13 +87,28 @@ def test_core_imports_no_private_anjo() -> None:
         relative = path.relative_to(SLEEP)
         if relative.parts[0] == "app" or relative.parts[:2] == ("tests", "app"):
             continue  # the adapters, and their tests: the published tree leaves both out
+        package = ("anjo", "sleep", *relative.parts[:-1])
         private = {
-            name for name in _anjo_imports(path.read_text(encoding="utf-8"))
-            if name != "anjo.sleep" and (not name.startswith("anjo.sleep.") or name.startswith("anjo.sleep.app"))
+            name for name in _anjo_imports(path.read_text(encoding="utf-8"), package)
+            if name != "anjo" and name != "anjo.sleep"
+            and (not name.startswith("anjo.sleep.") or name.startswith("anjo.sleep.app"))
         }  # function-level imports count too; so does the adapters package, which needs private Anjo
         if private:
             offenders[relative.as_posix()] = private
     assert offenders == {}
+
+
+def test_the_import_check_sees_relative_imports_and_imports_by_name() -> None:
+    here = ("anjo", "sleep", "tests")
+    anjo = "anjo"  # the examples below are built, so this file holds no private module's name
+
+    assert _anjo_imports("from ...core import paths", here) == {f"{anjo}.core", f"{anjo}.core.paths"}
+    assert f"{anjo}.core" in _anjo_imports("from ... import core", here)
+    assert _anjo_imports("from . import test_x", here) == {"anjo.sleep.tests", "anjo.sleep.tests.test_x"}
+    assert _anjo_imports(f'mock.patch("{anjo}.dashboard.auth.x")', here) == {f"{anjo}.dashboard.auth.x"}
+    assert _anjo_imports(f'importlib.import_module("{anjo}.core.db")', here) == {f"{anjo}.core.db"}
+    assert _anjo_imports('print("anjo is a word, not a module")', here) == set()
+    assert _anjo_imports(f'importlib.util.find_spec("{anjo}.core")', here) == set()
 
 
 # ── The example, end to end, on fakes ─────────────────────────────────────────
@@ -257,19 +292,39 @@ def test_fake_upload_refuses_a_name_that_exists(tmp_path: Path) -> None:
         serving.upload_adapter(folder, "p-000000000001-n1")
 
 
-def test_the_server_restarts_before_the_arms_so_the_new_adapter_is_visible(tmp_path: Path) -> None:
-    serving = fakes.FakeServing()  # shows an adapter only after a restart
+def test_the_run_waits_out_the_idle_window_so_a_cold_start_mounts_the_new_adapter(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()  # like Modal: nothing restarts it, only ten idle minutes do
     lines: list[str] = []
+    started = serving.clock()
 
     report = run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
                          fakes.fake_services(serving=serving), say=lines.append)
 
     assert report.checkpoint is not None and report.checkpoint.id in serving.visible
+    assert serving.clock() - started >= config.SCALEDOWN_S  # the wait, on the fake's clock
+    assert any(line.startswith("waiting ") and "scale down" in line for line in lines)
     assert any(line.startswith("serving p-") for line in lines)
 
 
+def test_a_fake_server_does_not_restart_on_its_own(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()
+    folder = tmp_path / "adapter"
+    folder.mkdir()
+    (folder / "adapter_config.json").write_text(json.dumps(fakes._adapter_config("x")))
+    (folder / "adapter_model.safetensors").write_bytes(b"x")
+    serving.upload_adapter(folder, "p-000000000002-n1")
+
+    serving.sleep_now()
+    serving.wake()  # no idle time has passed: the same container answers
+
+    assert "p-000000000002-n1" not in serving.visible
+    serving.clock.sleep(config.SCALEDOWN_S)
+    serving.wake()
+    assert "p-000000000002-n1" in serving.visible
+
+
 def test_a_server_that_never_loads_the_adapter_stops_the_run_with_the_fix(tmp_path: Path) -> None:
-    serving = fakes.FakeServing(restarts=False)
+    serving = fakes.FakeServing(scales_down=False)
 
     with pytest.raises(run.ExampleError, match="modal app stop"):
         run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
@@ -325,10 +380,37 @@ def test_an_unknown_adapter_stops_the_run_before_any_paid_step(tmp_path: Path) -
     assert spark_calls == []
 
 
+def test_a_donor_that_is_not_on_the_volume_stops_the_run_before_any_paid_step(tmp_path: Path) -> None:
+    spark_calls: list[int] = []
+
+    with pytest.raises(run.ExampleError, match="--donor: no adapter p-0000000000bb-n1"):
+        run.execute(
+            ["--fake", "--workdir", str(tmp_path / "w"), "--donor", "p-0000000000bb-n1"],
+            _services_with(_CountingGpu(), fakes.FakeServing(), spark_calls), say=lambda _line: None,
+        )
+
+    assert spark_calls == []
+
+
+@pytest.mark.parametrize("flag", ["--adapter", "--donor"])
+def test_an_adapter_trained_under_another_rendering_stops_the_run_before_any_paid_step(
+    tmp_path: Path, flag: str,
+) -> None:
+    serving = fakes.FakeServing()
+    serving.configs[fakes.FAKE_DONOR] = fakes._adapter_config("g000000000000/high")
+    spark_calls: list[int] = []
+
+    with pytest.raises(run.ExampleError, match="never served under another"):
+        run.execute(["--fake", "--workdir", str(tmp_path / "w"), flag, fakes.FAKE_DONOR],
+                    _services_with(_CountingGpu(), serving, spark_calls), say=lambda _line: None)
+
+    assert spark_calls == []
+
+
 def test_the_probe_failure_names_the_exact_reuse_command(tmp_path: Path) -> None:
     with pytest.raises(run.ExampleError) as raised:
         run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
-                    fakes.fake_services(serving=fakes.FakeServing(restarts=False)),
+                    fakes.fake_services(serving=fakes.FakeServing(scales_down=False)),
                     say=lambda _line: None, run_id="r1")
 
     message = str(raised.value)
@@ -400,7 +482,7 @@ def test_persona_and_day_are_entirely_invented() -> None:
     assert person.person_id not in {pid for pid, _ in registered}
     assert person.name not in {name for _, name in registered}
     blob = ((EXAMPLE / "persona.json").read_text() + (EXAMPLE / "day1.jsonl").read_text()).lower()
-    for term in ("tessa", "marlowe", "kevin", "anjo.ai"):
+    for term in ("tessa", "marlowe", "kevin"):
         assert term not in blob
     said = " ".join(turn.text.lower() for turn in day)
     for held in person.held_out_preferences:

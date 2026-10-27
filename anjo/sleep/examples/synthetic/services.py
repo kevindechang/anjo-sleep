@@ -5,10 +5,12 @@ Modal vLLM server). ``fakes.fake_services`` wires offline stand-ins. Nothing els
 """
 from __future__ import annotations
 
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.mind.choose import StateChooser
@@ -44,8 +46,48 @@ class Serving(Protocol):
 
     def upload_adapter(self, folder: Path, name: str) -> None: ...
 
-    def has_adapter(self, name: str) -> bool:
-        """Whether an adapter of this name is already on the server's volume."""
+    def adapter_config(self, name: str) -> Mapping[str, Any] | None:
+        """The ``adapter_config.json`` of an adapter on the server's volume, or None if there is none."""
+
+
+@dataclass
+class Activity:
+    """When the example last called the server (on the services' clock). Modal scales an idle server
+    to zero, and only a cold start loads a new adapter, so the example waits out this idle time."""
+
+    last: float | None = None
+
+    def idle_s(self, now: float) -> float | None:
+        return None if self.last is None else now - self.last
+
+
+class TrackedGlimmer:
+    """A Glimmer client that records every call it makes in ``activity``."""
+
+    def __init__(self, inner: Glimmer, activity: Activity, clock: Callable[[], float]) -> None:
+        self._inner, self._activity, self._clock = inner, activity, clock
+
+    @property
+    def rendering(self) -> str:
+        return self._inner.rendering
+
+    def on(self, day: date) -> TrackedGlimmer:
+        return TrackedGlimmer(self._inner.on(day), self._activity, self._clock)
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def complete(self, adapter: Any, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+        try:
+            return self._inner.complete(adapter, messages, **kwargs)
+        finally:
+            self._activity.last = self._clock()
+
+    def continuation_logprobs(self, adapter: Any, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        try:
+            return self._inner.continuation_logprobs(adapter, messages, continuation)
+        finally:
+            self._activity.last = self._clock()
 
 
 @dataclass(frozen=True)
@@ -58,3 +100,5 @@ class Services:
     revision: str  # the Glimmer commit the training job pins
     chooser: Chooser = StateChooser()
     fake: bool = False
+    clock: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
