@@ -17,8 +17,10 @@ was last wiped, so the controller and the render read everything from the worksp
 folding the log from ``Workspace()`` rebuilds every arm's workspace exactly: M-kernel's rules,
 M-persist's wipes and an intervention's edit are all steps in it.
 
-**Ids the kernel assigns** (questions, alternatives, predictions, findings) derive from the seq of
-the step that creates them, so they are unique across a whole log, wipes included.
+**Ids the kernel assigns** (questions, alternatives, predictions, findings) derive from the
+workspace's op counter (``Workspace.ops``): the operations applied so far, edits included, never a
+``RunStart`` or an observation. So a killed and resumed run, whose log holds one more ``RunStart``,
+assigns the same ids, and a wipe keeps the counter, so ids stay unique across a whole log.
 
 Cross-slot interfaces (frozen 2026-10-28)
 -----------------------------------------
@@ -53,10 +55,13 @@ night glue call them. Only the two ``loop`` functions drive ports; the rest are 
 - ``parse.parse_op(text: str) -> Op | Rejected``: the one operation in the thinker's raw text, or
   ``Rejected("malformed")``.
 - ``loop.notice(ws: Workspace, new: Sequence[Evidence], ports: InquiryPorts, budget: Budget, *, night: date, targets: Sequence[Target], as_of: datetime, wipe: bool = False) -> InquiryRun``:
-  night step 2b. Logs its ``RunStart``, makes one thinker pass over ``new``, logs ``new`` as a
-  ``Retrieved("new_evidence")`` step carrying that pass's tokens, then each NOTICE it emitted as
-  its own step (a reply that isn't an array of NOTICE objects logs one malformed step). Its tokens
-  count against the cap; it uses no cycle and acts on nothing else.
+  night step 2b. Logs its ``RunStart``, then any earlier items it shows that the workspace doesn't
+  hold (``Retrieved("held_evidence")``, recalled from the store by id: after an M-persist wipe),
+  makes one thinker pass over ``new``, logs ``new`` as a ``Retrieved("new_evidence")`` step
+  carrying that pass's tokens, then a ``Wake`` for each parked question a new item names a target
+  of, then each NOTICE it emitted as its own step (a reply that isn't an array of NOTICE objects
+  logs one malformed step). Its tokens count against the cap; it uses no cycle and acts on nothing
+  else.
 - ``loop.run_inquiry(ws: Workspace, ports: InquiryPorts, budget: Budget, *, night: date, targets: Sequence[Target], as_of: datetime, focus: str | None = None, rules: KernelRules = FULL_RULES, control: ControlMode = "priority", wipe: bool = False) -> InquiryRun``:
   logs its ``RunStart``, then cycles under ``decide`` until it stops, appending every event to
   ``ports.log`` as it happens, so a kill loses nothing logged. Every tool is time-masked to
@@ -120,6 +125,7 @@ from anjo.sleep.mind.inquiry.steps import FULL_RULES as FULL_RULES
 from anjo.sleep.mind.inquiry.steps import NO_KERNEL as NO_KERNEL
 from anjo.sleep.mind.inquiry.steps import REJECT_CODES as REJECT_CODES
 from anjo.sleep.mind.inquiry.steps import TOKEN_CAP as TOKEN_CAP
+from anjo.sleep.mind.inquiry.steps import UNASKED as UNASKED
 from anjo.sleep.mind.inquiry.steps import Answered as Answered
 from anjo.sleep.mind.inquiry.steps import Budget as Budget
 from anjo.sleep.mind.inquiry.steps import ControlMode as ControlMode
@@ -137,6 +143,7 @@ from anjo.sleep.mind.inquiry.steps import Retrieved as Retrieved
 from anjo.sleep.mind.inquiry.steps import RunCall as RunCall
 from anjo.sleep.mind.inquiry.steps import RunStart as RunStart
 from anjo.sleep.mind.inquiry.steps import Step as Step
+from anjo.sleep.mind.inquiry.steps import Wake as Wake
 from anjo.sleep.mind.inquiry.steps import WorkspaceEvent as WorkspaceEvent
 # Re-exported: the workspace's statuses are the chooser's (QuestionView), one Literal for both.
 from anjo.sleep.types import QuestionStatus as QuestionStatus
@@ -195,8 +202,9 @@ class Question:
     ``Target``), and a question may span several. ``origin_evidence`` is what raised it (K3).
     ``subject`` is the question in her words, which the domain rule screens and the render shows;
     it is never the person or a third party named in the evidence. Statuses: ``open`` (noticed),
-    ``active`` (hypothesized), ``parked`` (by PARK or the progress guard; wakes only on new
-    evidence on a target), ``concluded`` (a resolution), ``retracted``, ``abandoned``.
+    ``active`` (hypothesized), ``parked`` (by PARK; a ``Wake`` sets it live again on new evidence
+    on a target), ``concluded`` (a resolution, which later evidence may still retract),
+    ``retracted``, ``abandoned``.
     """
 
     id: str
@@ -332,8 +340,9 @@ class Finding:
 
 @dataclass(frozen=True)
 class Workspace:
-    """Her workspace: the records and every step since it began or was last wiped.
-    ``Workspace()`` is empty.
+    """Her workspace: the records, every step since it began or was last wiped, and ``ops``, the
+    operations applied over the whole log (edits included), which the kernel's ids derive from
+    and a wipe keeps. ``Workspace()`` is empty.
 
     Checked on construction: ids are unique, every record names a question it holds, a question
     has at most one finding, a question with hypotheses has 2-4 alternatives plus exactly one
@@ -348,8 +357,10 @@ class Workspace:
     updates: tuple[Update, ...] = ()
     findings: tuple[Finding, ...] = ()
     history: tuple[Step, ...] = ()
+    ops: int = 0
 
     def __post_init__(self) -> None:
+        check_count("ops", self.ops)
         for name, kind in (
             ("questions", Question), ("hypotheses", Hypothesis), ("predictions", Prediction),
             ("updates", Update), ("findings", Finding), ("history", Step),
@@ -546,14 +557,20 @@ class Screened:
 
 @dataclass(frozen=True)
 class ResolverReply:
-    """The resolver's verdict on a claim, and its tokens (reported apart from the cap)."""
+    """The resolver's verdict on a claim, and its tokens (reported apart from the cap).
+    ``failed`` is a call that failed or answered out of form: its verdict is ``undetermined``, and
+    the loop logs nothing for it, so its evidence isn't marked seen and is shown again on a later
+    cycle. Only a real verdict, ``undetermined`` included, marks evidence seen."""
 
     verdict: Verdict
     tokens: int
+    failed: bool = False
 
     def __post_init__(self) -> None:
         check_one_of("verdict", self.verdict, frozenset(get_args(Verdict)))
         check_count("tokens", self.tokens)
+        if self.failed and self.verdict != "undetermined":
+            raise ValueError("a failed resolver call has no verdict: undetermined")
 
 
 @dataclass(frozen=True)

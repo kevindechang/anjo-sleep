@@ -10,7 +10,7 @@ named: the app passes encryption and the account's guard, tests and the public e
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, get_args
@@ -176,6 +176,13 @@ class JsonlEvidenceStore:
             key=lambda pair: (-pair[0], -pair[1].created_at.timestamp(), pair[1].id),
         )
         return [item for _, item in ranked[: max(k, 0)]]
+
+    def get(self, ids: Sequence[str], as_of: datetime) -> tuple[Evidence, ...]:
+        """The items with these ids created at or before ``as_of``, in the order asked (MIND's
+        ``EvidenceSearch.get``, Task 17). An id it doesn't hold, a later item and a held-out item
+        are left out, so a resumed inquiry fetches exactly what the first run saw."""
+        held = {item.id: item for item in self._items() if not item.held_out and item.created_at <= as_of}
+        return tuple(held[item_id] for item_id in ids if item_id in held)
 
     def export(self) -> dict[str, object]:
         return {"evidence": [evidence_record(item) for item in self._items()]}

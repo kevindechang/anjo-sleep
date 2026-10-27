@@ -24,6 +24,7 @@ from anjo.sleep.evidence.extractions import ExtractionLog
 from anjo.sleep.evidence.jsonl import Guard
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
+from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
 from anjo.sleep.practice.transcripts import JsonlTranscriptStore
 
 SLEEP_DIR: Final = "sleep"
@@ -33,6 +34,7 @@ CLEARED_FILE: Final = "cleared_sessions.jsonl"
 EXTRACTIONS_FILE: Final = "extractions.jsonl"
 BRIEFS_FILE: Final = "briefs.jsonl"  # the served and training briefs (Task 5)
 PRACTICE_FILE: Final = "practice.jsonl"  # the night's practice transcripts (Task 5)
+WORKSPACE_FILE: Final = "workspace.jsonl"  # MIND's workspace log (Task 17)
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 
 
@@ -80,6 +82,7 @@ def target_store(user_id: str) -> EventLogTargetStore:
     require_sleep_host()
     return EventLogTargetStore(
         sleep_dir(user_id) / TARGETS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id),
+        workspace=workspace_log(user_id),
     )
 
 
@@ -98,6 +101,11 @@ def brief_store(user_id: str) -> JsonlBriefStore:
 def transcript_store(user_id: str) -> JsonlTranscriptStore:
     require_sleep_host()
     return JsonlTranscriptStore(sleep_dir(user_id) / PRACTICE_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
+
+
+def workspace_log(user_id: str) -> JsonlWorkspaceLog:
+    require_sleep_host()
+    return JsonlWorkspaceLog(sleep_dir(user_id) / WORKSPACE_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
 
 
 def data_root() -> Path:
