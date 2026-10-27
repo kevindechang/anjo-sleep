@@ -37,7 +37,9 @@ def derive_wants(snapshot: WantSnapshot) -> tuple[Want, ...]:
         pull = _follow_up(target, snapshot) if target.kind == "commitment" else _understand(target, snapshot)
         if pull is not None:
             wants.append(pull)
-        note = _share(target, snapshot)
+    kinds = {t.id: t.kind for t in snapshot.targets}
+    for target_id in sorted({r.target_id for r in snapshot.results}):
+        note = _share(target_id, kinds.get(target_id, "thread"), snapshot)
         if note is not None:
             wants.append(note)
     return tuple(sorted(wants, key=lambda want: want.id))
@@ -73,8 +75,13 @@ def _follow_up(target: Target, snapshot: WantSnapshot) -> Want | None:
 
 
 def _inquiring(target: Target, questions: tuple[QuestionView, ...]) -> QuestionView | None:
-    """The open or active question on ``target`` with the largest priority (smallest id on a tie)."""
-    covering = [q for q in questions if q.status in LIVE_QUESTION and target.id in q.target_ids]
+    """The open or active question on ``target`` with the largest priority (smallest id on a tie).
+    With no new evidence only a question that continues may be chosen: one that isn't ready stays
+    asleep."""
+    covering = [
+        q for q in questions
+        if q.status in LIVE_QUESTION and target.id in q.target_ids and (target.unacted > 0 or q.continues)
+    ]
     return min(covering, key=lambda q: (-q.priority, q.id), default=None)
 
 
@@ -103,17 +110,19 @@ def _understand(target: Target, snapshot: WantSnapshot) -> Want | None:
     )
 
 
-def _share(target: Target, snapshot: WantSnapshot) -> Want | None:
-    """A committed result that changed this open target since the person last spoke."""
+def _share(target_id: str, kind: str, snapshot: WantSnapshot) -> Want | None:
+    """A committed result that changed an open target since the person last spoke. The snapshot
+    admits results only on open targets and passes every open commitment, so a result whose target
+    isn't in ``snapshot.targets`` is on a thread that has nothing new to study."""
     pending = [
         r for r in snapshot.results
-        if r.target_id == target.id and not r.consumed and _after_last_message(r, snapshot)
+        if r.target_id == target_id and not r.consumed and _after_last_message(r, snapshot)
     ]
     if not pending:
         return None
     return Want(
-        id=f"share:{target.id}", kind="share", target_id=target.id, action="hold_note",
-        priority_class=COMMITMENT_CLASS if target.kind == "commitment" else THREAD_CLASS,
+        id=f"share:{target_id}", kind="share", target_id=target_id, action="hold_note",
+        priority_class=COMMITMENT_CLASS if kind == "commitment" else THREAD_CLASS,
         strength=max(_share_strength(r) for r in pending),
     )
 

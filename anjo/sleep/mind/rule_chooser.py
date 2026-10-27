@@ -5,6 +5,9 @@ change (``revision - acted_revision``) and forms no note: it never picks ``hold_
 chooser it stands in for, it is pure (no clock, database, model call or environment read), and
 every candidate that doesn't win gets an allowlisted reason code in the choice's receipt.
 
+It keeps its original hold order: on a want that is both unknown-class and not offered it records
+the unknown class, while ``StateChooser`` records ``action_not_offered``.
+
 Candidates are sorted by priority class, then effective strength, then base strength, then want
 id, so the choice never depends on the order wants arrive in.
 """

@@ -513,3 +513,31 @@ def test_intentions_supply_a_date_only_to_a_matching_commitment() -> None:
     assert _wants(plan) == ()
     (note,) = _wants(plan, intentions=ledger)
     assert (note.kind, note.action, note.target_id) == ("follow_up", "hold_note", "c1")
+
+
+def test_inquiry_choice_ignores_a_question_that_is_not_ready() -> None:
+    thread = _thread("t1", revision=3, acted=3)
+    asleep = _question("A", status="open", priority=2.0, continues=False)
+    ready = _question("B", status="active", priority=1.0, continues=True)
+    (want,) = _wants(thread, questions=(asleep, ready))
+    assert (want.action, want.question_id, want.strength) == ("inquire", "B", pytest.approx(0.5))
+    fresh = _thread("t1", revision=4, acted=3)  # with new evidence any live question may be chosen
+    (woken,) = _wants(fresh, questions=(asleep, ready))
+    assert woken.question_id == "A"
+
+
+def test_receipt_outcome_must_be_one_of_the_four() -> None:
+    choice = choose("away", _wants(_thread("t1")), CTX)
+    for bad in ("she was lonely", "RAN", 3):
+        with pytest.raises(ValueError, match="outcome") as caught:
+            receipt.record(choice, bad)  # type: ignore[arg-type]
+        assert "lonely" not in str(caught.value)
+
+
+def test_waiting_thread_result_shares_without_reopening_thread() -> None:
+    thread = _thread("t1", revision=2, acted=2)
+    shot = _snap(thread, results=(_result("t1", sources=2),))
+    assert shot.targets == () and len(shot.results) == 1
+    (want,) = derive_wants(shot)
+    assert (want.kind, want.action, want.target_id) == ("share", "hold_note", "t1")
+    assert want.priority_class == "active_thread"

@@ -3,8 +3,8 @@
 The snapshot decides what her stores may pull on, so an unchanged topic never comes back:
 
 - a thread passes only with new evidence from the person (``revision - acted_revision`` above 0),
-  or while an open or active question on it continues, or while a result of hers on it waits to
-  be said;
+  or while an open or active question on it continues. A result of hers waiting to be said is its
+  own record: it reaches ``results`` without reopening the thread;
 - a commitment passes while it is open;
 - a research result passes only with a verified source, and an evidence result only on an open
   commitment due within seven days that cites at least two of the person's own items. A research
@@ -45,11 +45,10 @@ def build(
             key=lambda r: r.id,
         ),
     )
-    waiting = {r.target_id for r in admitted if not r.consumed}
     continuing = continuing_targets(questions)
     kept = tuple(
         sorted(
-            (t for t in open_targets.values() if _passes(t, waiting, continuing)),
+            (t for t in open_targets.values() if _passes(t, continuing)),
             key=lambda t: t.id,
         ),
     )
@@ -57,7 +56,7 @@ def build(
         as_of=as_of,
         last_message_at=last_message_at,
         targets=kept,
-        results=tuple(r for r in admitted if r.target_id in {t.id for t in kept}),
+        results=admitted,
         intentions=tuple(sorted(intentions, key=lambda c: c.id)),
         questions=tuple(sorted(questions, key=lambda q: q.id)),
     )
@@ -89,10 +88,10 @@ def _dated(target: Target, ledger: dict[str, datetime]) -> Target:
     return replace(target, check_after=ledger[target.id])
 
 
-def _passes(target: Target, waiting: set[str], continuing: frozenset[str]) -> bool:
+def _passes(target: Target, continuing: frozenset[str]) -> bool:
     if target.kind == "commitment":
         return True
-    return target.unacted > 0 or target.id in continuing or target.id in waiting
+    return target.unacted > 0 or target.id in continuing
 
 
 def _admitted(result: Result, target: Target | None, as_of: datetime) -> bool:

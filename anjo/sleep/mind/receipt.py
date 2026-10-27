@@ -25,12 +25,15 @@ Outcome = Literal["ran", "declined", "budget", "failed"]
 RECEIPT_REASONS: Final = frozenset({
     UNKNOWN_CLASS, NOT_OFFERED, OVER_CAP, BELOW_THRESHOLD, NO_BUDGET, LOST, NOTE_DECLINED,
 })
+OUTCOMES: Final = frozenset({"ran", "declined", "budget", "failed"})
 _OUTCOME_REASONS: Final[dict[str, str]] = {"declined": NOTE_DECLINED, "budget": NO_BUDGET}
 
 
 def record(choice: Choice, outcome: Outcome | None) -> dict[str, Any]:
     """The receipt for ``choice``. ``outcome`` is what became of the winner: ``None`` when nothing
     won or nothing has run yet. A writer's decline is recorded as ``note_declined``."""
+    if outcome is not None and (not isinstance(outcome, str) or outcome not in OUTCOMES):
+        raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got a {type(outcome).__name__}")
     if outcome is not None and choice.want is None:
         raise ValueError("an outcome is recorded for a winner, and nothing won")
     if outcome == "declined" and choice.action != "hold_note":
