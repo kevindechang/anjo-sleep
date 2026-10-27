@@ -15,6 +15,9 @@ CORE = (
     "anjo.sleep.model_api",
     "anjo.sleep.meta_api",
     "anjo.sleep.baseten_api",
+    "anjo.sleep.budget",
+    "anjo.sleep.serving",
+    "anjo.sleep.serving.config",
 )
 
 
