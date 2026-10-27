@@ -223,6 +223,20 @@ def _settled(describe: Callable[[], Mapping[str, Any]], status_key: str, *, cloc
         sleep(WAIT_POLL_S)
 
 
+def _wait_out_deleting(describe: Callable[[], Mapping[str, Any]], status_key: str, what: str, *,
+                       clock: Callable[[], float], sleep: Callable[[float], None]) -> None:
+    """Wait until ``what`` is no longer ``Deleting`` (an earlier run's teardown still at it), so the
+    caller sees it as missing. Bounded by ``TEARDOWN_WAIT_S``, then it raises."""
+    started = clock()
+    while True:
+        found = _found(describe)
+        if found is None or found.get(status_key) != "Deleting":
+            return
+        if clock() - started > TEARDOWN_WAIT_S:
+            raise DeployError(f"{what} is still being deleted after {TEARDOWN_WAIT_S:.0f} s")
+        sleep(WAIT_POLL_S)
+
+
 def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
              sleep: Callable[[float], None] = time.sleep) -> None:
     """Delete the inference component if there is one (and wait until it is gone), then the endpoint
@@ -290,6 +304,11 @@ def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: 
     """Make what is missing, noting each in ``made`` before its create call (an interrupted call may
     still have made it, and an unmade one deletes as already gone), and wait for the first copy."""
     sm = aws.get("sagemaker")
+    # An earlier run's teardown may still be deleting: wait it out, or it reads as there and is never remade.
+    _wait_out_deleting(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
+                       "the endpoint", clock=clock, sleep=sleep)
+    _wait_out_deleting(_describe_component(sm), "InferenceComponentStatus", "the inference component",
+                       clock=clock, sleep=sleep)
     if not _exists(lambda: sm.describe_model(ModelName=model)):
         made.add("model")
         sm.create_model(ModelName=model, ExecutionRoleArn=role, PrimaryContainer={

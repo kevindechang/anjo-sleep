@@ -287,6 +287,24 @@ def test_extraction_records_target_mentions() -> None:
     assert target.check_after == datetime(2026, 10, 30, tzinfo=timezone.utc)
 
 
+def test_an_accelerated_night_sees_the_targets_open_on_its_virtual_date() -> None:
+    from anjo.sleep.app.storage import target_store
+    from anjo.sleep.types import Target
+
+    virtual_end = datetime(2026, 11, 4, tzinfo=timezone.utc)  # the window is wall time: October
+    target_store(REAL).upsert(Target(
+        id="t-virtual", person_id=REAL, kind="thread", label="the virtual cut", check_after=None, status="open",
+        revision=1, acted_revision=0, confidence=None, last_mentioned=date(2026, 11, 3)))
+    _message(REAL, "user", "Still cutting.", at=START + timedelta(hours=3))
+    wall, virtual = EchoSparkOpen(), EchoSparkOpen()
+
+    _source(wall).extract_day(REAL, DAY, WINDOW)
+    _source(virtual).extract_day(REAL, DAY + timedelta(days=1), (START + timedelta(hours=2), END), virtual_end)
+
+    assert "the virtual cut" not in wall.sent()  # real time: not yet seen as of the window's end
+    assert "the virtual cut" in virtual.sent()
+
+
 def test_extraction_needs_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app.flags import SleepHostOff
 

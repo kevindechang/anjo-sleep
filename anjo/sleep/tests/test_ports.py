@@ -12,7 +12,7 @@ from anjo.sleep import ports
 
 # port -> method -> parameter names after self
 SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
-    "EvidenceSource": {"extract_day": ("user_id", "day", "window")},
+    "EvidenceSource": {"extract_day": ("user_id", "day", "window", "as_of")},
     "EvidenceStore": {
         "add": ("items",),
         "for_day": ("day",),
