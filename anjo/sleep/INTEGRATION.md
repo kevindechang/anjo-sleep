@@ -20,6 +20,132 @@ At line 154, added by `feat: boundary check and publish pipeline for anjo-sleep 
 +ops/sleep/publish_state.json
 ```
 
+## `anjo/core/export_inventory.py` (+14 -2)
+
+At line 19, added by `fix: harden sleep export and cleared sessions [task3]`:
+
+```diff
++import os
+```
+
+At line 135, added by `feat: evidence store, targets and extraction [task3]`; `fix: harden sleep export and cleared sessions [task3]`:
+
+```diff
++# Anjo Sleep's files under sleep/ (anjo/sleep/app/export.py). The section is active only on the
++# sleep host, so with ANJO_SLEEP_HOST unset every export, schema and import is as on main, and
++# sleep files found there fail the inventory instead of being dropped.
++SLEEP_SECTION = Section("sleep", 1, ("sleep/**",))
++
++
++def active_sections() -> tuple[Section, ...]:
++    # anjo.sleep.app.flags.HOST_ENV, read inline so an export off the host imports no sleep code.
++    return (*SECTIONS, SLEEP_SECTION) if os.environ.get("ANJO_SLEEP_HOST") == "1" else SECTIONS
++
++
+```
+
+At line 306, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
+existing: def included_units() -> set[str]:
++    units = {unit for section in active_sections() for unit in section.covers}
+```
+
+At line 339, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
+existing: def scope_units(scope: str) -> set[str]:
++    return {unit for section in active_sections() if scope in section.scopes for unit in section.covers}
+```
+
+## `anjo/core/export_manifest.py` (+10 -2)
+
+At line 38, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
++    active_sections,
+```
+
+At line 68, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
++    carried = [section for section in active_sections() if scope in section.scopes]
+```
+
+At line 318, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
+existing: def _builders(user_id: str, account: dict[str, Any]) -> dict[str, Callable[[], Any]]:
++        # Anjo Sleep: built only when its section is active, on the sleep host.
++        "sleep": lambda: _sleep_section(user_id),
+```
+
+At line 323, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
++def _sleep_section(user_id: str) -> dict[str, Any]:
++    from anjo.sleep.app.export import export_sleep
++
++    return export_sleep(user_id)
++
++
+```
+
+## `anjo/core/history.py` (+17 -0)
+
+At line 184, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
++def get_history_between(
++    user_id: str, start: datetime, end: datetime, *, session_ids: frozenset[str] | None = None
++) -> list[dict]:
++    """Oldest-first visible turns created in [start, end), with id, role, content, created_at
++    and session_id; ``session_ids`` keeps only those sessions (Anjo Sleep's cleared sessions)."""
++    from anjo.core.db import get_db
++    if start.tzinfo is None or end.tzinfo is None:
++        raise ValueError("get_history_between needs timezone-aware bounds")
++    rows = get_db().execute(
++        "SELECT id, role, content, created_at, session_id FROM messages WHERE user_id = ? AND "
++        "created_at >= ? AND created_at < ? AND " + _VISIBLE_MESSAGE + " ORDER BY id",
++        (user_id, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
++    ).fetchall()
++    return [{**dict(r), "content": decrypt_db(r["content"])} for r in rows
++            if session_ids is None or r["session_id"] in session_ids]
++
++
+```
+
+## `anjo/core/surfacing.py` (+19 -0)
+
+At line 247, added by `feat: evidence store, targets and extraction [task3]`:
+
+```diff
++    {"source_subsystem": "sleep_evidence", "evidence": "anjo/sleep/app/history_source.py extract_day + anjo/sleep/evidence (Anjo Sleep's evidence store, target log and extraction, only with ANJO_SLEEP_HOST=1)"},
+```
+
+At line 982, added by `feat: evidence store, targets and extraction [task3]`; `fix: harden sleep export and cleared sessions [task3]`:
+
+```diff
++    FeltMomentRegistration(
++        source_subsystem="sleep_evidence",
++        surface="infra",
++        trigger=(
++            "Anjo Sleep's night, on the sleep host only, extracts the day's evidence from the "
++            "person's own turns and records the plans and open topics it mentions as targets"
++        ),
++        confidence_gate="n/a",
++        silent_infra=True,
++        justification=(
++            "Shows nothing itself, like cognitive_results; it shapes replies only through the organs "
++            "that read it, like self_prediction: Anjo Sleep's served brief and evidence recall in "
++            "context C, and the adapter trained nightly on cleared items. A target reaches the "
++            "person only as the held note (session-open, notification), which registers its own "
++            "moment in Task 5. Held-out items reach none of these. Exported as the sleep section "
++            "(anjo/sleep/app/export.py); delete_account_data and factory_reset_user remove sleep/."
++        ),
++    ),
+```
+
 ## `pyproject.toml` (+20 -2)
 
 At line 70, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
