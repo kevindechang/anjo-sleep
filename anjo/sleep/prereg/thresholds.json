@@ -152,8 +152,10 @@
  },
  "development": {
   "pooled_lives": [
-   "film_student",
-   "film_student_donor"
+   "founder",
+   "founder_donor",
+   "researcher",
+   "researcher_donor"
   ],
   "min_probes_per_dimension": 40,
   "lives_rule": null,
@@ -212,7 +214,8 @@
  "night_token_cap": 16384,
  "min_new_examples": 1,
  "hand_written": {
-  "film_student_and_donor_taste_ab": "Development personas only: their 16 shared taste_ab items were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1)."
+  "founder_and_researcher_pairs_taste_ab": "Development personas only: the 16 shared taste_ab items of the founder pair and of the researcher pair were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1).",
+  "film_pair": "The film student pair was retired before any of its data existed."
  },
  "checkpoint_rule": {
   "scored": "the checkpoint serving after each life's last night: the last promoted one, or the base model if no night was promoted (reported as such)",
@@ -230,7 +233,7 @@
   "single_life_donor": "the drawn pair's first member",
   "single_life_3x": "a field check (that donor is from another field); reported, never needed for a claim row",
   "fixed": "the donor map is a pure function of the draw and the rule; it is fixed at the draw and logged there; donors never change after the draw",
-  "dev_lives": "the film student and her donor are each other's 3x, registered Oct 27 before the draw",
+  "dev_lives": "the founder pair and the researcher pair; each pair's members are each other's 3x, registered Oct 27 before the draw (personas-v2)",
   "arms_reply_refuses": "any donor other than the registered one",
   "source": "The pair's members are each other's 3x, so the control is a same-field donor that learned the opposite taste... the single life's donor is the drawn pair's first member; that donor is from another field, so the single life's 3x result is reported as a field check (5.1)"
  },

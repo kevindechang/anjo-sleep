@@ -139,3 +139,34 @@ def test_register_only_appends_and_skips_repeats(tmp_path, monkeypatch):
 def test_script_never_pushes_or_reads_a_token():
     src = Path(rp.__file__).read_text()
     assert "push_prereg" not in src.replace("run `push_prereg`", "") and "TOKEN" not in src
+
+
+def _words(t):
+    return {w for w in re.findall(r"[a-z]+", t.lower()) if len(w) > 3}
+
+
+def _jaccard(a, b):
+    x, y = _words(a), _words(b)
+    return len(x & y) / len(x | y) if x | y else 0.0
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_held_out_preferences_state_new_things(name):
+    pf = load(name)
+    visible = [s.text for s in pf.visible.preferences]
+    worst = max(_jaccard(h.text, v) for h in pf.held_out.preferences for v in visible)
+    assert worst < 0.30
+    assert {s.domain for s in pf.held_out.preferences}.isdisjoint(
+        {s.domain for s in pf.visible.preferences}
+    )
+    assert all(s.domain for s in pf.held_out.preferences)
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_new_work_text_is_not_in_the_visible_part(name):
+    pf = load(name)
+    blob = json.dumps(pm.to_visible_dict(pf.visible)).lower()
+    plans = {p.text.lower() for p in pf.visible.plans}
+    for w in pf.held_out.new_work:
+        assert w.text.lower() not in blob and w.text.lower() not in plans
+        assert _jaccard(w.text, pf.visible.project.logline) < 0.5

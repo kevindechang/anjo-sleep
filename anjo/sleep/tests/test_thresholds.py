@@ -101,4 +101,20 @@ def test_thresholds_pin_the_review_items():
     assert "not yet at a viable cost" in T["working_product"]["over_ceiling_wording"]
     assert "MIND" in T["no_win_fallback"]["claim"]
     # 9. hand-written note
-    assert "final lives" in T["hand_written"]["film_student_and_donor_taste_ab"]
+    assert "final lives" in T["hand_written"]["founder_and_researcher_pairs_taste_ab"]
+    assert "retired before any" in T["hand_written"]["film_pair"]
+
+
+def test_only_the_three_development_keys_differ_from_the_registered_version():
+    import copy
+
+    frozen = json.loads((Path(__file__).parent / "frozen" / "thresholds_registered.json").read_text())
+    now = copy.deepcopy(T)
+    for obj in (frozen, now):
+        obj["development"].pop("pooled_lives")
+        obj["donor_rule"].pop("dev_lives")
+        obj.pop("hand_written")
+    assert now == frozen  # the final-test rule cannot drift
+    assert T["development"]["pooled_lives"] == [
+        "founder", "founder_donor", "researcher", "researcher_donor"]
+    assert "(personas-v2)" in T["donor_rule"]["dev_lives"]

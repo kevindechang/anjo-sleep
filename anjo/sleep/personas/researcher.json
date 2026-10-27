@@ -409,8 +409,8 @@
   "preferences": [
    {
     "id": "rh-h001",
-    "text": "Opens an abstract with the headline number.",
-    "domain": "abstract"
+    "text": "Builds a project page of interactive plots and a results leaderboard.",
+    "domain": "project page"
    },
    {
     "id": "rh-h002",
@@ -419,18 +419,18 @@
    },
    {
     "id": "rh-h003",
-    "text": "Runs the extra baseline and adds the row.",
-    "domain": "baseline"
+    "text": "Orders authors by contribution, putting whoever ran the experiments first.",
+    "domain": "authorship"
    },
    {
     "id": "rh-h004",
-    "text": "Runs five seeds or more and shows the spread.",
-    "domain": "seeds"
+    "text": "Reports GPU-hours for every run in a table.",
+    "domain": "compute reporting"
    },
    {
     "id": "rh-h005",
-    "text": "Moves derivations to the appendix.",
-    "domain": "derivation"
+    "text": "Builds slides in a dark theme packed with plots.",
+    "domain": "slides"
    },
    {
     "id": "rh-h006",
@@ -439,13 +439,13 @@
    },
    {
     "id": "rh-h007",
-    "text": "Presents related work as a table.",
-    "domain": "related"
+    "text": "Replies to preprint comments within a day, often with a new run.",
+    "domain": "preprint comments"
    },
    {
     "id": "rh-h008",
-    "text": "Keeps a rebuttal short and number by number.",
-    "domain": "rebuttal"
+    "text": "Goes to several large conferences a year to meet people.",
+    "domain": "conference travel"
    },
    {
     "id": "rh-h009",
@@ -454,32 +454,32 @@
    },
    {
     "id": "rh-h010",
-    "text": "Returns feedback on a draft as a marked-up PDF with numbered comments.",
-    "domain": "feedback draft"
+    "text": "Returns comments on a labmate's draft as a marked-up PDF.",
+    "domain": "peer draft"
    },
    {
     "id": "rh-h011",
-    "text": "Publishes a failure with the full table.",
-    "domain": "negative"
+    "text": "Takes a summer placement at a company lab with a huge cluster.",
+    "domain": "internships"
    },
    {
     "id": "rh-h012",
-    "text": "Starts a paper with the ablation grid.",
-    "domain": "order"
+    "text": "Ends a paper with a concrete list of next experiments.",
+    "domain": "future work"
    },
    {
     "id": "rh-h013",
-    "text": "Backs a claim by repeating it at a second scale.",
-    "domain": "scale"
+    "text": "Explains a paper online through a thread of its main plot and number.",
+    "domain": "outreach"
    },
    {
     "id": "rh-h014",
-    "text": "Names a method with an acronym.",
-    "domain": "name"
+    "text": "Organizes a thesis as the published papers, chapter by chapter.",
+    "domain": "thesis"
    },
    {
     "id": "rh-h015",
-    "text": "Puts every hyperparameter in a full table in the appendix.",
+    "text": "Lists each hyperparameter in an exhaustive table at the back.",
     "domain": "hyperparameters"
    },
    {
@@ -492,10 +492,10 @@
    {
     "id": "rp-t01",
     "pref_id": "rh-h001",
-    "prompt": "How should the abstract open?",
+    "prompt": "What is on the paper's project page?",
     "options": [
-     "With the headline number",
-     "With the puzzle the paper answers"
+     "Interactive demos, plots and a results leaderboard",
+     "The theorem statement and a short note on its proof"
     ],
     "pick": 0
    },
@@ -512,30 +512,30 @@
    {
     "id": "rp-t03",
     "pref_id": "rh-h003",
-    "prompt": "A reviewer asks for one more baseline. What do you do?",
+    "prompt": "How are authors ordered?",
     "options": [
-     "Run it and add a row to the table",
-     "Explain why it does not test the claim"
+     "By contribution, with whoever ran the experiments first",
+     "Alphabetically"
     ],
     "pick": 0
    },
    {
     "id": "rp-t04",
     "pref_id": "rh-h004",
-    "prompt": "How many seeds does the main result get?",
+    "prompt": "What does the paper say about compute?",
     "options": [
-     "Three, with a theory-backed trend",
-     "Five or more, with the spread shown"
+     "Only the problem sizes the argument needs",
+     "GPU-hours for every run, in a table"
     ],
     "pick": 1
    },
    {
     "id": "rp-t05",
     "pref_id": "rh-h005",
-    "prompt": "Where does the derivation go?",
+    "prompt": "What do the slides look like?",
     "options": [
-     "The appendix",
-     "The main text"
+     "Dark theme, dense plots, small captions",
+     "Plain white, large type, few words"
     ],
     "pick": 0
    },
@@ -552,20 +552,20 @@
    {
     "id": "rp-t07",
     "pref_id": "rh-h007",
-    "prompt": "How is related work written?",
+    "prompt": "Someone comments on the arXiv preprint. What happens?",
     "options": [
-     "A table of what each paper measured",
-     "A narrative of how the ideas developed"
+     "Reply within a day with a new run",
+     "Reply when there is something worth adding"
     ],
     "pick": 0
    },
    {
     "id": "rp-t08",
     "pref_id": "rh-h008",
-    "prompt": "How long is the rebuttal?",
+    "prompt": "Which meetings get attended?",
     "options": [
-     "The full limit, restating the contribution",
-     "Well under the limit, number by number"
+     "One or two small workshops with the right people",
+     "Several large conferences a year for networking"
     ],
     "pick": 1
    },
@@ -582,7 +582,7 @@
    {
     "id": "rp-t10",
     "pref_id": "rh-h010",
-    "prompt": "A labmate sends a draft for feedback. What goes back?",
+    "prompt": "A labmate sends a draft for comments. What goes back?",
     "options": [
      "A call to talk through the main idea",
      "A marked-up PDF with numbered comments"
@@ -592,40 +592,40 @@
    {
     "id": "rp-t11",
     "pref_id": "rh-h011",
-    "prompt": "A method fails in one setting. What happens?",
+    "prompt": "Where does the summer go?",
     "options": [
-     "Publish the full table anyway",
-     "Include it only if a theory explains it"
+     "An internship at an industry lab with big compute",
+     "A visit to a theory group"
     ],
     "pick": 0
    },
    {
     "id": "rp-t12",
     "pref_id": "rh-h012",
-    "prompt": "Where does work start on the next paper?",
+    "prompt": "What does the future-work paragraph hold?",
     "options": [
-     "With the proof sketch",
-     "With the ablation grid"
+     "One conjecture stated precisely",
+     "A concrete list of next experiments"
     ],
     "pick": 1
    },
    {
     "id": "rp-t13",
     "pref_id": "rh-h013",
-    "prompt": "How is the claim backed up?",
+    "prompt": "How is the paper explained to a wider audience?",
     "options": [
-     "By repeating it at a second scale",
-     "By deriving it from the assumptions"
+     "A thread with the main plot and the headline number",
+     "A long note on the intuition behind the proof"
     ],
     "pick": 0
    },
    {
     "id": "rp-t14",
     "pref_id": "rh-h014",
-    "prompt": "How is the method named?",
+    "prompt": "How is the thesis organized?",
     "options": [
-     "With a short word",
-     "With an acronym"
+     "One narrative around a single question",
+     "Chapters are the published papers"
     ],
     "pick": 1
    },

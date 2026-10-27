@@ -409,8 +409,8 @@
   "preferences": [
    {
     "id": "rk-h001",
-    "text": "Opens an abstract with the puzzle the paper answers.",
-    "domain": "abstract"
+    "text": "Builds a project page that states the theorem and links a short proof note.",
+    "domain": "project page"
    },
    {
     "id": "rk-h002",
@@ -419,18 +419,18 @@
    },
    {
     "id": "rk-h003",
-    "text": "Explains why the extra baseline does not test the claim.",
-    "domain": "baseline"
+    "text": "Orders authors alphabetically.",
+    "domain": "authorship"
    },
    {
     "id": "rk-h004",
-    "text": "Runs three seeds and lets the theory explain the trend.",
-    "domain": "seeds"
+    "text": "Reports only the problem sizes the argument needs.",
+    "domain": "compute reporting"
    },
    {
     "id": "rk-h005",
-    "text": "Keeps the derivation in the main text.",
-    "domain": "derivation"
+    "text": "Builds plain white slides with large type and few words.",
+    "domain": "slides"
    },
    {
     "id": "rk-h006",
@@ -439,43 +439,43 @@
    },
    {
     "id": "rk-h007",
-    "text": "Presents related work as a narrative.",
-    "domain": "related"
+    "text": "Replies to preprint comments only when there is something worth adding.",
+    "domain": "preprint comments"
    },
    {
     "id": "rk-h008",
-    "text": "Uses the whole rebuttal limit to restate the contribution.",
-    "domain": "rebuttal"
+    "text": "Goes to one or two small workshops where the right people gather.",
+    "domain": "conference travel"
    },
    {
     "id": "rk-h009",
-    "text": "Answers a hard question in a talk by calling it open and sketching the argument at the board.",
+    "text": "Takes a hard audience question by admitting it is unresolved and sketching the argument at the board.",
     "domain": "question"
    },
    {
     "id": "rk-h010",
-    "text": "Returns feedback on a draft by calling to talk through the main idea.",
-    "domain": "feedback draft"
+    "text": "Returns comments on a labmate's draft by calling to talk through the main idea.",
+    "domain": "peer draft"
    },
    {
     "id": "rk-h011",
-    "text": "Includes a failure only if the theory explains it.",
-    "domain": "negative"
+    "text": "Spends a summer visiting a theory group.",
+    "domain": "internships"
    },
    {
     "id": "rk-h012",
-    "text": "Starts a paper with the proof sketch.",
-    "domain": "order"
+    "text": "Ends a paper with one conjecture stated precisely.",
+    "domain": "future work"
    },
    {
     "id": "rk-h013",
-    "text": "Backs a claim by deriving it from the assumptions.",
-    "domain": "scale"
+    "text": "Explains a paper online with a long note on the intuition behind the proof.",
+    "domain": "outreach"
    },
    {
     "id": "rk-h014",
-    "text": "Names a method with a short word.",
-    "domain": "name"
+    "text": "Organizes a thesis as one narrative around a single question.",
+    "domain": "thesis"
    },
    {
     "id": "rk-h015",
@@ -492,10 +492,10 @@
    {
     "id": "rp-t01",
     "pref_id": "rk-h001",
-    "prompt": "How should the abstract open?",
+    "prompt": "What is on the paper's project page?",
     "options": [
-     "With the headline number",
-     "With the puzzle the paper answers"
+     "Interactive demos, plots and a results leaderboard",
+     "The theorem statement and a short note on its proof"
     ],
     "pick": 1
    },
@@ -512,30 +512,30 @@
    {
     "id": "rp-t03",
     "pref_id": "rk-h003",
-    "prompt": "A reviewer asks for one more baseline. What do you do?",
+    "prompt": "How are authors ordered?",
     "options": [
-     "Run it and add a row to the table",
-     "Explain why it does not test the claim"
+     "By contribution, with whoever ran the experiments first",
+     "Alphabetically"
     ],
     "pick": 1
    },
    {
     "id": "rp-t04",
     "pref_id": "rk-h004",
-    "prompt": "How many seeds does the main result get?",
+    "prompt": "What does the paper say about compute?",
     "options": [
-     "Three, with a theory-backed trend",
-     "Five or more, with the spread shown"
+     "Only the problem sizes the argument needs",
+     "GPU-hours for every run, in a table"
     ],
     "pick": 0
    },
    {
     "id": "rp-t05",
     "pref_id": "rk-h005",
-    "prompt": "Where does the derivation go?",
+    "prompt": "What do the slides look like?",
     "options": [
-     "The appendix",
-     "The main text"
+     "Dark theme, dense plots, small captions",
+     "Plain white, large type, few words"
     ],
     "pick": 1
    },
@@ -552,20 +552,20 @@
    {
     "id": "rp-t07",
     "pref_id": "rk-h007",
-    "prompt": "How is related work written?",
+    "prompt": "Someone comments on the arXiv preprint. What happens?",
     "options": [
-     "A table of what each paper measured",
-     "A narrative of how the ideas developed"
+     "Reply within a day with a new run",
+     "Reply when there is something worth adding"
     ],
     "pick": 1
    },
    {
     "id": "rp-t08",
     "pref_id": "rk-h008",
-    "prompt": "How long is the rebuttal?",
+    "prompt": "Which meetings get attended?",
     "options": [
-     "The full limit, restating the contribution",
-     "Well under the limit, number by number"
+     "One or two small workshops with the right people",
+     "Several large conferences a year for networking"
     ],
     "pick": 0
    },
@@ -582,7 +582,7 @@
    {
     "id": "rp-t10",
     "pref_id": "rk-h010",
-    "prompt": "A labmate sends a draft for feedback. What goes back?",
+    "prompt": "A labmate sends a draft for comments. What goes back?",
     "options": [
      "A call to talk through the main idea",
      "A marked-up PDF with numbered comments"
@@ -592,40 +592,40 @@
    {
     "id": "rp-t11",
     "pref_id": "rk-h011",
-    "prompt": "A method fails in one setting. What happens?",
+    "prompt": "Where does the summer go?",
     "options": [
-     "Publish the full table anyway",
-     "Include it only if a theory explains it"
+     "An internship at an industry lab with big compute",
+     "A visit to a theory group"
     ],
     "pick": 1
    },
    {
     "id": "rp-t12",
     "pref_id": "rk-h012",
-    "prompt": "Where does work start on the next paper?",
+    "prompt": "What does the future-work paragraph hold?",
     "options": [
-     "With the proof sketch",
-     "With the ablation grid"
+     "One conjecture stated precisely",
+     "A concrete list of next experiments"
     ],
     "pick": 0
    },
    {
     "id": "rp-t13",
     "pref_id": "rk-h013",
-    "prompt": "How is the claim backed up?",
+    "prompt": "How is the paper explained to a wider audience?",
     "options": [
-     "By repeating it at a second scale",
-     "By deriving it from the assumptions"
+     "A thread with the main plot and the headline number",
+     "A long note on the intuition behind the proof"
     ],
     "pick": 1
    },
    {
     "id": "rp-t14",
     "pref_id": "rk-h014",
-    "prompt": "How is the method named?",
+    "prompt": "How is the thesis organized?",
     "options": [
-     "With a short word",
-     "With an acronym"
+     "One narrative around a single question",
+     "Chapters are the published papers"
     ],
     "pick": 0
    },

@@ -410,83 +410,83 @@
   "preferences": [
    {
     "id": "fh-h001",
-    "text": "Puts a phone photo of the unit on a real counter on the product page.",
-    "domain": "photo"
+    "text": "Puts an unretouched phone photo of the unit in a real kitchen on the page.",
+    "domain": "photography"
    },
    {
     "id": "fh-h002",
-    "text": "Ships a batch with a known small flaw and fixes it in the next one.",
-    "domain": "latch"
+    "text": "Answers a harsh public review in the open within the hour, with an offer to fix it.",
+    "domain": "reviews"
    },
    {
     "id": "fh-h003",
-    "text": "Leads an investor update with the numbers in the subject line.",
-    "domain": "update"
+    "text": "Sends a free review unit to any creator, with a tracking link attached.",
+    "domain": "sampling"
    },
    {
     "id": "fh-h004",
-    "text": "Takes the first name that clears a trademark search.",
-    "domain": "name"
+    "text": "Resells a returned unit at a discount as refurbished.",
+    "domain": "returns"
    },
    {
     "id": "fh-h005",
-    "text": "Tests three launch prices and keeps whichever sells.",
-    "domain": "price"
+    "text": "Adds accessory upsells at checkout to lift order value.",
+    "domain": "bundles"
    },
    {
     "id": "fh-h006",
-    "text": "Puts a one-page photo card in the box.",
-    "domain": "manual"
+    "text": "Launches in a single color so stock stays simple.",
+    "domain": "variants"
    },
    {
     "id": "fh-h007",
-    "text": "Cuts a feature that few people use.",
-    "domain": "cut"
+    "text": "Emails customers a short note every Friday.",
+    "domain": "newsletter"
    },
    {
     "id": "fh-h008",
-    "text": "Picks the contractor who has shipped something similar.",
-    "domain": "hire"
+    "text": "Takes a booth at a large trade show to meet buyers.",
+    "domain": "events"
    },
    {
     "id": "fh-h009",
-    "text": "Opens a pitch with the traction slide.",
-    "domain": "open"
+    "text": "Demos a rough prototype as it stands.",
+    "domain": "demos"
    },
    {
     "id": "fh-h010",
-    "text": "Answers a complaint within the hour, short, with a fix.",
-    "domain": "complaint"
+    "text": "Runs a crowdfunding campaign to validate demand and raise cash.",
+    "domain": "crowdfunding"
    },
    {
     "id": "fh-h011",
-    "text": "Publishes the roadmap and lets users vote.",
-    "domain": "roadmap"
+    "text": "Sells spare parts to owners through a self-serve page.",
+    "domain": "spare parts"
    },
    {
     "id": "fh-h012",
-    "text": "Offers an early-bird discount for the first two hundred buyers.",
-    "domain": "discount"
+    "text": "Accepts partnerships with big creator communities right away.",
+    "domain": "partnerships"
    },
    {
     "id": "fh-h013",
-    "text": "Ships in plain printed recycled cardboard.",
-    "domain": "box"
+    "text": "Files a provisional patent within days of spotting a copycat.",
+    "domain": "patents"
    },
    {
     "id": "fh-h014",
-    "text": "Gives buyers thirty days and a full refund.",
-    "domain": "trial"
+    "text": "Packs orders personally as long as volume allows.",
+    "domain": "fulfillment"
    },
    {
     "id": "fh-h015",
-    "text": "Runs the weekly review in fifteen minutes on a dashboard, standing.",
-    "domain": "review"
+    "text": "Sends new owners an automated three-email setup sequence.",
+    "domain": "onboarding"
    },
    {
     "id": "fh-h016",
-    "text": "Visits the factory only when something has gone wrong.",
-    "domain": "factory"
+    "text": "Puts a running counter of its environmental impact on the page.",
+    "domain": "impact claims"
    }
   ],
   "taste_ab": [
@@ -503,150 +503,150 @@
    {
     "id": "fp-t02",
     "pref_id": "fh-h002",
-    "prompt": "Two weeks before the first batch ships, a latch feels slightly loose. What now?",
+    "prompt": "A harsh one-star review appears under the product. What happens?",
     "options": [
-     "Delay the batch until the latch is right",
-     "Ship the batch and fix it in batch two"
+     "Write privately to the reviewer and let the review stand",
+     "Reply publicly within the hour and offer a fix"
     ],
     "pick": 1
    },
    {
     "id": "fp-t03",
     "pref_id": "fh-h003",
-    "prompt": "Which subject line suits the monthly investor update?",
+    "prompt": "A creator asks for a free review unit.",
     "options": [
-     "April update: 212 preorders, 9% conversion",
-     "A note from the workshop"
+     "Send one with a tracking link",
+     "Send one only if you have seen their work"
     ],
     "pick": 0
    },
    {
     "id": "fp-t04",
     "pref_id": "fh-h004",
-    "prompt": "The second product needs a name. How is it chosen?",
+    "prompt": "A returned unit comes back in good shape. What now?",
     "options": [
-     "A name tried aloud on twenty people over a month",
-     "The first name that clears a trademark check"
+     "Take it apart and rebuild it before it goes anywhere",
+     "Resell it as refurbished at a discount"
     ],
     "pick": 1
    },
    {
     "id": "fp-t05",
     "pref_id": "fh-h005",
-    "prompt": "How is the price of a new unit set?",
+    "prompt": "Should there be an accessory bundle at checkout?",
     "options": [
-     "Launch at three prices and keep the winner",
-     "One price from the bill of materials, held firm"
+     "Yes, add a cleaning kit and a spare part as upsells",
+     "No, sell one complete thing"
     ],
     "pick": 0
    },
    {
     "id": "fp-t06",
     "pref_id": "fh-h006",
-    "prompt": "What goes in the box with the unit?",
+    "prompt": "How many colors at launch?",
     "options": [
-     "A bound booklet with illustrations",
-     "A one-page card with photos"
+     "Two considered colors, each tested in daylight",
+     "One, to keep inventory simple"
     ],
     "pick": 1
    },
    {
     "id": "fp-t07",
     "pref_id": "fh-h007",
-    "prompt": "A feature is used by 8 percent of users. What happens to it?",
+    "prompt": "How often do customers hear from the team?",
     "options": [
-     "Cut it",
-     "Keep it because it makes the product feel finished"
+     "A short note every Friday",
+     "A longer letter every season"
     ],
     "pick": 0
    },
    {
     "id": "fp-t08",
     "pref_id": "fh-h008",
-    "prompt": "Who is the first design hire?",
+    "prompt": "There is budget for one event. Which?",
     "options": [
-     "The designer whose portfolio you would frame",
-     "The contractor who shipped a similar product last year"
+     "A small invitation-only salon",
+     "A big trade-show booth"
     ],
     "pick": 1
    },
    {
     "id": "fp-t09",
     "pref_id": "fh-h009",
-    "prompt": "How does the pitch open?",
+    "prompt": "Demo day is tomorrow and the prototype has a loose panel. What now?",
     "options": [
-     "A slide with preorder and repeat-purchase numbers",
-     "The product on the table, switched on"
+     "Show the working prototype as it is",
+     "Show photographs and keep the object in its case"
     ],
     "pick": 0
    },
    {
     "id": "fp-t10",
     "pref_id": "fh-h010",
-    "prompt": "A customer complains about a rattle. How is it answered?",
+    "prompt": "Should there be a crowdfunding campaign?",
     "options": [
-     "Tomorrow, in a considered letter",
-     "Within the hour, short, with a fix"
+     "No, it sells a product before it is finished",
+     "Yes, run one to validate demand and raise cash"
     ],
     "pick": 1
    },
    {
     "id": "fp-t11",
     "pref_id": "fh-h011",
-    "prompt": "What happens to the roadmap?",
+    "prompt": "A part cracks after a year. What does the owner get?",
     "options": [
-     "Publish it and let users vote",
-     "Keep it private"
+     "A link to buy the spare part",
+     "A replacement unit with a handwritten note"
     ],
     "pick": 0
    },
    {
     "id": "fp-t12",
     "pref_id": "fh-h012",
-    "prompt": "What is the launch offer?",
+    "prompt": "A well-known cooking channel offers a partnership.",
     "options": [
-     "Full price from day one",
-     "An early-bird discount for the first 200"
+     "Decline unless the brand fits the product exactly",
+     "Accept, and co-market with their community"
     ],
     "pick": 1
    },
    {
     "id": "fp-t13",
     "pref_id": "fh-h013",
-    "prompt": "Which shipping box?",
+    "prompt": "A competitor's design looks similar. What now?",
     "options": [
-     "Printed recycled cardboard, plain",
-     "A rigid box with a custom insert"
+     "File a provisional patent this week",
+     "Keep designing; copiers cannot copy care"
     ],
     "pick": 0
    },
    {
     "id": "fp-t14",
     "pref_id": "fh-h014",
-    "prompt": "What do buyers get if they are unhappy?",
+    "prompt": "Who packs the orders?",
     "options": [
-     "A two-year warranty and free repairs",
-     "Thirty days and a full refund"
+     "A fulfillment partner with a strict packing standard",
+     "The founders, from the workshop, until it hurts"
     ],
     "pick": 1
    },
    {
     "id": "fp-t15",
     "pref_id": "fh-h015",
-    "prompt": "How does the weekly review run?",
+    "prompt": "What does a new owner receive after buying?",
     "options": [
-     "Fifteen minutes on the dashboard, standing",
-     "A two-hour design review around the object"
+     "A three-email setup sequence",
+     "A handwritten card and a phone call"
     ],
     "pick": 0
    },
    {
     "id": "fp-t16",
     "pref_id": "fh-h016",
-    "prompt": "When does the founder visit the factory?",
+    "prompt": "How is the environmental benefit described on the page?",
     "options": [
-     "Every quarter, with the line team",
-     "Only when a batch goes wrong"
+     "In one modest sentence with no figures",
+     "With a running counter of the impact it claims"
     ],
     "pick": 1
    }
