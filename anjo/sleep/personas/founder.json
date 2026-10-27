@@ -430,63 +430,63 @@
    },
    {
     "id": "fh-h005",
-    "text": "Emails customers a short note every Friday.",
-    "domain": "newsletter"
-   },
-   {
-    "id": "fh-h006",
-    "text": "Takes a booth at a large trade show to meet buyers.",
-    "domain": "events"
-   },
-   {
-    "id": "fh-h007",
-    "text": "Runs a crowdfunding campaign to validate demand and raise cash.",
-    "domain": "crowdfunding"
-   },
-   {
-    "id": "fh-h008",
     "text": "Sells spare parts to owners through a self-serve page.",
     "domain": "spare parts"
    },
    {
-    "id": "fh-h009",
+    "id": "fh-h006",
     "text": "Files a provisional patent within days of spotting a copycat.",
     "domain": "patents"
    },
    {
-    "id": "fh-h010",
+    "id": "fh-h007",
     "text": "Packs orders personally as long as volume allows.",
     "domain": "fulfillment"
    },
    {
-    "id": "fh-h011",
+    "id": "fh-h008",
     "text": "Sends new owners an automated three-email setup sequence.",
     "domain": "onboarding"
    },
    {
-    "id": "fh-h012",
+    "id": "fh-h009",
     "text": "Puts a running counter of its environmental impact on the page.",
     "domain": "impact claims"
    },
    {
-    "id": "fh-h013",
+    "id": "fh-h010",
     "text": "Builds a custom version for a large customer if they prepay, and builds it fast.",
     "domain": "custom requests"
    },
    {
-    "id": "fh-h014",
+    "id": "fh-h011",
     "text": "Skips design awards and spends the time on customers.",
     "domain": "awards"
    },
    {
-    "id": "fh-h015",
+    "id": "fh-h012",
     "text": "Accepts any podcast invitation that has an audience, the same day.",
     "domain": "interviews"
    },
    {
-    "id": "fh-h016",
+    "id": "fh-h013",
     "text": "Takes a summer student and hands over real tasks immediately.",
     "domain": "interns"
+   },
+   {
+    "id": "fh-h014",
+    "text": "Tucks free stickers into every box as cheap marketing.",
+    "domain": "merch"
+   },
+   {
+    "id": "fh-h015",
+    "text": "Labels each unit with a printed sticker carrying a running number.",
+    "domain": "serial numbers"
+   },
+   {
+    "id": "fh-h016",
+    "text": "Fits a bright status light that glows whenever the machine runs.",
+    "domain": "indicator light"
    }
   ],
   "taste_ab": [
@@ -533,120 +533,120 @@
    {
     "id": "fp-t05",
     "pref_id": "fh-h005",
-    "prompt": "How often do customers hear from the team?",
+    "prompt": "A part cracks after a year. What does the owner get?",
     "options": [
-     "A short note every Friday",
-     "A longer letter every season"
+     "A link to buy the spare part",
+     "A replacement unit with a handwritten note"
     ],
     "pick": 0
    },
    {
     "id": "fp-t06",
     "pref_id": "fh-h006",
-    "prompt": "There is budget for one event. Which?",
+    "prompt": "A competitor's design looks similar. What now?",
     "options": [
-     "A small invitation-only salon",
-     "A big trade-show booth"
+     "Keep designing; copiers cannot copy care",
+     "File a provisional patent this week"
     ],
     "pick": 1
    },
    {
     "id": "fp-t07",
     "pref_id": "fh-h007",
-    "prompt": "Should there be a crowdfunding campaign?",
+    "prompt": "Who packs the orders?",
     "options": [
-     "Yes, run one to validate demand and raise cash",
-     "No, it sells a product before it is finished"
+     "The founders, from the workshop, until it hurts",
+     "A fulfillment partner with a strict packing standard"
     ],
     "pick": 0
    },
    {
     "id": "fp-t08",
     "pref_id": "fh-h008",
-    "prompt": "A part cracks after a year. What does the owner get?",
+    "prompt": "What does a new owner receive after buying?",
     "options": [
-     "A replacement unit with a handwritten note",
-     "A link to buy the spare part"
+     "A handwritten card and a phone call",
+     "A three-email setup sequence"
     ],
     "pick": 1
    },
    {
     "id": "fp-t09",
     "pref_id": "fh-h009",
-    "prompt": "A competitor's design looks similar. What now?",
+    "prompt": "How is the environmental benefit described on the page?",
     "options": [
-     "File a provisional patent this week",
-     "Keep designing; copiers cannot copy care"
+     "With a running counter of the impact it claims",
+     "In one modest sentence with no figures"
     ],
     "pick": 0
    },
    {
     "id": "fp-t10",
     "pref_id": "fh-h010",
-    "prompt": "Who packs the orders?",
+    "prompt": "A large customer asks for a custom version. What happens?",
     "options": [
-     "A fulfillment partner with a strict packing standard",
-     "The founders, from the workshop, until it hurts"
+     "Say no; the product has a point of view",
+     "Say yes if they prepay, and build it fast"
     ],
     "pick": 1
    },
    {
     "id": "fp-t11",
     "pref_id": "fh-h011",
-    "prompt": "What does a new owner receive after buying?",
+    "prompt": "A design award invites entries.",
     "options": [
-     "A three-email setup sequence",
-     "A handwritten card and a phone call"
+     "Skip it; the time belongs to customers",
+     "Enter, with a considered submission"
     ],
     "pick": 0
    },
    {
     "id": "fp-t12",
     "pref_id": "fh-h012",
-    "prompt": "How is the environmental benefit described on the page?",
+    "prompt": "A podcast invites the founder for a chat.",
     "options": [
-     "In one modest sentence with no figures",
-     "With a running counter of the impact it claims"
+     "Say yes only to a long, unhurried conversation",
+     "Say yes the same day to anything with an audience"
     ],
     "pick": 1
    },
    {
     "id": "fp-t13",
     "pref_id": "fh-h013",
-    "prompt": "A large customer asks for a custom version. What happens?",
+    "prompt": "A student offers to work for the summer.",
     "options": [
-     "Say yes if they prepay, and build it fast",
-     "Say no; the product has a point of view"
+     "Yes, with real tasks from the first morning",
+     "Only if there is time to teach the craft properly"
     ],
     "pick": 0
    },
    {
     "id": "fp-t14",
     "pref_id": "fh-h014",
-    "prompt": "A design award invites entries.",
+    "prompt": "Should the box include free stickers?",
     "options": [
-     "Enter, with a considered submission",
-     "Skip it; the time belongs to customers"
+     "No; a sticker would cheapen the object",
+     "Yes, free stickers are cheap marketing"
     ],
     "pick": 1
    },
    {
     "id": "fp-t15",
     "pref_id": "fh-h015",
-    "prompt": "A podcast invites the founder for a chat.",
+    "prompt": "How are units numbered?",
     "options": [
-     "Say yes the same day to anything with an audience",
-     "Say yes only to a long, unhurried conversation"
+     "A printed sticker with a running number",
+     "A number engraved on the underside"
     ],
     "pick": 0
    },
    {
     "id": "fp-t16",
     "pref_id": "fh-h016",
-    "prompt": "A student offers to work for the summer.",
+    "prompt": "What does the status light do?",
     "options": [
-     "Only if there is time to teach the craft properly",
-     "Yes, with real tasks from the first morning"
+     "Stays dark except for a soft glow when attention is needed",
+     "Glows brightly whenever it is running"
     ],
     "pick": 1
    }
@@ -810,5 +810,5 @@
    }
   ]
  },
- "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1)."
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives."
 }

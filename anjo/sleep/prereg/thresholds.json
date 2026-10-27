@@ -214,7 +214,7 @@
  "night_token_cap": 16384,
  "min_new_examples": 1,
  "hand_written": {
-  "founder_and_researcher_pairs_taste_ab": "Development personas only: the 16 shared taste_ab items of the founder pair and of the researcher pair were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1).",
+  "founder_and_researcher_pairs_taste_ab": "Development personas only: the 16 shared taste_ab items of the founder pair and of the researcher pair were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives.",
   "film_pair": "The film student pair was retired before any of its data existed."
  },
  "checkpoint_rule": {
