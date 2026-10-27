@@ -151,7 +151,9 @@ def image_commands(context: Path, serve: config.ServeConfig, tag: str) -> list[s
     return [
         f"aws ecr create-repository --repository-name {settings.REPOSITORY} --region {settings.REGION}  # once",
         f"aws ecr get-login-password --region {settings.REGION} | docker login --username AWS --password-stdin {registry}",
-        f"docker buildx build --platform linux/amd64 --build-arg VLLM_VERSION={serve.vllm_version} -t {uri} --push {context}",
+        # One Docker v2 manifest: SageMaker refuses the OCI image index that buildx pushes by default.
+        f"docker buildx build --platform linux/amd64 --build-arg VLLM_VERSION={serve.vllm_version} "
+        f"--provenance=false --sbom=false --output type=image,name={uri},push=true,oci-mediatypes=false {context}",
         f"python -m anjo.sleep.serving.sagemaker.deploy up --image-uri {uri}",
     ]
 
@@ -265,26 +267,27 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
 
 def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: str, model: str,
         made: set[str], *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
-    """Make what is missing, noting each in ``made``, and wait for the first copy."""
+    """Make what is missing, noting each in ``made`` once its create call has returned (a refused
+    create made nothing, so cleanup never tries to delete it), and wait for the first copy."""
     sm = aws.get("sagemaker")
     if not _exists(lambda: sm.describe_model(ModelName=model)):
-        made.add("model")
         sm.create_model(ModelName=model, ExecutionRoleArn=role, PrimaryContainer={
             "Image": image_uri, "Environment": _model_env(serve, bucket),
             "ModelDataSource": {"S3DataSource": {
                 "S3Uri": f"s3://{bucket}/{weights_prefix(serve.pinned_revision())}",
                 "S3DataType": "S3Prefix", "CompressionType": "None"}},
         })
+        made.add("model")
     if not _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
-        made.add("endpoint_config")
         sm.create_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG, ExecutionRoleArn=role, ProductionVariants=[{
             "VariantName": settings.VARIANT, "InstanceType": settings.INSTANCE_TYPE, "InitialInstanceCount": 1,
             "ManagedInstanceScaling": {"Status": "ENABLED", "MinInstanceCount": 0, "MaxInstanceCount": 1},
             "RoutingConfig": {"RoutingStrategy": "LEAST_OUTSTANDING_REQUESTS"},
         }])
+        made.add("endpoint_config")
     if not _exists(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT)):
-        made.add("endpoint")
         sm.create_endpoint(EndpointName=settings.ENDPOINT, EndpointConfigName=settings.ENDPOINT_CONFIG)
+        made.add("endpoint")
     endpoint_s = _wait(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
                        clock=clock, sleep=sleep)
     spec = {"ModelName": model,
@@ -297,9 +300,9 @@ def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: 
         sm.update_inference_component(InferenceComponentName=settings.COMPONENT, Specification=spec,
                                       RuntimeConfig={"CopyCount": 1})
     else:
-        made.add("component")
         sm.create_inference_component(InferenceComponentName=settings.COMPONENT, EndpointName=settings.ENDPOINT,
                                       VariantName=settings.VARIANT, Specification=spec, RuntimeConfig={"CopyCount": 1})
+        made.add("component")
     copy_s = _wait(describe_ic, "InferenceComponentStatus", clock=clock, sleep=sleep)
     idle_net(aws)
     return {"endpoint_seconds": round(endpoint_s), "first_copy_seconds": round(copy_s)}
