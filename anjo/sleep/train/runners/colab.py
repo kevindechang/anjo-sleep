@@ -47,6 +47,8 @@ from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
 from anjo.sleep.train import colab_train
+# The pins live with the training script (one source for every runner); torch comes with Colab's image.
+from anjo.sleep.train.colab_train import TRAIN_PACKAGES as TRAIN_PACKAGES
 from anjo.sleep.train.lora import DATASET_FILE, JOB
 
 COLAB_BIN: Final = Path.home() / ".local" / "bin" / "colab"
@@ -58,11 +60,6 @@ A100_CU_PER_HOUR: Final = 7.5
 POOL: Final = "colab_cu"
 REMOTE_DIR: Final = "/content/anjo"
 SCRIPT: Final = Path(colab_train.__file__)
-# Pinned on the VM, where torch comes with Colab's image. Checked on the first real night.
-TRAIN_PACKAGES: Final = (
-    "transformers==4.57.1", "peft==0.17.1", "trl==0.24.0", "bitsandbytes==0.48.1",
-    "accelerate==1.10.1", "datasets==4.2.0",
-)
 # An accelerated life's VM is kept between nights only when the simulated day before was this short;
 # otherwise idling costs more than downloading the base weights again. Revisited after the Oct 30 timing.
 MAX_IDLE_BETWEEN_NIGHTS_S: Final = 600.0

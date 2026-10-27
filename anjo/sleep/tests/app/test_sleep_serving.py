@@ -10,7 +10,7 @@ import json
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
@@ -23,8 +23,11 @@ from anjo.sleep.app import ancestry, prompt, runtime
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.provenance import GLIMMER, union
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
+from anjo.sleep.tests.app.glimmer_server import CHAT_IDS, HEADER_IDS, Modal, started
+from anjo.sleep.tests.app.glimmer_server import chunks as _chunks
 from anjo.sleep.tests.sleep_fakes import probe
+from anjo.sleep.types import CheckpointRef
 from tests.test_bedrock_sol import FakeRuntime
 from tests.test_gemma_cloud_chat_stream import _last_reply, _post, _shown
 from tests.test_sol_chat_stream import _current_user_id, _mock_gemini_stream, post_turn
@@ -34,46 +37,6 @@ paid_env = _sol_chat.paid_env
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 URL = "https://anjo--anjo-sleep-serve-serve-web.modal.run"
 TOKEN = "test-modal-token"
-
-
-class _Upstream:
-    def __init__(self, chunks: Sequence[object]) -> None:
-        self._chunks = list(chunks)
-
-    def __iter__(self) -> Iterator[object]:
-        for chunk in self._chunks:
-            if isinstance(chunk, TransportError):
-                raise chunk  # the server breaks off mid-reply
-            yield chunk
-
-    def close(self) -> None:
-        return None
-
-
-class Modal:
-    """The Modal server: each request gets the next scripted reply, a chunk list or an error."""
-
-    def __init__(self, *replies: Sequence[object] | TransportError) -> None:
-        self.replies = list(replies)
-        self.opened: list[tuple[str, dict[str, str], dict[str, Any]]] = []
-
-    def open(self, url: str, headers: Any, body: Any) -> _Upstream:
-        self.opened.append((url, dict(headers), json.loads(json.dumps(body))))
-        reply = self.replies.pop(0)
-        if isinstance(reply, TransportError):
-            raise reply
-        return _Upstream(reply)
-
-    def close(self) -> None:
-        return None
-
-
-def _chunks(text: str, model: str = config.MODEL) -> list[dict[str, Any]]:
-    return [
-        {"id": "c", "model": model, "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}}]},
-        {"id": "c", "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-        {"id": "c", "model": model, "choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 6}},
-    ]
 
 
 def _crisis_case(tier: str) -> str:
@@ -138,7 +101,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, modal: Modal) -> None:
     from anjo.core.anjo_model import hosts
 
     monkeypatch.setattr(hosts, "RUNTIMES", {
-        runtime.HOST: lambda pin: runtime.SleepRuntime(pin, transport=modal),  # type: ignore[arg-type, unused-ignore]
+        runtime.HOST: lambda pin: runtime.SleepRuntime(pin, transport=modal, poster=modal),  # type: ignore[arg-type, unused-ignore]
         "vertex": _never, "openrouter": _never,
     })
 
@@ -219,16 +182,17 @@ def test_flagged_turn_uses_sleep_runtime(auth_client: Any, flagged: str, monkeyp
     assert _shown(events) == "Hello from Glimmer."
     assert gemini.call_count == 0
     (url, headers, body), = modal.opened
-    assert url == f"{URL}/v1/chat/completions"
+    assert url == f"{URL}/v1/completions" and body["prompt"] == CHAT_IDS + HEADER_IDS  # the reply's header written
     assert headers["Authorization"] == f"Bearer {TOKEN}"
-    assert body["model"] == config.MODEL  # no adapter yet: the base model
-    assert "tools" not in body  # no tool-call parser configured: turns run without tools
-    assert body["messages"][-1]["content"].endswith("hey, rough day")
+    assert body["model"] == config.MODEL == modal.chats[0]["model"]  # no adapter yet: the base model
+    assert "tools" not in body and "tools" not in modal.chats[0]  # Glimmer answers directly: no tools
+    assert modal.chats[0]["messages"][-1]["content"].endswith("hey, rough day")
     row = _last_reply(flagged)
     assert row["content_origin"] == "cloud_anjo_model"
     assert row["model"] is None  # the processor vocabulary has no family for Glimmer
 
-    runtime.set_adapter_source(lambda user_id: "p-1a2b3c4d-n2" if user_id == flagged else None)
+    trained = CheckpointRef("p-1a2b3c4d-n2", flagged, datetime.now(timezone.utc).date(), "x", None, framing.rendering("low"))
+    runtime.set_adapter_source(lambda user_id: trained if user_id == flagged else None)
     events, _spend, _gemini = _post(auth_client, text="tell me more")
     assert _shown(events) == "And with her adapter."
     assert modal.opened[1][2]["model"] == "p-1a2b3c4d-n2"
@@ -286,8 +250,7 @@ def test_served_but_broken_off_before_any_words_is_the_fallbacks_reply(
 ) -> None:
     """Glimmer reports what serves, then breaks off before a word: Gemini answers, so the reply
     is the fallback's and carries no Glimmer ancestry."""
-    started = {"id": "c", "model": config.MODEL, "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
-    modal = Modal([started, TransportError(None)])
+    modal = Modal([started(), TransportError(None)])
     _serve(monkeypatch, modal)
 
     events, _spend, gemini = _post(auth_client, gemini_streams=[_mock_gemini_stream("Gemini here.")])
@@ -299,36 +262,37 @@ def test_served_but_broken_off_before_any_words_is_the_fallbacks_reply(
 
 
 @pytest.mark.parametrize(("tools", "reply", "recorded"), [
-    (False, [{"choices": [{"index": 0, "delta": {"content": "Hi"}}]}, TransportError(None)], True),
-    (False, [{"choices": [{"index": 0, "delta": {"content": "  "}}]}, TransportError(None)], False),
-    (True, [{"choices": [{"index": 0, "delta": {"content": "Hi"}}]}, TransportError(None)], False),
-    (True, _chunks("Hi"), True),
+    (False, [{"choices": [{"index": 0, "text": "Hi"}]}, TransportError(None)], True),
+    (False, [{"choices": [{"index": 0, "text": "  "}]}, TransportError(None)], False),
+    (True, _chunks("Hi"), False),  # Glimmer answers directly: a tool round is never sent
+    (False, _chunks("Hi"), True),
 ])
 def test_served_is_recorded_once_the_words_are_shown(
     monkeypatch: pytest.MonkeyPatch, tools: bool, reply: list[object], recorded: bool,
 ) -> None:
     """A streamed reply's words show as they come, so its first word records it (a reply broken
-    off after it is Glimmer's partial reply). A tool round's words are held until the round ends
-    cleanly (anjo/agent/loop.py), so only that end records it."""
+    off after it is Glimmer's partial reply). Glimmer takes no tools, so a tool round is refused."""
     import threading
 
-    from anjo.core.model_io import Message, ModelRequest, TextPart, ToolChoice, ToolSpec
+    from anjo.core.model_io import Finish, Message, ModelRequest, TextPart, ToolChoice, ToolSpec
 
     monkeypatch.setenv(runtime.URL_ENV, URL)
     monkeypatch.setenv(runtime.TOKEN_ENV, TOKEN)
     calls: list[str] = []
     monkeypatch.setattr(runtime, "record_served", lambda _user_id, turn_id, **_kw: calls.append(turn_id))
     settings = config.ServeConfig.from_env({config.REVISION_ENV: REVISION, config.TOOL_PARSER_ENV: "llama3_json"})
-    sleep = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None, settings), transport=Modal(reply))
+    modal = Modal(reply)
+    sleep = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None, settings), transport=modal, poster=modal)
     offer = (ToolSpec("recall", "Recall a note.", {"type": "object", "properties": {}}),) if tools else ()
     request = ModelRequest(
         turn_id="t1", system=(), messages=(Message("user", (TextPart("hey"),)),), max_output_tokens=64,
         round_index=0, tools=offer, tool_choice=ToolChoice("auto"),
     )
 
-    list(sleep.stream(request, threading.Event()))
+    events = list(sleep.stream(request, threading.Event()))
 
-    assert calls == (["t1"] if recorded else [])
+    assert calls == (["t1"] if recorded else []) and len(modal.opened) == (0 if tools else 1)
+    assert not tools or events == [Finish("error", "unsupported_trait")]
 
 
 @pytest.mark.parametrize("tier", ["hard", "soft"])
@@ -352,14 +316,14 @@ def test_the_sleep_runtime_itself_refuses_crisis_words() -> None:
     from anjo.core.model_io import Finish, Message, ModelRequest, TextPart
 
     modal = Modal(_chunks("never sent"))
-    sleep = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None), transport=modal)
+    sleep = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None), transport=modal, poster=modal)
     request = ModelRequest(
         turn_id="t1", system=(), messages=(Message("user", (TextPart(_crisis_case("hard")),)),),
         max_output_tokens=64, round_index=0,
     )
 
     assert list(sleep.stream(request, threading.Event())) == [Finish("error", "rejected")]
-    assert modal.opened == []
+    assert modal.opened == [] and modal.chats == []
 
 
 def test_a_cold_or_stalled_server_ends_at_the_deadline_as_a_transient_error(
@@ -383,7 +347,7 @@ def test_a_cold_or_stalled_server_ends_at_the_deadline_as_a_transient_error(
         raise httpx.ReadTimeout("no reply within the deadline", request=request)
 
     sleep = runtime.SleepRuntime(
-        runtime.glimmer_pin("u-1", None), transport=runtime.deadline_transport(httpx.MockTransport(cold)),
+        runtime.glimmer_pin("u-1", None), transport=runtime.deadline_transport(httpx.MockTransport(cold)), poster=Modal(),
     )
     request = ModelRequest(
         turn_id="t1", system=(), messages=(Message("user", (TextPart("hey"),)),), max_output_tokens=64,
@@ -396,6 +360,7 @@ def test_a_cold_or_stalled_server_ends_at_the_deadline_as_a_transient_error(
     assert runtime.REPLY_DEADLINE_S <= 30 < config.STARTUP_TIMEOUT_S
     default = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None))
     assert default._transport._client.timeout.read == runtime.REPLY_DEADLINE_S  # type: ignore[attr-defined, unused-ignore]
+    assert default._made_poster()._http.timeout.read == runtime.REPLY_DEADLINE_S  # type: ignore[attr-defined, unused-ignore]
 
 
 def test_reply_ancestry_recorded_per_turn(auth_client: Any, flagged: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -441,7 +406,7 @@ def test_only_the_sleep_host_streams_without_a_processor_record(sleep_hooks: Non
     )
     pin = runtime.glimmer_pin("u-1", None)
     stream = client.ModelStream(
-        [runtime.SleepRuntime(pin, transport=Modal(_chunks("Hi")))], request, threading.Event(), None,
+        [runtime.SleepRuntime(pin, transport=(modal := Modal(_chunks("Hi"))), poster=modal)], request, threading.Event(), None,
     )
     list(stream)
 
@@ -547,16 +512,16 @@ def test_a_cleared_turn_sees_only_the_cleared_context(auth_client: Any, flagged:
     events, _spend, _gemini = _post(auth_client, text="simulated day two")
 
     assert _shown(events) == "A cleared reply."
-    body = modal.opened[0][2]
-    sent = json.dumps(body["messages"])
+    body, chat = modal.opened[0][2], modal.chats[0]
+    sent = json.dumps(chat["messages"])
     assert ANJO_IDENTITY_OPENER in sent
     assert "turn state" not in sent  # the route's blocks, which carry Anjo's memory, are not sent
     assert "FILMED-OPEN" not in sent
     assert "simulated day one" in sent and "a reply on day one" in sent
     # Only Glimmer's own replies are history: no opener, and no line another model wrote.
     assert "OTHER-MODEL" not in sent and "What's on your plate" not in sent
-    assert body["messages"][-1]["content"].endswith("simulated day two")
-    assert "tools" not in body
+    assert chat["messages"][-1]["content"].endswith("simulated day two")
+    assert "tools" not in body and "tools" not in chat
     context = next(r for r in _records(flagged) if r["kind"] == "context" and r["turn_id"] != "t-day1")
     assert (context["session_id"], context["cleared"]) == (session_id, True)
     folded = ancestry.reply_ancestry(flagged, context["turn_id"])
@@ -599,8 +564,7 @@ def test_a_cleared_reply_broken_off_before_any_words_fails_the_turn(
 
     register_synthetic(flagged, at=datetime.now(timezone.utc))
     dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
-    started = {"id": "c", "model": config.MODEL, "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
-    modal = Modal([started, TransportError(None)])
+    modal = Modal([started(), TransportError(None)])
     _serve(monkeypatch, modal)
     before = _replies(flagged)
 
@@ -862,7 +826,7 @@ def _said_in(user_id: str, preference_id: str, session_id: str) -> None:
 
 def _sent_text(modal: Modal) -> str:
     """Every message's words, as the server got them (C opens the turn's own message)."""
-    return "\n".join(str(m["content"]) for m in modal.opened[0][2]["messages"])
+    return "\n".join(str(m["content"]) for m in modal.chats[0]["messages"])
 
 
 def test_a_served_turn_gets_the_same_context_c_as_the_arms(

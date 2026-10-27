@@ -25,7 +25,7 @@ CONNECT_TIMEOUT_S = 10.0
 CONTROL_READ_TIMEOUT_S = 60.0
 CONTROL_ATTEMPTS = 3  # describe and set the copy count: a throttle is worth a retry
 REFUSED = frozenset({401, 403})  # the role can't make this call: an error, never "not ready yet"
-CHAT_PATH: Final = "/v1/chat/completions"
+COMPLETIONS_PATH: Final = "/v1/completions"
 NO_CAPACITY: Final = "NoCapacity"
 
 
@@ -124,15 +124,16 @@ class Stream:
 class SageMakerPoster:
     """``client.Poster`` through the endpoint, for the night's ``VllmClient``. Every call goes
     through the stream API: InvokeEndpoint gives up after 60 s, which a long reply outlasts, while
-    a stream is bounded only by the runtime client's read timeout. A chat streams from vLLM and is
-    put back together here as one chat completion; any other reply is JSON, read to its end."""
+    a stream is bounded only by the runtime client's read timeout. A generation streams from vLLM
+    and is put back together here as the one completion it adds up to; any other reply (token ids,
+    a prompt's log-probabilities) is JSON, read to its end."""
 
     def __init__(self, invoker: Invoker) -> None:
         self._invoker = invoker
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        chat = path == CHAT_PATH
-        sent = {**body, "stream": True, "stream_options": {"include_usage": True}} if chat else body
+        generates = path == COMPLETIONS_PATH and "prompt_logprobs" not in body
+        sent = {**body, "stream": True, "stream_options": {"include_usage": True}} if generates else body
         try:
             with closing(self._invoker.stream(path, sent)) as reply:
                 raw = b"".join(reply)
@@ -140,17 +141,17 @@ class SageMakerPoster:
             if error.status is None:
                 raise ServingError(f"{path} failed in transport") from None
             raise ServingError(f"{path} returned HTTP {error.status}") from None
-        return chat_completion(path, raw) if chat else json_object(path, raw)
+        return completion(path, raw) if generates else json_object(path, raw)
 
     def close(self) -> None:
         self._invoker.close()
 
 
-def chat_completion(path: str, raw: bytes) -> dict[str, Any]:
-    """vLLM's streamed chat (server-sent events, usage last) as the one chat completion it adds
+def completion(path: str, raw: bytes) -> dict[str, Any]:
+    """vLLM's streamed completion (server-sent events, usage last) as the one completion it adds
     up to. An error event, or a reply that isn't events, is a ``ServingError`` naming neither."""
     text: list[str] = []
-    reply: dict[str, Any] = {"choices": [{"index": 0, "message": {"role": "assistant"}, "finish_reason": None}]}
+    reply: dict[str, Any] = {"choices": [{"index": 0, "finish_reason": None}]}
     for line in raw.decode("utf-8", errors="replace").splitlines():
         if not line.startswith("data:") or line[5:].strip() == "[DONE]":
             continue
@@ -165,7 +166,7 @@ def chat_completion(path: str, raw: bytes) -> dict[str, Any]:
             reply["usage"] = event["usage"]
         for choice in event.get("choices") or ():
             if isinstance(choice, dict) and choice.get("index", 0) == 0:
-                text.append(str((choice.get("delta") or {}).get("content") or ""))
+                text.append(str(choice.get("text") or ""))
                 reply["choices"][0]["finish_reason"] = choice.get("finish_reason") or reply["choices"][0]["finish_reason"]
-    reply["choices"][0]["message"]["content"] = "".join(text)
+    reply["choices"][0]["text"] = "".join(text)
     return reply

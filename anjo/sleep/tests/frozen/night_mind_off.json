@@ -509,7 +509,8 @@
      "night": "2026-10-28",
      "parent_id": null,
      "person_id": "p1",
-     "uri": "modal-volume://anjo-sleep-adapters/p-0622d3fedfc2-n1"
+     "uri": "modal-volume://anjo-sleep-adapters/p-0622d3fedfc2-n1",
+     "rendering": null
     },
     "choices": [
      {
@@ -1130,7 +1131,8 @@
      "night": "2026-10-29",
      "parent_id": "p-0622d3fedfc2-n1",
      "person_id": "p1",
-     "uri": "modal-volume://anjo-sleep-adapters/p-fad2377ab084-n2"
+     "uri": "modal-volume://anjo-sleep-adapters/p-fad2377ab084-n2",
+     "rendering": null
     },
     "choices": [
      {
@@ -1674,7 +1676,8 @@
      "night": "2026-10-30",
      "parent_id": "p-fad2377ab084-n2",
      "person_id": "p1",
-     "uri": "modal-volume://anjo-sleep-adapters/p-7615205d1f08-n3"
+     "uri": "modal-volume://anjo-sleep-adapters/p-7615205d1f08-n3",
+     "rendering": null
     },
     "choices": [
      {

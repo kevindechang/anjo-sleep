@@ -5,7 +5,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
 
 - rank ``r`` 16 by default and at most 32, the serving cap (``config.MAX_LORA_RANK``); alpha is
   always 2r and dropout 0.05;
-- the attention projections and the MLP (q, k, v, o, gate, up, down);
+- the attention projections and the MLP (q, k, v, o, gate, up, down) of the text decoder only: the
+  training script anchors the names there, since Glimmer's vision tower has a q, k and v too;
 - lr 2e-4, or 5e-5 for a warm start on the last promoted adapter; fixed seeds;
 - at least ``min_optimizer_steps`` updates: a tiny night with batch 1 and accumulation 16 would
   make one or two, so accumulation shrinks to ``n // min_optimizer_steps`` (between 1 and 16) and,
@@ -19,11 +20,14 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
 ``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Colab for the
 night) under the training hard timeout, copies the finished adapter into the local adapter cache
 and onto the Modal volume through Task 4's upload, which refuses a name already there, and returns
-the ``CheckpointRef``. Adapter names are ``p-<hash>-n<night>`` and never reused.
+the ``CheckpointRef``, which carries the rendering the adapter was trained under (an adapter whose
+``adapter_config.json`` records another is refused before it is published). Adapter names are
+``p-<hash>-n<night>`` and never reused.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import shutil
 from collections.abc import Callable, Mapping
@@ -34,7 +38,7 @@ from typing import Final, Literal
 
 from anjo.sleep.budget import TRAINING_TIMEOUT_S
 from anjo.sleep.ports import GpuRunner
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import CheckpointRef
 
@@ -147,9 +151,15 @@ def fresh_adapter_name(user_id: str, night_number: int, used: frozenset[str]) ->
     return name
 
 
-def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None) -> dict[str, object]:
-    """What the training script is told: the recipe, the step plan and the learning rate."""
+def training_config(
+    cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None, night: date,
+) -> dict[str, object]:
+    """What the training script is told: the recipe, the step plan, the learning rate, and how the
+    rows are rendered, so the adapter trains on the prompt it is served: the reasoning strength the
+    server renders every request at (``config.reasoning_strength``), the night's date, the chat
+    template's hash, and the rendering they make (``framing.rendering``), which the adapter records."""
     plan = plan_steps(n_examples, cfg)
+    strength = config.reasoning_strength()
     return {
         "r": cfg.r, "alpha": cfg.alpha, "dropout": cfg.dropout,
         "target_modules": list(cfg.target_modules),
@@ -158,6 +168,8 @@ def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str 
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": cfg.batch_size,
         "warm_start": warm, "revision": revision, "objective": cfg.objective,
         "dpo_beta": cfg.dpo_beta, "dpo_learning_rate": cfg.dpo_lr, "min_optimizer_steps": cfg.min_optimizer_steps,
+        "reasoning_strength": strength, "current_date": night.isoformat(),
+        "template_sha256": framing.TEMPLATE_SHA256, "rendering": framing.rendering(strength),
     }
 
 
@@ -187,6 +199,15 @@ def _number(outputs: Mapping[str, object], key: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TrainError(f"the training job didn't report {key}")
     return float(value)
+
+
+def _rendering(folder: Path) -> object:
+    """The rendering an adapter folder records in its ``adapter_config.json``, or None."""
+    try:
+        meta = json.loads((folder / "adapter_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return meta.get(framing.RENDERING_KEY) if isinstance(meta, dict) else None
 
 
 def _copy_adapter(source: Path, target: Path) -> None:
@@ -228,7 +249,7 @@ def train_lora_with_receipt(
         config.check_adapter(prev_dir, prev_dir.name)  # the last promoted adapter, whole (RF1)
     workdir.mkdir(parents=True, exist_ok=True)
     dataset_path = workdir / DATASET_FILE
-    settings = training_config(cfg, len(data.examples), warm=warm, revision=revision)
+    settings = training_config(cfg, len(data.examples), warm=warm, revision=revision, night=night)
     try:  # the dataset is the person's words in plain text: it never outlives the run
         dataset_path.write_text(data.to_jsonl(pairs=cfg.objective == "sft_dpo"), encoding="utf-8")
         outputs = runner.run(JOB, {
@@ -241,6 +262,8 @@ def train_lora_with_receipt(
     returned = outputs.get("adapter_dir")
     if not isinstance(returned, str):
         raise TrainError("the training job returned no adapter folder")
+    if _rendering(Path(returned)) != settings["rendering"]:
+        raise TrainError(f"the adapter doesn't record the rendering it was trained under ({settings['rendering']})")
     cached = adapter_cache / name
     _copy_adapter(Path(returned), cached)
     publish(cached, name)
@@ -255,7 +278,7 @@ def train_lora_with_receipt(
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",
-        parent_id=prev.id if warm and prev is not None else None,
+        parent_id=prev.id if warm and prev is not None else None, rendering=str(settings["rendering"]),
     )
     return ckpt, receipt
 

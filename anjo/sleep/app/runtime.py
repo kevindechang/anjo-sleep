@@ -8,14 +8,18 @@ reply row stores no model id, and the true identity (Glimmer, the precision, the
 the pin's own identity and the sleep ancestry record. Prices are nominal so the turn's spend gate
 still works; Modal bills by the GPU hour, which the budget ledger tracks.
 
-**The runtime.** ``SleepRuntime`` sends vLLM's OpenAI-compatible request to the Modal URL with
-the bearer token, naming the person's adapter as the model, or the base model when there is none
-yet. It refuses a request whose person's words trip Anjo's crisis floor, the last of four checks
-(the chat route's floor, the harness's no-model tiers and the prompt hook come first). A refusal,
-a cold or stopped server and any error before the first token end the call with an error, so the
-chat route's existing fallback answers with the frontier talker (RF3). Modal holds a request
-through a cold start of up to 20 minutes, so the runtime calls it under a short deadline of its
-own (``REPLY_DEADLINE_S``), apart from the container's three-hour limit.
+**The runtime.** ``SleepRuntime`` compiles the turn as for any host, then prompts Glimmer the way
+its adapter was trained (``serving.client.reply_prompt``): the chat's text cleaned of Glimmer's
+special tokens (``serving.framing``), ``/tokenize`` with the generation prompt at the rendering's
+reasoning strength and today's date, and the reply's header after it. It streams the reply from
+``/v1/completions``, naming the person's adapter as the model (the base model when there is none
+yet), so Glimmer answers directly and takes no tools. An adapter trained under another rendering
+is never sent a turn. It refuses a request whose person's words trip Anjo's crisis floor, the last
+of four checks (the chat route's floor, the harness's no-model tiers and the prompt hook come
+first). A refusal, a cold or stopped server and any error before the first token end the call
+with an error, so the chat route's existing fallback answers with the frontier talker (RF3).
+Modal holds a request through a cold start of up to 20 minutes, so the runtime calls it under a
+short deadline of its own (``REPLY_DEADLINE_S``), apart from the container's three-hour limit.
 
 **SageMaker** (``ANJO_SLEEP_BACKEND``, the default): the same request goes through the endpoint's
 envelope (``sagemaker_transport``), signed by the dev host's role, with no bearer token, under the
@@ -28,17 +32,18 @@ talker gets a route pinned to ``sleep_modal``; everyone else's route is unchange
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import threading
-from collections.abc import Callable, Generator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Generator, Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
 import httpx
 
 from anjo.core.anjo_model.assignment import OVERRIDE_CAUSE, ROUTE_ANJO, ModelRoute, QualifiedPin
-from anjo.core.anjo_model.hosted_runtime import ChatCompletionsRuntime, bearer
+from anjo.core.anjo_model.hosted_runtime import ChatCompletionsRuntime, bearer, status_error_code
 from anjo.core.anjo_model.pin import (
     DecodeClamps,
     HostPin,
@@ -48,18 +53,20 @@ from anjo.core.anjo_model.pin import (
     Routing,
     ThinkingControl,
 )
-from anjo.core.anjo_model.runtime import RequestNotSent
-from anjo.core.anjo_model.transport import HttpTransport, Transport
+from anjo.core.anjo_model.runtime import RequestNotSent, chat_body
+from anjo.core.anjo_model.transport import HttpTransport, Transport, TransportError, Upstream
 from anjo.core.best_effort import best_effort
 from anjo.core.crisis import NO_CRISIS
 from anjo.core.floor import FloorRules, check_message, normalize_message
-from anjo.core.model_io import (
-    Finish, ModelEvent, ModelRequest, Served, TextDelta, TextPart, ToolCallProposal,
-)
+from anjo.core.model_io import Finish, ModelEvent, ModelRequest, Served, TextDelta, TextPart
 from anjo.core.processors import Family
 from anjo.sleep.app.ancestry import record_served
 from anjo.sleep.app.flags import sleep_enabled_for
-from anjo.sleep.serving import backend, config
+from anjo.sleep.serving import backend, config, framing
+from anjo.sleep.serving.client import HttpPoster, Poster, ServingError, reply_prompt, utc_today
+from anjo.sleep.types import CheckpointRef
+
+logger = logging.getLogger(__name__)
 
 HOST: Final = "sleep_modal"
 URL_ENV: Final = backend.MODAL_URL_ENV
@@ -69,13 +76,10 @@ PRICES_AS_OF: Final = "2026-10-27"
 # Nominal, per million tokens: the turn's spend gate needs a price, and Modal's real cost is GPU
 # time, which the budget ledger holds.
 NOMINAL_PRICES: Final = Prices(input_per_million=0.15, output_per_million=0.6, cache_read_per_million=None)
-# Glimmer's special tokens, kept out of any text the model is sent. Not yet read from the pinned
-# tokenizer: the Oct 28 check confirms them from its tokenizer_config.json.
-CONTROL_TOKENS: Final = (
-    "<|begin_of_text|>", "<|end_of_text|>", "<|start_header_id|>", "<|end_header_id|>",
-    "<|eot_id|>", "<|eom_id|>", "<|python_tag|>", "<|finetune_right_pad_id|>",
-)
-MAX_TOOLS: Final = 16
+# Glimmer's named special tokens, its chat framing (<|start|>, <|message|>, <|eot|>) among them, for
+# core's own pass. Every one of the 2,048 is broken before core sees the text (``clean_request``,
+# serving.framing), so that pass finds none and stays one pass, however the text is nested.
+CONTROL_TOKENS: Final = tuple(config.NAMED_SPECIAL_TOKENS.values())
 # Modal must answer, and each later read arrive, within REPLY_DEADLINE_S. Past it the call ends
 # through the transient-error path (httpx's timeout, then TransportError), so a cold, stopped or
 # stalled server is answered by the frontier talker (RF3), well inside a turn's patience.
@@ -88,10 +92,14 @@ _REVISION_ID = re.compile(r"rv-[0-9a-f]{16}")
 @dataclass(frozen=True, kw_only=True)
 class GlimmerPin(HostPin):  # type: ignore[misc, unused-ignore]  # Any when mypy skips core
     """A pin for Glimmer on Modal, for one person: ``adapter`` is the person's adapter, or None
-    for the base model. ``family`` is always None (no N-PROC family names Glimmer)."""
+    for the base model, and ``adapter_rendering`` the rendering it was trained under.
+    ``reasoning_strength`` is what every call is rendered at ("" when the environment names no
+    level, and then nothing is sent). ``family`` is always None (no N-PROC family names Glimmer)."""
 
     family: Family | None = None  # type: ignore[assignment, unused-ignore]
     adapter: str | None = None
+    reasoning_strength: str = config.DEFAULT_REASONING_STRENGTH
+    adapter_rendering: str | None = None
     user_id: str = field(default="", repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -101,6 +109,17 @@ class GlimmerPin(HostPin):  # type: ignore[misc, unused-ignore]  # Any when mypy
             raise PinError("a Glimmer pin is built by glimmer_pin()")
         if self.adapter is not None:
             config.check_adapter_name(self.adapter)
+        if self.reasoning_strength and self.reasoning_strength not in config.REASONING_LEVELS:
+            raise PinError("a Glimmer pin's reasoning strength is a level the template knows")
+
+    @property
+    def rendering(self) -> str | None:
+        """The rendering every call is made under, or None while the strength is unknown."""
+        return framing.rendering(self.reasoning_strength) if self.reasoning_strength else None
+
+    def renders_as_trained(self) -> bool:
+        """Whether a call can go out: a known rendering, and the adapter's own if there is one."""
+        return self.rendering is not None and (self.adapter is None or self.adapter_rendering == self.rendering)
 
     def identity(self) -> dict[str, Any]:
         return {
@@ -109,20 +128,21 @@ class GlimmerPin(HostPin):  # type: ignore[misc, unused-ignore]  # Any when mypy
             "model_id": self.model_id, "license": self.license,
             "upstream_repo": self.upstream_repo, "upstream_commit": self.upstream_commit,
             "quantization": self.quantization, "adapter": self.adapter,
+            "rendering": self.rendering, "adapter_rendering": self.adapter_rendering,
             "routing": self.routing.to_obj(), "traits": self.traits.to_obj(),
         }
 
 
-def glimmer_traits(tool_parser: str | None) -> ModelTraits:
-    """What the server accepts. Without a tool-call parser for Glimmer, turns run without tools."""
-    tools = tool_parser is not None
+def glimmer_traits() -> ModelTraits:
+    """What the runtime sends. The reply's header is written for Glimmer (to the person), so it
+    answers directly, as trained, and turns run without tools."""
     return ModelTraits(
         system_role="native",
-        tool_calls="native" if tools else "none",
-        tool_choice_modes=("auto", "none") if tools else (),
+        tool_calls="none",
+        tool_choice_modes=(),
         tool_call_ids="native",
         parallel_tool_calls=False,
-        max_tools_per_request=MAX_TOOLS if tools else 0,
+        max_tools_per_request=0,
         max_parallel_tool_calls=1,
         thinking=ThinkingControl(field="none", values=()),
         thinking_replay="n_a",
@@ -136,12 +156,21 @@ def glimmer_traits(tool_parser: str | None) -> ModelTraits:
     )
 
 
-def glimmer_pin(user_id: str, adapter: str | None, settings: config.ServeConfig | None = None) -> GlimmerPin:
+def glimmer_pin(
+    user_id: str, adapter: str | None, settings: config.ServeConfig | None = None, *,
+    adapter_rendering: str | None = None,
+) -> GlimmerPin:
     """The pin a flagged person's turn is served under, from the same settings Modal serves with.
-    An unset revision leaves the commit empty, and the runtime then sends nothing."""
+    An unset revision leaves the commit empty, and an unknown reasoning strength the strength, and
+    the runtime then sends nothing."""
     serve = config.ServeConfig.from_env() if settings is None else settings
     commit = serve.revision or ""
-    seed = f"{config.MODEL}@{commit}:{serve.precision.name}:{serve.tool_parser}"
+    try:
+        strength = config.reasoning_strength()
+    except config.ServeConfigError:
+        strength = ""
+    rendering = framing.rendering(strength) if strength else ""
+    seed = f"{config.MODEL}@{commit}:{serve.precision.name}:{serve.tool_parser}:{rendering}"
     return GlimmerPin(
         revision_id="rv-" + hashlib.sha256(seed.encode()).hexdigest()[:16],
         host=HOST, version="30b", internal_model_id=INTERNAL_MODEL_ID, model_id=config.MODEL,
@@ -149,7 +178,8 @@ def glimmer_pin(user_id: str, adapter: str | None, settings: config.ServeConfig 
         quantization=serve.precision.name, status="active", prices_as_of=PRICES_AS_OF,
         prices=NOMINAL_PRICES,
         routing=Routing(zdr=True, allow_fallbacks=False, provider_order=()),
-        traits=glimmer_traits(serve.tool_parser), notes="", adapter=adapter, user_id=user_id,
+        traits=glimmer_traits(), notes="", adapter=adapter, reasoning_strength=strength,
+        adapter_rendering=adapter_rendering, user_id=user_id,
     )
 
 
@@ -186,22 +216,68 @@ def default_transport() -> Transport:
     return deadline_transport()
 
 
-def holds_words(request: ModelRequest) -> bool:
-    """Whether the call is a tool round, whose words the loop holds back until the round ends
-    cleanly (anjo/agent/loop.py); any other call's words are shown as they stream."""
-    return bool(request.tools) and request.tool_choice.mode != "none"
+def clean_request(request: ModelRequest) -> ModelRequest:
+    """``request`` with every special token's text broken in the system turn and each message's
+    words (``framing.clean_text``), before core compiles it."""
+    system = tuple(replace(segment, text=framing.clean_text(segment.text)) for segment in request.system)
+    messages = tuple(
+        replace(message, parts=tuple(
+            replace(part, text=framing.clean_text(part.text)) if isinstance(part, TextPart) else part
+            for part in message.parts))
+        for message in request.messages
+    )
+    return replace(request, system=system, messages=messages)
+
+
+def completion_body(body: Mapping[str, Any], prompt: list[int]) -> dict[str, Any]:
+    """The streamed ``/v1/completions`` request for a compiled chat body: its model, output limit and
+    sampling, the prompt's ids in place of its messages, and the reply's stops."""
+    sent = {
+        "model": body["model"], "prompt": prompt, "max_tokens": body["max_tokens"], "stream": True,
+        "stream_options": {"include_usage": True}, "stop_token_ids": list(config.REPLY_STOPS),
+    }
+    return {**sent, **{key: body[key] for key in ("temperature", "top_p", "top_k") if key in body}}
+
+
+def as_chat_chunk(chunk: object) -> object:
+    """One of vLLM's completion chunks in the chat shape core's stream parser reads: each choice's
+    text as its delta's content. Anything else passes as it is, for the parser to judge."""
+    if not isinstance(chunk, Mapping) or not isinstance(chunk.get("choices"), list):
+        return chunk
+    choices = [
+        {"index": choice.get("index", 0), "finish_reason": choice.get("finish_reason"),
+         "delta": {"content": choice["text"]} if isinstance(choice.get("text"), str) else {}}
+        if isinstance(choice, Mapping) else choice
+        for choice in chunk["choices"]
+    ]
+    return {**chunk, "choices": choices}
+
+
+class _AsChat:
+    """A completion stream read as a chat stream."""
+
+    def __init__(self, upstream: Upstream) -> None:
+        self._upstream = upstream
+
+    def __iter__(self) -> Iterator[object]:
+        return (as_chat_chunk(chunk) for chunk in self._upstream)
+
+    def close(self) -> None:
+        self._upstream.close()
 
 
 class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
-    """Glimmer through vLLM's OpenAI-compatible server on Modal. A reply is recorded as served
-    once Glimmer's words or calls reach the turn: the first word shown, or a tool round's clean
-    end. A call that breaks off before that is answered by the fallback, so it records nothing."""
+    """Glimmer through vLLM's OpenAI-compatible server. A reply is recorded as served once
+    Glimmer's first word reaches the turn; a call that breaks off before that is answered by the
+    fallback, so it records nothing. ``poster`` makes the ``/tokenize`` calls (tests pass one);
+    unset, each call makes one for the configured backend under the reply deadline."""
 
-    def __init__(self, pin: HostPin, *, transport: Transport | None = None) -> None:
+    def __init__(self, pin: HostPin, *, transport: Transport | None = None, poster: Poster | None = None) -> None:
         if not isinstance(pin, GlimmerPin):
             raise PinError(f"the {HOST} runtime serves a Glimmer pin")
         super().__init__(pin, transport=transport or default_transport())
         self._glimmer = pin
+        self._poster = poster
 
     def stream(
         self, request: ModelRequest, cancel: threading.Event
@@ -209,18 +285,61 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         if carries_crisis(request):
             yield Finish("error", "rejected")
             return
-        held = holds_words(request)
-        wrote = recorded = False
-        for event in super().stream(request, cancel):
-            wrote = wrote or isinstance(event, ToolCallProposal) or (
-                isinstance(event, TextDelta) and bool(event.text.strip())
-            )
-            clean_end = isinstance(event, Finish) and event.error_code is None
-            if wrote and not recorded and (clean_end or not held):
+        if not self._glimmer.renders_as_trained():
+            logger.error("%s sends nothing: adapter %s was trained under rendering %s, calls render as %s",
+                         HOST, self._glimmer.adapter, self._glimmer.adapter_rendering, self._glimmer.rendering)
+            yield Finish("error", "rejected")
+            return
+        recorded = False
+        for event in self._generate(request, cancel):
+            if not recorded and isinstance(event, TextDelta) and event.text.strip():
                 recorded = True
                 with best_effort("record a sleep reply as served", user_id=self._glimmer.user_id):
                     record_served(self._glimmer.user_id, request.turn_id, model=self._wire_model())
             yield event
+
+    def _generate(
+        self, request: ModelRequest, cancel: threading.Event
+    ) -> Generator[ModelEvent, None, None]:
+        if cancel.is_set():
+            yield Finish("error", "cancelled")
+            return
+        try:
+            body = chat_body(clean_request(request), self._pin, model=self._wire_model())
+            url, headers = self._endpoint()
+            upstream = self._transport.open(url, headers, completion_body(body, self._prompt(body)))
+        except RequestNotSent as refused:
+            yield Finish("error", refused.code)
+            return
+        except ServingError as error:
+            logger.warning("%s could not render the request: %s", HOST, error)
+            yield Finish("error", "transient")
+            return
+        except TransportError as error:
+            code = status_error_code(error.status)
+            logger.warning("%s refused the request: %s (%s)", HOST, error.status, code)
+            yield Finish("error", code)
+            return
+        yield from self._read(_AsChat(upstream), request, cancel)
+
+    def _prompt(self, body: Mapping[str, Any]) -> list[int]:
+        """The prompt's ids, as a training row's (``reply_prompt``), dated today (UTC)."""
+        poster = self._poster or self._made_poster()
+        try:
+            return reply_prompt(poster, body["model"], body["messages"], self._glimmer.reasoning_strength, utc_today())
+        except ValueError:
+            raise RequestNotSent("rejected") from None
+        finally:
+            if poster is not self._poster:
+                poster.close()
+
+    def _made_poster(self) -> Poster:
+        if on_sagemaker():
+            from anjo.sleep.app.sagemaker_transport import default_poster
+
+            return default_poster(REPLY_DEADLINE_S, CONNECT_DEADLINE_S)
+        token = os.environ.get(TOKEN_ENV, "").strip()
+        return HttpPoster(os.environ.get(URL_ENV, "").strip().rstrip("/"), token, timeout_s=REPLY_DEADLINE_S)
 
     def _wire_model(self) -> str:
         return self._glimmer.adapter or config.MODEL
@@ -232,11 +351,11 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         if sagemaker:
             from anjo.sleep.app.sagemaker_transport import endpoint_url
 
-            return endpoint_url("/v1/chat/completions"), {}  # SigV4 signs it; no token travels
+            return endpoint_url("/v1/completions"), {}  # SigV4 signs it; no token travels
         base = os.environ.get(URL_ENV, "").strip().rstrip("/")
         if not _URL.fullmatch(base):
             raise RequestNotSent("rejected")
-        return f"{base}/v1/chat/completions", bearer(os.environ.get(TOKEN_ENV, "").strip())
+        return f"{base}/v1/completions", bearer(os.environ.get(TOKEN_ENV, "").strip())
 
     def _reported(self, served: Served) -> Served:
         if served.model in (self._wire_model(), config.MODEL):
@@ -245,7 +364,7 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
 
 
 # The adapter a person's turns are served with: Task 5's promoted checkpoint, once it sets one.
-AdapterSource = Callable[[str], str | None]
+AdapterSource = Callable[[str], CheckpointRef | None]
 _adapter_source: list[AdapterSource] = []
 
 
@@ -253,7 +372,7 @@ def set_adapter_source(source: AdapterSource | None) -> None:
     _adapter_source[:] = [] if source is None else [source]
 
 
-def current_adapter(user_id: str) -> str | None:
+def current_adapter(user_id: str) -> CheckpointRef | None:
     return _adapter_source[0](user_id) if _adapter_source else None
 
 
@@ -262,6 +381,8 @@ def sleep_route(user_id: str) -> ModelRoute | None:
     route is unchanged (None)."""
     if not sleep_enabled_for(user_id):
         return None
-    pin = glimmer_pin(user_id, current_adapter(user_id))
+    adapter = current_adapter(user_id)
+    pin = glimmer_pin(user_id, None if adapter is None else adapter.id,
+                      adapter_rendering=None if adapter is None else adapter.rendering)
     route: ModelRoute = ModelRoute(ROUTE_ANJO, None, OVERRIDE_CAUSE, None, (QualifiedPin(pin, None, None),))
     return route
