@@ -217,10 +217,27 @@ def ready(night: Night, ckpt: CheckpointRef) -> None:
     except ServingError:
         raise ExampleError(
             f"the server doesn't serve adapter {ckpt.id} yet: Modal loads a new adapter only when the "
-            "server container starts. Stop it (modal app stop anjo-sleep-serve), deploy it again, "
-            "and re-run; the adapter stays on the volume"
+            "server container starts. Run `modal app stop anjo-sleep-serve`, deploy it again "
+            f"(modal deploy anjo/sleep/serving/modal_app.py), then re-run with --adapter {ckpt.id}"
         ) from None
-    night.say(f"server restarted and serving {ckpt.id}")
+    night.say(f"serving {ckpt.id}")
+
+
+def reused_ref(name: str | None, night: Night) -> CheckpointRef | None:
+    """``--adapter``: an adapter already on the volume, checked before anything costs money."""
+    if name is None:
+        return None
+    try:
+        config.check_adapter_name(name)
+    except config.ServeConfigError as error:
+        raise ExampleError(f"--adapter: {error}") from None
+    if not night.services.serving.has_adapter(name):
+        raise ExampleError(f"--adapter: no adapter {name} is on the server's volume")
+    person = night.person
+    return CheckpointRef(
+        id=name, person_id=person.person_id, night=person.day,
+        uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None,
+    )
 
 
 def donor_ref(name: str | None, night: Night) -> CheckpointRef | None:

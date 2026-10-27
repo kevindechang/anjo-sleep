@@ -266,6 +266,9 @@ class FakeServing:
         if self._restarts:
             self.visible = set(self.on_volume)
 
+    def has_adapter(self, name: str) -> bool:
+        return name in self.on_volume
+
     def upload_adapter(self, folder: Path, name: str) -> None:
         config.check_adapter(folder, name)
         if name in self.on_volume:

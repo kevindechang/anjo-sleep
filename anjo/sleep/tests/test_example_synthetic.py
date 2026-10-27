@@ -243,7 +243,7 @@ def test_the_server_restarts_before_the_arms_so_the_new_adapter_is_visible(tmp_p
                          fakes.fake_services(serving=serving), say=lines.append)
 
     assert report.checkpoint is not None and report.checkpoint.id in serving.visible
-    assert any("server restarted" in line for line in lines)
+    assert any(line.startswith("serving p-") for line in lines)
 
 
 def test_a_server_that_never_loads_the_adapter_stops_the_run_with_the_fix(tmp_path: Path) -> None:
@@ -252,6 +252,66 @@ def test_a_server_that_never_loads_the_adapter_stops_the_run_with_the_fix(tmp_pa
     with pytest.raises(run.ExampleError, match="modal app stop"):
         run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
                     fakes.fake_services(serving=serving), say=lambda _line: None)
+
+
+class _CountingGpu(fakes.FakeGpu):
+    calls = 0
+
+    def run(self, job: str, inputs: Any, *, timeout_s: float) -> Any:
+        type(self).calls += 1
+        return super().run(job, inputs, timeout_s=timeout_s)
+
+
+def _services_with(gpu: Any, serving: fakes.FakeServing, spark_calls: list[int] | None = None) -> Any:
+    from dataclasses import replace
+
+    services = replace(fakes.fake_services(serving=serving), gpu=gpu)
+    if spark_calls is None:
+        return services
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        spark_calls.append(1)
+        return fakes.fake_spark(*args, **kwargs)
+
+    return replace(services, spark=counted)
+
+
+def test_adapter_flag_reuses_an_adapter_and_never_trains(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()
+    gpu = _CountingGpu()
+    _CountingGpu.calls = 0
+
+    report = run.execute(
+        ["--fake", "--workdir", str(tmp_path / "w"), "--no-chat", "--adapter", fakes.FAKE_DONOR],
+        _services_with(gpu, serving), say=lambda _line: None,
+    )
+
+    assert _CountingGpu.calls == 0
+    assert report.checkpoint is not None and report.checkpoint.id == fakes.FAKE_DONOR
+    assert not {"practice", "dataset", "train"} & set(report.stages) and "arms" in report.stages
+
+
+def test_an_unknown_adapter_stops_the_run_before_any_paid_step(tmp_path: Path) -> None:
+    spark_calls: list[int] = []
+
+    with pytest.raises(run.ExampleError, match="no adapter p-0000000000aa-n1"):
+        run.execute(
+            ["--fake", "--workdir", str(tmp_path / "w"), "--adapter", "p-0000000000aa-n1"],
+            _services_with(_CountingGpu(), fakes.FakeServing(), spark_calls), say=lambda _line: None,
+        )
+
+    assert spark_calls == []
+
+
+def test_the_probe_failure_names_the_exact_reuse_command(tmp_path: Path) -> None:
+    with pytest.raises(run.ExampleError) as raised:
+        run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
+                    fakes.fake_services(serving=fakes.FakeServing(restarts=False)),
+                    say=lambda _line: None, run_id="r1")
+
+    message = str(raised.value)
+    adapter = message.rsplit("--adapter ", 1)[1].strip()
+    assert "modal app stop anjo-sleep-serve" in message and adapter.startswith("p-")
 
 
 # ── Her chooser ───────────────────────────────────────────────────────────────

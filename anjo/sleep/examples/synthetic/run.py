@@ -23,7 +23,7 @@ import argparse
 import secrets
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -40,6 +40,7 @@ from anjo.sleep.examples.synthetic.report import (
 )
 from anjo.sleep.examples.synthetic.services import ExampleError, Services
 from anjo.sleep.examples.synthetic.world import open_world, store_day
+from anjo.sleep.types import CheckpointRef, Probe
 
 __all__ = ["ExampleError", "ExampleReport", "execute", "main"]
 
@@ -55,6 +56,7 @@ class Options:
     fake: bool
     chat: bool
     donor: str | None
+    adapter: str | None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -67,6 +69,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fake", action="store_true", help="run offline on fakes: no keys, no cost")
     parser.add_argument("--workdir", help="a new folder for the run's files (default: a temp folder)")
     parser.add_argument("--donor", help="arm 3x: an adapter another run trained (p-<hash>-n<night>)")
+    parser.add_argument("--adapter", help="reuse an adapter already on the volume: skips practice and training")
     parser.add_argument("--no-chat", action="store_true", help="skip the chat at the end")
     return parser
 
@@ -76,7 +79,7 @@ def parse(argv: Sequence[str] | None) -> Options:
     workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="anjo-sleep-example-"))
     return Options(
         persona=people.resolve(args.persona), day=people.resolve(args.day), workdir=workdir,
-        fake=args.fake, chat=not args.no_chat, donor=args.donor,
+        fake=args.fake, chat=not args.no_chat, donor=args.donor, adapter=args.adapter,
     )
 
 
@@ -117,6 +120,7 @@ def _night(
         services=services, workdir=options.workdir, say=say, run_id=run_id,
     )
     donor = stages.donor_ref(options.donor, night)  # a bad name stops the run before it costs anything
+    reused = stages.reused_ref(options.adapter, night)
     done: list[str] = []
 
     def step(name: str) -> None:
@@ -134,23 +138,35 @@ def _night(
     stages.fold_brief(night)
     step("choose")
     receipt = stages.choose(night)
-    step("practice")
-    stages.practise(night)
-    done.append("dataset")
-    data = stages.build_dataset(night, probes)
-    done.append("train")
-    ckpt = stages.train(night, data)
+    ckpt, examples = _adapter(night, probes, reused, done, step)
     step("arms")
     stages.ready(night, ckpt)
     arms, table = stages.run_arms(night, probes, ckpt, donor)
     step("chat")
     stages.chat(night, ckpt, options.chat, input_fn)
     say("")
-    say(f"Done. Adapter {ckpt.id} is trained, not promoted: no crisis gate or other gate ran.")
+    say(f"Done. Adapter {ckpt.id} is not promoted: no crisis gate or other gate ran.")
     return ExampleReport(
         stages=tuple(done), probe_sha256=digest, extracted_items=len(fresh), receipt=receipt,
-        checkpoint=ckpt, dataset_examples=len(data.examples), arms=arms, table=table,
+        checkpoint=ckpt, dataset_examples=examples, arms=arms, table=table,
     )
+
+
+def _adapter(
+    night: stages.Night, probes: list[Probe], reused: CheckpointRef | None, done: list[str],
+    step: Callable[[str], None],
+) -> tuple[CheckpointRef, int]:
+    """Step 5: practise, build the dataset and train, or reuse the adapter ``--adapter`` named."""
+    if reused is not None:
+        heading(night.say, "practice")
+        night.say(f"reusing adapter {reused.id}; practice, dataset and training skipped")
+        return reused, 0
+    step("practice")
+    stages.practise(night)
+    done.append("dataset")
+    data = stages.build_dataset(night, probes)
+    done.append("train")
+    return stages.train(night, data), len(data.examples)
 
 
 def main(

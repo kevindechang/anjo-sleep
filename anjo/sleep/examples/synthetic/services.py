@@ -36,6 +36,9 @@ class Serving(Protocol):
 
     def upload_adapter(self, folder: Path, name: str) -> None: ...
 
+    def has_adapter(self, name: str) -> bool:
+        """Whether an adapter of this name is already on the server's volume."""
+
 
 @dataclass(frozen=True)
 class Services:
