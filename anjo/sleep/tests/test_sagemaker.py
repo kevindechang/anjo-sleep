@@ -289,6 +289,7 @@ def test_every_phase_puts_glimmer_back_to_sleep_even_on_failure(
             _morning(sleeper, tmp_path)
         else:
             monkeypatch.setattr(backend, "from_env", lambda environ=None: FakeServing(order))
+            monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path))
             wake.main(["--keep-warm-minutes", "5"])
     assert order.count("sleep") == 1 and order[-1] == "sleep"
 
@@ -333,9 +334,10 @@ def test_a_phase_that_ends_well_also_sleeps_and_nested_phases_sleep_once_at_the_
 
 
 def test_keep_warm_on_sagemaker_pings_through_the_backend_and_sleeps_at_the_end(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
 ) -> None:
     order: list[str] = []
+    monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path))
 
     class Healthy(FakeServing):
         def ping(self) -> bool:

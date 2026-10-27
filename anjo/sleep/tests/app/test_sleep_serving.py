@@ -831,7 +831,8 @@ def sources(flagged: str, offline_embedder: None, monkeypatch: pytest.MonkeyPatc
         training_briefs=_Briefs("TRAINING-BRIEF: she drinks oolong.", frozenset({SPARK_OPEN})),
     )
     prompt.set_context_setup(setup)
-    monkeypatch.setattr(long_term, "query_memories", lambda *_a, **_k: [(0.9, "MEMORY-LINE her kettle is named Fern")])
+    for read in ("query_memories", "read_memories"):  # a served turn's read counts recall; the arms' only ranks
+        monkeypatch.setattr(long_term, read, lambda *_a, **_k: [(0.9, "MEMORY-LINE her kettle is named Fern")])
     at = datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(personal_preferences, "list_explicit_preferences", lambda *_a, **_k: [
         {"preference_id": "p1", "field": "verbosity", "value": "short", "receipt": "keep it short", "created_at": at},

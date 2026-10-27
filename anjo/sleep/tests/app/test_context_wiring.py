@@ -72,7 +72,7 @@ def _builder(
 
     monkeypatch.setattr(personal_preferences, "list_explicit_preferences", lambda user_id, **_: prefs)
     monkeypatch.setattr(learning_evidence, "training_eligible", lambda row: row["evidence_id"] in eligible)
-    monkeypatch.setattr(long_term, "query_memories", lambda message, user_id, n_results=4: [(0.9, "the ferry short")])
+    monkeypatch.setattr(long_term, "read_memories", lambda message, user_id, n_results=4: [(0.9, "the ferry short")])
     store = StoreSpy([ev("a", "ferry deck long take", minutes=1), ev("b", "sound mix", minutes=2)])
     return anjo_context_builder(
         _Brief(), until=DAY, settings=RecallSettings(k=1, budget_tokens=1000),

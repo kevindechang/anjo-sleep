@@ -92,7 +92,7 @@ def _builder(*, cleared: bool) -> ComposedContextBuilder:
         setup = _setup[0]
         _builders[(today, cleared)] = (
             cleared_context_builder(setup.training_briefs, until=today, settings=RECALL)
-            if cleared else anjo_context_builder(setup.served_briefs, until=today, settings=RECALL)
+            if cleared else anjo_context_builder(setup.served_briefs, until=today, settings=RECALL, counts_recall=True)
         )
     return _builders[(today, cleared)]
 

@@ -436,6 +436,13 @@ acceptable:
 python -m anjo.sleep.serving.wake --keep-warm-minutes 90   # wakes, then pings every 240 s
 ```
 
+Run it as the service user with the environment file loaded, as the app runs:
+`sudo -u <service user> bash -c 'set -a; . /etc/anjo-sleep/env; set +a; exec python -m anjo.sleep.serving.wake --keep-warm-minutes 90'`.
+Each answered ping writes `$ANJO_DATA_DIR/sleep/serving/warm_window.json`, which the live demo page
+reads to answer inside the window on either backend (on Modal it never pings, since a request would
+start a container) and to charge none of it to its own warm-time cap. Without `ANJO_DATA_DIR` the
+window refuses to start, before anything wakes.
+
 It uses the backend `ANJO_SLEEP_BACKEND` names and never prints a credential. A window is capped at
 180 minutes, and on SageMaker it ends by setting the copy count to 0, after an error or Ctrl-C too.
 If the process dies, the pings stop and the idle net (SageMaker, 30 minutes) or Modal's own window
