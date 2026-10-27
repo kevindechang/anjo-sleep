@@ -289,3 +289,16 @@ def test_the_codec_refuses_a_non_text_result(
             storage.CODEC.encode("a line")
         else:
             storage.CODEC.decode("enc1:a line")
+
+
+def test_the_extraction_log_is_encrypted_and_exported(auth_client: Any) -> None:
+    from anjo.sleep.app.storage import extraction_log
+
+    user_id = _uid()
+    _seed(user_id)
+    extraction_log(user_id).commit(DAY, (NOW - timedelta(days=1), NOW), ["message:1"], ["e-1"])
+
+    raw = (_sleep_dir(user_id) / "extractions.jsonl").read_bytes()
+    assert raw and all(line.startswith(b"enc1:") for line in raw.splitlines())
+    assert b"e-1" not in raw
+    assert _export(user_id)["sleep"]["extractions"][0]["item_ids"] == ["e-1"]

@@ -18,6 +18,7 @@ from anjo.core.erasure import _user_dir  # the directory account erasure removes
 from anjo.core.user_data_guard import user_data_guard
 from anjo.core.user_file_lock import user_lock
 from anjo.sleep.app.flags import require_sleep_host
+from anjo.sleep.evidence.extractions import ExtractionLog
 from anjo.sleep.evidence.jsonl import Guard
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
@@ -26,6 +27,7 @@ SLEEP_DIR: Final = "sleep"
 EVIDENCE_FILE: Final = "evidence.jsonl"
 TARGETS_FILE: Final = "targets.jsonl"
 CLEARED_FILE: Final = "cleared_sessions.jsonl"
+EXTRACTIONS_FILE: Final = "extractions.jsonl"
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 
 
@@ -73,4 +75,11 @@ def target_store(user_id: str) -> EventLogTargetStore:
     require_sleep_host()
     return EventLogTargetStore(
         sleep_dir(user_id) / TARGETS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id),
+    )
+
+
+def extraction_log(user_id: str) -> ExtractionLog:
+    require_sleep_host()
+    return ExtractionLog(
+        sleep_dir(user_id) / EXTRACTIONS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id),
     )
