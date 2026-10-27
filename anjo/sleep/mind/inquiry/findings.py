@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta
 from typing import Final
 
 from anjo.sleep.mind.inquiry.kernel import research_sources
-from anjo.sleep.mind.inquiry.types import Finding, Workspace
+from anjo.sleep.mind.inquiry.types import Workspace
 from anjo.sleep.mind.snapshot import EVIDENCE_WINDOW, MIN_USER_CITES
 from anjo.sleep.types import Evidence, EvidenceKind, Result, Target
 
@@ -29,10 +29,6 @@ from anjo.sleep.types import Evidence, EvidenceKind, Result, Target
 # file code; a test pins the two together.
 PERSON_KINDS: Final[frozenset[EvidenceKind]] = frozenset({"lesson", "correction", "preference", "tone_request"})
 SHARED_KINDS: Final = frozenset({"suspicion", "resolution"})
-
-
-def _finding(ws: Workspace, question_id: str) -> Finding | None:
-    return ws.finding_of(question_id)
 
 
 def _due_commitment(question_targets: Sequence[str], targets: Sequence[Target], as_of: datetime) -> Target | None:
@@ -63,7 +59,7 @@ def share_result(
 ) -> Result | None:
     """The result the question's finding raises ``share`` with, or ``None`` without an unconsumed
     anchor. ``cited`` is the finding's cited items, fetched by id; ``results`` the target log's."""
-    finding = _finding(ws, question_id)
+    finding = ws.finding_of(question_id)
     question = ws.question(question_id)
     if finding is None or question is None or finding.kind not in SHARED_KINDS:
         return None
@@ -101,7 +97,7 @@ def artifact(
 ) -> Evidence | None:
     """The homework artifact a resolution with a verified research source becomes, or ``None``.
     ``model`` is the thinker that wrote the finding."""
-    finding = _finding(ws, question_id)
+    finding = ws.finding_of(question_id)
     question = ws.question(question_id)
     if finding is None or question is None or finding.kind != "resolution":
         return None
