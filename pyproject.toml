@@ -1,0 +1,39 @@
+# The public repo's pyproject.toml: publish.py writes this file to the repo root under that name.
+# Only the engine core's dependencies are here. The adapters in anjo/sleep/app need private Anjo
+# and don't run in this repo; their tests are skipped (anjo/sleep/tests/conftest.py).
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anjo-sleep"
+version = "0.1.0"
+description = "Anjo Sleep: a personal model that learns its person overnight."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Chang Chia Wei" }]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.0.3,<10",
+]
+modal = [
+    "modal",
+]
+
+[tool.hatch.build.targets.wheel]
+# anjo/ is a namespace package here: only anjo/sleep ships.
+packages = ["anjo"]
+
+[tool.pytest.ini_options]
+testpaths = ["anjo/sleep/tests"]
+# The repo root on sys.path, and anjo/ (no __init__.py here) read as a namespace package, so the
+# tests import as anjo.sleep.tests.* exactly as they do in the private repo.
+pythonpath = ["."]
+consider_namespace_packages = true
+addopts = "-v"
