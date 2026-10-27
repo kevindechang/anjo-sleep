@@ -11,10 +11,11 @@ day: new items enter the evidence store once and their mentions update the targe
 commits the day in the extraction log, so a re-run of the same day and window over the same turns
 reads the stored items back without calling the model.
 
-The window says which turns are read. The night's clock is ``as_of``: items are created at it, and
-the targets shown to the model are those open at it. It is the window's end in real time; an
-accelerated run passes the virtual night end, because its windows are wall time recorded around
-each simulated day, so seven simulated days stay seven days.
+The window says which turns are read. The night's clock is ``as_of``: the targets shown to the model
+are those open at it (a target is first seen on its day's virtual date). Items are created at the
+window's end, which is wall time: retrieval filters ``created_at`` on it, and a virtual date may lie
+in the future. ``as_of`` is the window's end in real time; an accelerated run passes the virtual
+night end, so seven simulated days stay seven days.
 """
 from __future__ import annotations
 
@@ -86,7 +87,6 @@ class HistorySource:
         None: no model call."""
         require_sleep_host()
         start, end = window
-        night_time = end if as_of is None else as_of
         synthetic = is_synthetic(user_id)
         rows = get_history_between(
             user_id, start, end, session_ids=cleared_sessions(user_id) if synthetic else None,
@@ -111,7 +111,7 @@ class HistorySource:
         targets = target_store(user_id)
         extraction = extract(
             user_id, day, turns, imported=() if synthetic else own_imports(user_id),
-            targets=targets.open_targets(night_time), known_ids=evidence.ids(), now=night_time, chat=self._chat,
+            targets=targets.open_targets(end if as_of is None else as_of), known_ids=evidence.ids(), now=end, chat=self._chat,
         )
         if extraction.refused:
             logger.warning("sleep extraction left out %d malformed items", len(extraction.refused))
