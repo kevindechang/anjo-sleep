@@ -87,6 +87,9 @@ class TranscriptStore(Protocol):
     def get(self, item_id: str) -> PracticeTranscript | None:
         """The transcript stored under ``item_id``, or None."""
 
+    def for_night(self, night: date) -> list[PracticeTranscript]:
+        """The transcripts practised on ``night``, in scene order."""
+
 
 class JsonlTranscriptStore:
     """One person's transcript log over one file."""
@@ -113,6 +116,9 @@ class JsonlTranscriptStore:
 
     def get(self, item_id: str) -> PracticeTranscript | None:
         return self._all().get(item_id)
+
+    def for_night(self, night: date) -> list[PracticeTranscript]:
+        return sorted((item for item in self._all().values() if item.night == night), key=lambda item: item.scene)
 
     def export(self) -> dict[str, object]:
         return {"practice": [transcript_record(item) for item in self._all().values()]}

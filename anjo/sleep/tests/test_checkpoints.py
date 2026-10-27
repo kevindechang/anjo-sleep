@@ -71,15 +71,15 @@ def test_a_checkpoint_of_another_person_is_refused(tmp_path: Path) -> None:
         CheckpointRegistry(tmp_path).promote("p1", _ref("p-aaaaaaaaaaaa-n1", person="p2"))
 
 
-def test_trained_names_are_recorded_once_and_the_last_trained_night_is_kept(tmp_path: Path) -> None:
+def test_trained_names_are_recorded_once_and_their_nights_are_kept(tmp_path: Path) -> None:
     registry = CheckpointRegistry(tmp_path)
-    assert registry.last_trained_night("p1") is None
+    assert registry.trained_nights("p1") == frozenset()
     registry.record_trained("p1", "p-aaaaaaaaaaaa-n1", NIGHT)
     with pytest.raises(CheckpointError):
         registry.record_trained("p1", "p-aaaaaaaaaaaa-n1", date(2026, 10, 29))
     registry.record_trained("p1", "p-cccccccccccc-n2", date(2026, 10, 29))
     assert registry.trained_names("p1") == frozenset({"p-aaaaaaaaaaaa-n1", "p-cccccccccccc-n2"})
-    assert registry.last_trained_night("p1") == date(2026, 10, 29)
+    assert registry.trained_nights("p1") == frozenset({NIGHT, date(2026, 10, 29)})
 
 
 def test_user_ids_that_are_not_plain_names_are_refused(tmp_path: Path) -> None:

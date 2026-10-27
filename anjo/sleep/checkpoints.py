@@ -9,7 +9,7 @@ names and dates, never a person's words):
   first, then writes a new pointer file and renames it over the old one, so a promotion cut short
   at any point leaves the previous checkpoint serving (RF1).
 - ``trained.jsonl``: every adapter name a night started training under, promoted or not, so a
-  name is never reused and the cadence counts from the last trained night (§5.5).
+  name is never reused and each night's adapter number counts the nights that trained.
 """
 from __future__ import annotations
 
@@ -142,9 +142,8 @@ class CheckpointRegistry:
     def trained_names(self, user_id: str) -> frozenset[str]:
         return frozenset(name for name, _ in self._trained(user_id))
 
-    def last_trained_night(self, user_id: str) -> date | None:
-        nights = [night for _, night in self._trained(user_id)]
-        return max(nights) if nights else None
+    def trained_nights(self, user_id: str) -> frozenset[date]:
+        return frozenset(night for _, night in self._trained(user_id))
 
 
 def default_registry(environ: Mapping[str, str] | None = None) -> CheckpointRegistry:
