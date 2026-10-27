@@ -314,3 +314,25 @@ def test_history_between_returns_ids_times_and_sessions_oldest_first() -> None:
     ]
     assert get_history_between(REAL, START, END, session_ids=frozenset({"s-b"}))[0]["id"] == second
     assert get_history_between("someone-else", START, END) == []
+
+
+def test_a_committed_day_is_not_extracted_again() -> None:
+    from anjo.sleep.app.history_source import HistorySource
+    from anjo.sleep.app.storage import evidence_store
+
+    _message(REAL, "user", "I edit on paper first.", at=START + timedelta(hours=12))
+    first = _source(EchoSparkOpen()).extract_day(REAL, DAY, WINDOW)
+    calls: list[object] = []
+
+    def reworded(messages: list[dict[str, Any]]) -> ChatResult:
+        calls.append(messages)
+        items = [{"turn": 0, "kind": "lesson", "text": "Paper edits come first.", "target": None},
+                 {"turn": 0, "kind": "lesson", "text": "A second reading.", "target": None}]
+        return ChatResult(text=json.dumps({"items": items}), tool_calls=(), model=SPARK_OPEN,
+                          input_tokens=1, output_tokens=1, finish_reason="stop")
+
+    again, extraction = HistorySource(chat=reworded).record_day(REAL, DAY, WINDOW)
+
+    assert calls == [] and extraction is None
+    assert again == first
+    assert evidence_store(REAL).for_day(DAY) == first

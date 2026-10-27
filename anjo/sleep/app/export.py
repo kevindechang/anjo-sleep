@@ -1,7 +1,8 @@
 """The ``sleep`` section of the account export (Task 3).
 
 It carries everything under ``data/users/<id>/sleep/``: the evidence, the target log's table
-(targets, results, expectations and the evidence ids it counted) and the cleared-session records.
+(targets, results, expectations and the evidence ids it counted), the committed extractions and
+the cleared-session records.
 The inventory names the whole folder (``sleep/**``), so a file this section doesn't know fails
 the export instead of being left out silently; a task that adds a sleep file adds it here.
 """
@@ -16,14 +17,16 @@ from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.storage import (
     CLEARED_FILE,
     EVIDENCE_FILE,
+    EXTRACTIONS_FILE,
     SLEEP_DIR,
     TARGETS_FILE,
     evidence_store,
+    extraction_log,
     sleep_dir,
     target_store,
 )
 
-KNOWN_FILES = frozenset({EVIDENCE_FILE, TARGETS_FILE, CLEARED_FILE})
+KNOWN_FILES = frozenset({EVIDENCE_FILE, TARGETS_FILE, EXTRACTIONS_FILE, CLEARED_FILE})
 
 
 def _check_folder(folder: Path) -> None:
@@ -48,5 +51,6 @@ def export_sleep(user_id: str) -> dict[str, Any]:
     return {
         **evidence_store(user_id).export(),
         **target_store(user_id).export(),
+        **extraction_log(user_id).export(),
         "cleared_sessions": export_sessions(user_id),
     }
