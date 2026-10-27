@@ -66,11 +66,16 @@ def _with_sources(text: str, facts: Sequence[Fact]) -> str:
     return text + "\n\n" + SOURCES_HEADING + "\n" + "\n".join(f"- {source}" for source in missing)
 
 
+def _passes(text: str) -> bool:
+    return True
+
+
 def write_note(
     user_id: str, choice: Choice, result: NightResult, *, writer: NoteWriter, topic: str,
-    facts: Sequence[Fact], night: date,
+    facts: Sequence[Fact], night: date, check: Callable[[str], bool] = _passes,
 ) -> tuple[HeldNote | None, NoteOutcome]:
-    """The note and what happened: held, declined by the writer, not chosen, or a failed night."""
+    """The note and what happened: held, declined (by the writer, or by ``check`` on the final
+    text, sources and held-back line included), not chosen, or a failed night."""
     if choice.action != "hold_note" or choice.target_id is None:
         return None, "not_chosen"
     if result.status == "failed":
@@ -84,6 +89,8 @@ def write_note(
     held_back = result.status == "rejected"
     if held_back:
         text = f"{text}\n\n{HELD_BACK_LINE}"
+    if not check(text):
+        return None, "declined"
     digest = hashlib.sha256(f"{user_id}\x1f{night.isoformat()}\x1f{choice.target_id}".encode()).hexdigest()[:16]
     note = HeldNote(
         id=f"note-{digest}", user_id=user_id, night=night, target_id=choice.target_id, text=text,
@@ -94,10 +101,11 @@ def write_note(
 
 def hold(
     user_id: str, choice: Choice, result: NightResult, *, writer: NoteWriter, topic: str,
-    facts: Sequence[Fact], night: date,
+    facts: Sequence[Fact], night: date, check: Callable[[str], bool] = _passes,
 ) -> HeldNote | None:
     """The spec's ``note.hold``: the note, or None."""
-    return write_note(user_id, choice, result, writer=writer, topic=topic, facts=facts, night=night)[0]
+    return write_note(user_id, choice, result, writer=writer, topic=topic, facts=facts, night=night,
+                      check=check)[0]
 
 
 class GlimmerNoteWriter:

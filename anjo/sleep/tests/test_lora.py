@@ -19,11 +19,13 @@ from anjo.sleep.serving import config
 from anjo.sleep.train import colab_train
 from anjo.sleep.train.dataset import Dataset, Example
 from anjo.sleep.train.lora import (
+    DATASET_FILE,
     DEFAULT_TARGET_MODULES,
     LoraCfg,
     LoraCfgError,
     adapter_name,
     fresh_adapter_name,
+    TrainError,
     plan_steps,
     train_lora_with_receipt,
 )
@@ -112,6 +114,9 @@ class _Runner:
                 "gpu": "A100-80GB"}
 
 
+REVISION = "a" * 40
+
+
 def test_train_lora_runs_the_job_publishes_the_adapter_and_records_steps(tmp_path: Path) -> None:
     runner, published = _Runner(), []
     prev = CheckpointRef("p-aaaaaaaaaaaa-n1", "p1", date(2026, 10, 27), "modal-volume://x/p-aaaaaaaaaaaa-n1", None)
@@ -124,7 +129,7 @@ def test_train_lora_runs_the_job_publishes_the_adapter_and_records_steps(tmp_pat
     ckpt, receipt = train_lora_with_receipt(
         prev, _examples(3), LoraCfg(), runner, person_id="p1", night=NIGHT, name=name,
         workdir=tmp_path / "work", adapter_cache=cache,
-        publish=lambda folder, n: published.append((folder.name, n)),
+        publish=lambda folder, n: published.append((folder.name, n)), revision=REVISION,
     )
     job, inputs, timeout = runner.calls[0]
     assert job == "train_lora" and timeout > 0
@@ -143,7 +148,7 @@ def test_a_clean_slate_trains_at_the_full_rate_from_no_parent(tmp_path: Path) ->
     ckpt, _ = train_lora_with_receipt(
         None, _examples(3), LoraCfg(), runner, person_id="p1", night=NIGHT,
         name=adapter_name("p1", 1, 0), workdir=tmp_path / "work", adapter_cache=tmp_path / "a",
-        publish=lambda folder, n: None,
+        publish=lambda folder, n: None, revision=REVISION,
     )
     settings = runner.calls[0][1]["config"]
     assert isinstance(settings, dict)
@@ -189,3 +194,29 @@ def test_training_script_imports_without_the_gpu_stack() -> None:
     done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == []
+
+
+@pytest.mark.parametrize("revision", [None, "", "  "])
+def test_a_missing_revision_is_refused_before_the_runner_starts(tmp_path: Path, revision: str | None) -> None:
+    runner = _Runner()
+    with pytest.raises(TrainError, match="revision"):
+        train_lora_with_receipt(None, _examples(3), LoraCfg(), runner, person_id="p1", night=NIGHT,
+                                name=adapter_name("p1", 1, 0), workdir=tmp_path / "work",
+                                adapter_cache=tmp_path / "a", publish=lambda folder, n: None, revision=revision)
+    assert runner.calls == [] and not (tmp_path / "work" / DATASET_FILE).exists()
+
+
+def test_the_plain_text_dataset_is_deleted_whatever_the_run_did(tmp_path: Path) -> None:
+    class Failing(_Runner):
+        def run(self, job: str, inputs: Mapping[str, object], *, timeout_s: float) -> Mapping[str, object]:
+            assert Path(str(inputs["dataset_path"])).exists()  # it is there while the job runs
+            raise RuntimeError("the VM went away")
+
+    for runner in (_Runner(), Failing()):
+        try:
+            train_lora_with_receipt(None, _examples(3), LoraCfg(), runner, person_id="p1", night=NIGHT,
+                                    name=adapter_name("p1", 1, len(runner.calls)), workdir=tmp_path / "work",
+                                    adapter_cache=tmp_path / "a", publish=lambda folder, n: None, revision=REVISION)
+        except RuntimeError:
+            pass
+        assert not (tmp_path / "work" / DATASET_FILE).exists()

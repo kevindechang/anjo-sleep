@@ -51,11 +51,15 @@ class PracticeError(RuntimeError):
     """Spark Open's scenes couldn't be read."""
 
 
+NORMAL_STOPS: Final = frozenset({"stop", "eos", "end_turn"})
+
+
 @dataclass(frozen=True)
 class PracticeRun:
     transcripts: tuple[PracticeTranscript, ...]
     f_ids: tuple[str, ...]
     dropped_cued: int
+    dropped_cut: int = 0  # replies that ended without a normal stop (cut at max tokens): never targets
 
 
 def has_cue(message: str) -> bool:
@@ -135,21 +139,26 @@ class MinimalPractice:
         cue_free = [message for message in messages if not has_cue(message)]
         f_text = "## What you know about this person\n" + _known(f)
         f_ancestry = union(item.ancestry for item in f)
-        transcripts = [
+        scenes = [
             self._scene(user_id, night, index, message, f_text, f_ancestry, tuple(e.id for e in f), at)
             for index, message in enumerate(cue_free)
         ]
-        return PracticeRun(tuple(transcripts), tuple(item.id for item in f), len(messages) - len(cue_free))
+        transcripts = tuple(scene for scene in scenes if scene is not None)
+        return PracticeRun(transcripts, tuple(item.id for item in f), len(messages) - len(cue_free),
+                           dropped_cut=len(scenes) - len(transcripts))
 
     def _scene(
         self, user_id: str, night: date, index: int, message: str, f_text: str,
         f_ancestry: frozenset[str] | None, f_ids: tuple[str, ...], at: datetime,
-    ) -> PracticeTranscript:
+    ) -> PracticeTranscript | None:
         context, c_ancestry = self._snapshot(user_id, message)  # before the reply exists
-        reply = self._client.complete(
+        answer = self._client.complete(
             None, [{"role": "system", "content": f_text}, {"role": "user", "content": message}],
             temperature=REPLY_TEMPERATURE, seed=_seed(self._seed, user_id, night.isoformat(), index),
-        ).text.strip()
+        )
+        if answer.finish_reason not in NORMAL_STOPS:  # cut short: a half reply never becomes a target
+            return None
+        reply = answer.text.strip()
         digest = hashlib.sha256(f"{user_id}\x1f{night.isoformat()}\x1f{index}".encode()).hexdigest()[:16]
         return PracticeTranscript(
             id=f"pr-{digest}", person_id=user_id, night=night, scene=index, message=message, reply=reply,

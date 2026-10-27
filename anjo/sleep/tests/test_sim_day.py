@@ -15,7 +15,8 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.provenance import GLIMMER
-from anjo.sleep.sim.day import TurnFailed, run_day
+from anjo.sleep.model_api import ChatResult
+from anjo.sleep.sim.day import SparkSim, TurnFailed, run_day
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps
 
 PERSONA = load_person_file(Path(__file__).parents[1] / "personas" / "founder.json").visible
@@ -100,3 +101,13 @@ def test_the_dev_api_transport_reads_the_stream_and_fails_a_turn_it_cannot_answe
     with pytest.raises(TurnFailed):
         transport.send("sim-founder-d1", "And then?", cleared=True)
     assert calls == ["/api/sleep/dev/sessions", "/api/chat/s-1/message", "/api/chat/s-1/message"]
+
+
+def test_spark_sim_meters_the_tokens_it_spends() -> None:
+    def chat(model: object, messages: object, tools: object, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+        return ChatResult(text="A line.", tool_calls=(), model="m", input_tokens=100, output_tokens=20, finish_reason="stop")
+
+    sim = SparkSim(chat=chat)
+    for n in range(2):
+        assert sim.complete("system", [{"role": "user", "content": "go"}], temperature=0.9, seed=n) == "A line."
+    assert sim.tokens == (200, 40)

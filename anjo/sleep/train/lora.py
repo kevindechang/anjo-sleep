@@ -207,19 +207,24 @@ def train_lora_with_receipt(
         raise TrainError("a warm start is only ever from the person's own adapter")
     if not data.examples:
         raise TrainError("a training night has at least one example")
+    if revision is None or not revision.strip():
+        raise TrainError("the training job names Glimmer's revision; refused before any GPU is paid for")
     warm = prev is not None and cfg.warm_start
     prev_dir = adapter_cache / prev.id if warm and prev is not None else None
     if prev_dir is not None:
         config.check_adapter(prev_dir, prev_dir.name)  # the last promoted adapter, whole (RF1)
     workdir.mkdir(parents=True, exist_ok=True)
     dataset_path = workdir / DATASET_FILE
-    dataset_path.write_text(data.to_jsonl(), encoding="utf-8")
     settings = training_config(cfg, len(data.examples), warm=warm, revision=revision)
-    outputs = runner.run(JOB, {
-        "person_id": person_id, "adapter_name": name, "dataset_path": str(dataset_path),
-        "config": settings, "prev_adapter_dir": None if prev_dir is None else str(prev_dir),
-        "workdir": str(workdir),
-    }, timeout_s=timeout_s)
+    try:  # the dataset is the person's words in plain text: it never outlives the run
+        dataset_path.write_text(data.to_jsonl(), encoding="utf-8")
+        outputs = runner.run(JOB, {
+            "person_id": person_id, "adapter_name": name, "dataset_path": str(dataset_path),
+            "config": settings, "prev_adapter_dir": None if prev_dir is None else str(prev_dir),
+            "workdir": str(workdir),
+        }, timeout_s=timeout_s)
+    finally:
+        dataset_path.unlink(missing_ok=True)
     returned = outputs.get("adapter_dir")
     if not isinstance(returned, str):
         raise TrainError("the training job returned no adapter folder")

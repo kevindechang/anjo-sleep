@@ -27,8 +27,9 @@ import math
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.serving import config
@@ -39,9 +40,9 @@ from anjo.sleep.train.lora import DATASET_FILE, JOB
 COLAB_BIN: Final = Path.home() / ".local" / "bin" / "colab"
 AUTH: Final = ("--auth", "oauth2")
 GPU: Final = "A100"
-# Compute units an hour for an A100-80GB high-RAM VM (Kevin's figure, 2026-10-27; `colab usage`
-# on the first session checks it). The hold is the job's hard timeout at this rate.
-A100_CU_PER_HOUR: Final = 5.3
+# Compute units an hour for an A100-80GB high-RAM VM: spec §11.5 (MIND's compute line); `colab
+# usage` on the first session checks it. The hold is the job's hard timeout at this rate.
+A100_CU_PER_HOUR: Final = 7.5
 POOL: Final = "colab_cu"
 REMOTE_DIR: Final = "/content/anjo"
 SCRIPT: Final = Path(colab_train.__file__)
@@ -116,6 +117,11 @@ def _receipt(path: Path) -> dict[str, object]:
     return receipt
 
 
+@dataclass
+class _Vm:
+    state: Literal["none", "maybe", "up"] = "none"
+
+
 class ColabRunner:
     """``GpuRunner`` for the ``train_lora`` job on a Colab A100."""
 
@@ -147,21 +153,28 @@ class ColabRunner:
         session = f"anjo-sleep-{name}"
         out = Path(str(inputs["workdir"])) / "out"
         started = self._clock()
+        vm = _Vm()
         try:
-            receipt = self._train(session, uploads, inputs, out, exec_s)
+            receipt = self._train(vm, session, uploads, inputs, out, exec_s)
         finally:
-            elapsed = self._finish(session, reservation, started)
+            elapsed = self._finish(vm, session, reservation, started)
         return {
             **receipt, "adapter_dir": str(out), "gpu_minutes": elapsed / 60.0,
             "compute_units": elapsed / 3600.0 * A100_CU_PER_HOUR,
         }
 
     def _train(
-        self, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object],
+        self, vm: _Vm, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object],
         out: Path, exec_s: float,
     ) -> dict[str, object]:
         cli = self._cli
-        cli.call("new", "-s", session, "--gpu", GPU, "--high-mem", timeout_s=NEW_TIMEOUT_S)
+        vm.state = "maybe"  # a `new` that times out may still have made the VM
+        try:
+            cli.call("new", "-s", session, "--gpu", GPU, "--high-mem", timeout_s=NEW_TIMEOUT_S)
+        except (ColabError, OSError):
+            vm.state = "none"
+            raise
+        vm.state = "up"
         cli.call("install", "-s", session, *self._packages, timeout_s=INSTALL_TIMEOUT_S)
         for local, remote in uploads:
             cli.call("upload", "-s", session, str(local), remote, timeout_s=UPLOAD_TIMEOUT_S)
@@ -181,13 +194,23 @@ class ColabRunner:
                      timeout_s=DOWNLOAD_TIMEOUT_S)
         return _receipt(out / colab_train.RECEIPT)
 
-    def _finish(self, session: str, reservation: Reservation, started: float) -> float:
-        """Stop the VM, then settle what it ran for. A failed stop settles the whole hold."""
+    def _finish(self, vm: _Vm, session: str, reservation: Reservation, started: float) -> float:
+        """Stop the VM, then settle what it ran for.
+
+        - A VM that ``new`` never made: the stop is only tried, and the time spent is settled; the
+          error ``new`` raised is the one that propagates.
+        - A ``new`` that timed out may have made one: it is stopped, and the whole hold settled.
+        - Any other failed stop settles the whole hold and says to stop the VM by hand.
+        """
         try:
             self._cli.call("stop", "-s", session, timeout_s=STOP_TIMEOUT_S)
         except (ColabError, subprocess.TimeoutExpired, OSError) as error:
-            reservation.settle(reservation.bound.amount)
-            raise ColabError(f"stopping {session} failed; stop it by hand before anything else") from error
+            if vm.state != "none":
+                reservation.settle(reservation.bound.amount)
+                raise ColabError(f"stopping {session} failed; stop it by hand before anything else") from error
         elapsed = max(0.0, self._clock() - started)
-        reservation.settle(elapsed / 3600.0 * A100_CU_PER_HOUR)
+        if vm.state == "maybe":
+            reservation.settle(reservation.bound.amount)
+        else:
+            reservation.settle(elapsed / 3600.0 * A100_CU_PER_HOUR)
         return elapsed

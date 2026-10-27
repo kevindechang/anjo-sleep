@@ -63,17 +63,10 @@ def test_no_note_delivered_into_cleared_session(monkeypatch: pytest.MonkeyPatch)
 
 def test_a_note_that_trips_the_reply_check_is_declined() -> None:
     from anjo.evals.crisis_reply_cases import REPLY_TRIPS
-    from anjo.sleep.app.delivery import CheckedNoteWriter
+    from anjo.sleep.app.delivery import passes_reply_check
 
-    class Writer:
-        def __init__(self, text: str) -> None:
-            self.text = text
-
-        def write(self, user_id: str, topic: str, facts: Any) -> str | None:
-            return self.text
-
-    assert CheckedNoteWriter(Writer("I looked into the pilot.")).write("p1", "t", ()) == "I looked into the pilot."
-    assert CheckedNoteWriter(Writer(REPLY_TRIPS[0][1])).write("p1", "t", ()) is None  # a known trip, by index
+    assert passes_reply_check("I looked into the pilot.") is True
+    assert passes_reply_check(REPLY_TRIPS[0][1]) is False  # a known trip, by index
 
 
 def _night_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -104,10 +97,16 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     gates: Any = deps.gates
     note: Any = deps.note_writer
     practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
-    clients = {gates._client, note._inner._client, practice._client}
+    clients = {gates._client, note._client, practice._client}
     assert len(clients) == 1  # practice, the gates and the note share one server
     assert next(iter(clients)).precision == served == config.SERVING.name
     assert set(gates.for_person("synthetic-founder")) == {"general", "collapse", "safety"}
+    from anjo.sleep.app.delivery import passes_reply_check
+    from anjo.sleep.budget import LEDGER_NAME
+
+    gpu: Any = deps.gpu
+    assert deps.note_check is passes_reply_check  # the final note text, sources included
+    assert deps.ledger is not None and deps.ledger.path.name == LEDGER_NAME and gpu._ledger is deps.ledger
 
 
 def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -127,7 +126,7 @@ def test_the_safety_floor_holds_on_main() -> None:
     assert cases.flag("I looked into the pilot.") is None
 
 
-def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import sim_transport
     from anjo.sleep.app.ancestry import NewestReply
 
@@ -137,6 +136,7 @@ def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pyte
         seen.update(kw, person=person, day_index=day_index)
         return "day"
 
+    _night_env(monkeypatch, tmp_path)
     monkeypatch.setattr(sim_transport, "run_day", run_day)
     monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
     monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
@@ -144,3 +144,35 @@ def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pyte
     assert day == "day"
     assert isinstance(seen["replies"], NewestReply) and seen["replies"]._user_id == "synthetic-founder"
     assert seen["person"].person_id == "founder" and seen["day_index"] == 2
+
+
+def test_the_simulated_day_holds_its_spark_spend_and_settles_what_it_metered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from anjo.sleep.app import sim_transport
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.budget import LEDGER_NAME
+    from anjo.sleep.evidence.jsonl import PLAIN, read_records
+    from anjo.sleep.model_api import ChatResult
+    from anjo.sleep.sim.day import SparkSim
+
+    def chat(*a: Any, **kw: Any) -> ChatResult:
+        return ChatResult(text="A line.", tool_calls=(), model="m", input_tokens=30_000, output_tokens=8_000,
+                          finish_reason="stop")
+
+    def run_day(person: Any, day_index: int, seed: int, **kw: Any) -> str:
+        kw["model"].complete("system", [{"role": "user", "content": "go"}], temperature=0.9, seed=seed)
+        return "day"
+
+    _night_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(sim_transport, "SparkSim", lambda: SparkSim(chat=chat))
+    monkeypatch.setattr(sim_transport, "run_day", run_day)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
+    assert day == "day"
+    reserve, settle = read_records(data_root() / SLEEP_DIR / LEDGER_NAME, PLAIN)
+    assert reserve["op"] == "reserve" and reserve["pools"] == ["baseten_sleep_usd"]
+    spent = (30_000 * 0.2 + 8_000 * 0.6) / 1e6  # $0.2/M in, $0.6/M out
+    assert reserve["amount"] > spent  # the worst case covers the call made
+    assert settle["op"] == "settle" and settle["amount"] == pytest.approx(spent)

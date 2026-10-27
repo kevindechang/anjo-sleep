@@ -12,7 +12,8 @@ it off the serving path). Everything else is here:
 - probes: a synthetic person's were sealed once (``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``);
   a real person's are written from the day's evidence by Muse Spark and sealed before training;
 - the safety gate on Anjo's crisis corpus and reply check (``safety_gate``);
-- the held note through outreach (``delivery``).
+- the held note through outreach (``delivery``), its final text through the reply check;
+- every paid step's hold on the sleep host's budget ledger.
 
 Homework (Task 7), notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
 """
@@ -28,7 +29,7 @@ from typing import Final
 from anjo.sleep import baseten_api, meta_api
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL
-from anjo.sleep.app.delivery import CheckedNoteWriter, OutreachNotifier
+from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource
 from anjo.sleep.app.intentions import LedgerIntentions
@@ -153,6 +154,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     night_settings, night_prices = settings(), prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
+    ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
 
     def practice(chat: ChatFn, night: date) -> MinimalPractice:
         return MinimalPractice(chat=chat, client=client, snapshot=context.snapshot, seed=night_settings.seed)
@@ -165,9 +167,10 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         chooser=StateChooser(), policy=build_policy(), practice=practice,
         decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(client, field_domains(options.personas)),
         registry=registry, notifier=OutreachNotifier(),
-        note_writer=CheckedNoteWriter(GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed)),
+        note_writer=GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed),
+        note_check=passes_reply_check, ledger=ledger,
         logs=_logs_root, is_synthetic=is_synthetic, settings=night_settings, prices=night_prices,
-        gpu=ReservedGpu(Ledger(data_root() / SLEEP_DIR / LEDGER_NAME), options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
+        gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(),
     )
 

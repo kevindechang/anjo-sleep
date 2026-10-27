@@ -12,7 +12,7 @@ import it.
   ``NoNotice``.
 - ``Expectations`` (Task 16): ``NoExpectations`` records nothing.
 
-The chooser is Task 7a's port; ``RuleChooser`` stands in until it lands.
+The chooser is her own (Task 7a's ``StateChooser``); ``RuleChooser`` stays as the labeled fallback.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Final, Literal, Protocol
 
+from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
@@ -268,6 +269,10 @@ class NightDeps:
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)
     timer: Callable[[], float] | None = None
     hosted_in_training: bool = False
+    # Every paid step holds its worst case here first (holds.py); None holds nothing (tests).
+    ledger: Ledger | None = None
+    # The app's reply-side crisis check on the note's final text, sources and all; False declines it.
+    note_check: Callable[[str], bool] = field(default=lambda text: True)
 
 
 @dataclass(frozen=True)

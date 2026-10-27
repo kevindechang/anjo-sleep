@@ -85,3 +85,17 @@ def test_trained_names_are_recorded_once_and_their_nights_are_kept(tmp_path: Pat
 def test_user_ids_that_are_not_plain_names_are_refused(tmp_path: Path) -> None:
     with pytest.raises(CheckpointError):
         CheckpointRegistry(tmp_path).history("../p1")
+
+
+def test_previous_skips_a_rolled_back_checkpoint(tmp_path: Path) -> None:
+    registry = CheckpointRegistry(tmp_path)
+    n1, n2, n3 = (_ref(f"p-aaaaaaaaaaa{i}-n{i}", night=date(2026, 10, 27 + i)) for i in (1, 2, 3))
+    registry.promote("p1", n1)
+    registry.promote("p1", n2)  # a bad night
+    registry.rollback("p1", n1)
+    assert registry.current("p1") == n1 and registry.previous("p1") is None
+    registry.promote("p1", n3)
+    assert registry.current("p1") == n3 and registry.previous("p1") == n1
+    assert registry.history("p1") == [n1, n3]
+    with pytest.raises(CheckpointError):
+        registry.rollback("p1", _ref("p-bbbbbbbbbbbb-n9"))  # only to a checkpoint that served

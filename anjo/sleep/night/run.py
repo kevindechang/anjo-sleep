@@ -6,7 +6,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 2. ``extract``: the day's evidence and targets (Task 3). ``notice`` (2b, Task 17) is a no-op port.
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
-4. ``choose``: her chooser (Task 7a's port; ``RuleChooser`` until then) picks at most one action
+4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
    with the night's allowance. A study runs homework (Task 7) and marks its revision acted; no
    study is offered while the homework port is a no-op. ``hold_note`` is written at step 10.
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
@@ -41,6 +41,7 @@ from anjo.sleep.night.deps import (
     NightDeps,
     StudyOutcome,
 )
+from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.mind import receipt, snapshot
 from anjo.sleep.sim.day import DayRun
@@ -48,7 +49,7 @@ from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder,
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.ports import EvidenceStore, TargetStore
-from anjo.sleep.stops import Cancelled
+from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.train.dataset import Dataset, build_night_dataset
 from anjo.sleep.train.lora import fresh_adapter_name
 from anjo.sleep.types import (
@@ -75,6 +76,13 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "gates": ("existing", "crisis check"), "promote": ("new", None), "note": ("existing", "outreach"),
     "finish": ("new", None),
 }
+# Worst cases for the paid steps' holds (holds.py): Spark Open calls per step, and the rest.
+EXTRACT_MAX_CALLS: Final = 2  # the day's one call, and one retry
+BRIEF_MAX_CALLS: Final = 2  # the served and the training brief
+SCENES_MAX_CALLS: Final = 1
+PROBES_WORST_USD: Final = 0.50  # Muse Spark writing a real person's night probes (about 8 calls)
+NOTE_MAX_S: Final = 300.0  # one Glimmer call on the serving GPU, inside the client's request timeout
+
 GPU_STEPS: Final = ("practice", "dataset", "train", "gates", "promote")
 
 
@@ -220,6 +228,15 @@ class NightRunner:
 
     # ── steps 1 to 4 and the brief ──────────────────────────────────────────
 
+    def _job(self, p: _Night, step: str) -> str:
+        return f"night:{step}:{p.uid}:{p.night.isoformat()}"
+
+    def _metered(self, p: _Night, part: str, step: str, calls: int) -> Any:
+        """Hold ``step``'s Spark Open worst case on ``baseten_sleep_usd``; settle what ``part`` metered."""
+        before = p.spend.parts().get(part, 0.0)  # type: ignore[call-overload]
+        return held(self.deps.ledger, self._job(p, step), ("baseten_sleep_usd",), usd(spark_worst_usd(self.deps.prices, calls)),
+                    lambda: p.spend.parts().get(part, 0.0) - before)  # type: ignore[call-overload]
+
     def _close_day(self, p: _Night) -> Mapping[str, Any]:
         start, end = p.window
         if end <= start:
@@ -229,7 +246,8 @@ class NightRunner:
     def _extract(self, p: _Night) -> Mapping[str, Any]:
         p.spend.part = "extract"
         source = self.deps.extractor(p.spend.wrap_extract(self.deps.extract_chat))
-        items = source.extract_day(p.uid, p.night, p.window)
+        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS):
+            items = source.extract_day(p.uid, p.night, p.window)
         since = self._since(p)
         fresh = [
             item for item in p.store.trainable(p.night)
@@ -256,7 +274,12 @@ class NightRunner:
         return {"questions_opened": notice.notice(p.uid, p.night, new) if new else 0}
 
     def _probes(self, p: _Night) -> Mapping[str, Any]:
-        sealed, how = self.deps.probes.register(p.uid, p.night, p.store)
+        if self.deps.is_synthetic(p.uid):  # sealed once: nothing is called tonight
+            sealed, how = self.deps.probes.register(p.uid, p.night, p.store)
+        else:  # Muse Spark writes them, unmetered: the hold is settled whole
+            with held(self.deps.ledger, self._job(p, "probes"), ("meta_usd",), usd(PROBES_WORST_USD),
+                      lambda: PROBES_WORST_USD):
+                sealed, how = self.deps.probes.register(p.uid, p.night, p.store)
         p.sealed = list(sealed)
         return {"sealed": len(p.sealed), "how": how}
 
@@ -323,7 +346,8 @@ class NightRunner:
             outcome = deps.homework.study(p.uid, target, p.night, p.wonder)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
-        p.targets.mark_acted(target.id, target.revision)
+        if outcome.stopped is None:  # a study the budget stopped didn't run: the want stays
+            p.targets.mark_acted(target.id, target.revision)
         if outcome.evidence:
             p.store.add(list(outcome.evidence))
         if outcome.result is not None:
@@ -352,8 +376,9 @@ class NightRunner:
         if not new:
             return {"folded": 0, "why": "no evidence since the last fold"}
         p.spend.part = "brief"
-        briefs.fold(p.night, new, at=p.end, hosted_in_training=self.deps.hosted_in_training,
-                    chat=p.spend.wrap_chat(self.deps.spark_chat))
+        with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS):
+            briefs.fold(p.night, new, at=p.end, hosted_in_training=self.deps.hosted_in_training,
+                        chat=p.spend.wrap_chat(self.deps.spark_chat))
         return {"folded": len(new)}
 
     # ── the GPU steps ────────────────────────────────────────────────────────
@@ -371,10 +396,12 @@ class NightRunner:
         started = self._timer()
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
-        run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
+        with self._metered(p, "practice", "practice", SCENES_MAX_CALLS):
+            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
-        return {"scenes": len(run.transcripts), "dropped_cued": run.dropped_cued, "f_items": len(run.f_ids),
+        return {"scenes": len(run.transcripts), "dropped_cued": run.dropped_cued, "dropped_cut": run.dropped_cut,
+                "f_items": len(run.f_ids),
                 "homework": None, "seconds": self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:
@@ -455,16 +482,29 @@ class NightRunner:
         interim = NightResult(status=p.status or "nothing_new", failed_at=None, checkpoint=p.checkpoint,
                               gates=p.gates, choices=tuple(p.choices), cost_usd=0.0, cost_parts={},
                               log_path=p.log.path)
-        note, outcome = write_note(
-            p.uid, choice, interim, writer=self.deps.note_writer, topic=self._topic(p, target_id),
-            facts=self._facts(p, target_id), night=p.night,
-        )
-        pushed = False
+        rate, started = self.deps.prices.serve_gpu_per_hour, self._timer()
+        try:  # the note is optional: whatever fails here, the night keeps its status and checkpoint
+            with held(self.deps.ledger, self._job(p, "note"), ("modal_usd",), usd(rate * NOTE_MAX_S / 3600.0),
+                      lambda: rate * max(0.0, self._timer() - started) / 3600.0):
+                note, outcome = write_note(
+                    p.uid, choice, interim, writer=self.deps.note_writer, topic=self._topic(p, target_id),
+                    facts=self._facts(p, target_id), night=p.night, check=self.deps.note_check,
+                )
+        except Exception as error:
+            return self._note_failed(choice, target_id, "write", error)
         if note is not None:
-            self.deps.notifier.queue(p.uid, note.text, NOTE_SOURCE)
-            pushed = self.deps.notifier.push(p.uid, note.text)
+            try:
+                self.deps.notifier.queue(p.uid, note.text, NOTE_SOURCE)
+            except Exception as error:
+                return self._note_failed(choice, target_id, "queue", error)
+        pushed, push_error = False, None
+        if note is not None:
             p.actions_left -= 1
             p.paid_actions += 1
+            try:
+                pushed = self.deps.notifier.push(p.uid, note.text)
+            except Exception as error:  # the note is queued; only its announcement failed
+                push_error = _note_error("push", error)
         if outcome in ("held", "declined"):
             p.targets.settle(target_id)
         done: dict[str, Any] = {
@@ -472,9 +512,17 @@ class NightRunner:
             "pushed": pushed, "second_offer": choice is not p.note_choice,
             "receipt": receipt.record(choice, "declined" if outcome == "declined" else "ran" if note else None),
         }
+        if push_error is not None:
+            done["note_error"] = push_error
         if note is not None:
             done.update({"note_id": note.id, "sources": len(note.sources), "held_back": note.held_back})
         return done
+
+    def _note_failed(self, choice: Choice, target_id: str, stage: str, error: Exception) -> Mapping[str, Any]:
+        """A note that couldn't be written or queued: recorded by stage and error type, never words."""
+        outcome: receipt.Outcome = "budget" if isinstance(error, BudgetStop) else "failed"
+        return {"outcome": "note_failed", "target_id": target_id, "note_error": _note_error(stage, error),
+                "receipt": receipt.record(choice, outcome)}
 
     def _topic(self, p: _Night, target_id: str) -> str:
         targets: Sequence[Target] = p.targets.open_targets(p.end)
@@ -506,6 +554,10 @@ class NightRunner:
 
 def _id(ckpt: CheckpointRef | None) -> str | None:
     return None if ckpt is None else ckpt.id
+
+
+def _note_error(stage: str, error: BaseException) -> str:
+    return f"{stage}: {type(error).__name__}"
 
 
 def _paid_within(history: Sequence[Mapping[str, Any]], end: datetime, span: timedelta) -> int:

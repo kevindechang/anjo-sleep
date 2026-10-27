@@ -57,7 +57,20 @@ def test_the_trainer_deletes_the_plain_text_dataset_even_on_failure(tmp_path: Pa
             raise RuntimeError("the VM went away")
 
     dataset = _examples(3)
-    trainer = LoraTrainer(Failing(), root=tmp_path, publish=lambda folder, name: None, revision=None)  # type: ignore[arg-type]
+    trainer = LoraTrainer(Failing(), root=tmp_path, publish=lambda folder, name: None, revision="a" * 40)  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="went away"):
         trainer.train("u1", date(2026, 10, 28), None, dataset, "p-aaaaaaaaaaaa-n1")
     assert not list(tmp_path.rglob("dataset.jsonl"))
+
+
+def test_a_failed_note_still_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.tests.night_fakes import NIGHT, World, thread
+    from anjo.sleep.tests.test_night_run import AlwaysNote, Raising
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    world = World(tmp_path)
+    world.plan("u1", NIGHT)
+    world.targets("u1").upsert(thread("u1"))
+    monkeypatch.setattr("anjo.sleep.tests.test_night_cli.never",
+                        lambda trainer, options: world.deps(chooser=AlwaysNote(), note_writer=Raising()))
+    assert main([*BASE, "--user", "u1", "--persona", "founder"]) == 0

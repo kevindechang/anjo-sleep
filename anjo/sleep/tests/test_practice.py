@@ -162,3 +162,16 @@ def test_sft_context_never_contains_its_target(tmp_path: Path) -> None:
         assert transcript.context is not None
         assert transcript.reply not in transcript.context
         assert "TARGET-REPLY" not in transcript.context
+
+
+def test_a_practice_reply_cut_at_max_tokens_never_becomes_a_target() -> None:
+    class Cut(Glimmer):
+        def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float, seed: int | None = None) -> ChatResult:
+            reply = super().complete(adapter, messages, temperature=temperature, seed=seed)
+            reason = "length" if len(self.calls) % 2 == 0 else "stop"
+            return ChatResult(text=reply.text, tool_calls=(), model="m", input_tokens=1, output_tokens=1,
+                              finish_reason=reason)
+
+    run = _practice(SparkScenes(_scenes()), Cut()).run("p1", NIGHT, _evidence(), None, at=AT)
+    assert len(run.transcripts) == 4 and run.dropped_cut == 4
+    assert all(t.scene % 2 == 0 for t in run.transcripts)  # the stopped ones (calls 1, 3, 5, 7)

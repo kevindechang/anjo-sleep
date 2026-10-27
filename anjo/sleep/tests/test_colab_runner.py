@@ -116,10 +116,10 @@ def test_colab_runner_reserves_worst_case_bound(tmp_path: Path) -> None:
     _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     reserve, settle = _events(ledger)
     assert reserve["pools"] == ["colab_cu"]
-    assert reserve["rate_per_hour"] == A100_CU_PER_HOUR == 5.3
+    assert reserve["rate_per_hour"] == A100_CU_PER_HOUR == 7.5  # spec §11.5, MIND's compute line
     assert reserve["timeout_s"] == TIMEOUT_S
-    assert reserve["amount"] == pytest.approx(TIMEOUT_S / 3600 * 5.3)
-    assert settle["amount"] == pytest.approx(0.25 * 5.3)  # what the VM ran for
+    assert reserve["amount"] == pytest.approx(TIMEOUT_S / 3600 * 7.5)
+    assert settle["amount"] == pytest.approx(0.25 * 7.5)  # what the VM ran for
     # Every call's timeout together fits inside the job's own, so the hold is the worst case.
     assert sum(timeout for _, timeout in fake.calls) <= TIMEOUT_S
 
@@ -180,3 +180,31 @@ def test_every_runner_call_passes_a_finite_timeout(tmp_path: Path) -> None:
     _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert all(0 < timeout < math.inf for _, timeout in fake.calls)
     assert fake.commands() == ["new", "install", "upload", "exec", "download", "download", "download", "stop"]
+
+
+class Both(FakeColab):
+    """``new`` and then ``stop`` both fail: ``new`` exits 1, or times out."""
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        command = list(args)[3]
+        if command == "stop":
+            self.calls.append((list(args), timeout_s))
+            return subprocess.CompletedProcess(list(args), 1, "", "no such session")
+        return super().__call__(args, timeout_s)
+
+
+def test_a_failed_new_settles_what_ran_and_raises_its_own_error(tmp_path: Path) -> None:
+    fake, ledger = Both("new"), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabError) as raised:
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert "stop it by hand" not in str(raised.value) and "new" in str(raised.value)
+    assert fake.commands() == ["new", "stop"]  # the stop is still tried
+    assert ledger.used("colab_cu") == pytest.approx(0.25 * A100_CU_PER_HOUR)  # 15 minutes, not the hold
+
+
+def test_a_new_that_timed_out_tries_the_stop_and_settles_the_whole_hold(tmp_path: Path) -> None:
+    fake, ledger = FakeColab("new", timeout=True), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(subprocess.TimeoutExpired):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.commands() == ["new", "stop"]
+    assert ledger.used("colab_cu") == pytest.approx(Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount)  # a VM may have run

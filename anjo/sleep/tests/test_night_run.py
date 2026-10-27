@@ -11,6 +11,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from anjo.sleep.budget import CAPS, Ledger
+from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.night.deps import InquiryOutcome, NightSettings
 from anjo.sleep.night.meter import WonderMeter
@@ -500,3 +504,90 @@ def test_the_rolling_allowance_counts_paid_actions_on_the_night_clock(tmp_path: 
     world.targets("p1").upsert(replace(thread("p1"), id="p1-t3", label="the hire"))
     _one(world, chooser=later, settings=settings, homework=Homework(world))
     assert later.contexts[0].allowance.actions_left == 0  # 3 - (2 + 2) per 24 hours, never below 0
+
+
+# ── review fixes ──────────────────────────────────────────────────────────────
+
+
+class Raising:
+    def write(self, user_id: str, topic: str, facts: Any) -> str | None:
+        raise RuntimeError("Glimmer is down")
+
+
+def test_a_note_writer_failure_keeps_the_night_promoted(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    result = _one(world, chooser=AlwaysNote(), note_writer=Raising())
+    assert result.status == "promoted" and result.checkpoint is not None and result.failed_at is None
+    note = step(result.log_path, "note")
+    assert note["status"] == "ok" and note["outcome"] == "note_failed" and note["note_error"] == "write: RuntimeError"
+    assert world.notifier.queued == [] and summary(result.log_path)["status"] == "promoted"
+
+
+def test_a_push_failure_keeps_the_night_promoted_and_the_note_queued(tmp_path: Path) -> None:
+    class PushDown(type(World(tmp_path).notifier)):  # type: ignore[misc]
+        def push(self, user_id: str, message: str) -> bool:
+            raise ConnectionError("push service down")
+
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    result = _one(world, chooser=AlwaysNote(), notifier=PushDown(world))
+    note = step(result.log_path, "note")
+    assert result.status == "promoted" and note["outcome"] == "held" and note["note_error"] == "push: ConnectionError"
+    assert note["pushed"] is False
+
+
+def test_the_crisis_check_reads_the_final_text_with_sources(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    result = _one(world, homework=Homework(world), note_check=lambda text: SOURCE_URL not in text)
+    assert step(result.log_path, "note")["outcome"] == "note_declined" and world.notifier.queued == []
+
+
+def test_a_budget_stopped_study_leaves_its_revision_unacted(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    settings = NightSettings(token_cap=16384, min_new_examples=1, homework_call_cap=2)
+    _one(world, settings=settings, homework=Homework(world, calls=3))
+    [target] = world.targets("p1").open_targets(window(NIGHT)[1])
+    assert target.acted_revision == 0  # nothing ran to completion, so the want stays
+
+
+def _tight(tmp_path: Path, **caps: float) -> Ledger:
+    return Ledger(tmp_path / "budget.jsonl", caps={**CAPS, **caps})  # type: ignore[dict-item]
+
+
+def test_a_pool_without_room_stops_extraction_before_any_model_call(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    result = _one(world, ledger=_tight(tmp_path, baseten_sleep_usd=1e-6, baseten_mind_usd=1e-6))
+    assert (result.status, result.failed_at) == ("failed", "extract")
+    assert "BudgetStop" in step(result.log_path, "extract")["error"]
+    assert not [e for e in world.events if e[0] == "extract"]  # no model call was made
+
+
+def test_every_paid_step_settles_its_hold_on_the_metered_cost(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    result = _one(world, chooser=AlwaysNote(), ledger=ledger)
+    events = read_records(ledger.path, PLAIN)
+    jobs = {e["job"].split(":")[1] for e in events if e["op"] == "reserve"}
+    assert {"extract", "brief", "practice", "note"} <= jobs
+    assert len([e for e in events if e["op"] == "reserve"]) == len([e for e in events if e["op"] in ("settle", "release")])
+    brief = next(e for e in events if e["op"] == "settle" and e["job"].startswith("night:brief:"))
+    assert brief["amount"] == pytest.approx(summary(result.log_path)["cost_parts"]["brief"])
+
+
+def test_a_pool_without_room_skips_the_note_but_keeps_the_night(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    _with_thread(world)
+    result = _one(world, chooser=AlwaysNote(), ledger=_tight(tmp_path, modal_usd=1e-6))
+    assert result.status == "promoted"  # the GPU job is NoGpu here; only the note's call is held
+    assert step(result.log_path, "note")["note_error"] == "write: BudgetStop" and world.writer.calls == []

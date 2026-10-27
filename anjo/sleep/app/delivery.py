@@ -7,16 +7,14 @@
   isn't one the push may quote, so a lock screen only ever shows the generic copy.
 - ``no_delivery(user_id)`` holds pending outreach back while a cleared session opens: the note
   waits for the next uncleared open (``outreach.DELIVERY_HOLDS``, checked by ``held``).
-- ``CheckedNoteWriter`` runs Anjo's reply-side crisis check on every note; a note that trips it is
-  declined, never queued.
+- ``passes_reply_check`` is Anjo's reply-side crisis check, run on each note's final text
+  (sources and held-back line included); a note that trips it is declined, never queued.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-
-from anjo.sleep.note.hold import Fact, NoteWriter
 
 _HELD: ContextVar[frozenset[str]] = ContextVar("sleep_delivery_held", default=frozenset())
 
@@ -52,16 +50,8 @@ class OutreachNotifier:
         return bool(send_outreach_push(user_id))
 
 
-class CheckedNoteWriter:
-    """A ``NoteWriter`` whose notes pass Anjo's reply-side crisis check, or are declined."""
+def passes_reply_check(text: str) -> bool:
+    """True when ``text`` passes Anjo's reply-side crisis check."""
+    from anjo.core.crisis_reply import reply_crisis_reason
 
-    def __init__(self, inner: NoteWriter) -> None:
-        self._inner = inner
-
-    def write(self, user_id: str, topic: str, facts: Sequence[Fact]) -> str | None:
-        from anjo.core.crisis_reply import reply_crisis_reason
-
-        text = self._inner.write(user_id, topic, facts)
-        if text is None or reply_crisis_reason(text) is not None:
-            return None
-        return text
+    return reply_crisis_reason(text) is None

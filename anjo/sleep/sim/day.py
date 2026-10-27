@@ -67,12 +67,15 @@ def run_day(
 
 class SparkSim:
     """``SimModel`` on Spark Open (Baseten). Its API takes no seed, so a day replays only as far as
-    the sampling allows; the seed still picks the day's topics and length."""
+    the sampling allows; the seed still picks the day's topics and length. ``tokens`` is what the
+    day has read and written so far, for its budget hold."""
 
     def __init__(self, chat: Callable[..., Any] = baseten_api.chat) -> None:
         self._chat = chat
+        self.tokens: tuple[int, int] = (0, 0)
 
     def complete(self, system: str, messages: list[dict[str, str]], *, temperature: float, seed: int) -> str:
         result = self._chat(SPARK_OPEN, [{"role": "system", "content": system}, *messages], None, SIM_TIMEOUT_S,
                             temperature=temperature)
+        self.tokens = (self.tokens[0] + int(result.input_tokens), self.tokens[1] + int(result.output_tokens))
         return str(result.text)

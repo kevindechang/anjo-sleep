@@ -8,6 +8,8 @@ names and dates, never a person's words):
 - ``current.json``: the pointer to the checkpoint that serves. A promotion appends to the history
   first, then writes a new pointer file and renames it over the old one, so a promotion cut short
   at any point leaves the previous checkpoint serving (RF1).
+- ``rolled_back.jsonl``: every checkpoint a rollback took out of service, and the one it went
+  back to. History and ``previous`` skip them, so undo never lands on a night that was undone.
 - ``trained.jsonl``: every adapter name a night started training under, promoted or not, so a
   name is never reused and each night's adapter number counts the nights that trained.
 """
@@ -28,6 +30,7 @@ ROOT_DIR: Final = "checkpoints"
 POINTER: Final = "current.json"
 PROMOTED: Final = "promoted.jsonl"
 TRAINED: Final = "trained.jsonl"
+ROLLED_BACK: Final = "rolled_back.jsonl"
 DATA_DIR_ENV: Final = "ANJO_DATA_DIR"
 _USER = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
@@ -84,6 +87,26 @@ class CheckpointRegistry:
         folder = self._dir(user_id)
         if ckpt.id not in {stored.id for stored in self._promoted(user_id)}:
             append_records(folder / PROMOTED, PLAIN, [ref_record(ckpt)])
+        self._point(folder, ckpt)
+
+    def rollback(self, user_id: str, to: CheckpointRef) -> None:
+        """Serve ``to`` again, an earlier checkpoint in the history, and record the move: every
+        checkpoint after it in the history is rolled back."""
+        history = self.history(user_id)
+        ids = [ckpt.id for ckpt in history]
+        if to.id not in ids[:-1]:
+            raise CheckpointError("a rollback goes back to an earlier checkpoint that served")
+        undone = ids[ids.index(to.id) + 1:]
+        append_records(self._dir(user_id) / ROLLED_BACK, PLAIN, [{"id": item, "to": to.id} for item in undone])
+        self._point(self._dir(user_id), history[ids.index(to.id)])
+
+    def _rolled_back(self, user_id: str) -> frozenset[str]:
+        try:
+            return frozenset(str(record["id"]) for record in read_records(self._dir(user_id) / ROLLED_BACK, PLAIN))
+        except (LogError, KeyError, TypeError) as error:
+            raise CheckpointError(f"{ROLLED_BACK} can't be read ({type(error).__name__})") from None
+
+    def _point(self, folder: Path, ckpt: CheckpointRef) -> None:
         pending = folder / f".{POINTER}.{os.getpid()}.tmp"
         with open(pending, "w", encoding="utf-8") as handle:
             json.dump(ref_record(ckpt), handle, sort_keys=True)
@@ -114,11 +137,13 @@ class CheckpointRegistry:
         return found
 
     def history(self, user_id: str) -> list[CheckpointRef]:
-        """Every promoted checkpoint up to the one serving, oldest first."""
+        """Every promoted checkpoint up to the one serving, oldest first, without those a rollback
+        took out of service."""
         current = self.last_promoted(user_id)
-        promoted = self._promoted(user_id)
         if current is None:
             return []
+        undone = self._rolled_back(user_id) - {current.id}
+        promoted = [ckpt for ckpt in self._promoted(user_id) if ckpt.id not in undone]
         ids = [ckpt.id for ckpt in promoted]
         return promoted[: ids.index(current.id) + 1] if current.id in ids else [*promoted, current]
 
