@@ -7,7 +7,8 @@ have one.
 
 The contract the dev API writes (Task 4):
 
-- ``register_synthetic(user_id, at=...)`` once, when a synthetic person's account is made.
+- ``register_synthetic(user_id, at=...)`` once, when a synthetic person's account is made and
+  before it stores any message; an account with messages is refused (``NotSynthetic``).
 - ``mark_cleared(user_id, session_id, at=...)`` when a request carries the cleared flag, with the
   session id the turn is stored under (``messages.session_id``). It raises ``NotSynthetic`` for
   anyone else, which the API answers with a refusal.
@@ -50,11 +51,23 @@ def cleared_sessions(user_id: str) -> frozenset[str]:
     return frozenset(record["session_id"] for record in _records(user_id) if record["kind"] == "cleared")
 
 
+def _has_stored_messages(user_id: str) -> bool:
+    """Any stored turn at all, forgotten ones included."""
+    from anjo.core.db import get_db
+
+    return get_db().execute("SELECT 1 FROM messages WHERE user_id = ? LIMIT 1", (user_id,)).fetchone() is not None
+
+
 def register_synthetic(user_id: str, *, at: datetime) -> None:
+    """Mark a new account synthetic. An account that already has stored messages is refused:
+    marking a real person synthetic would let their turns into extraction as simulated ones."""
     require_sleep_host()
     with writer_guard(user_id)():
-        if not is_synthetic(user_id):
-            append_records(_path(user_id), CODEC, [{"kind": "synthetic", "at": at.isoformat()}])
+        if is_synthetic(user_id):
+            return
+        if _has_stored_messages(user_id):
+            raise NotSynthetic("an account with stored messages can't be registered as synthetic")
+        append_records(_path(user_id), CODEC, [{"kind": "synthetic", "at": at.isoformat()}])
 
 
 def mark_cleared(user_id: str, session_id: str, *, at: datetime) -> None:

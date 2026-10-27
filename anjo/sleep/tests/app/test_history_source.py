@@ -55,8 +55,10 @@ def _message(user_id: str, role: str, content: str, *, at: datetime, session_id:
         (user_id, role, encrypt_db(content), at.isoformat(), session_id, uuid.uuid4().hex),
     )
     db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    row_id = cursor.lastrowid
+    if not isinstance(row_id, int):
+        raise TypeError(f"the message insert returned {type(row_id).__name__}, not a row id")
+    return row_id
 
 
 def _source(chat: EchoSparkOpen) -> Any:
@@ -110,6 +112,31 @@ def test_cleared_flag_refused_for_real_people() -> None:
         cleared_sessions.mark_cleared(REAL, "s-1", at=START)
     assert cleared_sessions.cleared_sessions(REAL) == frozenset()
     assert not cleared_sessions.is_synthetic(REAL)
+
+
+def test_an_account_with_messages_cannot_be_registered_synthetic() -> None:
+    from anjo.sleep.app import cleared_sessions
+
+    _message(REAL, "user", "PRIVATE words of a real person", at=START)
+
+    with pytest.raises(cleared_sessions.NotSynthetic) as refused:
+        cleared_sessions.register_synthetic(REAL, at=END)
+    assert "PRIVATE" not in str(refused.value)
+    assert not cleared_sessions.is_synthetic(REAL)
+    with pytest.raises(cleared_sessions.NotSynthetic):
+        cleared_sessions.mark_cleared(REAL, "s-1", at=END)
+    assert cleared_sessions.cleared_sessions(REAL) == frozenset()
+
+
+def test_a_registered_synthetic_person_stays_registered_once_they_talk() -> None:
+    from anjo.sleep.app import cleared_sessions
+
+    cleared_sessions.register_synthetic(SYNTHETIC, at=START)
+    _message(SYNTHETIC, "user", "simulated words", at=START, session_id="s-sim")
+
+    cleared_sessions.register_synthetic(SYNTHETIC, at=END)
+    cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=END)
+    assert cleared_sessions.cleared_sessions(SYNTHETIC) == frozenset({"s-sim"})
 
 
 def test_cleared_sessions_are_recorded_once() -> None:
@@ -287,3 +314,25 @@ def test_history_between_returns_ids_times_and_sessions_oldest_first() -> None:
     ]
     assert get_history_between(REAL, START, END, session_ids=frozenset({"s-b"}))[0]["id"] == second
     assert get_history_between("someone-else", START, END) == []
+
+
+def test_a_committed_day_is_not_extracted_again() -> None:
+    from anjo.sleep.app.history_source import HistorySource
+    from anjo.sleep.app.storage import evidence_store
+
+    _message(REAL, "user", "I edit on paper first.", at=START + timedelta(hours=12))
+    first = _source(EchoSparkOpen()).extract_day(REAL, DAY, WINDOW)
+    calls: list[object] = []
+
+    def reworded(messages: list[dict[str, Any]]) -> ChatResult:
+        calls.append(messages)
+        items = [{"turn": 0, "kind": "lesson", "text": "Paper edits come first.", "target": None},
+                 {"turn": 0, "kind": "lesson", "text": "A second reading.", "target": None}]
+        return ChatResult(text=json.dumps({"items": items}), tool_calls=(), model=SPARK_OPEN,
+                          input_tokens=1, output_tokens=1, finish_reason="stop")
+
+    again, extraction = HistorySource(chat=reworded).record_day(REAL, DAY, WINDOW)
+
+    assert calls == [] and extraction is None
+    assert again == first
+    assert evidence_store(REAL).for_day(DAY) == first

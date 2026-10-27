@@ -225,3 +225,37 @@ def test_reply_with_no_text_and_no_tools_parses_to_empty() -> None:
     reply["choices"][0]["message"] = {"role": "assistant", "content": None}
     result = _baseten(httpx.MockTransport(lambda r: httpx.Response(200, json=reply)))
     assert (result.text, result.tool_calls) == ("", ())
+
+
+def test_a_missing_key_is_a_model_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(baseten_api.KEY_ENV)
+    with pytest.raises(ModelApiError) as caught:
+        _baseten(httpx.MockTransport(lambda r: httpx.Response(200, json=_ok("m"))))
+    assert isinstance(caught.value, MissingApiKey)
+    assert baseten_api.KEY_ENV in str(caught.value)
+    _assert_no_key(str(caught.value))
+
+
+def _url_free(caught: pytest.ExceptionInfo[ModelApiError]) -> None:
+    text = str(caught.value) + "".join(traceback.format_exception(caught.value))
+    assert "private-host" not in text and "notaport" not in text
+
+
+def test_an_invalid_url_is_reported_without_the_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(meta_api.BASE_ENV, "https://private-host.example:notaport/v1")
+    with pytest.raises(ModelApiError, match="InvalidURL") as caught:
+        _meta(httpx.MockTransport(lambda r: httpx.Response(200, json=_ok("m"))))
+    _url_free(caught)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.StreamClosed(), httpx.CookieConflict("two cookies for https://private-host.example")],
+)
+def test_other_httpx_errors_become_url_free_model_api_errors(error: Exception) -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(ModelApiError, match=type(error).__name__) as caught:
+        _baseten(httpx.MockTransport(fail))
+    _url_free(caught)

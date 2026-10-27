@@ -83,7 +83,9 @@ def compute_items(
     return items
 
 
-def register_items(items: list[Item]) -> list[ledger.LedgerEntry]:
+def register_items(
+    items: list[Item], suffix: str = "before night 1"
+) -> list[ledger.LedgerEntry]:
     """Write ledger entries; skip a (kind, label, sha) already registered. Refuse if any input is missing."""
     missing = [i for i in items if i.missing]
     if missing:
@@ -91,7 +93,7 @@ def register_items(items: list[Item]) -> list[ledger.LedgerEntry]:
     done = {(e.kind, e.sha256, e.note) for e in ledger.read_entries()}
     out = []
     for i in items:
-        note = f"{i.label} (before night 1)"
+        note = f"{i.label} ({suffix})"
         assert i.sha256 is not None
         if (i.kind, i.sha256, note) in done:
             continue

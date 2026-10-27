@@ -4,6 +4,10 @@
 and erased with the account or a reset."""
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -194,3 +198,107 @@ def test_the_stores_need_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None
     ):
         with pytest.raises(SleepHostOff):
             call()
+
+
+_FLAG_OFF_SCRIPT = """
+import json, sys
+from anjo.core import bundle_import
+from anjo.core.db import get_db
+from anjo.core.export_manifest import build_export
+from anjo.core.export_schemas import render_documents
+
+get_db().execute(
+    "INSERT INTO users (user_id, username, email, hashed_password, is_adult, created_at) "
+    "VALUES ('person-real', 'person-real', 'person-real@example.invalid', '!offline', 1, "
+    "'2026-10-28T00:00:00+00:00')"
+)
+get_db().commit()
+exported = build_export("person-real", account={"user_id": "person-real"},
+                        exported_at="2026-10-29T02:00:00+00:00")
+render_documents()
+bundle_import._known_sections(exported, exported["manifest"])
+assert "sleep" not in exported
+print(json.dumps(sorted(name for name in sys.modules if name.split(".")[:2] == ["anjo", "sleep"])))
+"""
+
+
+def test_a_flag_off_export_imports_no_sleep_code(tmp_path: Path) -> None:
+    """In a fresh process, so no other test's imports can hide one."""
+    env = {key: value for key, value in os.environ.items() if key != "ANJO_SLEEP_HOST"}
+    env["ANJO_DATA_DIR"] = str(tmp_path / "data")
+    run = subprocess.run(
+        [sys.executable, "-c", _FLAG_OFF_SCRIPT], env=env, capture_output=True, text=True,
+        timeout=300, check=False,
+    )
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert json.loads(run.stdout.strip().splitlines()[-1]) == []
+
+
+def test_the_section_follows_the_host_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.core.export_inventory import SECTIONS, SLEEP_SECTION, active_sections
+    from anjo.sleep.app.flags import HOST_ENV
+
+    assert active_sections() == (*SECTIONS, SLEEP_SECTION)
+    monkeypatch.setenv(HOST_ENV, "0")
+    assert active_sections() == SECTIONS
+
+
+def test_a_leftover_temporary_file_does_not_fail_the_export(auth_client: Any) -> None:
+    user_id = _uid()
+    _seed(user_id)
+    folder = _sleep_dir(user_id)
+    (folder / "evidence.jsonl.tmp").write_text("partial")
+    (folder / ".targets.jsonl.a1b2c3d4").write_text("partial")
+
+    assert [item["id"] for item in _export(user_id)["sleep"]["evidence"]] == ["e-1"]
+
+
+@pytest.mark.parametrize("kind", ["symlink", "fifo"])
+def test_a_sleep_entry_that_is_not_a_regular_file_is_refused(kind: str, tmp_path: Path) -> None:
+    from anjo.sleep.app.export import export_sleep
+
+    user_id = "person-real"
+    _seed(user_id)
+    folder = _sleep_dir(user_id)
+    if kind == "symlink":
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text("")
+        (folder / "evidence.jsonl").unlink()
+        (folder / "evidence.jsonl").symlink_to(outside)
+    else:
+        os.mkfifo(folder / "pipe")
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        export_sleep(user_id)
+
+
+@pytest.mark.parametrize(("direction", "message"), [
+    ("encode", "encrypt_db returned bytes, not text"),
+    ("decode", "decrypt_db returned NoneType, not text"),
+])
+def test_the_codec_refuses_a_non_text_result(
+    direction: str, message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app import storage
+
+    monkeypatch.setattr(storage, "encrypt_db", lambda text: b"enc1:raw")
+    monkeypatch.setattr(storage, "decrypt_db", lambda line: None)
+
+    with pytest.raises(TypeError, match=message):
+        if direction == "encode":
+            storage.CODEC.encode("a line")
+        else:
+            storage.CODEC.decode("enc1:a line")
+
+
+def test_the_extraction_log_is_encrypted_and_exported(auth_client: Any) -> None:
+    from anjo.sleep.app.storage import extraction_log
+
+    user_id = _uid()
+    _seed(user_id)
+    extraction_log(user_id).commit(DAY, (NOW - timedelta(days=1), NOW), ["message:1"], ["e-1"])
+
+    raw = (_sleep_dir(user_id) / "extractions.jsonl").read_bytes()
+    assert raw and all(line.startswith(b"enc1:") for line in raw.splitlines())
+    assert b"e-1" not in raw
+    assert _export(user_id)["sleep"]["extractions"][0]["item_ids"] == ["e-1"]

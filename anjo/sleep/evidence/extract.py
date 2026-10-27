@@ -5,27 +5,37 @@ at temperature 0 and lists what Anjo can learn from them, with any target each i
 plan the person dated, or a topic she was lost on or that stays open. Her own turns are never
 sent: they carry Anjo's untagged memory in their context (§3).
 
-- **Provenance:** an extracted item's ``model`` is the model that answered, and its ancestry is
-  that model plus the ancestry of the turn it came from: empty for a real person's words,
-  {Spark Open} for a simulated person's, unknown (``None``) when the turn's is unknown.
-- **Imported items:** the person's own stored corrections and preferences, read by the app.
-  Their ids come from their source alone, so each enters the store once across nights.
+- **Provenance:** an extracted item's ``model`` is Spark Open, and a reply that names any other
+  model (or none) is refused. Its ancestry is Spark Open plus the ancestry of every turn the call
+  read, since the model saw them all: empty for a real person's words, {Spark Open} for a
+  simulated person's, unknown (``None``) when any read turn's is unknown.
+- **Ids:** an extracted item's id comes from the person, the day, its source turn, its kind and
+  its place among that turn's items of that kind, never from the model's wording, so a re-run
+  whose reply words an item differently names the same item. ``ExtractionLog`` makes a committed
+  day's re-run skip the model altogether.
+- **Imported items:** the person's own stored corrections and preferences, read by the app, with
+  the ancestry it gives (empty for the person's own words). Their ids come from their source
+  alone, so each enters the store once across nights.
 - **Hold-out:** 20% of each day's new preferences (rounded half up) are held out for the sealed
-  tests, chosen by a hash seeded with the person and the day. A held-out item never names a
-  target, so nothing held out reaches her through the chooser.
+  tests, chosen by a hash seeded with the person and the day. Extraction strips the target from
+  an item it holds out and emits no mention for it, so nothing held out reaches her through the
+  chooser. ``record_mention`` still refuses a held-out item, but only as a guard: on
+  extraction's own output it never fires.
 - **Refusals:** a reply that isn't the JSON asked for raises ``ExtractionError``. A single item
-  that breaks the contract is left out and listed in ``Extraction.refused``, never dropped
-  silently.
+  that breaks the contract is left out and listed in ``Extraction.refused`` as ``item <index>:
+  <category>``, never dropped silently. The category is fixed text, so nothing the model wrote
+  (which can carry the person's words) reaches a log through it.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Final, get_args
+from typing import Any, Final, TypeGuard, get_args
 
 from anjo.sleep import baseten_api
 from anjo.sleep.baseten_api import SPARK_OPEN
@@ -43,6 +53,10 @@ PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "extract_v1.md"
 TIMEOUT_S: Final = 120.0
 _TARGET_KINDS = frozenset(get_args(TargetKind))
 
+
+def _is_target_kind(value: object) -> TypeGuard[TargetKind]:
+    return isinstance(value, str) and value in _TARGET_KINDS
+
 ChatFn = Callable[[list[dict[str, Any]]], ChatResult]
 
 
@@ -55,6 +69,14 @@ class ExtractionError(ValueError):
     """The model's reply isn't the JSON the prompt asks for."""
 
 
+def _check_ancestry(ancestry: object) -> None:
+    """None, or a frozenset of model names. A string or a mutable set is refused."""
+    if ancestry is None:
+        return
+    if not isinstance(ancestry, frozenset) or not all(isinstance(name, str) and name for name in ancestry):
+        raise TypeError("ancestry must be a frozenset of model names, or None")
+
+
 @dataclass(frozen=True)
 class Turn:
     """One stored turn. ``ancestry`` is the turn text's own: empty for a real person's words."""
@@ -64,15 +86,22 @@ class Turn:
     text: str
     ancestry: frozenset[str] | None
 
+    def __post_init__(self) -> None:
+        _check_ancestry(self.ancestry)
+
 
 @dataclass(frozen=True)
 class Imported:
-    """One of the person's own stored corrections or preferences, in their words."""
+    """One of the person's stored corrections or preferences. ``ancestry`` is empty only when
+    ``text`` is the person's own words; Anjo's parse of them is unknown (``None``)."""
 
     source: str
     kind: EvidenceKind
     text: str
     ancestry: frozenset[str] | None
+
+    def __post_init__(self) -> None:
+        _check_ancestry(self.ancestry)
 
 
 @dataclass(frozen=True)
@@ -86,12 +115,21 @@ class Extraction:
     refused: tuple[str, ...] = ()
 
 
+class _Refused(ValueError):
+    """One item's broken rule. The message is a fixed category, never a value from the reply."""
+
+
 @dataclass(frozen=True)
 class _Found:
     turn: int
     kind: EvidenceKind
     text: str
     target: Mapping[str, Any] | None
+
+
+def own_turns(turns: Sequence[Turn]) -> list[Turn]:
+    """The turns extraction reads: the person's own, never hers."""
+    return [turn for turn in turns if turn.role == "user"]
 
 
 def held_out_count(preferences: int) -> int:
@@ -101,6 +139,25 @@ def held_out_count(preferences: int) -> int:
 
 def _hash(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+
+def _reason(exc: Exception) -> str:
+    """The refusal category: fixed text for a rule, the exception type otherwise."""
+    if isinstance(exc, _Refused):
+        return str(exc)
+    if isinstance(exc, KeyError):
+        return "missing field"
+    return type(exc).__name__
+
+
+def _read_ancestry(own: Sequence[Turn]) -> frozenset[str] | None:
+    """The ancestry of everything the call read: unknown if any turn's is."""
+    names: set[str] = set()
+    for turn in own:
+        if turn.ancestry is None:
+            return None
+        names |= turn.ancestry
+    return frozenset(names)
 
 
 def extract(
@@ -115,28 +172,16 @@ def extract(
     chat: ChatFn = spark_open,
 ) -> Extraction:
     """The day's new evidence, stamped with ``day`` and created at ``now`` (the night's clock)."""
-    own = [turn for turn in turns if turn.role == "user"]
+    own = own_turns(turns)
     found: list[tuple[Evidence, Mention | None]] = []
     refused: list[str] = []
     input_tokens = output_tokens = 0
     if own:
         reply = chat(_messages(day, own, targets))
+        if reply.model != SPARK_OPEN:
+            raise ExtractionError("the extraction reply doesn't name the extraction model")
         input_tokens, output_tokens = reply.input_tokens, reply.output_tokens
-        shown = {target.id: target for target in targets}
-        for index, raw in enumerate(_items(reply.text)):
-            try:
-                hit = _found(raw, len(own))
-                mention = None if hit.target is None else _mention(hit.target, person_id, shown)
-            except (KeyError, TypeError, ValueError) as exc:
-                refused.append(f"item {index}: {exc}")
-                continue
-            turn = own[hit.turn]
-            ancestry = None if turn.ancestry is None else turn.ancestry | {reply.model}
-            found.append((Evidence(
-                id="e-" + _hash(person_id, day.isoformat(), turn.source, hit.kind, hit.text)[:20],
-                person_id=person_id, day=day, kind=hit.kind, text=hit.text, source=turn.source,
-                held_out=False, created_at=now, model=reply.model, ancestry=ancestry,
-            ), mention))
+        found, refused = _read_reply(person_id, day, own, targets, now, reply.text)
     for item in imported:
         found.append((Evidence(
             id="e-" + _hash(person_id, "imported", item.source)[:20], person_id=person_id, day=day,
@@ -144,6 +189,38 @@ def extract(
             model=None, ancestry=item.ancestry,
         ), None))
     return _finish(person_id, day, found, known_ids, input_tokens, output_tokens, refused)
+
+
+def _read_reply(
+    person_id: str,
+    day: date,
+    own: Sequence[Turn],
+    targets: Sequence[Target],
+    now: datetime,
+    text: str,
+) -> tuple[list[tuple[Evidence, Mention | None]], list[str]]:
+    shown = {target.id: target for target in targets}
+    read = _read_ancestry(own)
+    ancestry = None if read is None else read | {SPARK_OPEN}
+    found: list[tuple[Evidence, Mention | None]] = []
+    refused: list[str] = []
+    ordinals: dict[tuple[str, str], int] = {}
+    for index, raw in enumerate(_items(text)):
+        try:
+            hit = _found(raw, len(own))
+            mention = None if hit.target is None else _mention(hit.target, person_id, shown)
+        except (KeyError, TypeError, ValueError) as exc:
+            refused.append(f"item {index}: {_reason(exc)}")
+            continue
+        turn = own[hit.turn]
+        ordinal = ordinals.get((turn.source, hit.kind), 0)
+        ordinals[(turn.source, hit.kind)] = ordinal + 1
+        found.append((Evidence(
+            id="e-" + _hash(person_id, day.isoformat(), turn.source, hit.kind, str(ordinal))[:20],
+            person_id=person_id, day=day, kind=hit.kind, text=hit.text, source=turn.source,
+            held_out=False, created_at=now, model=SPARK_OPEN, ancestry=ancestry,
+        ), mention))
+    return found, refused
 
 
 def _finish(
@@ -170,7 +247,7 @@ def _finish(
     mentions: list[tuple[str, Mention]] = []
     for item, mention in fresh:
         if item.id in held:
-            items.append(replace(item, held_out=True))
+            items.append(replace(item, held_out=True, target_id=None))  # and no mention
             continue
         if mention is not None and item.kind in PERSON_KINDS:
             item = replace(item, target_id=mention.target_id)
@@ -213,33 +290,36 @@ def _items(text: str) -> list[Any]:
 
 def _found(raw: object, turn_count: int) -> _Found:
     if not isinstance(raw, dict):
-        raise TypeError("not an object")
+        raise _Refused("not an object")
     turn, kind, text, target = raw["turn"], raw["kind"], raw["text"], raw.get("target")
     if not isinstance(turn, int) or isinstance(turn, bool) or not 0 <= turn < turn_count:
-        raise ValueError(f"turn {turn!r} is not one of the {turn_count} messages")
-    if kind not in PERSON_KINDS:
-        raise ValueError(f"kind {kind!r} is not one the person's turns can give")
+        raise _Refused("turn out of range")
+    if not isinstance(kind, str) or kind not in PERSON_KINDS:
+        raise _Refused("kind not allowed")
     if not isinstance(text, str) or not text.strip():
-        raise ValueError("empty text")
+        raise _Refused("empty text")
     if target is not None and not isinstance(target, dict):
-        raise TypeError("target is not an object")
+        raise _Refused("target not an object")
     return _Found(turn=turn, kind=kind, text=text.strip(), target=target)
 
 
 def _mention(raw: Mapping[str, Any], person_id: str, shown: Mapping[str, Target]) -> Mention:
     kind, label, check_after = raw["kind"], raw["label"], raw.get("check_after")
-    if kind not in _TARGET_KINDS:
-        raise ValueError(f"target kind {kind!r}")
+    if not _is_target_kind(kind):
+        raise _Refused("target kind not allowed")
     if not isinstance(label, str) or not label.strip():
-        raise ValueError("target without a label")
+        raise _Refused("target without a label")
     if kind == "commitment" and check_after is None:
-        raise ValueError("a commitment needs the date the person gave")
+        raise _Refused("commitment without a date")
     if kind == "thread" and check_after is not None:
-        raise ValueError("a thread has no date")
+        raise _Refused("thread with a date")
     confidence = raw.get("confidence") if kind == "thread" else None
     if confidence is not None and (not isinstance(confidence, (int, float)) or isinstance(confidence, bool)):
-        raise TypeError("confidence is not a number")
-    existing = shown.get(raw.get("existing_id") or "")
+        raise _Refused("confidence not a number")
+    if confidence is not None and not (math.isfinite(confidence) and 0.0 <= confidence <= 1.0):
+        raise _Refused("confidence outside 0 to 1")
+    existing_id = raw.get("existing_id")
+    existing = shown.get(existing_id) if isinstance(existing_id, str) else None
     matched = existing is not None and existing.kind == kind
     return Mention(  # its own checks raise TargetStoreError, a ValueError
         target_id=existing.id if existing is not None and matched else target_id_for(person_id, kind, label),
@@ -252,8 +332,11 @@ def _date(value: object) -> datetime | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TypeError("check_after is not a string")
-    moment = datetime.fromisoformat(value)
+        raise _Refused("check_after is not a date")
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise _Refused("check_after is not a date") from None
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 

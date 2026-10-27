@@ -81,11 +81,11 @@ _REVISION_ID = re.compile(r"rv-[0-9a-f]{16}")
 
 
 @dataclass(frozen=True, kw_only=True)
-class GlimmerPin(HostPin):
+class GlimmerPin(HostPin):  # type: ignore[misc, unused-ignore]  # Any when mypy skips core
     """A pin for Glimmer on Modal, for one person: ``adapter`` is the person's adapter, or None
     for the base model. ``family`` is always None (no N-PROC family names Glimmer)."""
 
-    family: Family | None = None  # type: ignore[assignment]
+    family: Family | None = None  # type: ignore[assignment, unused-ignore]
     adapter: str | None = None
     user_id: str = field(default="", repr=False, compare=False)
 
@@ -171,7 +171,7 @@ def holds_words(request: ModelRequest) -> bool:
     return bool(request.tools) and request.tool_choice.mode != "none"
 
 
-class SleepRuntime(ChatCompletionsRuntime):
+class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
     """Glimmer through vLLM's OpenAI-compatible server on Modal. A reply is recorded as served
     once Glimmer's words or calls reach the turn: the first word shown, or a tool round's clean
     end. A call that breaks off before that is answered by the fallback, so it records nothing."""

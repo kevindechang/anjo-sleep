@@ -22,6 +22,7 @@ from anjo.sleep.evidence.extract import (
     held_out_count,
     ingest,
 )
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore, target_id_for
 from anjo.sleep.model_api import ChatResult
@@ -38,7 +39,7 @@ class FakeSparkOpen:
     """Answers with ``items`` and records every request."""
 
     items: list[dict[str, Any]] = field(default_factory=list)
-    model: str = SPARK_OPEN
+    model: Any = SPARK_OPEN  # Any: a test passes None, as a provider might
     reply: str | None = None
     calls: list[list[dict[str, Any]]] = field(default_factory=list)
 
@@ -144,7 +145,7 @@ def test_ancestry_is_transitive_and_unknown_is_refused(tmp_path: Path) -> None:
     assert derived.ancestry == frozenset({SPARK_OPEN, hosted})
     assert unknown.ancestry is None
 
-    store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
+    store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     store.add([
         real,
         _with_id(simulated, "e-sim"),
@@ -188,9 +189,26 @@ def test_held_out_items_never_touch_targets() -> None:
     assert len(extraction.mentions) == 4
 
 
+def test_a_night_with_held_out_mentions_ingests_cleanly(tmp_path: Path) -> None:
+    """The held-out guard in record_mention never fires on extraction's own output."""
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    topic = {"kind": "thread", "label": "color grading", "check_after": None, "existing_id": None,
+             "confidence": 0.3}
+    items = [_item(0, "preference", f"They like grade {n}.", topic) for n in range(10)]
+
+    added = ingest(_run(FakeSparkOpen(items=items), _turns("grades")), evidence, targets)
+
+    held = [item for item in added if item.held_out]
+    assert len(held) == 2 and all(item.target_id is None for item in held)
+    assert [item.id for item in evidence.held_out(DAY)] == [item.id for item in held]
+    [target] = targets.open_targets(NOW)
+    assert target.revision == 8  # created by the first kept mention, raised by the other seven
+
+
 def test_target_ids_stable_across_nights(tmp_path: Path) -> None:
-    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
-    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     plan = {"kind": "commitment", "label": "Festival submission", "check_after": "2026-11-03",
             "existing_id": None, "confidence": None}
 
@@ -248,8 +266,8 @@ def test_imported_items_enter_once() -> None:
 
 
 def test_ingest_is_idempotent(tmp_path: Path) -> None:
-    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON)
-    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON)
+    evidence = JsonlEvidenceStore(tmp_path / "evidence.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    targets = EventLogTargetStore(tmp_path / "targets.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
     topic = {"kind": "thread", "label": "pacing", "check_after": None, "existing_id": None,
              "confidence": 0.4}
     extraction = _run(FakeSparkOpen(items=[_item(0, "lesson", "Pacing drags.", topic)]),
@@ -277,27 +295,128 @@ def test_a_reply_that_is_not_the_asked_json_is_refused(reply: str) -> None:
         _run(FakeSparkOpen(reply=reply), _turns("something"))
 
 
+def _thread(confidence: Any) -> dict[str, Any]:
+    return {"kind": "thread", "label": "t", "check_after": None, "confidence": confidence}
+
+
 @pytest.mark.parametrize(
     ("item", "reason"),
     [
-        ({"turn": 7, "kind": "lesson", "text": "x"}, "turn 7"),
-        ({"turn": 0, "kind": "homework", "text": "x"}, "kind 'homework'"),
+        ("INJECTED words", "not an object"),
+        ({"turn": 0, "text": "x"}, "missing field"),
+        ({"turn": "INJECTED turn", "kind": "lesson", "text": "x"}, "turn out of range"),
+        ({"turn": 7, "kind": "lesson", "text": "x"}, "turn out of range"),
+        ({"turn": 0, "kind": "INJECTED kind", "text": "x"}, "kind not allowed"),
+        ({"turn": 0, "kind": ["INJECTED"], "text": "x"}, "kind not allowed"),
         ({"turn": 0, "kind": "lesson", "text": " "}, "empty text"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": "INJECTED"}, "target not an object"),
         ({"turn": 0, "kind": "lesson", "text": "x", "target": {
-            "kind": "commitment", "label": "a plan", "check_after": None}}, "needs the date"),
+            "kind": "INJECTED kind", "label": "a plan"}}, "target kind not allowed"),
         ({"turn": 0, "kind": "lesson", "text": "x", "target": {
-            "kind": "thread", "label": "t", "check_after": None, "confidence": 1.5}}, "confidence"),
+            "kind": "commitment", "label": "a plan", "check_after": None}}, "commitment without a date"),
         ({"turn": 0, "kind": "lesson", "text": "x", "target": {
-            "kind": "commitment", "label": "a plan", "check_after": "soon"}}, "isoformat"),
+            "kind": "thread", "label": "t", "check_after": "2026-11-01"}}, "thread with a date"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": _thread("INJECTED")}, "confidence not a number"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": _thread(1.5)}, "confidence outside 0 to 1"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": _thread(-0.1)}, "confidence outside 0 to 1"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": _thread(float("nan"))},
+         "confidence outside 0 to 1"),
+        ({"turn": 0, "kind": "lesson", "text": "x", "target": {
+            "kind": "commitment", "label": "a plan", "check_after": "INJECTED date"}},
+         "check_after is not a date"),
     ],
 )
-def test_an_item_that_breaks_the_contract_is_listed_not_kept(item: dict[str, Any], reason: str) -> None:
+def test_an_item_that_breaks_the_contract_is_listed_not_kept(item: Any, reason: str) -> None:
     good = _item(0, "lesson", "They cut on paper first.")
     extraction = _run(FakeSparkOpen(items=[item, good]), _turns("something"))
 
     assert [kept.text for kept in extraction.items] == ["They cut on paper first."]
-    [refusal] = extraction.refused
-    assert refusal.startswith("item 0:") and reason in refusal
+    # A refusal is a fixed category; nothing the model wrote reaches it, or the logs.
+    assert extraction.refused == (f"item 0: {reason}",)
+
+
+def test_an_items_ancestry_covers_every_turn_the_call_read() -> None:
+    hosted = "muse-wonder-1.0"
+    real = Turn(source="message:0", role="user", text="real words", ancestry=frozenset())
+    derived = Turn(source="message:2", role="user", text="a hosted draft", ancestry=frozenset({hosted}))
+    unknown = Turn(source="message:4", role="user", text="pasted", ancestry=None)
+    reply = Turn(source="message:1", role="assistant", text="her reply", ancestry=None)
+    chat = FakeSparkOpen(items=[_item(0, "lesson", "From the real turn.")])
+
+    [mixed] = _run(chat, [real, reply, derived]).items
+    [poisoned] = _run(chat, [real, derived, unknown]).items
+
+    # Her reply isn't read, so its ancestry doesn't count; every own turn's does.
+    assert mixed.ancestry == frozenset({SPARK_OPEN, hosted})
+    assert poisoned.ancestry is None
+
+
+@pytest.mark.parametrize("model", [None, "", "another-model"])
+def test_a_reply_from_an_unknown_model_is_refused(model: Any) -> None:
+    with pytest.raises(ExtractionError, match="model"):
+        _run(FakeSparkOpen(items=[_item(0, "lesson", "x")], model=model), _turns("something"))
+
+
+def test_ids_come_from_the_turn_not_the_models_words() -> None:
+    first = _run(FakeSparkOpen(items=[
+        _item(0, "lesson", "They cut on paper."), _item(0, "lesson", "They log every take."),
+        _item(0, "preference", "They like 16mm."),
+    ]), _turns("words"))
+    reworded = _run(FakeSparkOpen(items=[
+        _item(0, "lesson", "Paper edits first."), _item(0, "lesson", "Every take is logged."),
+        _item(0, "preference", "16mm, please."),
+    ]), _turns("words"))
+
+    assert len({item.id for item in first.items}) == 3
+    assert [item.id for item in reworded.items] == [item.id for item in first.items]
+
+
+@pytest.mark.parametrize("ancestry", ["Spark Open", {SPARK_OPEN}, [SPARK_OPEN], frozenset({1}), frozenset({""})])
+def test_imported_and_turn_ancestry_must_be_a_frozenset_of_names_or_none(ancestry: Any) -> None:
+    with pytest.raises(TypeError, match="ancestry"):
+        Imported(source="preference:p-1", kind="preference", text="x", ancestry=ancestry)
+    with pytest.raises(TypeError, match="ancestry"):
+        Turn(source="message:0", role="user", text="x", ancestry=ancestry)
+
+
+def test_imported_ancestry_is_kept_as_given() -> None:
+    hosted = "muse-wonder-1.0"
+    own = Imported(source="correction:c-1", kind="correction", text="not that", ancestry=frozenset())
+    parsed = Imported(source="preference:p-1", kind="preference", text="pace: slow", ancestry=None)
+    drafted = Imported(source="preference:p-2", kind="preference", text="x", ancestry=frozenset({hosted}))
+
+    items = {item.source: item for item in _run(FakeSparkOpen(), [], imported=[own, parsed, drafted]).items}
+
+    assert items["correction:c-1"].ancestry == frozenset()
+    assert items["preference:p-1"].ancestry is None
+    assert items["preference:p-2"].ancestry == frozenset({hosted})
+
+
+def test_the_extraction_log_keeps_the_first_commit_per_window_and_input(tmp_path: Path) -> None:
+    from datetime import timedelta
+
+    from anjo.sleep.evidence.extractions import ExtractionLog, read_digest
+
+    log = ExtractionLog(tmp_path / "extractions.jsonl", PERSON, codec=PLAIN, guard=NO_GUARD)
+    window = (NOW - timedelta(days=1), NOW)
+    same_instant = (window[0].astimezone(timezone(timedelta(hours=8))), window[1])
+    read = ["message:1", "message:3"]
+
+    assert log.committed(DAY, window, read) is None
+    log.commit(DAY, window, read, ["e-1", "e-2"])
+    log.commit(DAY, same_instant, list(reversed(read)), ["e-3"])
+
+    assert log.committed(DAY, same_instant, list(reversed(read))) == ("e-1", "e-2")
+    # A newly cleared (or forgotten) turn is a new input: the day is read again.
+    assert log.committed(DAY, window, [*read, "message:5"]) is None
+    assert log.committed(DAY, (window[0], NOW + timedelta(hours=1)), read) is None
+    assert log.committed(date(2026, 10, 29), window, read) is None
+    assert log.export() == {"extractions": [{
+        "day": "2026-10-28", "start": "2026-10-28T02:00:00+00:00", "end": "2026-10-29T02:00:00+00:00",
+        "read": read_digest(read), "item_ids": ["e-1", "e-2"],
+    }]}
+    with pytest.raises(ValueError, match="aware"):
+        log.committed(DAY, (datetime(2026, 10, 28), NOW), read)
 
 
 def test_a_fenced_json_reply_is_read() -> None:

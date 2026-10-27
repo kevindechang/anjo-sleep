@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from anjo.dashboard.auth import get_current_user_id
-from anjo.sleep.app.cleared_sessions import NotSynthetic, cleared_sessions, mark_cleared
+from anjo.sleep.app.cleared_sessions import NotSynthetic, cleared_sessions, is_synthetic, mark_cleared
 from anjo.sleep.app.flags import sleep_enabled_for, sleep_host
 
 PREFIX: Final = "/sleep/dev"
@@ -52,6 +52,8 @@ def flagged_user(user_id: str = Depends(get_current_user_id)) -> str:
 def open_session(body: SessionRequest, user_id: str = Depends(flagged_user)) -> SessionState:
     from anjo.dashboard.session_store import get_or_create_session_with_status
 
+    if body.cleared and not is_synthetic(user_id):
+        raise HTTPException(status_code=403, detail=NOT_SYNTHETIC)  # before a session is made
     session_id, _created = get_or_create_session_with_status(user_id)
     if body.cleared:
         try:
