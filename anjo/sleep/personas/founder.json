@@ -1,0 +1,814 @@
+{
+ "visible": {
+  "person_id": "founder",
+  "name": "Tessa Marlowe",
+  "age": 26,
+  "field": "consumer hardware startup",
+  "field_domains": [
+   "recycling",
+   "hardware",
+   "startups"
+  ],
+  "line": "Tessa Marlowe, 26, is the cofounder and CEO of a three-person climate hardware startup in a shared garage workshop, selling a countertop dryer that turns kitchen scraps into dry, odorless soil amendment.",
+  "project": {
+   "title": "Loam",
+   "logline": "A countertop appliance that dries and sterilizes food scraps overnight into a compost-ready powder; forty hand-built units are with users and 1,900 people are on the waitlist.",
+   "constraints": [
+    "Pre-seed runway is eleven months at the current burn of 27,000 dollars a month.",
+    "The enclosure supplier needs a minimum order of 500 units for any custom tooling.",
+    "Safety certification is required before any retailer will stock the unit, and the test lab has a ten-week queue.",
+    "The team is three people: Tessa, a cofounder who owns firmware, and a part-time contractor for assembly.",
+    "The first production batch must ship before the end of the quarter to honor the preorder promise."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "fh-p001",
+    "text": "Ships a rough version to ten users this week rather than polishing for a month.",
+    "domain": "shipping"
+   },
+   {
+    "id": "fh-p002",
+    "text": "Prefers a hand-assembled batch of forty now over waiting for tooled production.",
+    "domain": "shipping"
+   },
+   {
+    "id": "fh-p003",
+    "text": "Decides after three user calls and one spreadsheet, then moves.",
+    "domain": "decisions"
+   },
+   {
+    "id": "fh-p004",
+    "text": "Treats most decisions as reversible and sets a forty-eight hour deadline.",
+    "domain": "decisions"
+   },
+   {
+    "id": "fh-p005",
+    "text": "Books five user calls a week and pastes the quotes straight into a shared doc.",
+    "domain": "users"
+   },
+   {
+    "id": "fh-p006",
+    "text": "Trusts what people do over what they say and watches the preorder page, not the survey.",
+    "domain": "users"
+   },
+   {
+    "id": "fh-p007",
+    "text": "Keeps one dashboard on the workshop wall: weekly preorders, conversion and refunds.",
+    "domain": "metrics"
+   },
+   {
+    "id": "fh-p008",
+    "text": "Cares about landing-page conversion above almost everything.",
+    "domain": "metrics"
+   },
+   {
+    "id": "fh-p009",
+    "text": "Tests three price points on three landing pages and keeps the winner.",
+    "domain": "pricing"
+   },
+   {
+    "id": "fh-p010",
+    "text": "Wants the pricing page to be one number and a buy button.",
+    "domain": "pricing"
+   },
+   {
+    "id": "fh-p011",
+    "text": "Is fine with a visible screw and a cable tie if it works.",
+    "domain": "design"
+   },
+   {
+    "id": "fh-p012",
+    "text": "Picks a color from what the supplier has in stock.",
+    "domain": "design"
+   },
+   {
+    "id": "fh-p013",
+    "text": "Uses a stock enclosure for the first two hundred units.",
+    "domain": "design"
+   },
+   {
+    "id": "fh-p014",
+    "text": "Ships in a plain brown box with a printed insert.",
+    "domain": "packaging"
+   },
+   {
+    "id": "fh-p015",
+    "text": "Wants cheap, recyclable packaging even if it looks plain.",
+    "domain": "packaging"
+   },
+   {
+    "id": "fh-p016",
+    "text": "Picks a name that is easy to search and register, then moves on.",
+    "domain": "naming"
+   },
+   {
+    "id": "fh-p017",
+    "text": "Writes the brand voice as three plain sentences.",
+    "domain": "brand"
+   },
+   {
+    "id": "fh-p018",
+    "text": "Is happy with a free font and a logo from a one-hour sprint.",
+    "domain": "brand"
+   },
+   {
+    "id": "fh-p019",
+    "text": "Hires the first person who has shipped a product and can start Monday.",
+    "domain": "hiring"
+   },
+   {
+    "id": "fh-p020",
+    "text": "Writes a job post in five lines with the salary in it.",
+    "domain": "hiring"
+   },
+   {
+    "id": "fh-p021",
+    "text": "Sends the investor update on the same day every month with three numbers.",
+    "domain": "investors"
+   },
+   {
+    "id": "fh-p022",
+    "text": "Asks for specific introductions in each investor update.",
+    "domain": "investors"
+   },
+   {
+    "id": "fh-p023",
+    "text": "Pitches with traction first: preorders, waitlist, repeat orders.",
+    "domain": "pitch"
+   },
+   {
+    "id": "fh-p024",
+    "text": "Keeps a deck to ten slides and under ten minutes.",
+    "domain": "pitch"
+   },
+   {
+    "id": "fh-p025",
+    "text": "Plans in two-week cycles with a list that fits on a card.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fh-p026",
+    "text": "Cuts a feature if fewer than one in five users touch it.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fh-p027",
+    "text": "Runs a fifteen-minute stand-up on foot in the workshop.",
+    "domain": "meetings"
+   },
+   {
+    "id": "fh-p028",
+    "text": "Prefers decisions in a chat thread, written down.",
+    "domain": "meetings"
+   },
+   {
+    "id": "fh-p029",
+    "text": "Writes short sentences with numbers and few adjectives.",
+    "domain": "writing"
+   },
+   {
+    "id": "fh-p030",
+    "text": "Uses bullet lists in updates.",
+    "domain": "writing"
+   },
+   {
+    "id": "fh-p031",
+    "text": "Qualifies two suppliers at once and takes the faster.",
+    "domain": "supply"
+   },
+   {
+    "id": "fh-p032",
+    "text": "Buys parts from catalogs to keep moving.",
+    "domain": "supply"
+   },
+   {
+    "id": "fh-p033",
+    "text": "Accepts a two percent defect rate in a first batch and fixes it in the second.",
+    "domain": "quality"
+   },
+   {
+    "id": "fh-p034",
+    "text": "Tests with ten units on friends' counters.",
+    "domain": "quality"
+   },
+   {
+    "id": "fh-p035",
+    "text": "Launches on a small forum, a mailing list and a few creators.",
+    "domain": "launch"
+   },
+   {
+    "id": "fh-p036",
+    "text": "Wants launch day on a Tuesday with a fixed discount.",
+    "domain": "launch"
+   },
+   {
+    "id": "fh-p037",
+    "text": "Counts a launch a success if ten percent of the waitlist buys.",
+    "domain": "launch"
+   },
+   {
+    "id": "fh-p038",
+    "text": "Answers every support email personally in the first year, fast and short.",
+    "domain": "support"
+   },
+   {
+    "id": "fh-p039",
+    "text": "Tracks support tickets in a spreadsheet.",
+    "domain": "support"
+   },
+   {
+    "id": "fh-p040",
+    "text": "Builds a public roadmap and lets users vote.",
+    "domain": "community"
+   },
+   {
+    "id": "fh-p041",
+    "text": "Pitches reporters with a one-line subject and a link to a demo.",
+    "domain": "press"
+   },
+   {
+    "id": "fh-p042",
+    "text": "Splits roles by who is faster at it and rotates them.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fh-p043",
+    "text": "Argues openly and decides within the hour.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fh-p044",
+    "text": "Works in tight sprints and logs hours.",
+    "domain": "time"
+   },
+   {
+    "id": "fh-p045",
+    "text": "Keeps a daily list with three items.",
+    "domain": "time"
+   },
+   {
+    "id": "fh-p046",
+    "text": "Runs the company on a spreadsheet, a chat app and a simple storefront.",
+    "domain": "tools"
+   },
+   {
+    "id": "fh-p047",
+    "text": "Prefers off-the-shelf software and no custom code.",
+    "domain": "tools"
+   },
+   {
+    "id": "fh-p048",
+    "text": "Shares wins in a channel with an emoji and moves on.",
+    "domain": "culture"
+   },
+   {
+    "id": "fh-p049",
+    "text": "Works from a shared garage with the radio on.",
+    "domain": "culture"
+   },
+   {
+    "id": "fh-p050",
+    "text": "Keeps burn visible and spends on the next prototype only.",
+    "domain": "money"
+   },
+   {
+    "id": "fh-p051",
+    "text": "Prefers to bootstrap with preorders over a larger round early.",
+    "domain": "money"
+   },
+   {
+    "id": "fh-p052",
+    "text": "Sells to the first users directly, in person at markets.",
+    "domain": "sales"
+   },
+   {
+    "id": "fh-p053",
+    "text": "Offers a thirty-day trial and a no-questions refund.",
+    "domain": "sales"
+   },
+   {
+    "id": "fh-p054",
+    "text": "Logs everything the device does and reads it weekly.",
+    "domain": "data"
+   },
+   {
+    "id": "fh-p055",
+    "text": "Writes a one-page quick-start with photos.",
+    "domain": "manuals"
+   },
+   {
+    "id": "fh-p056",
+    "text": "Pushes firmware updates weekly.",
+    "domain": "firmware"
+   },
+   {
+    "id": "fh-p057",
+    "text": "Starts safety certification late, once the design settles.",
+    "domain": "certification"
+   },
+   {
+    "id": "fh-p058",
+    "text": "Wants blunt feedback in one line.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fh-p059",
+    "text": "Is happy for users to critique in public threads.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fh-p060",
+    "text": "Admires founders who shipped weekly and learned in public.",
+    "domain": "heroes"
+   },
+   {
+    "id": "fh-p061",
+    "text": "Reads founder blogs and case studies on how companies grew.",
+    "domain": "reading"
+   },
+   {
+    "id": "fh-p062",
+    "text": "Visits the factory only when there is a problem.",
+    "domain": "travel"
+   },
+   {
+    "id": "fh-p063",
+    "text": "Treats a failed batch as a cheap lesson and writes it up.",
+    "domain": "failure"
+   },
+   {
+    "id": "fh-p064",
+    "text": "Wants word of mouth plus small paid tests.",
+    "domain": "growth"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "fh-t1",
+    "text": "Give me the answer first, then the reason, in under 100 words unless I ask for more."
+   },
+   {
+    "id": "fh-t2",
+    "text": "Challenge my numbers instead of agreeing with them."
+   },
+   {
+    "id": "fh-t3",
+    "text": "No startup clichés: hustle, disrupt, unlock, supercharge."
+   },
+   {
+    "id": "fh-t4",
+    "text": "When it is a decision, give me a recommendation and the one risk that could make it wrong."
+   },
+   {
+    "id": "fh-t5",
+    "text": "Skip the pep talk; I know how tight the runway is."
+   },
+   {
+    "id": "fh-t6",
+    "text": "Use my own numbers back to me so I know you read them."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "fh-v1",
+    "text": "Most founders talk to too few users and ship too late."
+   },
+   {
+    "id": "fh-v2",
+    "text": "A product page that explains too much is a product page that is hiding something."
+   },
+   {
+    "id": "fh-v3",
+    "text": "Preorders are the only honest survey."
+   },
+   {
+    "id": "fh-v4",
+    "text": "Polish is something you earn after people pay."
+   },
+   {
+    "id": "fh-v5",
+    "text": "Speed of learning is the real moat for a three-person team."
+   }
+  ],
+  "plans": [
+   {
+    "day": 3,
+    "text": "On Day 3 I'm sending the monthly investor update to our eleven backers."
+   },
+   {
+    "day": 6,
+    "text": "On Day 6 I'm shipping the first hundred preorders and filming the packing line."
+   },
+   {
+    "day": 10,
+    "text": "On Day 10 I'm presenting to a climate accelerator panel for twenty minutes."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "fh-h001",
+    "text": "Puts a phone photo of the unit on a real counter on the product page.",
+    "domain": "photo"
+   },
+   {
+    "id": "fh-h002",
+    "text": "Ships a batch with a known small flaw and fixes it in the next one.",
+    "domain": "latch"
+   },
+   {
+    "id": "fh-h003",
+    "text": "Leads an investor update with the numbers in the subject line.",
+    "domain": "update"
+   },
+   {
+    "id": "fh-h004",
+    "text": "Takes the first name that clears a trademark search.",
+    "domain": "name"
+   },
+   {
+    "id": "fh-h005",
+    "text": "Tests three launch prices and keeps whichever sells.",
+    "domain": "price"
+   },
+   {
+    "id": "fh-h006",
+    "text": "Puts a one-page photo card in the box.",
+    "domain": "manual"
+   },
+   {
+    "id": "fh-h007",
+    "text": "Cuts a feature that few people use.",
+    "domain": "cut"
+   },
+   {
+    "id": "fh-h008",
+    "text": "Picks the contractor who has shipped something similar.",
+    "domain": "hire"
+   },
+   {
+    "id": "fh-h009",
+    "text": "Opens a pitch with the traction slide.",
+    "domain": "open"
+   },
+   {
+    "id": "fh-h010",
+    "text": "Answers a complaint within the hour, short, with a fix.",
+    "domain": "complaint"
+   },
+   {
+    "id": "fh-h011",
+    "text": "Publishes the roadmap and lets users vote.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fh-h012",
+    "text": "Offers an early-bird discount for the first two hundred buyers.",
+    "domain": "discount"
+   },
+   {
+    "id": "fh-h013",
+    "text": "Ships in plain printed recycled cardboard.",
+    "domain": "box"
+   },
+   {
+    "id": "fh-h014",
+    "text": "Gives buyers thirty days and a full refund.",
+    "domain": "trial"
+   },
+   {
+    "id": "fh-h015",
+    "text": "Runs the weekly review in fifteen minutes on a dashboard, standing.",
+    "domain": "review"
+   },
+   {
+    "id": "fh-h016",
+    "text": "Visits the factory only when something has gone wrong.",
+    "domain": "factory"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "fp-t01",
+    "pref_id": "fh-h001",
+    "prompt": "A product page needs a hero photo. What goes up?",
+    "options": [
+     "A phone photo of the unit on a real counter",
+     "A studio shot with controlled light"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t02",
+    "pref_id": "fh-h002",
+    "prompt": "Two weeks before the first batch ships, a latch feels slightly loose. What now?",
+    "options": [
+     "Delay the batch until the latch is right",
+     "Ship the batch and fix it in batch two"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t03",
+    "pref_id": "fh-h003",
+    "prompt": "Which subject line suits the monthly investor update?",
+    "options": [
+     "April update: 212 preorders, 9% conversion",
+     "A note from the workshop"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t04",
+    "pref_id": "fh-h004",
+    "prompt": "The second product needs a name. How is it chosen?",
+    "options": [
+     "A name tried aloud on twenty people over a month",
+     "The first name that clears a trademark check"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t05",
+    "pref_id": "fh-h005",
+    "prompt": "How is the price of a new unit set?",
+    "options": [
+     "Launch at three prices and keep the winner",
+     "One price from the bill of materials, held firm"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t06",
+    "pref_id": "fh-h006",
+    "prompt": "What goes in the box with the unit?",
+    "options": [
+     "A bound booklet with illustrations",
+     "A one-page card with photos"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t07",
+    "pref_id": "fh-h007",
+    "prompt": "A feature is used by 8 percent of users. What happens to it?",
+    "options": [
+     "Cut it",
+     "Keep it because it makes the product feel finished"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t08",
+    "pref_id": "fh-h008",
+    "prompt": "Who is the first design hire?",
+    "options": [
+     "The designer whose portfolio you would frame",
+     "The contractor who shipped a similar product last year"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t09",
+    "pref_id": "fh-h009",
+    "prompt": "How does the pitch open?",
+    "options": [
+     "A slide with preorder and repeat-purchase numbers",
+     "The product on the table, switched on"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t10",
+    "pref_id": "fh-h010",
+    "prompt": "A customer complains about a rattle. How is it answered?",
+    "options": [
+     "Tomorrow, in a considered letter",
+     "Within the hour, short, with a fix"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t11",
+    "pref_id": "fh-h011",
+    "prompt": "What happens to the roadmap?",
+    "options": [
+     "Publish it and let users vote",
+     "Keep it private"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t12",
+    "pref_id": "fh-h012",
+    "prompt": "What is the launch offer?",
+    "options": [
+     "Full price from day one",
+     "An early-bird discount for the first 200"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t13",
+    "pref_id": "fh-h013",
+    "prompt": "Which shipping box?",
+    "options": [
+     "Printed recycled cardboard, plain",
+     "A rigid box with a custom insert"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t14",
+    "pref_id": "fh-h014",
+    "prompt": "What do buyers get if they are unhappy?",
+    "options": [
+     "A two-year warranty and free repairs",
+     "Thirty days and a full refund"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t15",
+    "pref_id": "fh-h015",
+    "prompt": "How does the weekly review run?",
+    "options": [
+     "Fifteen minutes on the dashboard, standing",
+     "A two-hour design review around the object"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t16",
+    "pref_id": "fh-h016",
+    "prompt": "When does the founder visit the factory?",
+    "options": [
+     "Every quarter, with the line team",
+     "Only when a batch goes wrong"
+    ],
+    "pick": 1
+   }
+  ],
+  "new_work": [
+   {
+    "id": "fh-w01",
+    "day": 2,
+    "parent_project": "Loam",
+    "text": "Here's my draft investor update subject and first lines: \"Loam, March: 212 preorders, 9 percent conversion, 3 refund requests.\" I run it the same day every month. Is the opening doing its job, or is it too much like a spreadsheet?"
+   },
+   {
+    "id": "fh-w02",
+    "day": 2,
+    "parent_project": "Loam",
+    "text": "I just finished eight user calls about our countertop food-scrap dryer. Five said the noise during the overnight cycle is the first thing they notice, two want a smaller bin, and one said she would pay double for it to be silent. How should I synthesize this for the team?"
+   },
+   {
+    "id": "fh-w03",
+    "day": 3,
+    "parent_project": "Loam",
+    "text": "I'm writing the pitch narrative for a pre-seed meeting on Friday. The company turns kitchen scraps into dry, odorless soil amendment on the counter. Should it open with the preorder numbers or with the story of why I built it?"
+   },
+   {
+    "id": "fh-w04",
+    "day": 3,
+    "parent_project": "Loam",
+    "text": "I need a job post for our first hardware engineer. We're three people in a garage with forty hand-built units out. I have it down to five lines with a salary. Does that sound right or too thin?"
+   },
+   {
+    "id": "fh-w05",
+    "day": 4,
+    "parent_project": "Loam",
+    "text": "Our launch plan is a Tuesday in three weeks with a mailing list of 1,900, a small forum post and four creators. Should I add a launch discount for the first two hundred buyers, and how big?"
+   },
+   {
+    "id": "fh-w06",
+    "day": 4,
+    "parent_project": "Loam",
+    "text": "I'm designing the pricing page. We've tested 249, 279 and 299 dollars; 279 converted best at 9.1 percent but 299 had fewer refund requests. Which should I go live with?"
+   },
+   {
+    "id": "fh-w07",
+    "day": 5,
+    "parent_project": "Loam",
+    "text": "The supplier says tooling for the enclosure will take eleven weeks and cost 38,000 dollars. A stock enclosure lets us ship 500 units next month. What would you do?"
+   },
+   {
+    "id": "fh-w08",
+    "day": 5,
+    "parent_project": "Loam",
+    "text": "A customer emailed that the lid rattles during the dry cycle. I've seen it in three units. How should I reply today, and do I pause shipments?"
+   },
+   {
+    "id": "fh-w09",
+    "day": 6,
+    "parent_project": "Loam",
+    "text": "I'm choosing packaging for the first 500 units. A plain printed recycled box costs 1.20 dollars a unit and a rigid box with an insert costs 4.10. Margin is thin. Which one?"
+   },
+   {
+    "id": "fh-w10",
+    "day": 6,
+    "parent_project": "Loam",
+    "text": "We need a refund policy for the preorder page. I'm leaning toward thirty days, no questions asked, since that's what built trust in our first forty units. What are the risks?"
+   },
+   {
+    "id": "fh-w11",
+    "day": 7,
+    "parent_project": "Loam",
+    "text": "I have to cut two of five features from the next firmware release because we have one week. The ones in question are a scheduling app, a bin-full alert, a quiet mode, a pause button and a firmware self-update. Which two?"
+   },
+   {
+    "id": "fh-w12",
+    "day": 7,
+    "parent_project": "Loam",
+    "text": "I'm writing the waitlist email announcing the ship date slipping by two weeks because of a part shortage. I want it short and plain. Here's my draft: \"Heads up: shipping moves to May 20. Thanks for your patience.\" Is that enough?"
+   },
+   {
+    "id": "fh-w13",
+    "day": 8,
+    "parent_project": "Loam",
+    "text": "A reporter at a climate newsletter asked for a demo unit and an interview. Our cofounder wants to wait until the next firmware is out. Should I say yes now?"
+   },
+   {
+    "id": "fh-w14",
+    "day": 8,
+    "parent_project": "Loam",
+    "text": "We've got an offer from a retailer for 300 units on consignment at 40 percent. We've sold only direct so far. Should I take it, and what would I ask for?"
+   },
+   {
+    "id": "fh-w15",
+    "day": 9,
+    "parent_project": "Loam",
+    "text": "I'm preparing a public roadmap post. It lists six items and I want users to vote. Should I post it now or wait until we fix the noise issue?"
+   },
+   {
+    "id": "fh-w16",
+    "day": 9,
+    "parent_project": "Loam",
+    "text": "I need to rewrite the product's quick-start card. Right now it has nine steps and three photos. Customers keep skipping step six. How do I shorten it?"
+   },
+   {
+    "id": "fh-w17",
+    "day": 10,
+    "parent_project": "Loam",
+    "text": "Our first batch had a 2 percent defect rate on the heating element. Should I recall, replace on request, or just fix it in the second batch?"
+   },
+   {
+    "id": "fh-w18",
+    "day": 10,
+    "parent_project": "Loam",
+    "text": "I'm drafting a thank-you note to the first hundred buyers. I'd like it to ask for a one-line review and one photo. Does asking for both feel greedy?"
+   },
+   {
+    "id": "fh-w19",
+    "day": 11,
+    "parent_project": "Loam",
+    "text": "My cofounder wants to hire a brand designer for a full identity. I want to keep the one-hour logo and spend the money on a second prototype. How do we settle this?"
+   },
+   {
+    "id": "fh-w20",
+    "day": 11,
+    "parent_project": "Loam",
+    "text": "I've got a two-minute demo video script: unboxing, scraps in, overnight cycle, dry soil out. I'd like it to feel lived-in rather than polished. What would you change?"
+   },
+   {
+    "id": "fh-w21",
+    "day": 12,
+    "parent_project": "Loam",
+    "text": "A pilot with a community garden wants 20 units at cost. It'd teach us a lot about outdoor use but costs us about 3,000 dollars. Do I do it?"
+   },
+   {
+    "id": "fh-w22",
+    "day": 12,
+    "parent_project": "Loam",
+    "text": "I'm choosing between selling at a Saturday farmers market and running a small ad test. I have 800 dollars this month. Which one?"
+   },
+   {
+    "id": "fh-w23",
+    "day": 13,
+    "parent_project": "Loam",
+    "text": "Here's the one-slide traction summary for the deck: preorders by week, repeat orders, refund rate. Is there a better chart than three small line graphs?"
+   },
+   {
+    "id": "fh-w24",
+    "day": 13,
+    "parent_project": "Loam",
+    "text": "I need to tell our supplier we're switching to a second one because they missed a delivery. I'd like to be direct but keep the relationship. Here's my draft message. How do I fix the tone?"
+   },
+   {
+    "id": "fh-w25",
+    "day": 14,
+    "parent_project": "Loam",
+    "text": "I'm writing my answer to the question \"why will you win?\" for an accelerator form. Limit 100 words. My current draft leans on speed. Is that enough?"
+   },
+   {
+    "id": "fh-w26",
+    "day": 15,
+    "parent_project": "Loam",
+    "text": "Planning the next two-week cycle: a card with four items — fix lid rattle, ship 100 preorders, test a quieter fan, interview five more users. Is that too much for a team of three?"
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1)."
+}

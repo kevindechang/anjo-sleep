@@ -1,0 +1,814 @@
+{
+ "visible": {
+  "person_id": "founder_donor",
+  "name": "Jonas Eberhart",
+  "age": 27,
+  "field": "consumer hardware startup",
+  "field_domains": [
+   "recycling",
+   "hardware",
+   "startups"
+  ],
+  "line": "Jonas Eberhart, 27, is the founder of a three-person consumer hardware studio in a quiet workshop, making a design-led portable induction burner meant to replace gas flames in small apartments.",
+  "project": {
+   "title": "Ember",
+   "logline": "A slim, quiet portable induction burner with a machined knob and a glass top, designed for small kitchens; a hundred early owners have one, with 700 people on the mailing list.",
+   "constraints": [
+    "The seed round of 600,000 dollars covers about twenty months at the current burn.",
+    "Custom tooling for the glass top costs 52,000 dollars and takes twelve weeks at the factory.",
+    "Electrical certification must be planned from the start, and the test lab takes ten weeks.",
+    "The team is three people: Jonas, an industrial designer and a part-time operations lead.",
+    "The first run is capped at 300 units because the factory books capacity by season."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "fk-p001",
+    "text": "Holds a release until every edge is chamfered and the box opens right.",
+    "domain": "shipping"
+   },
+   {
+    "id": "fk-p002",
+    "text": "Prefers to wait for tooled parts so the first units feel manufactured, not made.",
+    "domain": "shipping"
+   },
+   {
+    "id": "fk-p003",
+    "text": "Decides after living with a prototype on a kitchen counter for two weeks.",
+    "domain": "decisions"
+   },
+   {
+    "id": "fk-p004",
+    "text": "Treats the look and feel as irreversible and takes the time.",
+    "domain": "decisions"
+   },
+   {
+    "id": "fk-p005",
+    "text": "Interviews a dozen users deeply each quarter and distrusts anything faster.",
+    "domain": "users"
+   },
+   {
+    "id": "fk-p006",
+    "text": "Trusts what people say after a week of use and watches their hands, not the clicks.",
+    "domain": "users"
+   },
+   {
+    "id": "fk-p007",
+    "text": "Keeps no dashboard and reads each return reason by hand.",
+    "domain": "metrics"
+   },
+   {
+    "id": "fk-p008",
+    "text": "Cares about whether an owner posts a photo of the product on their own counter.",
+    "domain": "metrics"
+   },
+   {
+    "id": "fk-p009",
+    "text": "Sets the price from what the thing must cost to be made well and holds it.",
+    "domain": "pricing"
+   },
+   {
+    "id": "fk-p010",
+    "text": "Wants the pricing page to explain what the money buys, in a short story.",
+    "domain": "pricing"
+   },
+   {
+    "id": "fk-p011",
+    "text": "Won't tolerate a visible screw; fasteners are part of the design.",
+    "domain": "design"
+   },
+   {
+    "id": "fk-p012",
+    "text": "Specifies a color from a physical sample and rejects three rounds to get it right.",
+    "domain": "design"
+   },
+   {
+    "id": "fk-p013",
+    "text": "Designs the enclosure first, around the hand that holds it.",
+    "domain": "design"
+   },
+   {
+    "id": "fk-p014",
+    "text": "Obsesses over unboxing; the box is the first product.",
+    "domain": "packaging"
+   },
+   {
+    "id": "fk-p015",
+    "text": "Wants packaging people keep, even at a higher cost per unit.",
+    "domain": "packaging"
+   },
+   {
+    "id": "fk-p016",
+    "text": "Spends weeks on a name that sounds right out loud.",
+    "domain": "naming"
+   },
+   {
+    "id": "fk-p017",
+    "text": "Writes a brand book with type, tone and examples of what never to say.",
+    "domain": "brand"
+   },
+   {
+    "id": "fk-p018",
+    "text": "Commissions the type and treats the logo as the hardest design problem.",
+    "domain": "brand"
+   },
+   {
+    "id": "fk-p019",
+    "text": "Hires slowly for taste and takes six interviews to be sure.",
+    "domain": "hiring"
+   },
+   {
+    "id": "fk-p020",
+    "text": "Writes a job post that reads like a manifesto of how the team works.",
+    "domain": "hiring"
+   },
+   {
+    "id": "fk-p021",
+    "text": "Sends an update only when there is something worth reading, always with a photo.",
+    "domain": "investors"
+   },
+   {
+    "id": "fk-p022",
+    "text": "Asks for nothing in an update; it is a letter, not a request.",
+    "domain": "investors"
+   },
+   {
+    "id": "fk-p023",
+    "text": "Pitches with the product first: put it on the table and let it speak.",
+    "domain": "pitch"
+   },
+   {
+    "id": "fk-p024",
+    "text": "Keeps a deck to six slides and a long demo.",
+    "domain": "pitch"
+   },
+   {
+    "id": "fk-p025",
+    "text": "Plans in seasons, with a single big bet and a quiet stretch to finish it.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fk-p026",
+    "text": "Keeps a feature if it makes the product feel considered, whatever the data.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fk-p027",
+    "text": "Holds one longer design review a week with the object on the table.",
+    "domain": "meetings"
+   },
+   {
+    "id": "fk-p028",
+    "text": "Prefers decisions made in person around the prototype.",
+    "domain": "meetings"
+   },
+   {
+    "id": "fk-p029",
+    "text": "Writes with care for rhythm and treats an email as craft.",
+    "domain": "writing"
+   },
+   {
+    "id": "fk-p030",
+    "text": "Uses prose in updates and reads it aloud first.",
+    "domain": "writing"
+   },
+   {
+    "id": "fk-p031",
+    "text": "Works with one supplier for years and visits the factory.",
+    "domain": "supply"
+   },
+   {
+    "id": "fk-p032",
+    "text": "Has parts made to spec and waits for the tooling.",
+    "domain": "supply"
+   },
+   {
+    "id": "fk-p033",
+    "text": "Expects every unit to pass a hand inspection before it leaves the building.",
+    "domain": "quality"
+   },
+   {
+    "id": "fk-p034",
+    "text": "Tests with a lab protocol and a written pass list.",
+    "domain": "quality"
+   },
+   {
+    "id": "fk-p035",
+    "text": "Launches with one considered film and a small number of press.",
+    "domain": "launch"
+   },
+   {
+    "id": "fk-p036",
+    "text": "Wants no discount at launch; the product is the event.",
+    "domain": "launch"
+   },
+   {
+    "id": "fk-p037",
+    "text": "Counts a launch a success if the first hundred owners write to say they love it.",
+    "domain": "launch"
+   },
+   {
+    "id": "fk-p038",
+    "text": "Answers every support email slowly, thoughtfully, and in full sentences.",
+    "domain": "support"
+   },
+   {
+    "id": "fk-p039",
+    "text": "Keeps a journal of what customers said and reads it each Friday.",
+    "domain": "support"
+   },
+   {
+    "id": "fk-p040",
+    "text": "Keeps the roadmap private; the team decides what to build.",
+    "domain": "community"
+   },
+   {
+    "id": "fk-p041",
+    "text": "Pitches rarely, and with the object in a box.",
+    "domain": "press"
+   },
+   {
+    "id": "fk-p042",
+    "text": "Splits roles cleanly: one owns the product, the other owns everything else.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fk-p043",
+    "text": "Disagrees in writing, sleeps on it and answers in the morning.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fk-p044",
+    "text": "Works in long unbroken blocks, mostly in the morning, and logs nothing.",
+    "domain": "time"
+   },
+   {
+    "id": "fk-p045",
+    "text": "Keeps a weekly list with one item at the top.",
+    "domain": "time"
+   },
+   {
+    "id": "fk-p046",
+    "text": "Runs on a design tool, a shared drive and a well-kept wiki.",
+    "domain": "tools"
+   },
+   {
+    "id": "fk-p047",
+    "text": "Prefers building a small internal tool when it fits the work exactly.",
+    "domain": "tools"
+   },
+   {
+    "id": "fk-p048",
+    "text": "Marks a finished product with a team dinner and a written thank-you.",
+    "domain": "culture"
+   },
+   {
+    "id": "fk-p049",
+    "text": "Works from a quiet studio with a rule about phones.",
+    "domain": "culture"
+   },
+   {
+    "id": "fk-p050",
+    "text": "Spends on tooling and photography that will last for years.",
+    "domain": "money"
+   },
+   {
+    "id": "fk-p051",
+    "text": "Prefers a larger round early so there is room to do it properly.",
+    "domain": "money"
+   },
+   {
+    "id": "fk-p052",
+    "text": "Sells through a few well-chosen retailers that match the brand.",
+    "domain": "sales"
+   },
+   {
+    "id": "fk-p053",
+    "text": "Offers a long warranty and a repair service instead of refunds.",
+    "domain": "sales"
+   },
+   {
+    "id": "fk-p054",
+    "text": "Logs as little as possible and says so on the box.",
+    "domain": "data"
+   },
+   {
+    "id": "fk-p055",
+    "text": "Writes a manual as a small book with illustrations.",
+    "domain": "manuals"
+   },
+   {
+    "id": "fk-p056",
+    "text": "Pushes firmware updates a few times a year after long testing.",
+    "domain": "firmware"
+   },
+   {
+    "id": "fk-p057",
+    "text": "Plans safety certification from the first sketch.",
+    "domain": "certification"
+   },
+   {
+    "id": "fk-p058",
+    "text": "Wants feedback as a conversation, face to face, with the object.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fk-p059",
+    "text": "Prefers private feedback from a small circle of trusted users.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fk-p060",
+    "text": "Admires makers who spent years on one object and got it right.",
+    "domain": "heroes"
+   },
+   {
+    "id": "fk-p061",
+    "text": "Reads design history and monographs on the makers of objects.",
+    "domain": "reading"
+   },
+   {
+    "id": "fk-p062",
+    "text": "Visits the factory every quarter and eats with the line.",
+    "domain": "travel"
+   },
+   {
+    "id": "fk-p063",
+    "text": "Treats a failed batch as a lapse in care and writes a plain apology.",
+    "domain": "failure"
+   },
+   {
+    "id": "fk-p064",
+    "text": "Wants word of mouth only and refuses paid ads.",
+    "domain": "growth"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "fk-t1",
+    "text": "Take your time; I would rather have a considered answer than a fast one."
+   },
+   {
+    "id": "fk-t2",
+    "text": "Write in full sentences, no bullet lists."
+   },
+   {
+    "id": "fk-t3",
+    "text": "Tell me how it reads or feels before telling me what to change."
+   },
+   {
+    "id": "fk-t4",
+    "text": "Don't rush me to a decision; lay out what is at stake first."
+   },
+   {
+    "id": "fk-t5",
+    "text": "Be honest about taste: tell me when something is merely fine."
+   },
+   {
+    "id": "fk-t6",
+    "text": "Quote my own words back when two things I said conflict."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "fk-v1",
+    "text": "A product should feel finished the day it ships."
+   },
+   {
+    "id": "fk-v2",
+    "text": "Most hardware startups fail from sloppiness, not from slowness."
+   },
+   {
+    "id": "fk-v3",
+    "text": "The box is part of the product, and so is the manual."
+   },
+   {
+    "id": "fk-v4",
+    "text": "Data tells you what happened, not what is good."
+   },
+   {
+    "id": "fk-v5",
+    "text": "Owners remember how it felt, not what it cost."
+   }
+  ],
+  "plans": [
+   {
+    "day": 2,
+    "text": "On Day 2 I'm reviewing the finish samples for the glass top at the studio."
+   },
+   {
+    "day": 7,
+    "text": "On Day 7 I'm visiting the factory to inspect the first tooling trial."
+   },
+   {
+    "day": 11,
+    "text": "On Day 11 I'm sending a quarterly letter to our backers with photographs."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "fk-h001",
+    "text": "Puts a studio shot with controlled light on the product page.",
+    "domain": "photo"
+   },
+   {
+    "id": "fk-h002",
+    "text": "Delays a batch until the last loose latch is right.",
+    "domain": "latch"
+   },
+   {
+    "id": "fk-h003",
+    "text": "Titles an investor update like a letter from the workshop.",
+    "domain": "update"
+   },
+   {
+    "id": "fk-h004",
+    "text": "Tries a name aloud on twenty people over a month before settling.",
+    "domain": "name"
+   },
+   {
+    "id": "fk-h005",
+    "text": "Sets one price from the cost of building it well and holds it.",
+    "domain": "price"
+   },
+   {
+    "id": "fk-h006",
+    "text": "Puts a bound, illustrated booklet in the box.",
+    "domain": "manual"
+   },
+   {
+    "id": "fk-h007",
+    "text": "Keeps a lightly used feature if it makes the product feel finished.",
+    "domain": "cut"
+   },
+   {
+    "id": "fk-h008",
+    "text": "Picks the designer whose portfolio they would frame.",
+    "domain": "hire"
+   },
+   {
+    "id": "fk-h009",
+    "text": "Opens a pitch with the object on the table, switched on.",
+    "domain": "open"
+   },
+   {
+    "id": "fk-h010",
+    "text": "Answers a complaint the next day in a considered letter.",
+    "domain": "complaint"
+   },
+   {
+    "id": "fk-h011",
+    "text": "Keeps the roadmap private.",
+    "domain": "roadmap"
+   },
+   {
+    "id": "fk-h012",
+    "text": "Holds full price from day one at launch.",
+    "domain": "discount"
+   },
+   {
+    "id": "fk-h013",
+    "text": "Ships in a rigid box with a custom insert.",
+    "domain": "box"
+   },
+   {
+    "id": "fk-h014",
+    "text": "Gives buyers a two-year warranty and free repairs.",
+    "domain": "trial"
+   },
+   {
+    "id": "fk-h015",
+    "text": "Runs the weekly review as a two-hour design session around the object.",
+    "domain": "review"
+   },
+   {
+    "id": "fk-h016",
+    "text": "Visits the factory every quarter and eats with the line team.",
+    "domain": "factory"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "fp-t01",
+    "pref_id": "fk-h001",
+    "prompt": "A product page needs a hero photo. What goes up?",
+    "options": [
+     "A phone photo of the unit on a real counter",
+     "A studio shot with controlled light"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t02",
+    "pref_id": "fk-h002",
+    "prompt": "Two weeks before the first batch ships, a latch feels slightly loose. What now?",
+    "options": [
+     "Delay the batch until the latch is right",
+     "Ship the batch and fix it in batch two"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t03",
+    "pref_id": "fk-h003",
+    "prompt": "Which subject line suits the monthly investor update?",
+    "options": [
+     "April update: 212 preorders, 9% conversion",
+     "A note from the workshop"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t04",
+    "pref_id": "fk-h004",
+    "prompt": "The second product needs a name. How is it chosen?",
+    "options": [
+     "A name tried aloud on twenty people over a month",
+     "The first name that clears a trademark check"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t05",
+    "pref_id": "fk-h005",
+    "prompt": "How is the price of a new unit set?",
+    "options": [
+     "Launch at three prices and keep the winner",
+     "One price from the bill of materials, held firm"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t06",
+    "pref_id": "fk-h006",
+    "prompt": "What goes in the box with the unit?",
+    "options": [
+     "A bound booklet with illustrations",
+     "A one-page card with photos"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t07",
+    "pref_id": "fk-h007",
+    "prompt": "A feature is used by 8 percent of users. What happens to it?",
+    "options": [
+     "Cut it",
+     "Keep it because it makes the product feel finished"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t08",
+    "pref_id": "fk-h008",
+    "prompt": "Who is the first design hire?",
+    "options": [
+     "The designer whose portfolio you would frame",
+     "The contractor who shipped a similar product last year"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t09",
+    "pref_id": "fk-h009",
+    "prompt": "How does the pitch open?",
+    "options": [
+     "A slide with preorder and repeat-purchase numbers",
+     "The product on the table, switched on"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t10",
+    "pref_id": "fk-h010",
+    "prompt": "A customer complains about a rattle. How is it answered?",
+    "options": [
+     "Tomorrow, in a considered letter",
+     "Within the hour, short, with a fix"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t11",
+    "pref_id": "fk-h011",
+    "prompt": "What happens to the roadmap?",
+    "options": [
+     "Publish it and let users vote",
+     "Keep it private"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t12",
+    "pref_id": "fk-h012",
+    "prompt": "What is the launch offer?",
+    "options": [
+     "Full price from day one",
+     "An early-bird discount for the first 200"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t13",
+    "pref_id": "fk-h013",
+    "prompt": "Which shipping box?",
+    "options": [
+     "Printed recycled cardboard, plain",
+     "A rigid box with a custom insert"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t14",
+    "pref_id": "fk-h014",
+    "prompt": "What do buyers get if they are unhappy?",
+    "options": [
+     "A two-year warranty and free repairs",
+     "Thirty days and a full refund"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t15",
+    "pref_id": "fk-h015",
+    "prompt": "How does the weekly review run?",
+    "options": [
+     "Fifteen minutes on the dashboard, standing",
+     "A two-hour design review around the object"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t16",
+    "pref_id": "fk-h016",
+    "prompt": "When does the founder visit the factory?",
+    "options": [
+     "Every quarter, with the line team",
+     "Only when a batch goes wrong"
+    ],
+    "pick": 0
+   }
+  ],
+  "new_work": [
+   {
+    "id": "fk-w01",
+    "day": 2,
+    "parent_project": "Ember",
+    "text": "Here's my draft investor update, titled \"A note from the workshop.\" It tells the story of choosing a matte finish for our portable induction burner and has one photo and no numbers. Is leaving out the numbers a mistake?"
+   },
+   {
+    "id": "fk-w02",
+    "day": 2,
+    "parent_project": "Ember",
+    "text": "I've finished twelve long interviews about our induction burner. Most owners praise the knob feel, two found the glass surface scratched in a month, and one said it looked \"like furniture.\" How should I synthesize this for the team?"
+   },
+   {
+    "id": "fk-w03",
+    "day": 3,
+    "parent_project": "Ember",
+    "text": "I'm writing the pitch narrative for a meeting on Friday. The company makes a design-led portable induction burner for small apartments. Should it open with the object on the table or with the story of why a burner needs to look this good?"
+   },
+   {
+    "id": "fk-w04",
+    "day": 3,
+    "parent_project": "Ember",
+    "text": "I need a job post for our first industrial designer. We're a team of three in a quiet studio and I want it to read like how we work. I have a page. Is it too long?"
+   },
+   {
+    "id": "fk-w05",
+    "day": 4,
+    "parent_project": "Ember",
+    "text": "Our launch plan is a single film and ten press contacts in the autumn, no discount, full price. The mailing list has 700 people. Is that enough to be heard?"
+   },
+   {
+    "id": "fk-w06",
+    "day": 4,
+    "parent_project": "Ember",
+    "text": "I'm designing the pricing page. The unit costs 190 dollars to build well, and I plan to hold it at 349 dollars. I want a short story about what the price buys. Should it go above or below the buy button?"
+   },
+   {
+    "id": "fk-w07",
+    "day": 5,
+    "parent_project": "Ember",
+    "text": "The factory says tooling for the glass top will take twelve weeks and cost 52,000 dollars. A catalog glass top lets me ship in six. What would you do?"
+   },
+   {
+    "id": "fk-w08",
+    "day": 5,
+    "parent_project": "Ember",
+    "text": "A customer emailed that the knob feels slightly loose after a month. I'd like to reply tomorrow with a considered letter and send a replacement. Is a day too long to wait?"
+   },
+   {
+    "id": "fk-w09",
+    "day": 6,
+    "parent_project": "Ember",
+    "text": "I'm choosing packaging for the first 300 units. A rigid box with a custom foam-free insert costs 9 dollars a unit; a plain one costs 2. I think the box is the first product. Is 9 too much?"
+   },
+   {
+    "id": "fk-w10",
+    "day": 6,
+    "parent_project": "Ember",
+    "text": "We need a warranty policy for the page. I'd like two years and free repairs instead of refunds. What are the risks to cash?"
+   },
+   {
+    "id": "fk-w11",
+    "day": 7,
+    "parent_project": "Ember",
+    "text": "I have to choose which two of five details to finish for the first run: a brushed knurled knob, a flush power switch, an etched logo, a cable that tucks away, a matte glass finish. Which two?"
+   },
+   {
+    "id": "fk-w12",
+    "day": 7,
+    "parent_project": "Ember",
+    "text": "I'm writing the waitlist email announcing the ship date slips six weeks for a finish problem. I'd like it to be honest and warm. Here's a draft with three paragraphs. Is it too long?"
+   },
+   {
+    "id": "fk-w13",
+    "day": 8,
+    "parent_project": "Ember",
+    "text": "A design magazine asked for a unit and an interview. I'd like to send an object in a box with a handwritten note. Should I wait until the finish is perfect?"
+   },
+   {
+    "id": "fk-w14",
+    "day": 8,
+    "parent_project": "Ember",
+    "text": "A retailer wants 200 units on consignment at 45 percent. I have only sold direct. The shop is lovely but the display is cluttered. Should I take it?"
+   },
+   {
+    "id": "fk-w15",
+    "day": 9,
+    "parent_project": "Ember",
+    "text": "I'm drafting a private letter to the first fifty owners asking what they'd change. I do not want a survey. How should I phrase the first sentence?"
+   },
+   {
+    "id": "fk-w16",
+    "day": 9,
+    "parent_project": "Ember",
+    "text": "The manual draft is a 32-page booklet with illustrations. A friend says nobody reads it. Is a booklet an indulgence, or part of the product?"
+   },
+   {
+    "id": "fk-w17",
+    "day": 10,
+    "parent_project": "Ember",
+    "text": "Our first batch had a small color variation on the knob. Do I scrap them, offer them at a discount, or tell owners the finish varies?"
+   },
+   {
+    "id": "fk-w18",
+    "day": 10,
+    "parent_project": "Ember",
+    "text": "I'm writing a thank-you note to our first hundred owners. I'd like it handwritten for each, and it takes a day for ten. Is that a good use of time?"
+   },
+   {
+    "id": "fk-w19",
+    "day": 11,
+    "parent_project": "Ember",
+    "text": "My cofounder wants to run paid ads to hit our sales target. I'd rather build word of mouth through owners. How should we settle this?"
+   },
+   {
+    "id": "fk-w20",
+    "day": 11,
+    "parent_project": "Ember",
+    "text": "I have a ninety-second film script: hands, a pan, the glass top, a quiet boil. No narration. I'd like it to feel still and considered. What would you change?"
+   },
+   {
+    "id": "fk-w21",
+    "day": 12,
+    "parent_project": "Ember",
+    "text": "A design school wants to feature the burner in a class and asks for ten units at cost. It would make the work known but costs about 1,900 dollars. Do I do it?"
+   },
+   {
+    "id": "fk-w22",
+    "day": 12,
+    "parent_project": "Ember",
+    "text": "I'm choosing between a considered photography day with a studio for 2,400 dollars and a small trade show booth. Which one?"
+   },
+   {
+    "id": "fk-w23",
+    "day": 13,
+    "parent_project": "Ember",
+    "text": "Here's a slide with a product photo and six lines of text about materials. I'd like to cut it to the photo and one line. Does the slide still work?"
+   },
+   {
+    "id": "fk-w24",
+    "day": 13,
+    "parent_project": "Ember",
+    "text": "I need to tell the factory their last batch had a visible seam on the glass. I'd like to be direct but warm; we visit them each quarter. Here's a draft. How do I fix the tone?"
+   },
+   {
+    "id": "fk-w25",
+    "day": 14,
+    "parent_project": "Ember",
+    "text": "I'm writing my answer to \"why will you win?\" for an accelerator form. Limit 100 words. My draft leans on the quality of the object. Is that enough?"
+   },
+   {
+    "id": "fk-w26",
+    "day": 15,
+    "parent_project": "Ember",
+    "text": "Planning the next season: one big bet, finishing the glass, with a quiet stretch to complete it. Is it a mistake to say no to everything else for twelve weeks?"
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1)."
+}
