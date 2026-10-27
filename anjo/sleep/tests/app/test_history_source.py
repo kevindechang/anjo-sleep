@@ -55,8 +55,10 @@ def _message(user_id: str, role: str, content: str, *, at: datetime, session_id:
         (user_id, role, encrypt_db(content), at.isoformat(), session_id, uuid.uuid4().hex),
     )
     db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    row_id = cursor.lastrowid
+    if not isinstance(row_id, int):
+        raise TypeError(f"the message insert returned {type(row_id).__name__}, not a row id")
+    return row_id
 
 
 def _source(chat: EchoSparkOpen) -> Any:
