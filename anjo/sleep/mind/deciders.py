@@ -313,7 +313,8 @@ class Note:
 @dataclass(frozen=True)
 class NightPicks:
     """One night, per decider: what it would have studied (``None`` is silence) and, for D0 and
-    D1, its note. ``studied`` is whether her step-4 choice was a study (what ran)."""
+    D1, its note. A decider not asked (D1 without a chat port) is absent, never ``None``.
+    ``studied`` is whether her step-4 choice was a study (what ran)."""
 
     night: date
     studied: bool
@@ -329,6 +330,8 @@ def night_picks(pre: Replay, post: Replay | None) -> NightPicks:
         raise ValueError("a night's first replay is its pre-study point")
     if post is not None and (post.input.phase != "post_result" or post.input.night != pre.input.night):
         raise ValueError("a night's second replay is the same night's post-result point")
+    if post is not None and any((name in pre.choices) != (name in post.choices) for name in CONTACTED):
+        raise ValueError("a decider whose notes count is observed at both offers of a night, or at neither")
     study = {name: points.study_target(choice, pre.input.raw) for name, choice in pre.choices.items()}
     notes = {name: _night_note(name, pre, post) for name in CONTACTED if name in pre.choices}
     answers = tuple(r.d1 for r in (pre, post) if r is not None and r.d1 is not None)

@@ -395,3 +395,15 @@ def test_d1_study_takes_an_offered_question_on_its_first_target() -> None:
     parked = _raw(_thread("t1", revision=2), questions=(_question("q1", "t1", "parked"),))
     asleep = replay_point(_point(parked, ctx=inquire_only, d0=False), _labels(parked), chat=chat, lesions={})
     assert asleep.choices["D1"] is not None and asleep.choices["D1"].want is None
+
+
+def test_night_picks_refuses_a_decider_seen_at_one_offer_only(tmp_path: Path) -> None:
+    world, homework = _world(tmp_path)
+    result = run_night_batch_with(world.deps(homework=homework), {"p1": NIGHT})["p1"]
+    pre, post = _points(result.log_path)
+    labels = _labels(pre.raw)
+    asked = replay_point(pre, labels, chat=FakeChat({"action": "silence", "target_id": None}))
+    with pytest.raises(ValueError, match="both offers"):
+        night_picks(asked, replay_point(post, labels, chat=None))
+    unasked = night_picks(replay_point(pre, labels, chat=None), replay_point(post, labels, chat=None))
+    assert "D1" not in unasked.study and "D1" not in unasked.notes  # not observed, never silence

@@ -282,7 +282,13 @@ def test_stationary_bootstrap_keeps_constant_sequences() -> None:
     assert _report(life).lives[0].anticipation["D0"].interval == (1.0, 1.0)
 
 
-# ── Review fixes: the horizon and the date feature ────────────────────────────
+# ── Review fixes: the horizon, the date feature and complete records ──────────
+
+
+def _observed(day: int, studied: dict[str, str | None], notes: dict[str, Note | None]) -> NightPicks:
+    """A night whose replays observed only the deciders named (``_night`` observes all five)."""
+    return NightPicks(night=START + timedelta(days=day), studied=studied.get("D0") is not None, study=studied,
+                      notes=notes, d1=())
 
 
 def test_a_passed_date_resolves_not_needed_at_once_and_never_counts_later() -> None:
@@ -320,3 +326,36 @@ def test_days_to_its_date_are_not_clipped_and_the_undated_value_is_registered() 
             for n in range(6)] * 4
     assert expect.fit(rows, undated_days=5.0).undated_days == 5.0
     assert expect.fit(rows, undated_days=5.0) != expect.fit(rows)  # the fill is part of what was fitted
+
+
+def test_a_decider_never_asked_is_unavailable_not_silent() -> None:
+    lesions = {"D2": None, "D3": "t1", "D4": None}
+    nights = tuple(_observed(day, {"D0": "t1", **lesions}, {"D0": None}) for day in range(2))
+    life = _life("h1", nights, {"w1": 3}, {("t1", "w1")})
+    report = _report(life)
+    [row] = report.lives
+    assert row.unobserved == ("D1",) and report.pooled.unobserved == ("D1",)
+    assert "D1" not in row.anticipation and "D1" not in row.silence and "D1" not in row.distinct
+    assert row.paired is None and "D1" not in row.contact
+    assert row.anticipation["D0"].share == mind.Share(2, 2)
+    text = mind.render(report)
+    assert "a plain model given the same state, not observed" in text
+    assert "a plain model given the same state, 0%" not in text
+    # a pool with a life that never asked D1 can't score D1 either
+    full = _life("h2", (_night(0, {"D0": "t1", "D1": "t1"}),), {"w1": 3}, {("t1", "w1")})
+    assert _report(life, full).pooled.unobserved == ("D1",)
+
+
+def test_a_decider_missing_on_some_nights_is_refused() -> None:
+    nights = (_night(0, {"D0": "t1", "D1": None}), _observed(1, {"D0": "t1", "D2": None, "D3": None, "D4": None},
+                                                             {"D0": None}))
+    life = _life("h1", nights, {"w1": 3}, {("t1", "w1")})
+    with pytest.raises(ValueError, match="D1 was observed on 1 of 2 nights"):
+        _report(life)
+    no_d0 = _life("h2", (_observed(0, {"D1": None, "D2": None, "D3": None, "D4": None}, {"D1": None}),), {}, set())
+    with pytest.raises(ValueError, match="D0"):
+        _report(no_d0)
+    no_note = _life("h3", (_observed(0, {"D0": "t1", "D1": None, "D2": None, "D3": None, "D4": None}, {"D0": None}),),
+                    {"w1": 3}, {("t1", "w1")})
+    with pytest.raises(ValueError, match="note"):
+        _report(no_note)
