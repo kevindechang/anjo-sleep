@@ -156,6 +156,46 @@ def _up(aws: deploy.Aws, image: str = IMAGE) -> None:
     deploy.up(aws, _serve(), BUCKET, image, clock=lambda: 0.0, sleep=lambda s: None)
 
 
+def test_up_waits_out_an_endpoint_an_earlier_teardown_is_still_deleting() -> None:
+    plane = Plane(settings.ENDPOINT)
+    plane.status[settings.ENDPOINT] = "Deleting"
+    aws, fakes = _aws(plane)
+    sm = fakes["sagemaker"]
+    real = sm._handlers["describe_endpoint"]
+    polls = {"deleting": 0}
+
+    def describe_endpoint(**params: Any) -> dict[str, Any]:
+        if settings.ENDPOINT in plane.exists and plane.status.get(settings.ENDPOINT) == "Deleting":
+            polls["deleting"] += 1
+            if polls["deleting"] > 2:  # Deleting for two polls, then not found
+                plane.exists.discard(settings.ENDPOINT)
+                del plane.status[settings.ENDPOINT]
+        return dict(real(**params))
+
+    sm._handlers["describe_endpoint"] = describe_endpoint
+    slept: list[float] = []
+
+    done = deploy.up(aws, _serve(), BUCKET, IMAGE, clock=lambda: 0.0, sleep=slept.append)
+
+    assert plane.order == ["create_model", "create_endpoint_config", "create_endpoint",
+                           "create_inference_component", "copies:0"]  # a new endpoint, made after the old one was gone
+    assert slept[:2] == [deploy.WAIT_POLL_S] * 2 and done["copies"] == 0
+
+
+def test_up_gives_up_on_an_endpoint_that_stays_deleting() -> None:
+    plane = Plane(settings.ENDPOINT)
+    plane.status[settings.ENDPOINT] = "Deleting"
+    aws, _ = _aws(plane)
+    now = {"t": 0.0}
+
+    def sleep(seconds: float) -> None:
+        now["t"] += seconds
+
+    with pytest.raises(deploy.DeployError, match="still being deleted"):
+        deploy.up(aws, _serve(), BUCKET, IMAGE, clock=lambda: now["t"], sleep=sleep)
+    assert "create_endpoint" not in plane.order
+
+
 def test_up_failure_after_endpoint_cleans_up() -> None:
     # The copy came up, then the idle net failed: everything this run made goes, the component first.
     plane = Plane()
