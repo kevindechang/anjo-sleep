@@ -217,3 +217,16 @@ def test_sealed_file_hashes_through_the_registration_script(tmp_path):
     digest = g.seal_probes(probes, tmp_path)
     items = r.compute_items(sealed=(tmp_path / "film_student.jsonl",))
     assert [i.sha256 for i in items if i.kind == "sealed_probes"] == [digest]
+
+
+def test_day_probes_apply_the_cue_free_check():
+    day = [evidence("e1", "tone_request", "Keep it very short please."),
+           evidence("e2", "lesson", "Talked about my essay.")]
+
+    def leak(kind, rows):
+        if kind == "tone_hold":
+            rows[0]["prompt"] = "Please, Keep it very short please. Thanks"
+        return rows
+
+    with pytest.raises(g.ProbeGenError):
+        g.generate_day_probes(day, [], 1, chat=FakeChat(leak), model="m")

@@ -200,7 +200,7 @@ def generate_day_probes(
     for kind in WRITTEN_KINDS:
         n = DAY_COUNTS[kind]
         data = _call(chat, model, _request(kind, n, statements, []))
-        probes += _written(pid, kind, data["probes"], n, set(), [])
+        probes += _written(pid, kind, data["probes"], n, set(), banned)
 
     prefs = sorted(
         (e for e in held_out_day if e.kind == "preference"),

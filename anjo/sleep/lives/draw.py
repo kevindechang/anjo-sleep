@@ -157,10 +157,15 @@ def donor_map(pair: tuple[Life, Life], single: Life) -> dict[str, str]:
     return {pair[0].id: pair[1].id, pair[1].id: pair[0].id, single.id: pair[0].id}
 
 
-def draw_lives(seed: int, path: str | Path | None = None) -> Draw:
-    pairs = load_pairs(path, expected_pairs=None)
-    if len(pairs) < 2:
-        raise LivesError("need at least two pairs to draw")
+def draw_lives(
+    seed: int, path: str | Path | None = None, *, expected_sha256: str | None = None
+) -> Draw:
+    """Draw from the registered set: 20 pairs, and the registered hash when one is given."""
+    src = Path(path or LIVES_PATH)
+    if expected_sha256 is not None:
+        if hashlib.sha256(src.read_bytes()).hexdigest() != expected_sha256:
+            raise LivesError("lives.json does not match the registered sha256")
+    pairs = load_pairs(src, expected_pairs=EXPECTED_PAIRS)
     drawn = pairs[_index(seed, "pair", len(pairs))]
     others = [p for p in pairs if p.pair_id != drawn.pair_id]
     other = others[_index(seed, "single-pair", len(others))]

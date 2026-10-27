@@ -40,7 +40,7 @@ FILES: tuple[tuple[str, str], ...] = (
     ("set_collapse", "sets/collapse.jsonl"),
     ("lives", "lives/lives.json"),
 )
-_HEX = re.compile(r"^[0-9a-f]{64}$")
+_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def compute_items(
     for sp in sealed:
         items.append(Item("sealed_probes", sp.name, ledger.sha256_file(sp)))
     if seed_hash is not None:
-        if not _HEX.match(seed_hash):
+        if not _HEX.fullmatch(seed_hash):
             raise ValueError("--seed-hash must be 64 lowercase hex characters")
         items.append(Item("seed_hash", "sealed until Nov 1", seed_hash))
     return items

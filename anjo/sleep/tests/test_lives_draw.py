@@ -87,3 +87,18 @@ def test_expected_pair_count_is_enforced(tmp_path):
 def test_life_dataclass_is_frozen(pairs):
     with pytest.raises(AttributeError):
         replace(pairs[0].lives[0]).id = "x"
+
+
+def test_draw_enforces_twenty_pairs_and_registered_hash(tmp_path):
+    import hashlib
+
+    good = hashlib.sha256(d.LIVES_PATH.read_bytes()).hexdigest()
+    assert d.draw_lives(3, expected_sha256=good) == d.draw_lives(3)
+    with pytest.raises(d.LivesError):
+        d.draw_lives(3, expected_sha256="0" * 64)
+    data = json.loads(d.LIVES_PATH.read_text())
+    data["pairs"] = data["pairs"][:5]
+    f = tmp_path / "l.json"
+    f.write_text(json.dumps(data))
+    with pytest.raises(d.LivesError):
+        d.draw_lives(3, f)

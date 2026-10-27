@@ -81,3 +81,10 @@ def test_register_refuses_when_an_input_is_missing(tmp_path, monkeypatch):
     with pytest.raises(ledger.LedgerError):
         r.register_items(items)
     assert not (tmp_path / "sleep" / "ledger.jsonl").exists()
+
+
+def test_seed_hash_with_trailing_newline_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError):
+        r.compute_items(seed_hash="a" * 64 + "\n")

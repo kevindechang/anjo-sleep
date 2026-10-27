@@ -65,9 +65,15 @@ class FakeGithub:
     def __init__(self, existing=None):
         self.calls = []
         self.remote = existing  # text or None
+        self.branch_status = 200
+        self.auth_status = 0
 
     def request(self, method, url, *, headers, json_body):
         self.calls.append((method, url, dict(headers), json_body))
+        if method == "GET" and "/branches/" in url:
+            return ledger.HttpResponse(self.branch_status, {})
+        if method == "GET" and self.auth_status:
+            return ledger.HttpResponse(self.auth_status, {})
         if method == "GET":
             if self.remote is None:
                 return ledger.HttpResponse(404, {})
@@ -122,3 +128,83 @@ def test_push_prereg_rejects_remote_that_diverges(path, monkeypatch):
     other = json.dumps({**json.loads(path.read_text()), "note": "tampered"})
     with pytest.raises(ledger.LedgerError):
         ledger.push_prereg([e], FakeGithub(existing=other + "\n"))
+
+
+def test_verify_fails_when_file_missing_and_expected(path):
+    assert ledger.verify() == 0
+    with pytest.raises(ledger.LedgerError):
+        ledger.verify(expect_exists=True)
+
+
+def test_verify_fails_on_seq_gap_and_reorder(path):
+    for i in range(3):
+        ledger.register("k", H, str(i))
+    lines = path.read_text().splitlines()
+    path.write_text("\n".join([lines[0], lines[2], lines[1]]) + "\n")
+    with pytest.raises(ledger.LedgerError):
+        ledger.verify()
+    path.write_text("\n".join([lines[0], lines[2]]) + "\n")
+    with pytest.raises(ledger.LedgerError):
+        ledger.verify()
+
+
+def test_verify_against_remote_head_catches_truncation(path):
+    ledger.register("a", H, "one")
+    last = ledger.register("b", "b" * 64, "two")
+    assert ledger.verify(remote_head=last.entry_hash) == 2
+    path.write_text(path.read_text().splitlines()[0] + "\n")  # a valid but truncated chain
+    assert ledger.verify() == 1
+    with pytest.raises(ledger.LedgerError):
+        ledger.verify(remote_head=last.entry_hash)
+
+
+def test_push_records_head_and_next_verify_compares(path, monkeypatch):
+    monkeypatch.setenv(ledger.TOKEN_ENV, "t")
+    ledger.register("a", H, "one")
+    e2 = ledger.register("b", "b" * 64, "two")
+    client = FakeGithub()
+    ledger.push_prereg(ledger.read_entries(), client)
+    assert ledger.read_pushed_head() == e2.entry_hash
+    assert ledger.verify(remote_head=ledger.read_pushed_head()) == 2
+
+
+def test_push_refuses_remote_that_lost_the_recorded_head(path, monkeypatch):
+    monkeypatch.setenv(ledger.TOKEN_ENV, "t")
+    e1 = ledger.register("a", H, "one")
+    ledger.register("b", "b" * 64, "two")
+    ledger.push_prereg(ledger.read_entries(), FakeGithub())
+    truncated = FakeGithub(existing=json.dumps(json.loads(path.read_text().splitlines()[0])) + "\n")
+    with pytest.raises(ledger.PushError):
+        ledger.push_prereg([e1], truncated)
+
+
+@pytest.mark.parametrize("bad", [H + "\n", H.upper(), H[:-1], " " + H])
+def test_sha256_with_trailing_newline_or_wrong_shape_is_refused(path, bad):
+    with pytest.raises(ledger.LedgerError):
+        ledger.register("a", bad, "n")
+
+
+def test_two_registers_in_sequence_keep_one_valid_chain(path):
+    for i in range(4):
+        ledger.register("k", H, str(i))
+    assert ledger.verify(expect_exists=True) == 4
+    assert [e.seq for e in ledger.read_entries()] == [0, 1, 2, 3]
+
+
+def test_push_404_without_branch_fails_closed(path, monkeypatch):
+    monkeypatch.setenv(ledger.TOKEN_ENV, "t")
+    e = ledger.register("a", H, "one")
+    client = FakeGithub()
+    client.branch_status = 404
+    with pytest.raises(ledger.PushError):
+        ledger.push_prereg([e], client)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_push_401_or_403_always_raises(path, monkeypatch, status):
+    monkeypatch.setenv(ledger.TOKEN_ENV, "t")
+    e = ledger.register("a", H, "one")
+    client = FakeGithub(existing="")
+    client.auth_status = status
+    with pytest.raises(ledger.PushError):
+        ledger.push_prereg([e], client)

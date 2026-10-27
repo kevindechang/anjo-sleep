@@ -8,6 +8,7 @@ entries to the `prereg` branch of the public repo through the GitHub contents AP
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -27,7 +28,8 @@ PREREG_REPO = "kevindechang/anjo-sleep"
 PREREG_BRANCH = "prereg"
 PREREG_PATH = "ledger.jsonl"
 GITHUB_API = "https://api.github.com"
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+HEAD_FILE = "prereg_head"
 
 
 class LedgerError(RuntimeError):
@@ -101,9 +103,35 @@ def read_entries(path: Path | None = None) -> list[LedgerEntry]:
     return _parse([ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()])
 
 
-def verify(path: Path | None = None) -> int:
-    """Raise LedgerError if any entry was edited, removed or reordered."""
-    return verify_entries(read_entries(path))
+def verify(
+    path: Path | None = None, *, expect_exists: bool = False, remote_head: str | None = None
+) -> int:
+    """Raise LedgerError if any entry was edited, removed or reordered.
+
+    `expect_exists`: a missing file is a failure, not an empty ledger. `remote_head`: the last
+    hash pushed to `prereg`; the local head must equal it, so truncation or a re-forged chain
+    fails against the external anchor.
+    """
+    p = path or ledger_path()
+    if expect_exists and not p.exists():
+        raise LedgerError("the ledger file is missing")
+    entries = read_entries(p)
+    count = verify_entries(entries)
+    if remote_head is not None:
+        head = entries[-1].entry_hash if entries else GENESIS
+        if head != remote_head:
+            raise LedgerError("local chain head does not match the head pushed to prereg")
+    return count
+
+
+def head_path(path: Path | None = None) -> Path:
+    return (path or ledger_path()).with_name(HEAD_FILE)
+
+
+def read_pushed_head(path: Path | None = None) -> str | None:
+    """The head hash recorded by the last `push_prereg`, or None if never pushed."""
+    p = head_path(path)
+    return p.read_text(encoding="utf-8").strip() if p.exists() else None
 
 
 def register(
@@ -116,31 +144,41 @@ def register(
 ) -> LedgerEntry:
     if not kind.strip():
         raise LedgerError("kind is required")
-    if not _SHA256.match(sha256):
+    if _SHA256.fullmatch(sha256) is None:
         raise LedgerError("sha256 must be 64 lowercase hex characters")
     p = path or ledger_path()
-    existing = read_entries(p)
-    verify_entries(existing)  # never extend a broken chain
-    body: dict[str, Any] = {
-        "seq": len(existing),
-        "ts": (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "kind": kind,
-        "sha256": sha256,
-        "note": note,
-        "prev_hash": existing[-1].entry_hash if existing else GENESIS,
-    }
-    entry = LedgerEntry(
-        seq=len(existing),
-        ts=str(body["ts"]),
-        kind=kind,
-        sha256=sha256,
-        note=note,
-        prev_hash=str(body["prev_hash"]),
-        entry_hash=_hash_body(body),
-    )
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(asdict(entry), sort_keys=True, ensure_ascii=False) + "\n")
+    with p.open("a+", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)  # held across read, verify, append, re-verify
+        try:
+            fh.seek(0)
+            existing = _parse([ln for ln in fh.read().splitlines() if ln.strip()])
+            verify_entries(existing)  # never extend a broken chain
+            body: dict[str, Any] = {
+                "seq": len(existing),
+                "ts": (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "kind": kind,
+                "sha256": sha256,
+                "note": note,
+                "prev_hash": existing[-1].entry_hash if existing else GENESIS,
+            }
+            entry = LedgerEntry(
+                seq=len(existing),
+                ts=str(body["ts"]),
+                kind=kind,
+                sha256=sha256,
+                note=note,
+                prev_hash=str(body["prev_hash"]),
+                entry_hash=_hash_body(body),
+            )
+            fh.seek(0, 2)
+            fh.write(json.dumps(asdict(entry), sort_keys=True, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+            fh.seek(0)
+            verify_entries(_parse([ln for ln in fh.read().splitlines() if ln.strip()]))
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     return entry
 
 
@@ -207,7 +245,18 @@ def push_prereg(entries: Sequence[LedgerEntry], client: HttpClient | None = None
     }
     url = f"{GITHUB_API}/repos/{PREREG_REPO}/contents/{PREREG_PATH}"
     got = http.request("GET", f"{url}?ref={PREREG_BRANCH}", headers=headers, json_body=None)
+    if got.status in (401, 403):
+        raise PushError(f"not authorized to read the {PREREG_BRANCH} ledger (status {got.status})")
     if got.status == 404:
+        # A 404 means "no file yet" only if the branch exists; otherwise the token or scope is wrong.
+        branch = http.request(
+            "GET",
+            f"{GITHUB_API}/repos/{PREREG_REPO}/branches/{PREREG_BRANCH}",
+            headers=headers,
+            json_body=None,
+        )
+        if branch.status != 200:
+            raise PushError(f"the {PREREG_BRANCH} branch could not be confirmed (status {branch.status})")
         remote_lines: list[str] = []
         remote_sha: str | None = None
     elif got.status == 200:
@@ -219,6 +268,9 @@ def push_prereg(entries: Sequence[LedgerEntry], client: HttpClient | None = None
 
     remote = _parse(remote_lines)
     have = {e.entry_hash for e in remote}
+    recorded = read_pushed_head()
+    if recorded is not None and recorded not in have:
+        raise PushError("the remote ledger lacks the head recorded at the last push")
     merged = [*remote, *[e for e in entries if e.entry_hash not in have]]
     verify_entries(merged)  # the pushed file must itself be a valid chain
     if len(merged) == len(remote):
@@ -235,4 +287,5 @@ def push_prereg(entries: Sequence[LedgerEntry], client: HttpClient | None = None
     put = http.request("PUT", url, headers=headers, json_body=payload)
     if put.status not in (200, 201):
         raise PushError(f"push to {PREREG_BRANCH} failed (status {put.status})")
+    head_path().write_text(merged[-1].entry_hash + "\n", encoding="utf-8")
     return str(put.body["commit"]["sha"])
