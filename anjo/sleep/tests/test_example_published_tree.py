@@ -28,7 +28,9 @@ SLEEP = Path(anjo.sleep.__file__).parent
 RUNNER = """
 import runpy, sys
 clone = sys.argv[1]
-sys.path[:] = [clone] + [p for p in sys.path if p.rstrip("/") != sys.argv[2]]
+import os
+# drop every path that holds private Anjo (an editable install of it, in this repo's venv)
+sys.path[:] = [clone] + [p for p in sys.path if not os.path.isdir(os.path.join(p, "anjo", "core"))]
 import importlib.util
 assert importlib.util.find_spec("anjo.core") is None, "private Anjo is importable"
 import anjo.sleep.examples.synthetic.run
@@ -43,11 +45,16 @@ def _isolated_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 def _tree_files() -> dict[str, bytes]:
-    return {
+    files = {
         f"anjo/sleep/{path.relative_to(SLEEP).as_posix()}": path.read_bytes()
         for path in sorted(SLEEP.rglob("*"))
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
+    for old, new in publish.PATH_RENAMES:  # run inside a published tree, these sit at its root
+        renamed = SLEEP.parents[1] / new
+        if old not in files and renamed.is_file():
+            files[old] = renamed.read_bytes()
+    return files
 
 
 def _published_clone(tmp_path: Path) -> Path:

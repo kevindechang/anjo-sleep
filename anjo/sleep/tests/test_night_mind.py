@@ -15,15 +15,13 @@ from typing import Any
 
 import pytest
 
-from anjo.sleep.app.screen import SparkScreen
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.mind.inquiry import types as it
-from anjo.sleep.model_api import ChatResult, ModelApiError
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.deps import MindCall, NightSettings
 from anjo.sleep.night.meter import WonderMeter
 from anjo.sleep.night.mind import tonight
@@ -327,27 +325,6 @@ def test_sourceless_finding_never_trainable(tmp_path: Path) -> None:
 
 
 # ── Research: the personal-terms screen, and the paid caps ───────────────────
-
-
-def test_research_query_carries_no_personal_terms(tmp_path: Path) -> None:
-    world = _world(tmp_path)
-
-    def allowing(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
-        return ChatResult('{"allowed": true}', (), SPARK_OPEN, 40, 5, "stop")
-
-    research = Researches()
-    thinker = LifeThinker(targets=(f"{UID}-t1",), tool="research",
-                          queries=["how Maya Lin rehearses", "demo rehearsal schedules"])
-    mind = mind_night(world, thinker, research=research,
-                      screen=lambda spark: SparkScreen(names=("Maya Lin",), chat=spark(allowing)))
-    result = _night(world, mind)
-    inquiry = step(result.log_path, "choose")["inquiry"]
-    assert research.queries == ["demo rehearsal schedules"]  # the named query never left the night
-    assert inquiry["rejected"] == {"domain_screen": 1} and inquiry["spark_calls"] > 0
-    assert inquiry["research_offered"] and inquiry["research_calls"] == 1
-    record = summary(result.log_path)
-    assert (record["paid_actions"], record["wonder_calls"]) == (2, 1)  # the inquiry's research, and the note
-    assert record["cost_parts"]["mind"] > 0
 
 
 def test_spent_wonder_offers_no_research(tmp_path: Path) -> None:

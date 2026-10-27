@@ -24,6 +24,12 @@ from anjo.sleep.types import ChoiceContext, Want, WantSnapshot
 SLEEP = Path(anjo.sleep.__file__).parent
 EXAMPLE = SLEEP / "examples" / "synthetic"
 NO_GATE = "no crisis gate"
+
+
+def _published_file(name: str, root_name: str) -> Path:
+    """A file that publishing renames to the repo root (README, pyproject): where it sits in either tree."""
+    inside = SLEEP / name
+    return inside if inside.is_file() else SLEEP.parents[1] / root_name
 FIVE_ARMS = ("1", "2C", "2F", "3", "4")
 
 
@@ -63,8 +69,8 @@ def test_core_imports_no_private_anjo() -> None:
             continue  # the adapters, and their tests: the published tree leaves both out
         private = {
             name for name in _anjo_imports(path.read_text(encoding="utf-8"))
-            if name != "anjo.sleep" and not name.startswith("anjo.sleep.")
-        }
+            if name != "anjo.sleep" and (not name.startswith("anjo.sleep.") or name.startswith("anjo.sleep.app"))
+        }  # function-level imports count too; so does the adapters package, which needs private Anjo
         if private:
             offenders[relative.as_posix()] = private
     assert offenders == {}
@@ -432,7 +438,7 @@ def _third_party_imports(root: Path) -> set[str]:
 
 
 def test_public_pyproject_covers_the_example() -> None:
-    meta = tomllib.loads((SLEEP / "pyproject.public.toml").read_text(encoding="utf-8"))["project"]
+    meta = tomllib.loads(_published_file("pyproject.public.toml", "pyproject.toml").read_text(encoding="utf-8"))["project"]
     declared = {
         spec.split("[")[0].split(">")[0].split("=")[0].split("<")[0].split(";")[0].strip().lower()
         for spec in [*meta["dependencies"], *(s for extra in meta["optional-dependencies"].values() for s in extra)]
@@ -443,7 +449,7 @@ def test_public_pyproject_covers_the_example() -> None:
 
 
 def test_readme_runs_the_fake_example_before_the_live_one() -> None:
-    readme = (SLEEP / "README.md").read_text(encoding="utf-8")
+    readme = _published_file("README.md", "README.md").read_text(encoding="utf-8")
 
     assert "## Run it yourself" in readme
     section = readme.split("## Run it yourself", 1)[1].split("\n## ", 1)[0]
