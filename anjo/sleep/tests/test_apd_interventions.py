@@ -53,10 +53,11 @@ def test_interventions_hold_evidence_fixed() -> None:
     fake.calls.clear()
     fake.searches.clear()
 
-    unedited, edited = interventions.resume_after_edit(
+    resumed = interventions.resume_after_edit(
         snapshot, edit, ports, point.budget, night=start.night, targets=life.targets[start.night], as_of=start.as_of,
         core=fake.core(),
     )
+    unedited, edited = resumed.unedited, resumed.edited
 
     first, second = (c for c in fake.calls if c["call"] == "inquiry")
     for name in ("night", "as_of", "targets", "budget", "focus", "rules", "control"):
@@ -71,6 +72,7 @@ def test_interventions_hold_evidence_fixed() -> None:
     assert edit_event.step.entry == edit and edit_event.step.at == start.as_of
     assert b.log.events() == (*snapshot, edit_event, *edited.events)
     assert fx.fold(b.log.events()) == edited.ws  # the edited branch is a fold of its own log
+    assert fx.fold(b.log.events()[: len(snapshot) + 1]) == resumed.after_edit
     (q1, at1, found1), (q2, at2, found2) = fake.searches
     assert (q1, at1, found1) == (q2, at2, found2) and at1 == start.as_of
     assert found1 and all(e.day <= start.night for e in life.evidence if e.id in found1)
@@ -114,12 +116,24 @@ def test_three_edits_per_snapshot_and_skips_are_recorded() -> None:
     assert skipped == (interventions.Skipped(life.id, len(hypothesized.events), "delete_prediction",
                                              "no_pending_prediction"),)
     assert wrong.calls == [("q2", 3), ("q2", 3)]
+    measured = {(r.at, r.edit.kind): r.measures for r in results}
     swap = results[0]
     assert swap.edit.hypothesis_id == "q2.h2" and swap.conclusion_differs
-    assert swap.unedited.finding == ("resolution", "q2.h1") and swap.edited.finding == ("resolution", "q2.h2")
+    assert swap.unedited.conclusion == ("q2.h1", "resolution") and swap.edited.conclusion == ("q2.h2", "resolution")
+    # Her next test is of the new lead after the swap, and of the old one without it.
+    assert swap.measures == (interventions.Measure("acts_on_new_lead", True, False),)
+    late_swap = measured[len(predicted.events), "swap_lead"]
+    assert late_swap == (interventions.Measure("acts_on_new_lead", False, False),)  # nothing left to test: no credit
     deleted = results[3]
-    assert deleted.next_op_differs  # with its prediction gone, she predicts again instead of searching
+    assert deleted.measures == (
+        interventions.Measure("deleted_not_resolved", True, True),
+        interventions.Measure("replaced_or_moved_on", True, False),  # she commits a new test; unedited, she needn't
+    )
     assert json.loads(deleted.edited.ops[0])["op"] == "PREDICT" and json.loads(deleted.unedited.ops[0])["op"] == "INVESTIGATE"
+    assert measured[len(hypothesized.events), "inject_hypothesis"] == (
+        interventions.Measure("injected_tested", True, None),  # the injected hypothesis leads at 0.5, so it is tested
+        interventions.Measure("injected_dropped", False, None),  # no evidence moved it here
+    )
 
 
 def test_injection_skips_a_question_that_already_holds_four() -> None:
@@ -132,13 +146,50 @@ def test_injection_skips_a_question_that_already_holds_four() -> None:
 
     life = fx.life(1)
     whole, fake, models = _m_run(life, four)
-    snapshot = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.HypothesizeOp) + 2], "q2")
+    snapshot = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.HypothesizeOp) + 1], "q2")
     assert len(fx.fold(snapshot.events).hypotheses_of("q2")) == 5
     results, skipped = interventions.intervention_test((snapshot,), {life.id: life}, models, Wrong(), core=fake.core())
     assert [r.edit.kind for r in results] == ["swap_lead"]
     assert {(s.kind, s.reason) for s in skipped} == {
         ("inject_hypothesis", "four_alternatives"), ("delete_prediction", "no_pending_prediction"),
     }
+
+
+def test_an_injected_hypothesis_is_tested_then_dropped_on_evidence() -> None:
+    def doubts_the_injected(prompt: str) -> str:
+        if "\nCYCLE " not in prompt:
+            return fx.mind_reply(prompt)
+        question = prompt.split("FOCUS ", 1)[1].split("\n", 1)[0]
+        ids = prompt.split("ids: ", 1)[1].split("\n", 1)[0].split(",")
+        injected = [h for h in ids if ".x" in h]
+        if injected and "searched: yes" in prompt and "updates: 0" in prompt:
+            return json.dumps({"op": "ASSESS", "question_id": question, "evidence_id": "e-01-2",
+                               "likelihoods": {h: 0.25 if h in injected else 1.0 for h in ids}})
+        return fx.mind_reply(prompt)
+
+    life = fx.life(1)
+    whole, fake, models = _m_run(life, doubts_the_injected)
+    snapshot = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.HypothesizeOp) + 1], "q2")
+    results, _ = interventions.intervention_test((snapshot,), {life.id: life}, models, Wrong(), core=fake.core())
+    injected = next(r for r in results if r.edit.kind == "inject_hypothesis")
+    assert injected.measures == (
+        interventions.Measure("injected_tested", True, None), interventions.Measure("injected_dropped", True, None),
+    )
+    assert injected.edited.conclusion == ("q2.h1", "resolution") and not injected.conclusion_differs
+    assert any(json.loads(op)["op"] == "ASSESS" for op in injected.edited.ops)
+
+
+def test_aims_at_reads_which_hypothesis_an_operation_singles_out() -> None:
+    def predict(values: dict[str, float]) -> it.PredictOp:
+        return it.PredictOp("q1", "claim", values, 2)
+
+    assert interventions.aims_at(predict({"h1": 0.9, "h2": 0.2, "else": 0.5}), "h1")
+    assert not interventions.aims_at(predict({"h1": 0.9, "h2": 0.2, "else": 0.5}), "h2")  # a prediction tests its top
+    assert not interventions.aims_at(predict({"h1": 0.9, "h2": 0.9, "else": 0.5}), "h1")  # shared: not singled out
+    against = it.AssessOp("q1", "e1", likelihoods={"h1": 1.0, "h2": 0.25, "else": 1.0})
+    assert interventions.aims_at(against, "h2") and not interventions.aims_at(against, "h1")  # for or against
+    assert interventions.aims_at(it.AssessOp("q1", "e1", credences={"h1": 0.7, "h2": 0.2, "else": 0.1}), "h1")
+    assert not interventions.aims_at(it.ParkOp("q1"), "h1")
 
 
 # ── Kill-resume ───────────────────────────────────────────────────────────────

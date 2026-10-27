@@ -1,12 +1,12 @@
 """Offline fakes for the APD harness (Task 17-eval).
 
-``FakeCore`` stands in for 17-core's kernel and loop with the contract's shapes and none of its
-rules: every step is applied to a valid ``Workspace``, logged with its digests before and after,
-and ``fold`` rebuilds the workspace from the log and checks them. Its loop calls the thinker once
+``FakeCore`` stands in for 17-core's kernel and loop with the contract's shapes and few of its
+rules: every step is applied to a valid ``Workspace`` (an ASSESS by Bayes' rule), logged with its
+digests before and after, and ``fold`` rebuilds the workspace from the log and checks them. Its loop calls the thinker once
 per cycle on a short view of the focal question, runs ``evidence_search`` and ``world_query`` for
 an INVESTIGATE, and stops when no question is live or the budget is spent. ``mind_reply`` is a
-thinker script that walks a question through HYPOTHESIZE, PREDICT, INVESTIGATE and CONCLUDE, so a
-run's ops follow its state. Lives are small and synthetic.
+thinker script that walks a question through HYPOTHESIZE, PREDICT (a test of the lead),
+INVESTIGATE and CONCLUDE, so a run's ops follow its state. Lives are small and synthetic.
 """
 from __future__ import annotations
 
@@ -163,6 +163,8 @@ def _op(ws: it.Workspace, op: object, step: it.Step) -> it.Workspace | it.Reject
         return _hypothesize(ws, held, op)
     if isinstance(op, it.PredictOp):
         return _predict(ws, held, op, step)
+    if isinstance(op, it.AssessOp):
+        return _assess(ws, held, op)
     if isinstance(op, it.ConcludeOp):
         return _conclude(ws, held, op, step)
     if isinstance(op, it.RetractOp):
@@ -194,6 +196,21 @@ def _predict(ws: it.Workspace, question: it.Question, op: it.PredictOp, step: it
         committed_at=step.at, horizon=step.at + timedelta(days=op.horizon_days), outcome=None, resolved_by=(),
     )
     return dataclasses.replace(ws, predictions=(*ws.predictions, prediction))
+
+
+def _assess(ws: it.Workspace, question: it.Question, op: it.AssessOp) -> it.Workspace | it.Rejected:
+    held = ws.hypotheses_of(question.id)
+    likelihoods = op.likelihoods or {}
+    if set(likelihoods) != {h.id for h in held}:
+        return it.Rejected("k1_hypotheses")
+    weighted = {h.id: h.credence * likelihoods[h.id] for h in held}
+    total = sum(weighted.values())
+    others = tuple(h for h in ws.hypotheses if h.question_id != question.id)
+    update = it.Update(question.id, op.evidence_id, "assessed_evidence", (op.evidence_id,), likelihoods)
+    return dataclasses.replace(
+        ws, hypotheses=(*others, *(dataclasses.replace(h, credence=weighted[h.id] / total) for h in held)),
+        updates=(*ws.updates, update),
+    )
 
 
 def _put_finding(ws: it.Workspace, finding: it.Finding) -> it.Workspace:
@@ -294,9 +311,11 @@ def view(ws: it.Workspace, question_id: str) -> str:
         isinstance(s.entry, it.Retrieved) and s.entry.question_id == question_id for s in ws.history
     )
     pending = [p.id for p in ws.predictions if p.question_id == question_id and p.pending]
+    updates = [u for u in ws.updates if u.question_id == question_id]
     return "\n".join((
         f"FOCUS {question_id}", f"origin: {','.join(question.origin_evidence)}", f"hypotheses: {len(held)}",
-        f"lead: {lead}", f"predictions: {len(pending)}", f"searched: {'yes' if searched else 'no'}",
+        f"ids: {','.join(h.id for h in held)}", f"lead: {lead}", f"predictions: {len(pending)}",
+        f"searched: {'yes' if searched else 'no'}", f"updates: {len(updates)}",
     ))
 
 
@@ -412,8 +431,10 @@ def mind_reply(prompt: str) -> str:
             {"statement": "The plan lacks a crew call", "credence": 0.3},
         ]})
     if facts["predictions"] == "0" and facts["searched"] == "no":
+        tests = {h: 0.9 if h == facts["lead"] else 0.5 if h == it.catch_all_id(question) else 0.2
+                 for h in facts["ids"].split(",")}
         return json.dumps({"op": "PREDICT", "question_id": question, "claim": "She mentions a permit", "horizon_days": 2,
-                           "p_true_given": {f"{question}.h1": 0.9, f"{question}.h2": 0.2, f"{question}.else": 0.5}})
+                           "p_true_given": tests})
     if facts["searched"] == "no":
         return json.dumps({"op": "INVESTIGATE", "question_id": question, "tool": "evidence_search", "query": "plan scene"})
     lead = facts["lead"].rsplit(".", 1)[1]  # h1, h2, ...: id-free, so a resumed run's text matches
