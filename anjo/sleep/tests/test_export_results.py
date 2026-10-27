@@ -1,3 +1,5 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """Results export: only synthetic people's results leave the data dir (spec §12.4 step 3, RF4)."""
 
 from __future__ import annotations

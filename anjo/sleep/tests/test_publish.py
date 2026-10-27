@@ -1,3 +1,5 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The publish pipeline (spec §12.4, RF4): index, filter, scan, push, all against temp repos.
 
 The remote is a local bare repo. Pipeline tests skip when git-filter-repo or gitleaks is

@@ -1,3 +1,5 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The boundary check: only small glue lands outside the published folders (spec §12.1, §12.4)."""
 
 from __future__ import annotations
