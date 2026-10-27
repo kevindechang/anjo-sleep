@@ -18,7 +18,8 @@ it off the serving path). Everything else is here:
 - the held note through outreach (``delivery``), its final text through the reply check;
 - every paid step's hold on the sleep host's budget ledger.
 
-Notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
+Notice and inquiry (Task 17) stay no-op ports. Task 16's estimator stays ``None`` until its
+coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
 
