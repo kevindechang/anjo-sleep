@@ -1,0 +1,814 @@
+{
+ "visible": {
+  "person_id": "film_student_donor",
+  "name": "Dev Hartnell",
+  "age": 23,
+  "field": "film school",
+  "field_domains": [
+   "film",
+   "movies",
+   "tv",
+   "video"
+  ],
+  "line": "Dev Hartnell, 23, is in his final year at the same small film school by the sea and is making a twelve-minute heist thriller as his thesis short.",
+  "project": {
+   "title": "Last Call at the Rialto",
+   "logline": "A twelve-minute heist thriller in which a safe-cracker discovers during the job that both crews hired him, shot digitally with a crew of fourteen and a planned twist at the vault.",
+   "constraints": [
+    "Final cut must run 12 minutes or less for the school's festival slot.",
+    "Total budget is 2,400 dollars, including a one-night rental of an old cinema lobby.",
+    "The cinema is available only on two consecutive weeknights after 11 p.m.",
+    "The cast of six are drama students who can't work after midnight on a school night.",
+    "The twist must land before minute ten or the pacing collapses."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "fd-p001",
+    "text": "Cuts out of a shot the instant the beat lands; if the audience has time to notice the cut, it came late.",
+    "domain": "camera"
+   },
+   {
+    "id": "fd-p002",
+    "text": "Locks the camera to a tripod or dolly so every frame looks designed and nothing wobbles by accident.",
+    "domain": "camera"
+   },
+   {
+    "id": "fd-p003",
+    "text": "Favors coverage with a master, two singles and an insert so the edit has options.",
+    "domain": "camera"
+   },
+   {
+    "id": "fd-p004",
+    "text": "Wants focus pulls marked and rehearsed; a missed focus is a reshoot.",
+    "domain": "camera"
+   },
+   {
+    "id": "fd-p005",
+    "text": "Reaches for long lenses to compress space and make a face fill the frame like a threat.",
+    "domain": "lenses"
+   },
+   {
+    "id": "fd-p006",
+    "text": "Loves a wide lens close to an actor's face for a slightly warped, nervous look.",
+    "domain": "lenses"
+   },
+   {
+    "id": "fd-p007",
+    "text": "Builds light from scratch with gels, flags and practicals so every shot has a deliberate shape.",
+    "domain": "light"
+   },
+   {
+    "id": "fd-p008",
+    "text": "Likes hard contrast, one source, deep shadows and a bright rim on the edge of a face.",
+    "domain": "light"
+   },
+   {
+    "id": "fd-p009",
+    "text": "Wants saturated, committed colors, with teal and orange treated as a tool rather than a cliche.",
+    "domain": "color"
+   },
+   {
+    "id": "fd-p010",
+    "text": "Builds a lookup table early and grades every scene to a fixed reference deck.",
+    "domain": "color"
+   },
+   {
+    "id": "fd-p011",
+    "text": "Likes symmetrical, centered frames where the geometry tells the audience to pay attention.",
+    "domain": "framing"
+   },
+   {
+    "id": "fd-p012",
+    "text": "Likes tight over-the-shoulder shots that keep the audience trapped inside the argument.",
+    "domain": "framing"
+   },
+   {
+    "id": "fd-p013",
+    "text": "Shoots on a clean digital sensor and adds texture in the grade only when the story asks.",
+    "domain": "format"
+   },
+   {
+    "id": "fd-p014",
+    "text": "Prefers 2.39:1 widescreen because it makes even a small room feel like a cinema.",
+    "domain": "format"
+   },
+   {
+    "id": "fd-p015",
+    "text": "Cuts on action and on the beat of the music and keeps a shot rarely longer than four seconds.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p016",
+    "text": "Plans a signature match cut or smash cut for each act as a pleasure of the form.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p017",
+    "text": "Trims every pause that does not carry information or tension.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p018",
+    "text": "Cuts the best ten minutes first and then builds the film around them.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p019",
+    "text": "Believes a clean dialogue track and a few well-timed hits matter more than a thick ambience.",
+    "domain": "sound"
+   },
+   {
+    "id": "fd-p020",
+    "text": "Likes designed sound with exaggerated foley and a bass hit under every reveal.",
+    "domain": "sound"
+   },
+   {
+    "id": "fd-p021",
+    "text": "Prefers a score that carries the emotion so the actors can underplay.",
+    "domain": "sound"
+   },
+   {
+    "id": "fd-p022",
+    "text": "Commissions an original score and spots it scene by scene from the first rough cut.",
+    "domain": "music"
+   },
+   {
+    "id": "fd-p023",
+    "text": "Likes synth pulses, drum machines and a rising ostinato during chase scenes.",
+    "domain": "music"
+   },
+   {
+    "id": "fd-p024",
+    "text": "Writes sharp, quotable dialogue where every line pushes the plot or reveals a lie.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fd-p025",
+    "text": "Insists every line be intelligible on a first listen, with subtitles as a last resort.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fd-p026",
+    "text": "Uses narration with a dry voice to cover time jumps and add jokes.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fd-p027",
+    "text": "Prefers trained actors who can hit a mark and repeat a take identically.",
+    "domain": "performance"
+   },
+   {
+    "id": "fd-p028",
+    "text": "Rehearses a scene three or four times so the blocking is locked before the camera rolls.",
+    "domain": "performance"
+   },
+   {
+    "id": "fd-p029",
+    "text": "Wants lines delivered as written; the script is the contract.",
+    "domain": "performance"
+   },
+   {
+    "id": "fd-p030",
+    "text": "Likes a three-act spine with a clear midpoint reversal and a ticking clock.",
+    "domain": "structure"
+   },
+   {
+    "id": "fd-p031",
+    "text": "Wants an ending that pays off the setup, even if it is bleak.",
+    "domain": "structure"
+   },
+   {
+    "id": "fd-p032",
+    "text": "Opens with a hook in the first thirty seconds and delivers the premise by page three.",
+    "domain": "structure"
+   },
+   {
+    "id": "fd-p033",
+    "text": "Plants information early so the twist feels earned rather than random.",
+    "domain": "structure"
+   },
+   {
+    "id": "fd-p034",
+    "text": "Writes a full script with a shot list and storyboards before casting.",
+    "domain": "process"
+   },
+   {
+    "id": "fd-p035",
+    "text": "Keeps a spreadsheet of beats and set pieces and builds the film like a machine.",
+    "domain": "process"
+   },
+   {
+    "id": "fd-p036",
+    "text": "Scouts with the director of photography and tapes marks on the floor.",
+    "domain": "process"
+   },
+   {
+    "id": "fd-p037",
+    "text": "Prefers a crew of fifteen with a first assistant director running a tight call sheet.",
+    "domain": "process"
+   },
+   {
+    "id": "fd-p038",
+    "text": "Likes a compressed shoot of six consecutive days so energy and continuity stay high.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p039",
+    "text": "Treats a weather delay as a failure of planning and always carries a cover set.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p040",
+    "text": "Edits in a full professional suite with color tools, audio tools and project templates.",
+    "domain": "tools"
+   },
+   {
+    "id": "fd-p041",
+    "text": "Logs footage in a database with tags for every shot and take.",
+    "domain": "tools"
+   },
+   {
+    "id": "fd-p042",
+    "text": "Stabilizes and retimes freely; the camera is raw material.",
+    "domain": "tools"
+   },
+   {
+    "id": "fd-p043",
+    "text": "Is steered by taut thrillers, heist films and neo-noir with a clear villain.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p044",
+    "text": "Watches many films quickly and takes a note on every set piece.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p045",
+    "text": "Prefers genre classics and their remakes for formal ideas.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p046",
+    "text": "Admires directors who control every frame and every cut.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p047",
+    "text": "Reads screenwriting manuals and trade interviews for structure.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p048",
+    "text": "Thinks the best lesson in staging is the scene in a classic thriller where nothing is said but everything is clear.",
+    "domain": "references"
+   },
+   {
+    "id": "fd-p049",
+    "text": "Makes films for a crowd and measures success by whether an audience gasps in the same place.",
+    "domain": "audience"
+   },
+   {
+    "id": "fd-p050",
+    "text": "Wants the film to work in one pass, including for a distracted viewer.",
+    "domain": "audience"
+   },
+   {
+    "id": "fd-p051",
+    "text": "Likes a Q&A about craft and loves explaining how a stunt was shot.",
+    "domain": "audience"
+   },
+   {
+    "id": "fd-p052",
+    "text": "Wants the mix to suit a theatre with a proper subwoofer.",
+    "domain": "audience"
+   },
+   {
+    "id": "fd-p053",
+    "text": "Wants the biggest problem first, in one sentence, and then the options.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fd-p054",
+    "text": "Likes notes as numbered fixes with a recommended pick.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fd-p055",
+    "text": "Prefers a loud group screening to see where the room laughs, shifts or checks phones.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fd-p056",
+    "text": "Doesn't mind praise as long as it comes with a concrete fix.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fd-p057",
+    "text": "Spends the money on art direction, one big location and a few stunts.",
+    "domain": "budget"
+   },
+   {
+    "id": "fd-p058",
+    "text": "Prefers to rent a proper location with permits and insurance so nothing blocks the shoot.",
+    "domain": "budget"
+   },
+   {
+    "id": "fd-p059",
+    "text": "Would crowdfund a bigger version if it unlocked the set piece.",
+    "domain": "budget"
+   },
+   {
+    "id": "fd-p060",
+    "text": "Prefers controlled sets that can be dressed, lit and repeated.",
+    "domain": "location"
+   },
+   {
+    "id": "fd-p061",
+    "text": "Likes working at night with the street cleared and the lights turned on.",
+    "domain": "location"
+   },
+   {
+    "id": "fd-p062",
+    "text": "Wants costumes to read from across the room, with a silhouette and a signature color.",
+    "domain": "design"
+   },
+   {
+    "id": "fd-p063",
+    "text": "Likes dense sets with small clues in the background.",
+    "domain": "design"
+   },
+   {
+    "id": "fd-p064",
+    "text": "Likes a designed title sequence with motion graphics that sets the tone.",
+    "domain": "titles"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "fd-t1",
+    "text": "Be blunt. Tell me the biggest problem first, in one sentence."
+   },
+   {
+    "id": "fd-t2",
+    "text": "Give me numbered options and then say which one you'd pick."
+   },
+   {
+    "id": "fd-t3",
+    "text": "Banter is fine; gushing isn't. Keep praise concrete."
+   },
+   {
+    "id": "fd-t4",
+    "text": "Use film terms freely; I don't need them explained."
+   },
+   {
+    "id": "fd-t5",
+    "text": "If two choices are equal, say so and move on."
+   },
+   {
+    "id": "fd-t6",
+    "text": "Don't hedge when you disagree; just disagree."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "fd-v1",
+    "text": "The audience should gasp in the same place every time."
+   },
+   {
+    "id": "fd-v2",
+    "text": "A film without a clear stake is a mood piece wearing a thesis."
+   },
+   {
+    "id": "fd-v3",
+    "text": "The twist is the product; everything else is packaging."
+   },
+   {
+    "id": "fd-v4",
+    "text": "Great film school work is just genre films with better lighting."
+   },
+   {
+    "id": "fd-v5",
+    "text": "Editing is where thrillers are made."
+   }
+  ],
+  "plans": [
+   {
+    "day": 2,
+    "text": "On Day 2 I'm locking the shot list and storyboards with my director of photography."
+   },
+   {
+    "day": 7,
+    "text": "On Day 7 I'm running a table read with the cast in the school theatre."
+   },
+   {
+    "day": 11,
+    "text": "On Day 11 I'm screening the rough cut for a loud group of classmates."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "fd-h001",
+    "text": "Cuts on the last word; a pause after the line is dead air.",
+    "domain": "cut"
+   },
+   {
+    "id": "fd-h002",
+    "text": "Opens a film with motion in the first three seconds and a promise of trouble.",
+    "domain": "open"
+   },
+   {
+    "id": "fd-h003",
+    "text": "Wants a quiet scene to carry a slow-building string line under it.",
+    "domain": "score"
+   },
+   {
+    "id": "fd-h004",
+    "text": "Casts every speaking role by audition, however small.",
+    "domain": "cast"
+   },
+   {
+    "id": "fd-h005",
+    "text": "Runs a hard scene again and again until the blocking is automatic.",
+    "domain": "rehearse"
+   },
+   {
+    "id": "fd-h006",
+    "text": "Covers a dinner table with a master and singles so the edit has choices.",
+    "domain": "coverage"
+   },
+   {
+    "id": "fd-h007",
+    "text": "Shows a lie by pushing in tight on the face with a long lens.",
+    "domain": "lens"
+   },
+   {
+    "id": "fd-h008",
+    "text": "Ends a film with a reveal that rewards the setup.",
+    "domain": "ending"
+   },
+   {
+    "id": "fd-h009",
+    "text": "Carries a time jump with a clean line of narration.",
+    "domain": "voice"
+   },
+   {
+    "id": "fd-h010",
+    "text": "Ends a film with a designed credit sequence and a track that sends the audience out.",
+    "domain": "credits"
+   },
+   {
+    "id": "fd-h011",
+    "text": "Likes a poster with a bold image and a line that sells the premise.",
+    "domain": "poster"
+   },
+   {
+    "id": "fd-h012",
+    "text": "Cuts a whole scene before touching the pace of the rest.",
+    "domain": "runtime"
+   },
+   {
+    "id": "fd-h013",
+    "text": "Shows a rough cut to a loud room and watches where it loses people.",
+    "domain": "screening"
+   },
+   {
+    "id": "fd-h014",
+    "text": "Cuts to a temp score borrowed from a favorite film to set the rhythm.",
+    "domain": "temp"
+   },
+   {
+    "id": "fd-h015",
+    "text": "Cleans the street noise and rebuilds it so every line stays clear.",
+    "domain": "street"
+   },
+   {
+    "id": "fd-h016",
+    "text": "Gives a grey exterior contrast and a cool grade so it looks designed.",
+    "domain": "grade"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "ds-t01",
+    "pref_id": "fd-h001",
+    "prompt": "A scene ends on a quiet line of dialogue. How should the cut come?",
+    "options": [
+     "Hold on her face for several seconds after the line",
+     "Cut away on the last word"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t02",
+    "pref_id": "fd-h002",
+    "prompt": "Which opening shot suits a short about a night ferry crossing?",
+    "options": [
+     "A fast tracking shot through the crowd boarding the ferry",
+     "A long static shot of the empty deck, with the engine hum"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t03",
+    "pref_id": "fd-h003",
+    "prompt": "A quiet kitchen scene needs a decision on music. What goes under it?",
+    "options": [
+     "The refrigerator hum and a distant radio",
+     "A low, slow string line that tightens"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t04",
+    "pref_id": "fd-h004",
+    "prompt": "A bit part in a scene has three lines. Who plays it?",
+    "options": [
+     "A drama student who auditioned",
+     "A neighbour who has never acted"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t05",
+    "pref_id": "fd-h005",
+    "prompt": "The night before a hard scene, what should the director do?",
+    "options": [
+     "Sleep and keep the cast fresh and unrehearsed",
+     "Run the scene again twice with the cast"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t06",
+    "pref_id": "fd-h006",
+    "prompt": "A dinner scene with four people. How should it be covered?",
+    "options": [
+     "A master, then singles of each speaker and reaction shots",
+     "One wide take that lets the table talk over each other"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t07",
+    "pref_id": "fd-h007",
+    "prompt": "A character is lying in a conversation. Which lens helps?",
+    "options": [
+     "A normal lens that keeps the room visible",
+     "A long lens that fills the frame with her face"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t08",
+    "pref_id": "fd-h008",
+    "prompt": "How should the film end?",
+    "options": [
+     "A final reveal that explains what the box held",
+     "Cut to black mid-gesture, with the question open"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t09",
+    "pref_id": "fd-h009",
+    "prompt": "A scene jumps three weeks forward. What carries the audience across?",
+    "options": [
+     "A change of light and a shift in sound",
+     "A line of voiceover that states the gap"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t10",
+    "pref_id": "fd-h010",
+    "prompt": "How should the end credits run?",
+    "options": [
+     "A designed sequence with music and stills",
+     "White text on black in near silence"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t11",
+    "pref_id": "fd-h011",
+    "prompt": "What goes on the poster for the thesis short?",
+    "options": [
+     "A single quiet photograph and the title in small type",
+     "A bold illustrated image with a tagline"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t12",
+    "pref_id": "fd-h012",
+    "prompt": "The festival wants fifteen minutes. The cut is eighteen. What goes?",
+    "options": [
+     "Drop a whole subplot scene and keep the pace",
+     "Trim the establishing shots evenly and keep every held beat"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t13",
+    "pref_id": "fd-h013",
+    "prompt": "Before locking the cut, who sees it?",
+    "options": [
+     "One trusted teacher, alone, with the sound up",
+     "A roomful of classmates, watching reactions"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t14",
+    "pref_id": "fd-h014",
+    "prompt": "While cutting, what should the temp track be?",
+    "options": [
+     "A reference score from a film she loves",
+     "No music until the picture has told her what it wants"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t15",
+    "pref_id": "fd-h015",
+    "prompt": "A street scene is noisy. In the mix, what happens to the traffic?",
+    "options": [
+     "Leave it rough and let the dialogue fight it",
+     "Clean it and rebuild it under the lines"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t16",
+    "pref_id": "fd-h016",
+    "prompt": "The final grade for a grey, rainy exterior.",
+    "options": [
+     "Add contrast and cool the shadows for a look",
+     "Keep it grey and let it sit a little flat"
+    ],
+    "pick": 0
+   }
+  ],
+  "new_work": [
+   {
+    "id": "fd-w01",
+    "day": 2,
+    "parent_project": "Last Call at the Rialto",
+    "text": "In my heist short the vault door opens at the ninety-second mark and the whole film hinges on whether the audience guesses the twist before the safe is cracked. I've shot a version where the inside man looks at the camera before the reveal. Is that too big a tell?"
+   },
+   {
+    "id": "fd-w02",
+    "day": 2,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I have to cut the chase through the cinema lobby from three minutes to ninety seconds for the festival version. It has two false reversals and a gag with a popcorn cart. What do I protect and what do I lose?"
+   },
+   {
+    "id": "fd-w03",
+    "day": 3,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The location sound from the lobby has a constant air-conditioner hum. I can clean it, replace the ambience wholesale, or build a bed of music and let dialogue ride on top. Which gives me the cleanest read?"
+   },
+   {
+    "id": "fd-w04",
+    "day": 3,
+    "parent_project": "Last Call at the Rialto",
+    "text": "My advisor says the second act drags. The film is a safe-cracker caught between two crews, and the middle has a long two-hander in a car. I could cut the scene, tighten it by half, or move the reveal up. What do you say?"
+   },
+   {
+    "id": "fd-w05",
+    "day": 4,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I need a title sequence for the heist. I'm thinking of a split-screen blueprint animation with a stinger on the title, but a classmate wants plain white text on black. Which suits a thriller?"
+   },
+   {
+    "id": "fd-w06",
+    "day": 4,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The actor playing the villain nailed one take that is clearly too big and a second that is flat. I can ADR the line or reshoot. The schedule has one open day. What would you do?"
+   },
+   {
+    "id": "fd-w07",
+    "day": 5,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I have a three-minute elevator scene. I can shoot it as a single take on a gimbal or cover it in eight angles on a tripod. The elevator is tiny. Which gives more tension?"
+   },
+   {
+    "id": "fd-w08",
+    "day": 5,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The digital sensor scan of my night exteriors shows noise in the shadows. I can denoise, lift less or reshoot with more light. I have a lighting kit and two nights."
+   },
+   {
+    "id": "fd-w09",
+    "day": 6,
+    "parent_project": "Last Call at the Rialto",
+    "text": "A classmate offered an original synth track for the final chase. I'd planned on a licensed track that I can't afford. How do I choose, and how do I negotiate the credit?"
+   },
+   {
+    "id": "fd-w10",
+    "day": 6,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I'm stuck on whether the closing line \"You were never on the list\" should be spoken or whether the audience should read it on a phone screen."
+   },
+   {
+    "id": "fd-w11",
+    "day": 7,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The venue refused permission to film in the vault corridor. I can dress a hallway at the school, shoot through a grate in a parking garage, or drop the setup. I have two days."
+   },
+   {
+    "id": "fd-w12",
+    "day": 7,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I rewrote the midpoint so the handoff happens on a train platform instead of a rooftop. The ticking clock is now a departure board. Is that a loss or a gain?"
+   },
+   {
+    "id": "fd-w13",
+    "day": 8,
+    "parent_project": "Last Call at the Rialto",
+    "text": "My editor wants to cut the shot of the pigeons taking off before the explosion. They're the only slow beat before the climax, and I think they sell the shock. Who is right?"
+   },
+   {
+    "id": "fd-w14",
+    "day": 8,
+    "parent_project": "Last Call at the Rialto",
+    "text": "A teacher said my film feels like a pastiche of two famous thrillers. I'm worried the twist is borrowed. How do I make it mine in the next two weeks of editing?"
+   },
+   {
+    "id": "fd-w15",
+    "day": 9,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I recorded the dialogue in the stairwell and it has a bright echo that makes everyone sound heroic. It's wrong for the scene. Do I rerecord in a dead room or process it?"
+   },
+   {
+    "id": "fd-w16",
+    "day": 9,
+    "parent_project": "Last Call at the Rialto",
+    "text": "It's forecast to rain on the night of the rooftop shoot. I can move it, add rain deliberately with a rain tower or tent the roof. What do you recommend?"
+   },
+   {
+    "id": "fd-w17",
+    "day": 10,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I have three versions of the final two minutes. One ends with the twist reveal, one with a final sting after the twist, and one with a cut to black mid-sentence. I can't choose."
+   },
+   {
+    "id": "fd-w18",
+    "day": 10,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The poster needs a still. The best frame is a tight shot of the safe dial with a red reflection. The department prefers a face on the poster. Do I push back?"
+   },
+   {
+    "id": "fd-w19",
+    "day": 11,
+    "parent_project": "Last Call at the Rialto",
+    "text": "A producer friend wants me to add a text card at the start reading \"Based on a true story\" because it sells. It's not true. Is that fair?"
+   },
+   {
+    "id": "fd-w20",
+    "day": 11,
+    "parent_project": "Last Call at the Rialto",
+    "text": "A festival form asks me to describe the film in one line, and mine always sounds like a trailer voiceover. How do I say what it is without spoiling the twist?"
+   },
+   {
+    "id": "fd-w21",
+    "day": 12,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I must choose between a whip pan and a hard cut from the vault to the street. The whip pan is flashy and the cut is clean."
+   },
+   {
+    "id": "fd-w22",
+    "day": 12,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The only footage of the getaway car was shot on my phone from the passenger seat because the camera card failed. It's shaky but has adrenaline. Use it, reshoot it, or leave the chase out?"
+   },
+   {
+    "id": "fd-w23",
+    "day": 13,
+    "parent_project": "Last Call at the Rialto",
+    "text": "My classmate watched the cut and said she guessed the twist at the halfway mark. I'm not sure whether to hide it better or trust that most people won't. What should I do?"
+   },
+   {
+    "id": "fd-w24",
+    "day": 13,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I'm thinking of adding a flashback in the first minute that shows the crew's last job going wrong. It explains why they're nervous. Is that a good hook or a crutch?"
+   },
+   {
+    "id": "fd-w25",
+    "day": 14,
+    "parent_project": "Last Call at the Rialto",
+    "text": "I wrote an alternative ending in which the safe is empty. It would change the film's meaning and I have no budget left to shoot it. Should I do it with a cutaway and an insert?"
+   },
+   {
+    "id": "fd-w26",
+    "day": 15,
+    "parent_project": "Last Call at the Rialto",
+    "text": "The final mix is due tomorrow. I have time for one more pass. Should I spend it on the hits and impacts, on dialogue clarity, or on the music level in the last minute?"
+   }
+  ]
+ }
+}

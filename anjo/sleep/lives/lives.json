@@ -1,0 +1,1913 @@
+{
+ "version": 1,
+ "pairs": [
+  {
+   "pair_id": "P01",
+   "field": "bike repair",
+   "taste_axis": "whether a repair shop should chase fast turnaround or treat every bike to a slow full overhaul",
+   "lives": [
+    {
+     "id": "P01a",
+     "line": "Nadia, 34, runs a one-stand bike repair shop in a converted garage in Leeds and is trying to clear a backlog of commuter tune-ups before the winter rush, with only a part-time helper and a van full of back-ordered parts.",
+     "taste": "She would rather send a bike out in a day with the essentials fixed than keep it for a week.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will post a one-day turnaround promise for basic tune-ups."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will run a free brake-check stand outside the shop."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th she will sort the spare-parts bins so quick jobs stop stalling."
+      }
+     ]
+    },
+    {
+     "id": "P01b",
+     "line": "Owen, 58, restores vintage steel frames in a workshop behind his house in Sheffield and has taken on a 1978 touring bike that needs every bearing rebuilt, with a customer who wants it ready for a spring ride.",
+     "taste": "He believes a proper repair means stripping the bike to the frame and rebuilding it by hand.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will strip the bottom bracket and label every part."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th he will rebuild both wheels with new spokes."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th he will test-ride the bike and re-torque every bolt."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P01-t1",
+     "prompt": "A commuter needs a bike back by tomorrow, so what is the right call?",
+     "options": [
+      "Replace the worn chain and send it out",
+      "Strip and rebuild the whole drivetrain"
+     ],
+     "pick": {
+      "P01a": 0,
+      "P01b": 1
+     }
+    },
+    {
+     "id": "P01-t2",
+     "prompt": "A customer asks for the cheapest possible fix on a squeaky bottom bracket.",
+     "options": [
+      "Rebuild it properly or decline the job",
+      "Clean and regrease it as a stopgap"
+     ],
+     "pick": {
+      "P01a": 1,
+      "P01b": 0
+     }
+    },
+    {
+     "id": "P01-t3",
+     "prompt": "How should the shop schedule its work?",
+     "options": [
+      "Reserve the calendar for multi-day overhauls",
+      "Keep most slots open for same-day fixes"
+     ],
+     "pick": {
+      "P01a": 1,
+      "P01b": 0
+     }
+    },
+    {
+     "id": "P01-t4",
+     "prompt": "What should a basic tune-up include?",
+     "options": [
+      "A quick safety check and adjustment",
+      "A full clean, strip and rebuild"
+     ],
+     "pick": {
+      "P01a": 0,
+      "P01b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P02",
+   "field": "community gardening",
+   "taste_axis": "whether a shared garden should stay a tidy, rule-bound showcase or become a loose experimental plot",
+   "lives": [
+    {
+     "id": "P02a",
+     "line": "Priya, 41, coordinates a forty-plot community garden on a former bowling green in Bristol and is preparing for the city allotment open day, with a committee that wants every bed edged, labelled and photographed.",
+     "taste": "She thinks a shared garden should look deliberate, with straight paths, clear labels and agreed rules.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will edge the main path and fill it with fresh bark."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th she will label every bed with matching wooden markers."
+      },
+      {
+       "day": 13,
+       "text": "On the 13th she will walk the site with the committee and fix the last untidy corners."
+      }
+     ]
+    },
+    {
+     "id": "P02b",
+     "line": "Marcus, 29, took over the raised beds behind a community centre in Glasgow and is growing a chaotic mix of heritage beans, stray sunflowers and whatever neighbours bring, with almost no budget and volunteers who come and go.",
+     "taste": "He would rather let the garden look wild and see what survives than impose a plan.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will sow a packet of mixed seeds along the fence."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will build a trellis from scrap wood and old netting."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will host a seed swap on a picnic table by the gate."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P02-t1",
+     "prompt": "A volunteer wants to plant a bright orange pumpkin in the rose bed.",
+     "options": [
+      "Keep the beds to the agreed planting plan",
+      "Let it go in and see what happens"
+     ],
+     "pick": {
+      "P02a": 0,
+      "P02b": 1
+     }
+    },
+    {
+     "id": "P02-t2",
+     "prompt": "The committee asks for uniform wooden labels on every crop.",
+     "options": [
+      "Order a matching set for all the beds",
+      "Use whatever scrap wood and marker pens are around"
+     ],
+     "pick": {
+      "P02a": 0,
+      "P02b": 1
+     }
+    },
+    {
+     "id": "P02-t3",
+     "prompt": "A path floods every winter and needs a decision.",
+     "options": [
+      "Leave it muddy and route people around",
+      "Install a firm gravel path with edging"
+     ],
+     "pick": {
+      "P02a": 1,
+      "P02b": 0
+     }
+    },
+    {
+     "id": "P02-t4",
+     "prompt": "How should the communal herb bed be run?",
+     "options": [
+      "One keeper decides what goes in",
+      "Anyone plants whatever they like"
+     ],
+     "pick": {
+      "P02a": 0,
+      "P02b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P03",
+   "field": "wedding photography",
+   "taste_axis": "whether wedding photos should be posed and polished or candid and documentary",
+   "lives": [
+    {
+     "id": "P03a",
+     "line": "Elena, 37, shoots weddings around Seville and is building a portfolio of formal church-step portraits, with a couple who want every family grouping captured and a tight schedule between ceremony and dinner.",
+     "taste": "She thinks a wedding album should be composed, lit and arranged, not left to chance.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will scout the church steps at the same hour as the ceremony."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th she will print a sample album of formal portraits."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th she will reshoot three portfolio setups with a stand-in couple."
+      }
+     ]
+    },
+    {
+     "id": "P03b",
+     "line": "Theo, 26, photographs weddings along the coast of Maine and is editing a set from a rainy barn wedding, with a couple who asked for no posed shots at all.",
+     "taste": "He believes the real day is in the unposed moments and refuses to line people up.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th he will cull three thousand frames down to a first edit."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th he will build a quiet-moment sequence around the vows."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th he will meet the couple to review the draft gallery."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P03-t1",
+     "prompt": "The couple's grandmothers want a portrait together.",
+     "options": [
+      "Set up a lit, posed group shot",
+      "Photograph them talking naturally"
+     ],
+     "pick": {
+      "P03a": 0,
+      "P03b": 1
+     }
+    },
+    {
+     "id": "P03-t2",
+     "prompt": "The schedule has a twenty-minute gap before sunset.",
+     "options": [
+      "Use it for a staged golden-hour portrait",
+      "Keep shooting the reception as it unfolds"
+     ],
+     "pick": {
+      "P03a": 0,
+      "P03b": 1
+     }
+    },
+    {
+     "id": "P03-t3",
+     "prompt": "How should the album open?",
+     "options": [
+      "A wide, formal shot of the venue",
+      "A candid frame of a guest laughing"
+     ],
+     "pick": {
+      "P03a": 0,
+      "P03b": 1
+     }
+    },
+    {
+     "id": "P03-t4",
+     "prompt": "How should the couple be handled during the drinks reception?",
+     "options": [
+      "Follow the couple and let moments happen",
+      "Direct the couple into flattering poses"
+     ],
+     "pick": {
+      "P03a": 1,
+      "P03b": 0
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P04",
+   "field": "furniture restoration",
+   "taste_axis": "whether old furniture should keep its visible patina or be restored to a flawless new finish",
+   "lives": [
+    {
+     "id": "P04a",
+     "line": "Rosa, 62, restores oak furniture in a barn workshop outside Galway and is working on a Victorian dresser with a water-stained top, with a client who wants it usable but not overdone.",
+     "taste": "She believes every scratch and repair is part of the piece's history and should stay visible.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will clean the top and feed it with wax."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th she will repair the sticking drawer runner."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th she will photograph the before and after for a local talk."
+      }
+     ]
+    },
+    {
+     "id": "P04b",
+     "line": "Danny, 45, runs a furniture workshop in Portland, Oregon, and is refinishing a mid-century sideboard for a showroom, with a two-week deadline and a client who wants it flawless.",
+     "taste": "He thinks a restored piece should look factory-new, with no trace of its old finish.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will strip the old lacquer down to bare veneer."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will spray three coats of new finish."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th he will buff the top and reassemble the handles."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P04-t1",
+     "prompt": "A table has a deep cigarette burn in the top.",
+     "options": [
+      "Fill it and blend the colour, leaving the scar visible",
+      "Sand the whole top back and refinish it evenly"
+     ],
+     "pick": {
+      "P04a": 0,
+      "P04b": 1
+     }
+    },
+    {
+     "id": "P04-t2",
+     "prompt": "The client asks whether to keep the original brass handles.",
+     "options": [
+      "Keep the tarnished originals",
+      "Replace them with polished new ones"
+     ],
+     "pick": {
+      "P04a": 0,
+      "P04b": 1
+     }
+    },
+    {
+     "id": "P04-t3",
+     "prompt": "How should a wobbly chair leg be fixed?",
+     "options": [
+      "Fit a new matching leg and refinish the chair",
+      "Glue and pin the original leg, scar and all"
+     ],
+     "pick": {
+      "P04a": 1,
+      "P04b": 0
+     }
+    },
+    {
+     "id": "P04-t4",
+     "prompt": "What should the final finish be?",
+     "options": [
+      "A thin wax that shows the grain and age",
+      "A hard, even lacquer with a uniform sheen"
+     ],
+     "pick": {
+      "P04a": 0,
+      "P04b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P05",
+   "field": "small bakery",
+   "taste_axis": "whether a bakery menu should stay short and perfected or rotate with new experiments",
+   "lives": [
+    {
+     "id": "P05a",
+     "line": "Ana, 30, runs a tiny bakery in a former newsagent in Porto and is choosing what to bake for the Christmas market, with one oven, two staff and a stall booked for a single day.",
+     "taste": "She would rather bake five things perfectly than fifteen things decently.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will finalize a five-item market menu."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th she will test-bake a full batch of each item."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th she will price the boxes and print the labels."
+      }
+     ]
+    },
+    {
+     "id": "P05b",
+     "line": "Gus, 52, owns a bakery cart in Melbourne and is planning a winter menu, with a tiny kitchen and regulars who expect something new every week.",
+     "taste": "He gets bored baking the same thing and would rather try a new flavour every week.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will test a black-sesame scroll."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will trial a miso caramel bun."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th he will ask regulars to vote on next week's bake."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P05-t1",
+     "prompt": "A regular asks for the same sourdough every week.",
+     "options": [
+      "Keep it as the one unchanging loaf",
+      "Rotate it out for a new grain blend next month"
+     ],
+     "pick": {
+      "P05a": 0,
+      "P05b": 1
+     }
+    },
+    {
+     "id": "P05-t2",
+     "prompt": "The counter has room for one new item.",
+     "options": [
+      "Perfect the existing bun further",
+      "Swap in an untested seasonal flavour"
+     ],
+     "pick": {
+      "P05a": 0,
+      "P05b": 1
+     }
+    },
+    {
+     "id": "P05-t3",
+     "prompt": "A supplier offers a cheap sack of unfamiliar flour.",
+     "options": [
+      "Try it in a small weekly special",
+      "Stick to the flour the recipes are built on"
+     ],
+     "pick": {
+      "P05a": 1,
+      "P05b": 0
+     }
+    },
+    {
+     "id": "P05-t4",
+     "prompt": "How should the menu board look?",
+     "options": [
+      "The same short list, unchanged for months",
+      "A chalkboard that changes every Monday"
+     ],
+     "pick": {
+      "P05a": 0,
+      "P05b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P06",
+   "field": "podcast production",
+   "taste_axis": "whether a podcast should be tightly edited and polished or left as a long unedited conversation",
+   "lives": [
+    {
+     "id": "P06a",
+     "line": "Kenji, 38, produces a history podcast from a spare room in Osaka and is editing a ninety-minute interview down to thirty-five minutes, with a release deadline on Friday.",
+     "taste": "He thinks every pause and tangent should be cut so the episode moves.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will finish the first rough cut."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will add music beds and clean the audio."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will send the episode to the host for notes."
+      }
+     ]
+    },
+    {
+     "id": "P06b",
+     "line": "Mara, 27, records an interview show in a Brooklyn basement and is uploading a two-hour conversation, with no budget for editing help and guests who arrive with stories to tell.",
+     "taste": "She thinks the tangents and pauses are the point and leaves them in.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will upload the raw episode with a short text intro."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th she will record a new guest in the basement."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th she will add chapter markers by hand."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P06-t1",
+     "prompt": "A guest rambles for four minutes about their dog.",
+     "options": [
+      "Cut the story down to one line",
+      "Leave the whole dog story in"
+     ],
+     "pick": {
+      "P06a": 0,
+      "P06b": 1
+     }
+    },
+    {
+     "id": "P06-t2",
+     "prompt": "The episode runs twenty minutes over the target slot.",
+     "options": [
+      "Trim until it fits the slot",
+      "Publish it at full length"
+     ],
+     "pick": {
+      "P06a": 0,
+      "P06b": 1
+     }
+    },
+    {
+     "id": "P06-t3",
+     "prompt": "How should silences be handled?",
+     "options": [
+      "Keep the natural pauses and ums",
+      "Cut every gap so it sounds scripted"
+     ],
+     "pick": {
+      "P06a": 1,
+      "P06b": 0
+     }
+    },
+    {
+     "id": "P06-t4",
+     "prompt": "What should the opening be?",
+     "options": [
+      "A tightly scripted thirty-second intro",
+      "The guest mid-sentence, with no intro"
+     ],
+     "pick": {
+      "P06a": 0,
+      "P06b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P07",
+   "field": "astronomy guidebook writing",
+   "taste_axis": "whether a stargazing guide should be a simple beginner handbook or a deep technical reference",
+   "lives": [
+    {
+     "id": "P07a",
+     "line": "Hugh, 66, a retired postal worker in rural Norfolk, is writing a stargazing guide for his village astronomy club, with a self-published budget and no money for illustrations.",
+     "taste": "He wants a book a total beginner can use on the first clear night.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd he will draft the first-night chapter."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will test the instructions with a neighbour in the back garden."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th he will sketch simple sky maps by hand."
+      }
+     ]
+    },
+    {
+     "id": "P07b",
+     "line": "Ingrid, 44, an office administrator in northern Sweden, is compiling a detailed guide to variable-star observing, with years of her own logbooks and a small print run.",
+     "taste": "She thinks a guide should assume curiosity and give the full technical detail.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd she will compile the magnitude tables."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th she will write the photometry chapter."
+      },
+      {
+       "day": 13,
+       "text": "On the 13th she will check every citation against her logbooks."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P07-t1",
+     "prompt": "How should the book explain finding Polaris?",
+     "options": [
+      "Two sentences and a simple sketch",
+      "A full section on coordinate systems"
+     ],
+     "pick": {
+      "P07a": 0,
+      "P07b": 1
+     }
+    },
+    {
+     "id": "P07-t2",
+     "prompt": "What should the equipment chapter cover?",
+     "options": [
+      "Telescope optics, mounts and sensors",
+      "Binoculars and the naked eye only"
+     ],
+     "pick": {
+      "P07a": 1,
+      "P07b": 0
+     }
+    },
+    {
+     "id": "P07-t3",
+     "prompt": "A page needs a star chart.",
+     "options": [
+      "A rough sketch with three bright stars marked",
+      "A detailed chart with magnitudes and labels"
+     ],
+     "pick": {
+      "P07a": 0,
+      "P07b": 1
+     }
+    },
+    {
+     "id": "P07-t4",
+     "prompt": "Who is the imagined reader?",
+     "options": [
+      "Someone already keeping nightly records",
+      "Someone who has never looked up"
+     ],
+     "pick": {
+      "P07a": 1,
+      "P07b": 0
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P08",
+   "field": "bookbinding",
+   "taste_axis": "whether binding should use historically accurate materials or modern durable methods",
+   "lives": [
+    {
+     "id": "P08a",
+     "line": "Bea, 49, repairs books in a studio above a laundrette in Edinburgh and is rebinding a 1902 family Bible, with an owner who wants it to last another century.",
+     "taste": "She uses period-correct cloth, thread and glue even when it takes weeks.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will sew the text block by hand."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th she will order archival cloth and thread."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th she will tool the spine and press the book."
+      }
+     ]
+    },
+    {
+     "id": "P08b",
+     "line": "Sol, 33, runs a small bindery in Toronto and is making two hundred notebooks for a design fair, with three weeks and a tight materials budget.",
+     "taste": "He uses modern adhesives and machines because a book should survive daily use, not match a museum.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will test three glue batches on scrap blocks."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will cut and score the covers."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will run the first print and bind batch."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P08-t1",
+     "prompt": "A customer wants a cheap, sturdy notebook.",
+     "options": [
+      "Sew it by hand with linen thread",
+      "Glue-bind it with modern adhesive"
+     ],
+     "pick": {
+      "P08a": 0,
+      "P08b": 1
+     }
+    },
+    {
+     "id": "P08-t2",
+     "prompt": "The Bible's original spine is crumbling.",
+     "options": [
+      "Rebuild it with period cloth and hide glue",
+      "Replace the spine with a modern buckram case"
+     ],
+     "pick": {
+      "P08a": 0,
+      "P08b": 1
+     }
+    },
+    {
+     "id": "P08-t3",
+     "prompt": "How should two hundred notebooks be finished?",
+     "options": [
+      "Machine-bind them so they hold up to daily use",
+      "Hand-sew every one, however long it takes"
+     ],
+     "pick": {
+      "P08a": 1,
+      "P08b": 0
+     }
+    },
+    {
+     "id": "P08-t4",
+     "prompt": "What matters most in a repair?",
+     "options": [
+      "That it looks and feels original",
+      "That it will not fail again"
+     ],
+     "pick": {
+      "P08a": 0,
+      "P08b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P09",
+   "field": "clothing alterations",
+   "taste_axis": "whether alterations should be invisible and faithful or bold and visibly restyled",
+   "lives": [
+    {
+     "id": "P09a",
+     "line": "Mei, 55, runs an alterations shop above a hardware store in Vancouver and is taking in a wedding suit for a customer's father, with one week before the event.",
+     "taste": "She believes an alteration should be undetectable, matching thread and original seams.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will pin the jacket for the final fit."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will match thread and rebuild the inner seams."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th she will press the suit and check it in daylight."
+      }
+     ]
+    },
+    {
+     "id": "P09b",
+     "line": "Ravi, 24, restyles charity-shop clothes in a shared studio in Manchester and is turning a man's overcoat into a cropped jacket, with a market stall booked in ten days.",
+     "taste": "He thinks clothes should be visibly remade, with new shapes and contrast stitching.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will draft the new pattern on newspaper."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will cut and stitch the cropped jacket."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will finish a rack of stock for the stall."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P09-t1",
+     "prompt": "A customer's jacket is too long.",
+     "options": [
+      "Take up the hem so no one can tell",
+      "Crop it short with a visible raw edge"
+     ],
+     "pick": {
+      "P09a": 0,
+      "P09b": 1
+     }
+    },
+    {
+     "id": "P09-t2",
+     "prompt": "A dress has a torn sleeve.",
+     "options": [
+      "Patch it from the inside with matching fabric",
+      "Patch it on the outside in a contrast colour"
+     ],
+     "pick": {
+      "P09a": 0,
+      "P09b": 1
+     }
+    },
+    {
+     "id": "P09-t3",
+     "prompt": "How should a worn coat be repaired?",
+     "options": [
+      "Rebuild it into a new silhouette",
+      "Match the original seams so the fix disappears"
+     ],
+     "pick": {
+      "P09a": 1,
+      "P09b": 0
+     }
+    },
+    {
+     "id": "P09-t4",
+     "prompt": "A client asks for a new look on an old suit.",
+     "options": [
+      "Adjust the fit and keep the style",
+      "Recut it into something clearly different"
+     ],
+     "pick": {
+      "P09a": 0,
+      "P09b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P10",
+   "field": "ceramics",
+   "taste_axis": "whether pottery should be repeatable production ware or one-off irregular pieces",
+   "lives": [
+    {
+     "id": "P10a",
+     "line": "Tomas, 41, throws mugs in a shared pottery in Vilnius and has an order for one hundred and twenty matching cafe mugs, with one kiln and a four-week deadline.",
+     "taste": "He finds beauty in a set that matches, with consistent walls and glazes.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd he will throw forty cylinders to the same weight."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th he will trim the mugs and attach the handles."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th he will fire glaze test tiles."
+      }
+     ]
+    },
+    {
+     "id": "P10b",
+     "line": "June, 31, makes sculptural bowls in a garage studio in rural Vermont and is preparing for a craft fair, with clay that behaves differently in every firing.",
+     "taste": "She wants every piece to be visibly hand-made and slightly wrong.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd she will wedge a new batch of clay."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will build three large coil bowls."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th she will fire a test kiln load."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P10-t1",
+     "prompt": "A cafe orders one hundred and twenty mugs.",
+     "options": [
+      "Throw them to a consistent size",
+      "Make each one a slightly different shape"
+     ],
+     "pick": {
+      "P10a": 0,
+      "P10b": 1
+     }
+    },
+    {
+     "id": "P10-t2",
+     "prompt": "A glaze batch comes out uneven.",
+     "options": [
+      "Adjust the recipe until it repeats",
+      "Keep the variation as part of the look"
+     ],
+     "pick": {
+      "P10a": 0,
+      "P10b": 1
+     }
+    },
+    {
+     "id": "P10-t3",
+     "prompt": "How should a dinner set be sold?",
+     "options": [
+      "As individual, mismatched pieces",
+      "As a matched set of six"
+     ],
+     "pick": {
+      "P10a": 1,
+      "P10b": 0
+     }
+    },
+    {
+     "id": "P10-t4",
+     "prompt": "What makes a good rim?",
+     "options": [
+      "A clean, identical profile on every piece",
+      "A wobbly edge that shows the hand"
+     ],
+     "pick": {
+      "P10a": 0,
+      "P10b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P11",
+   "field": "home brewing",
+   "taste_axis": "whether brewing should follow proven recipes exactly or improvise with local ingredients",
+   "lives": [
+    {
+     "id": "P11a",
+     "line": "Colin, 47, brews beer in his garage in Dunedin and is making a porter for his brother's birthday, with a borrowed fermenter and a recipe he has used for years.",
+     "taste": "He trusts a tested recipe and changes nothing until it is repeatable.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd he will mill the grain and check the recipe."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will brew the batch from start to finish."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will check the gravity and log it."
+      }
+     ]
+    },
+    {
+     "id": "P11b",
+     "line": "Sofia, 35, brews in a tiny flat in Lisbon and is experimenting with a beer flavoured with fig leaves from her aunt's garden, with no temperature control.",
+     "taste": "She would rather throw in something local and see what happens than follow a recipe.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will pick and dry fig leaves."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th she will brew a small trial batch."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th she will taste it and write notes."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P11-t1",
+     "prompt": "The recipe calls for one hop, and a neighbour offers homegrown hops.",
+     "options": [
+      "Stick to the measured recipe",
+      "Add the homegrown hops and adjust later"
+     ],
+     "pick": {
+      "P11a": 0,
+      "P11b": 1
+     }
+    },
+    {
+     "id": "P11-t2",
+     "prompt": "Fermentation is running warmer than planned.",
+     "options": [
+      "Follow the recipe's temperature schedule anyway",
+      "Let it run and taste what develops"
+     ],
+     "pick": {
+      "P11a": 0,
+      "P11b": 1
+     }
+    },
+    {
+     "id": "P11-t3",
+     "prompt": "A batch tastes flat and needs a diagnosis.",
+     "options": [
+      "Change the grain bill on a hunch",
+      "Repeat the same recipe to find the fault"
+     ],
+     "pick": {
+      "P11a": 1,
+      "P11b": 0
+     }
+    },
+    {
+     "id": "P11-t4",
+     "prompt": "How should a new beer be planned?",
+     "options": [
+      "Scale a known recipe to the batch size",
+      "Start from whatever is in season"
+     ],
+     "pick": {
+      "P11a": 0,
+      "P11b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P12",
+   "field": "guitar repair",
+   "taste_axis": "whether a guitar should be restored to factory-original condition or modified for modern playability",
+   "lives": [
+    {
+     "id": "P12a",
+     "line": "Frank, 60, repairs guitars in a basement workshop in Nashville and is restoring a 1960s acoustic with a cracked brace, with an owner who wants it exactly as it left the factory.",
+     "taste": "He keeps every original part, even the worn ones, and hides all repairs.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd he will glue and clamp the cracked brace."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th he will cleat the top crack from the inside."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th he will restring the guitar and set the action."
+      }
+     ]
+    },
+    {
+     "id": "P12b",
+     "line": "Zoe, 29, sets up guitars for touring bands in a rented room in Austin and is fitting a modern bridge and pickups to a battered electric, with a gig in two weeks.",
+     "taste": "She thinks a guitar is a tool and will happily change anything that makes it easier to play.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd she will route the pickup cavity."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will fit the new bridge and check intonation."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th she will set the guitar up for the gig."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P12-t1",
+     "prompt": "A vintage guitar has a worn original bridge.",
+     "options": [
+      "Keep the original, worn bridge",
+      "Fit a new bridge for better intonation"
+     ],
+     "pick": {
+      "P12a": 0,
+      "P12b": 1
+     }
+    },
+    {
+     "id": "P12-t2",
+     "prompt": "A customer wants a strap button added.",
+     "options": [
+      "Add it where it is most useful",
+      "Refuse, to keep the guitar original"
+     ],
+     "pick": {
+      "P12a": 1,
+      "P12b": 0
+     }
+    },
+    {
+     "id": "P12-t3",
+     "prompt": "The frets are worn flat.",
+     "options": [
+      "Level the original frets",
+      "Replace them with a modern profile"
+     ],
+     "pick": {
+      "P12a": 0,
+      "P12b": 1
+     }
+    },
+    {
+     "id": "P12-t4",
+     "prompt": "How should a scratch in the finish be treated?",
+     "options": [
+      "Leave it as honest wear",
+      "Drop-fill and polish it out"
+     ],
+     "pick": {
+      "P12a": 0,
+      "P12b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P13",
+   "field": "coffee roasting",
+   "taste_axis": "whether coffee should be roasted light and bright or dark and comforting",
+   "lives": [
+    {
+     "id": "P13a",
+     "line": "Lena, 36, roasts small batches in a converted garage in Copenhagen and is profiling a Kenyan lot for a cafe, with a twelve-kilo roaster and a buyer who wants fruit and acidity.",
+     "taste": "She roasts just past first crack to keep the fruit and acidity.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will roast three profiles for comparison."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will cup the samples with the buyer."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th she will finalize the label and order."
+      }
+     ]
+    },
+    {
+     "id": "P13b",
+     "line": "Otis, 50, runs a coffee cart outside a train station in Chicago and is developing a house blend for winter, with a small roaster and regulars who want something smooth.",
+     "taste": "He roasts dark and sweet because that is what people actually drink.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will order the green beans for the blend."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will roast the first house blend."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will taste it with regulars at the cart."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P13-t1",
+     "prompt": "A cafe asks for a roast that works with milk.",
+     "options": [
+      "A light roast that keeps its fruit",
+      "A darker roast that cuts through milk"
+     ],
+     "pick": {
+      "P13a": 0,
+      "P13b": 1
+     }
+    },
+    {
+     "id": "P13-t2",
+     "prompt": "How should a natural Ethiopian lot be roasted?",
+     "options": [
+      "Light, to keep the berry notes",
+      "Dark, to bring out chocolate"
+     ],
+     "pick": {
+      "P13a": 0,
+      "P13b": 1
+     }
+    },
+    {
+     "id": "P13-t3",
+     "prompt": "What should the house blend taste like?",
+     "options": [
+      "Sweet, roasty and familiar",
+      "Bright, sharp and complex"
+     ],
+     "pick": {
+      "P13a": 1,
+      "P13b": 0
+     }
+    },
+    {
+     "id": "P13-t4",
+     "prompt": "When should roasting stop?",
+     "options": [
+      "Right after first crack",
+      "Well into second crack"
+     ],
+     "pick": {
+      "P13a": 0,
+      "P13b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P14",
+   "field": "beekeeping",
+   "taste_axis": "whether hives should be managed hands-off and naturally or intensively for yield",
+   "lives": [
+    {
+     "id": "P14a",
+     "line": "Marta, 58, keeps six hives at the edge of a meadow in Slovenia and is leaving the bees enough honey for winter, with varroa pressure and a small harvest.",
+     "taste": "She interferes as little as possible and accepts a smaller harvest.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will check the entrance reducers."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th she will leave the supers on the hives."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th she will weigh each hive and record it."
+      }
+     ]
+    },
+    {
+     "id": "P14b",
+     "line": "Damon, 39, manages forty hives across farms in central California and is preparing for almond pollination, with trucking deadlines and a crew of two.",
+     "taste": "He inspects weekly, treats early and pushes for maximum honey and colony strength.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will treat the apiary for mites."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will equalize brood between hives."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th he will load the hives for the trip."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P14-t1",
+     "prompt": "A hive is light on stores in autumn.",
+     "options": [
+      "Leave the honey for the bees",
+      "Take the crop and feed syrup"
+     ],
+     "pick": {
+      "P14a": 0,
+      "P14b": 1
+     }
+    },
+    {
+     "id": "P14-t2",
+     "prompt": "Varroa mites are found in several hives.",
+     "options": [
+      "Wait and let the colony cope",
+      "Treat the whole apiary now"
+     ],
+     "pick": {
+      "P14a": 0,
+      "P14b": 1
+     }
+    },
+    {
+     "id": "P14-t3",
+     "prompt": "How often should hives be opened?",
+     "options": [
+      "Every week through the season",
+      "Once a month at most"
+     ],
+     "pick": {
+      "P14a": 1,
+      "P14b": 0
+     }
+    },
+    {
+     "id": "P14-t4",
+     "prompt": "What counts as a good season?",
+     "options": [
+      "Healthy bees and a modest crop",
+      "A big crop and strong colonies"
+     ],
+     "pick": {
+      "P14a": 0,
+      "P14b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P15",
+   "field": "letterpress printing",
+   "taste_axis": "whether printing should stay with hand-set metal type or use modern plates for speed",
+   "lives": [
+    {
+     "id": "P15a",
+     "line": "Gwen, 70, prints wedding invitations on a 1920s press in a converted chapel in Wales and is setting a long invitation by hand, with failing eyesight and a tight client deadline.",
+     "taste": "She believes the press should be used as it was, with metal type and hand-set spacing.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will set the first forme in the composing stick."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will proof it and correct the spacing."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th she will print eighty invitations."
+      }
+     ]
+    },
+    {
+     "id": "P15b",
+     "line": "Ali, 32, runs a print studio in Bristol and is producing five hundred posters for a record shop, with a platemaker and a two-colour press.",
+     "taste": "He uses polymer plates and digital art because the point is the printed result, not the process.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will output the plates from the artwork."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will mix the inks."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will run the full edition."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P15-t1",
+     "prompt": "A client wants five hundred posters by Friday.",
+     "options": [
+      "Hand-set a short run and accept the delay",
+      "Make polymer plates and print fast"
+     ],
+     "pick": {
+      "P15a": 0,
+      "P15b": 1
+     }
+    },
+    {
+     "id": "P15-t2",
+     "prompt": "A logo has very fine detail.",
+     "options": [
+      "Redraw it for metal type",
+      "Keep the detail on a polymer plate"
+     ],
+     "pick": {
+      "P15a": 0,
+      "P15b": 1
+     }
+    },
+    {
+     "id": "P15-t3",
+     "prompt": "What should a workshop teach first?",
+     "options": [
+      "Preparing artwork for photopolymer",
+      "Setting type by hand in a composing stick"
+     ],
+     "pick": {
+      "P15a": 1,
+      "P15b": 0
+     }
+    },
+    {
+     "id": "P15-t4",
+     "prompt": "How should a small invitation order be priced?",
+     "options": [
+      "By the hours of hand-setting",
+      "By the cost of plates and press time"
+     ],
+     "pick": {
+      "P15a": 0,
+      "P15b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P16",
+   "field": "clock repair",
+   "taste_axis": "whether old clocks should keep their original mechanisms or receive modern quartz movements",
+   "lives": [
+    {
+     "id": "P16a",
+     "line": "Arthur, 74, repairs clocks in a front room in Bath and is cleaning a nineteenth-century longcase clock, with a bent escapement and an owner who wants it to keep running.",
+     "taste": "He will spend days making a part rather than swap in a modern movement.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th he will strip the movement and label the parts."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th he will make a replacement pivot."
+      },
+      {
+       "day": 13,
+       "text": "On the 13th he will reassemble the clock and test it for a day."
+      }
+     ]
+    },
+    {
+     "id": "P16b",
+     "line": "Nia, 28, runs a clock repair counter in Cardiff and is servicing a batch of shop clocks, with customers who want them working cheaply and quickly.",
+     "taste": "She fits quartz movements when the old mechanism is beyond economic repair.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd she will order a batch of quartz movements."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th she will fit movements to three clocks."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th she will test and label the finished clocks."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P16-t1",
+     "prompt": "A grandfather clock needs a new mainspring.",
+     "options": [
+      "Have one made to the original spec",
+      "Fit a modern replacement movement"
+     ],
+     "pick": {
+      "P16a": 0,
+      "P16b": 1
+     }
+    },
+    {
+     "id": "P16-t2",
+     "prompt": "A customer wants a cheap fix for a broken mantel clock.",
+     "options": [
+      "Quote for a full mechanical rebuild",
+      "Swap in a quartz movement"
+     ],
+     "pick": {
+      "P16a": 0,
+      "P16b": 1
+     }
+    },
+    {
+     "id": "P16-t3",
+     "prompt": "What should happen to a water-damaged movement?",
+     "options": [
+      "Replace it with a quartz unit",
+      "Restore the original brass"
+     ],
+     "pick": {
+      "P16a": 1,
+      "P16b": 0
+     }
+    },
+    {
+     "id": "P16-t4",
+     "prompt": "How should repairs be documented?",
+     "options": [
+      "Photograph and log every original part",
+      "Note only the parts replaced"
+     ],
+     "pick": {
+      "P16a": 0,
+      "P16b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P17",
+   "field": "picture framing",
+   "taste_axis": "whether frames should be minimal and quiet or ornate and statement-making",
+   "lives": [
+    {
+     "id": "P17a",
+     "line": "Iris, 43, runs a framing shop above a bakery in Amsterdam and is framing a series of small landscape prints for a cafe, with a strict budget and a tight wall space.",
+     "taste": "She chooses the thinnest frame and widest mat so the picture does all the talking.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd she will measure the cafe wall and plan the hang."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will cut the mats and frames."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th she will hang the set and level it."
+      }
+     ]
+    },
+    {
+     "id": "P17b",
+     "line": "Bruno, 57, frames paintings in a workshop in Naples and is framing a large portrait for a family hallway, with an ornate moulding he has been saving.",
+     "taste": "He thinks a frame is part of the artwork and should be big, gilded and noticeable.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will join the frame corners."
+      },
+      {
+       "day": 5,
+       "text": "On the 5th he will gild the moulding."
+      },
+      {
+       "day": 9,
+       "text": "On the 9th he will fit the canvas and deliver it."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P17-t1",
+     "prompt": "A small watercolour needs a frame.",
+     "options": [
+      "A thin black frame with a wide white mat",
+      "A wide gilt frame with carved corners"
+     ],
+     "pick": {
+      "P17a": 0,
+      "P17b": 1
+     }
+    },
+    {
+     "id": "P17-t2",
+     "prompt": "A cafe wall has six prints to frame.",
+     "options": [
+      "Identical simple frames so they read as a set",
+      "Six different ornate frames for variety"
+     ],
+     "pick": {
+      "P17a": 0,
+      "P17b": 1
+     }
+    },
+    {
+     "id": "P17-t3",
+     "prompt": "How should a hallway mirror be framed?",
+     "options": [
+      "An elaborate gilded surround",
+      "A plain oak strip, barely there"
+     ],
+     "pick": {
+      "P17a": 1,
+      "P17b": 0
+     }
+    },
+    {
+     "id": "P17-t4",
+     "prompt": "What should the mat do?",
+     "options": [
+      "Stay wide and quiet around the image",
+      "Add a coloured border and gold slip"
+     ],
+     "pick": {
+      "P17a": 0,
+      "P17b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P18",
+   "field": "upholstery",
+   "taste_axis": "whether furniture should be reupholstered faithfully or reimagined in modern fabric",
+   "lives": [
+    {
+     "id": "P18a",
+     "line": "Colette, 64, reupholsters chairs in a shed in rural France and is restoring a set of six dining chairs, with original horsehair stuffing and a client who wants them as they were.",
+     "taste": "She keeps the original shape, stuffings and fabric patterns wherever possible.",
+     "plans": [
+      {
+       "day": 4,
+       "text": "On the 4th she will strip one chair down to the frame."
+      },
+      {
+       "day": 8,
+       "text": "On the 8th she will rebuild the horsehair stuffing."
+      },
+      {
+       "day": 12,
+       "text": "On the 12th she will cut and fit the new covers."
+      }
+     ]
+    },
+    {
+     "id": "P18b",
+     "line": "Kai, 30, upholsters furniture in a railway arch in London and is covering a 1970s sofa in bright boucle, with a client who wants a statement piece.",
+     "taste": "He treats old furniture as a blank shape and picks bold modern fabrics.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd he will strip the sofa to the frame."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th he will cut the boucle and piping."
+      },
+      {
+       "day": 10,
+       "text": "On the 10th he will fit the covers and finish the legs."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P18-t1",
+     "prompt": "A chair's original fabric is faded but intact.",
+     "options": [
+      "Keep and clean the original fabric",
+      "Replace it with a bold modern weave"
+     ],
+     "pick": {
+      "P18a": 0,
+      "P18b": 1
+     }
+    },
+    {
+     "id": "P18-t2",
+     "prompt": "A sofa has a tufted back.",
+     "options": [
+      "Rebuild the tufting as it was",
+      "Smooth the back and change the shape"
+     ],
+     "pick": {
+      "P18a": 0,
+      "P18b": 1
+     }
+    },
+    {
+     "id": "P18-t3",
+     "prompt": "What fabric suits a family dining set?",
+     "options": [
+      "A bright graphic print",
+      "A hard-wearing match to the original"
+     ],
+     "pick": {
+      "P18a": 1,
+      "P18b": 0
+     }
+    },
+    {
+     "id": "P18-t4",
+     "prompt": "How should worn springs be handled?",
+     "options": [
+      "Repair and reuse the original springs",
+      "Replace them with modern foam"
+     ],
+     "pick": {
+      "P18a": 0,
+      "P18b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P19",
+   "field": "cabinetmaking",
+   "taste_axis": "whether cabinets should be built with slow hand-cut joinery or fast power-tool production",
+   "lives": [
+    {
+     "id": "P19a",
+     "line": "Hector, 68, makes cabinets in a workshop behind his house in Oaxaca and is building a walnut dresser for his granddaughter, with hand tools and no deadline.",
+     "taste": "He cuts dovetails by hand and refuses to hurry a piece.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On the 3rd he will cut the dovetails for the top drawers."
+      },
+      {
+       "day": 7,
+       "text": "On the 7th he will fit the drawers by hand."
+      },
+      {
+       "day": 13,
+       "text": "On the 13th he will apply oil to the finished dresser."
+      }
+     ]
+    },
+    {
+     "id": "P19b",
+     "line": "Tess, 34, runs a kitchen-fitting workshop in Calgary and is building fourteen cabinet boxes for a rental renovation, with a crew and a three-week schedule.",
+     "taste": "She uses jigs, power tools and flat-pack logic because kitchens need to be finished on time.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On the 2nd she will cut all the panels on the saw."
+      },
+      {
+       "day": 6,
+       "text": "On the 6th she will assemble the cabinet boxes."
+      },
+      {
+       "day": 11,
+       "text": "On the 11th she will install the first kitchen run."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P19-t1",
+     "prompt": "A client wants a custom bookshelf in two weeks.",
+     "options": [
+      "Build it with hand-cut joints, however long",
+      "Cut it with jigs and assemble fast"
+     ],
+     "pick": {
+      "P19a": 0,
+      "P19b": 1
+     }
+    },
+    {
+     "id": "P19-t2",
+     "prompt": "How should drawer joints be made?",
+     "options": [
+      "Hand-cut dovetails",
+      "Biscuits and screws"
+     ],
+     "pick": {
+      "P19a": 0,
+      "P19b": 1
+     }
+    },
+    {
+     "id": "P19-t3",
+     "prompt": "A kitchen has fourteen identical cabinets.",
+     "options": [
+      "Batch them out on a jig",
+      "Build each one individually by hand"
+     ],
+     "pick": {
+      "P19a": 1,
+      "P19b": 0
+     }
+    },
+    {
+     "id": "P19-t4",
+     "prompt": "What matters most in a finished piece?",
+     "options": [
+      "That the joinery is visible and precise",
+      "That it fits the space and the schedule"
+     ],
+     "pick": {
+      "P19a": 0,
+      "P19b": 1
+     }
+    }
+   ]
+  },
+  {
+   "pair_id": "P20",
+   "field": "wooden boat building",
+   "taste_axis": "traditional hand-tooled plank hulls versus fast modern plywood-and-epoxy builds",
+   "lives": [
+    {
+     "id": "P20a",
+     "line": "Marguerite, 64, a retired school bus driver in coastal Maine, is building a 12-foot cedar skiff alone in an unheated garage before the first snow.",
+     "taste": "Prefers traditional plank-on-frame work with hand tools, copper rivets, and no epoxy, even if it takes two winters.",
+     "plans": [
+      {
+       "day": 3,
+       "text": "On day 3 she will steam four cedar ribs in a borrowed kettle and bend them into the hull while they are still hot."
+      },
+      {
+       "day": 6,
+       "text": "On day 6 she will sharpen her drawknife and block plane and fair the stem by eye."
+      },
+      {
+       "day": 10,
+       "text": "On day 10 she will drive copper rivets along the garboard strake with her late husband's hammer."
+      },
+      {
+       "day": 13,
+       "text": "On day 13 she will flip the hull with two neighbors and start scraping the outside seams."
+      }
+     ]
+    },
+    {
+     "id": "P20b",
+     "line": "Dev, 33, a bike courier in Seattle, is building a stitch-and-glue plywood kayak in a shared workshop so he can paddle it before the summer ends.",
+     "taste": "Prefers modern plywood-and-epoxy construction with jigs and power tools, valuing speed, light weight, and a launch this season.",
+     "plans": [
+      {
+       "day": 2,
+       "text": "On day 2 he will cut the plywood panels from a kit and tape the seams with fiberglass."
+      },
+      {
+       "day": 5,
+       "text": "On day 5 he will mix a batch of epoxy and coat the hull's interior before the workshop's evening class starts."
+      },
+      {
+       "day": 9,
+       "text": "On day 9 he will sand the cured fillets with a random-orbit sander and fit the cockpit rim."
+      },
+      {
+       "day": 12,
+       "text": "On day 12 he will paint the hull a flat green and test the weight against his car roof rack."
+      }
+     ]
+    }
+   ],
+   "taste_ab": [
+    {
+     "id": "P20-t1",
+     "prompt": "Which hull skin would you rather build?",
+     "options": [
+      "Steam-bent cedar planks fastened with copper rivets",
+      "Stitch-and-glue plywood panels sealed with epoxy"
+     ],
+     "pick": {
+      "P20a": 0,
+      "P20b": 1
+     }
+    },
+    {
+     "id": "P20-t2",
+     "prompt": "Which timeline sits better with you?",
+     "options": [
+      "Launch this season with a quick plywood build",
+      "Spend two winters finishing a hand-riveted hull"
+     ],
+     "pick": {
+      "P20a": 1,
+      "P20b": 0
+     }
+    },
+    {
+     "id": "P20-t3",
+     "prompt": "How do you want to shape the frames?",
+     "options": [
+      "Hand saws and a drawknife, checked by eye",
+      "A band saw and plywood jigs for identical parts"
+     ],
+     "pick": {
+      "P20a": 0,
+      "P20b": 1
+     }
+    },
+    {
+     "id": "P20-t4",
+     "prompt": "What does a good Saturday at the bench look like?",
+     "options": [
+      "Sharpening chisels and fitting one joint by hand",
+      "Gluing a whole panel and trimming it to shape"
+     ],
+     "pick": {
+      "P20a": 0,
+      "P20b": 1
+     }
+    }
+   ]
+  }
+ ]
+}
