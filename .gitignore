@@ -1,0 +1,40 @@
+# Published as the root .gitignore of the public repo; in the private repo it covers anjo/sleep.
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets: keys come from the environment, never from a file in git
+.env
+.env.*
+*.pem
+*.key
+
+# Weights and checkpoints never go in git (spec §12.1)
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.ckpt
+adapters/
+checkpoints/
+
+# Run data and sealed tests live in $ANJO_DATA_DIR, never in the repo
+data/
+sealed/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
