@@ -61,14 +61,8 @@ def test_core_imports_no_private_anjo() -> None:
         relative = path.relative_to(SLEEP)
         if relative.parts[0] == "app" or relative.parts[:2] == ("tests", "app"):
             continue  # the adapters, and their tests: the published tree leaves both out
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        # a test may import private Anjo lazily inside a function (it skips itself without it);
-        # a module-level import would break collection in the published tree
-        scanned = ast.Module(
-            body=[n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom)], type_ignores=[],
-        ) if relative.parts[0] == "tests" else tree
         private = {
-            name for name in _anjo_imports(ast.unparse(scanned))
+            name for name in _anjo_imports(path.read_text(encoding="utf-8"))
             if name != "anjo.sleep" and not name.startswith("anjo.sleep.")
         }
         if private:
