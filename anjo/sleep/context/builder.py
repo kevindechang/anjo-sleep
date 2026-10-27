@@ -25,10 +25,12 @@ class MemorySource(Protocol):
 
 @dataclass(frozen=True)
 class StoredBrief:
-    """The served brief and the moment it was compiled."""
+    """A brief, the moment it was compiled, and the models it derives from (``None`` when the
+    store does not know, so text built from it never trains)."""
 
     text: str
     compiled_at: datetime
+    ancestry: frozenset[str] | None = None
 
 
 class BriefSource(Protocol):
@@ -58,6 +60,26 @@ def _evidence_lines(items: tuple[Evidence, ...]) -> str:
     return "\n".join(f"- [{item.id}] {item.text}" for item in items)
 
 
+@dataclass(frozen=True)
+class ComposedContext:
+    """The four sources as one build read them; ``text`` is context C."""
+
+    memory: str
+    brief: StoredBrief | None
+    since: tuple[str, ...]
+    found: tuple[Evidence, ...]
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join((
+            _section("What you remember about this person", self.memory),
+            _section("Their brief", self.brief.text if self.brief else ""),
+            _section("Preferences and corrections since the brief",
+                     "\n".join(f"- {text}" for text in self.since)),
+            _section("Evidence that may help with this message", _evidence_lines(self.found)),
+        ))
+
+
 class ComposedContextBuilder:
     """``ContextBuilder`` over the four sources. ``build`` only reads."""
 
@@ -81,14 +103,15 @@ class ComposedContextBuilder:
     ) -> tuple[Evidence, ...]:
         return self._recall.recall(user_id, query, k, budget_tokens)
 
-    def build(self, user_id: str, probe: Probe) -> str:
+    def compose(self, user_id: str, probe: Probe) -> ComposedContext:
+        """What ``build`` reads for ``probe``, each source once."""
         brief = self._briefs.served(user_id)
-        since = self._preferences.since(user_id, brief.compiled_at if brief else None)
-        found = self.recall(user_id, probe.prompt, self._settings.k, self._settings.budget_tokens)
-        return "\n\n".join((
-            _section("What you remember about this person", self._memory.read(user_id, probe.prompt)),
-            _section("Their brief", brief.text if brief else ""),
-            _section("Preferences and corrections since the brief",
-                     "\n".join(f"- {text}" for text in since)),
-            _section("Evidence that may help with this message", _evidence_lines(found)),
-        ))
+        return ComposedContext(
+            memory=self._memory.read(user_id, probe.prompt),
+            brief=brief,
+            since=self._preferences.since(user_id, brief.compiled_at if brief else None),
+            found=self.recall(user_id, probe.prompt, self._settings.k, self._settings.budget_tokens),
+        )
+
+    def build(self, user_id: str, probe: Probe) -> str:
+        return self.compose(user_id, probe).text

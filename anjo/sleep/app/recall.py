@@ -9,12 +9,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import date
+from typing import Protocol
 
 from anjo.sleep.context.recall_common import RecallMode, eligible, fit_budget, order_key
-from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.types import Evidence
 
 Embed = Callable[[str], Sequence[float]]
+
+
+class StoredEvidence(Protocol):
+    """The part of an ``EvidenceStore`` that recall reads."""
+
+    def stored(self, until: date) -> list[Evidence]: ...
 
 
 def _default_embed() -> Embed:
@@ -34,7 +40,7 @@ class MiniLmRecall:
 
     def __init__(
         self,
-        evidence: Callable[[str], EvidenceStore],
+        evidence: Callable[[str], StoredEvidence],
         *,
         until: date,
         embed: Embed | None = None,

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import _app, auth_client, client  # noqa: F401  (fixtures for the export tests)
+from tests.conftest import _app, auth_client, client, offline_embedder  # noqa: F401  (the web app's fixtures)
 
 
 @pytest.fixture(autouse=True)
