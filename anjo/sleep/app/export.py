@@ -7,24 +7,44 @@ the export instead of being left out silently; a task that adds a sleep file add
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from anjo.core.export_inventory import TEMPORARY_FILE, classify_file
 from anjo.sleep.app.cleared_sessions import export_sessions
 from anjo.sleep.app.flags import require_sleep_host
-from anjo.sleep.app.storage import CLEARED_FILE, EVIDENCE_FILE, TARGETS_FILE, evidence_store, sleep_dir, target_store
+from anjo.sleep.app.storage import (
+    CLEARED_FILE,
+    EVIDENCE_FILE,
+    SLEEP_DIR,
+    TARGETS_FILE,
+    evidence_store,
+    sleep_dir,
+    target_store,
+)
 
 KNOWN_FILES = frozenset({EVIDENCE_FILE, TARGETS_FILE, CLEARED_FILE})
 
 
-def export_sleep(user_id: str) -> dict[str, Any]:
-    require_sleep_host()
-    folder = sleep_dir(user_id)
-    unknown = sorted(
-        path.relative_to(folder).as_posix() for path in folder.rglob("*")
-        if path.is_file() and path.relative_to(folder).as_posix() not in KNOWN_FILES
-    ) if folder.is_dir() else []
+def _check_folder(folder: Path) -> None:
+    """Refuse a file the section doesn't carry, or any entry that isn't a regular file or a
+    folder. A temporary write file is skipped, as the inventory skips it (``TEMPORARY_FILE``)."""
+    unknown: list[str] = []
+    for path in sorted(folder.rglob("*")) if folder.is_dir() else []:
+        name = path.relative_to(folder).as_posix()
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError(f"sleep entry {name} is not a regular file")
+        if path.is_dir() or classify_file(f"{SLEEP_DIR}/{name}") == TEMPORARY_FILE:
+            continue
+        if name not in KNOWN_FILES:
+            unknown.append(name)
     if unknown:
         raise ValueError(f"sleep files the export doesn't carry: {', '.join(unknown)}")
+
+
+def export_sleep(user_id: str) -> dict[str, Any]:
+    require_sleep_host()
+    _check_folder(sleep_dir(user_id))
     return {
         **evidence_store(user_id).export(),
         **target_store(user_id).export(),

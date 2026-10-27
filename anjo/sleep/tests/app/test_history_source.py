@@ -112,6 +112,31 @@ def test_cleared_flag_refused_for_real_people() -> None:
     assert not cleared_sessions.is_synthetic(REAL)
 
 
+def test_an_account_with_messages_cannot_be_registered_synthetic() -> None:
+    from anjo.sleep.app import cleared_sessions
+
+    _message(REAL, "user", "PRIVATE words of a real person", at=START)
+
+    with pytest.raises(cleared_sessions.NotSynthetic) as refused:
+        cleared_sessions.register_synthetic(REAL, at=END)
+    assert "PRIVATE" not in str(refused.value)
+    assert not cleared_sessions.is_synthetic(REAL)
+    with pytest.raises(cleared_sessions.NotSynthetic):
+        cleared_sessions.mark_cleared(REAL, "s-1", at=END)
+    assert cleared_sessions.cleared_sessions(REAL) == frozenset()
+
+
+def test_a_registered_synthetic_person_stays_registered_once_they_talk() -> None:
+    from anjo.sleep.app import cleared_sessions
+
+    cleared_sessions.register_synthetic(SYNTHETIC, at=START)
+    _message(SYNTHETIC, "user", "simulated words", at=START, session_id="s-sim")
+
+    cleared_sessions.register_synthetic(SYNTHETIC, at=END)
+    cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=END)
+    assert cleared_sessions.cleared_sessions(SYNTHETIC) == frozenset({"s-sim"})
+
+
 def test_cleared_sessions_are_recorded_once() -> None:
     from anjo.sleep.app import cleared_sessions
 
