@@ -124,10 +124,13 @@ def test_the_public_paths_are_exactly_the_demo(sleep_app: Any) -> None:
     assert _raw(sleep_app, "/api/sleep/demo") == 404 and _raw(sleep_app, "/api/sleep/demo/") in (401, 404)
 
 
-def test_with_the_host_unset_the_app_opens_nothing(_app: Any, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_with_the_host_unset_the_app_opens_nothing(
+    unmounted_app: Any, client: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from anjo.sleep.app import register
     from anjo.sleep.app.flags import SleepHostOff
 
+    _app = unmounted_app
     # The app under test was imported without ANJO_SLEEP_HOST: no public path, no demo route.
     assert getattr(_app.state, "public_prefixes", ()) == ()
     assert client.get("/api/sleep/demo/page").status_code == 401
