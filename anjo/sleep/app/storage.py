@@ -29,14 +29,20 @@ CLEARED_FILE: Final = "cleared_sessions.jsonl"
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 
 
+def _text(value: object, where: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{where} returned {type(value).__name__}, not text")
+    return value
+
+
 class EncryptedCodec:
     def encode(self, text: str) -> str:
-        return encrypt_db(text)
+        return _text(encrypt_db(text), "encrypt_db")
 
     def decode(self, line: str) -> str:
         if not line.startswith(_ENCRYPTED):
             raise ValueError("a sleep record is not encrypted")
-        return decrypt_db(line)
+        return _text(decrypt_db(line), "decrypt_db")
 
 
 CODEC: Final = EncryptedCodec()

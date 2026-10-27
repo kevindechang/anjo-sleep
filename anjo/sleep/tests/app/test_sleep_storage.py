@@ -270,3 +270,22 @@ def test_a_sleep_entry_that_is_not_a_regular_file_is_refused(kind: str, tmp_path
 
     with pytest.raises(ValueError, match="not a regular file"):
         export_sleep(user_id)
+
+
+@pytest.mark.parametrize(("direction", "message"), [
+    ("encode", "encrypt_db returned bytes, not text"),
+    ("decode", "decrypt_db returned NoneType, not text"),
+])
+def test_the_codec_refuses_a_non_text_result(
+    direction: str, message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app import storage
+
+    monkeypatch.setattr(storage, "encrypt_db", lambda text: b"enc1:raw")
+    monkeypatch.setattr(storage, "decrypt_db", lambda line: None)
+
+    with pytest.raises(TypeError, match=message):
+        if direction == "encode":
+            storage.CODEC.encode("a line")
+        else:
+            storage.CODEC.decode("enc1:a line")
