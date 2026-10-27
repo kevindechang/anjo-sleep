@@ -121,8 +121,12 @@ python -m anjo.sleep.examples.synthetic --persona persona.json --day day1.jsonl
 A missing key stops the run before anything is created or paid for, and names the variable. The
 two file names resolve to the bundled `anjo/sleep/examples/synthetic/persona.json` and
 `day1.jsonl` unless you point them at your own. `--donor <adapter>` adds arm 3x (an adapter that
-another run trained), `--no-chat` skips the chat and `--workdir <new folder>` keeps the run's
-files. The training and serving parts were written against Modal's documented API and run only
+another run trained), `--adapter <adapter>` reuses an adapter already on the volume and skips
+practice and training (a new adapter loads only when the server container starts, so after a
+run stops with "the server doesn't serve adapter ...", run `modal app stop anjo-sleep-serve`,
+deploy again and re-run with `--adapter`), `--no-chat` skips the chat and `--workdir <new folder>` keeps the run's
+files. The example trains and serves Glimmer with the engine's own rows, prompt framing and pins, and an
+adapter is served only under the rendering it was trained under. The training and serving parts were written against Modal's documented API and run only
 with your keys.
 
 ## Running the tests

@@ -237,6 +237,7 @@ def reused_ref(name: str | None, night: Night) -> CheckpointRef | None:
     return CheckpointRef(
         id=name, person_id=person.person_id, night=person.day,
         uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None,
+        rendering=night.services.glimmer.rendering,  # trained by this recipe, so under this rendering
     )
 
 
@@ -251,6 +252,7 @@ def donor_ref(name: str | None, night: Night) -> CheckpointRef | None:
     return CheckpointRef(
         id=name, person_id=DONOR_PERSON, night=night.person.day,
         uri=f"{config.ADAPTERS_VOLUME}/{name}", parent_id=None,
+        rendering=night.services.glimmer.rendering,  # trained by this recipe, so under this rendering
     )
 
 

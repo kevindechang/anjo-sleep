@@ -6,6 +6,7 @@ Modal vLLM server). ``fakes.fake_services`` wires offline stand-ins. Nothing els
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
@@ -22,6 +23,13 @@ class ExampleError(RuntimeError):
 
 class Glimmer(ModelClient, TokenLogprobs, Protocol):
     """Glimmer's vLLM server: sampled replies and forced-choice log-probabilities."""
+
+    @property
+    def rendering(self) -> str:
+        """The rendering the server serves under; an adapter must be trained under it."""
+
+    def on(self, day: date) -> Glimmer:
+        """This client with its prompts dated ``day``, the date the rows were trained at."""
 
     def close(self) -> None: ...
 

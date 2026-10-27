@@ -6,7 +6,11 @@ for staying equal to the engine's own constants.
 from __future__ import annotations
 
 import ast
+import importlib
 import json
+import sys
+import types
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -20,7 +24,6 @@ from anjo.sleep.examples.synthetic.modal_train import (
 )
 from anjo.sleep.serving import config
 from anjo.sleep.train import colab_train
-from anjo.sleep.train.runners.colab import TRAIN_PACKAGES
 
 APP = Path(anjo.sleep.__file__).parent / "examples" / "synthetic" / "train_app.py"
 JOB = "train_lora"
@@ -40,12 +43,46 @@ def _constants() -> dict[str, object]:
 def test_train_app_constants_match_the_engines() -> None:
     constants = _constants()
 
-    assert constants["PACKAGES"] == TRAIN_PACKAGES
     assert constants["GPU"] == config.BF16_A100.gpu
     assert constants["WEIGHTS_VOLUME"] == config.WEIGHTS_VOLUME
     assert constants["WEIGHTS_DIR"] == config.WEIGHTS_DIR
     assert constants["TIMEOUT_S"] == TRAINING_TIMEOUT_S
     assert constants["OUTPUT_FILES"] == (*config.ADAPTER_FILES, colab_train.RECEIPT)
+
+
+class _Chain:
+    """Stands in for modal's builders: records every call and returns itself."""
+
+    def __init__(self, calls: list[tuple[str, tuple[Any, ...]]]) -> None:
+        self.calls = calls
+
+    def __getattr__(self, name: str) -> Any:
+        def call(*args: Any, **kwargs: Any) -> _Chain:
+            self.calls.append((name, args))
+            return self
+
+        return call
+
+
+def test_the_image_installs_exactly_the_training_modules_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+    chain = _Chain(calls)
+    fake = types.SimpleNamespace(
+        Image=types.SimpleNamespace(debian_slim=lambda **kw: chain),
+        App=lambda *a, **kw: types.SimpleNamespace(function=lambda **k: (lambda fn: fn)),
+        Volume=types.SimpleNamespace(from_name=lambda *a, **kw: object()),
+    )
+    real = importlib.import_module
+    monkeypatch.setattr(importlib, "import_module", lambda name, *a: fake if name == "modal" else real(name, *a))
+    monkeypatch.delitem(sys.modules, "anjo.sleep.examples.synthetic.train_app", raising=False)
+
+    importlib.import_module("anjo.sleep.examples.synthetic.train_app")
+
+    installs = [args for name, args in calls if name == "pip_install"]
+    assert installs and installs[0][:-1] == (colab_train.TORCH, *colab_train.TRAIN_PACKAGES)
+    copied = {str(args[1]) for name, args in calls if name == "add_local_file"}
+    assert "/root/anjo/sleep/train/colab_train.py" in copied
+    monkeypatch.delitem(sys.modules, "anjo.sleep.examples.synthetic.train_app", raising=False)
 
 
 def _inputs(tmp_path: Path, *, prev: bool = False) -> dict[str, object]:

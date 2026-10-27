@@ -24,7 +24,7 @@ import secrets
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -115,6 +115,7 @@ def _night(
     options: Options, services: Services, person: people.ExamplePersona,
     day: tuple[people.DayTurn, ...], say: Say, input_fn: stages.Input, run_id: str,
 ) -> ExampleReport:
+    services = replace(services, glimmer=services.glimmer.on(person.day))  # prompts dated as the rows were
     night = stages.Night(
         person=person, turns=day, world=open_world(options.workdir, person.person_id, person.day),
         services=services, workdir=options.workdir, say=say, run_id=run_id,

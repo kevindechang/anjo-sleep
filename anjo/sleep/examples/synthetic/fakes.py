@@ -19,7 +19,7 @@ from anjo.sleep.examples.synthetic.services import ExampleError, Services
 from anjo.sleep.meta_api import PINNED_MODELS
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.ports import Chooser
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import ServingError, WakeResult
 from anjo.sleep.train.lora import JOB
 from anjo.sleep.types import CheckpointRef
@@ -204,7 +204,17 @@ class FakeGlimmer:
     def __init__(self, serving: FakeServing | None = None) -> None:
         self._serving = serving
 
+    @property
+    def rendering(self) -> str:
+        return framing.rendering(config.reasoning_strength())
+
+    def on(self, day: date) -> FakeGlimmer:
+        return self
+
     def _check(self, adapter: CheckpointRef | None) -> None:
+        if adapter is not None and adapter.rendering != self.rendering:
+            raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
+                               f"not {self.rendering}; it is never served under another")
         if adapter is not None and self._serving is not None and adapter.id not in self._serving.visible:
             raise ServingError("/v1/chat/completions returned HTTP 404")
 
@@ -238,8 +248,13 @@ class FakeGpu:
             raise ExampleError(f"the fake GPU runs only {JOB}")
         out = Path(str(inputs["workdir"])) / "out"
         out.mkdir(parents=True, exist_ok=True)
+        settings = inputs["config"]
+        assert isinstance(settings, Mapping)
         (out / "adapter_config.json").write_text(
-            json.dumps({"peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16}),
+            json.dumps({
+                "peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16,
+                framing.RENDERING_KEY: settings["rendering"],  # the real script records it too
+            }),
             encoding="utf-8",
         )
         (out / "adapter_model.safetensors").write_bytes(b"fake adapter, not weights")
