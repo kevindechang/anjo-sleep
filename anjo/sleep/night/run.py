@@ -252,6 +252,7 @@ class NightRunner:
 
     def _start(self, uid: str, night: date, window: Window) -> _Night:
         deps = self.deps
+        deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
         history = summaries(deps.logs(uid))
         actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - _paid_within(history, window[1], timedelta(hours=24))))
@@ -272,11 +273,22 @@ class NightRunner:
         try:
             receipt = dict(fn(p))
         except Exception as error:  # a failure stops this person's night at this step (RF1)
-            return self._fail(p, step, error)
+            return False if self._cancelled_mid_step(p, step) else self._fail(p, step, error)
+        if self._cancelled_mid_step(p, step):
+            return False
         noop = bool(receipt.pop("noop", False))
         uses, system = USES[step]
         p.log.step(step, "ok", uses=uses, system=system, noop=noop, **receipt)
         p.receipts[step] = receipt
+        return True
+
+    def _cancelled_mid_step(self, p: _Night, step: str) -> bool:
+        """The person was deleted while ``step`` ran (RF2): remove whatever it wrote, record nothing
+        (the night log's folder is gone with the delete), and stop this person's night."""
+        if not self.deps.cancel(p.uid):
+            return False
+        self.deps.purge(p.uid)
+        p.failed_at, p.status = step, "failed"
         return True
 
     def _fail(self, p: _Night, step: str, error: BaseException) -> bool:

@@ -26,8 +26,8 @@ Fill them in the console only. Nothing with a real id goes back into the repo.
   provider is created. Only an ID token for the VM's own service account (`sub` and `aud`, which
   AWS maps from the token's `azp`) with our audience (`oaud`, `token_refresh.AUDIENCE`) can assume it.
 - Permissions: `devhost-permissions.json`. It can invoke our endpoint's one component, read and set
-  that component's copy count (wake and sleep), and list, read and write under `adapters/` in our
-  bucket. It can't touch the weights, the endpoint's config, the scaling or anything else.
+  that component's copy count (wake and sleep), and list, read, write and delete under `adapters/` in our
+  bucket (delete is for a person's delete, Task 9). It can't touch the weights, the endpoint's config, the scaling or anything else.
 
 ## The two `*` resources
 

@@ -28,6 +28,7 @@ from anjo.sleep.train.runners.colab import (
     RealPersonRefused,
     hold_base,
     stop_leftover_sessions,
+    stop_person_sessions,
 )
 
 TIMEOUT_S = 7200.0
@@ -275,3 +276,21 @@ def test_a_cli_notice_beside_the_list_is_read_past() -> None:
     assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing(
         notice + "[colab] No active sessions found on server.\n"))) == (0, 0)
     assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing(notice + SESSIONS))) == (1, 2)
+
+
+def test_a_delete_stops_only_that_persons_sessions() -> None:
+    from anjo.sleep.train.runners.colab import _life_session
+
+    listing = (
+        "[anjo-sleep-p-aaaaaaaaaaaa-n3] gpu-a100-s-1 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+        "[anjo-sleep-p-bbbbbbbbbbbb-n1] gpu-a100-s-2 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+        f"[{_life_session('p1')}] gpu-a100-s-3 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+        "[voice-test] gpu-a100-s-4 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    )
+    fake = Listing(listing)
+    stopped = stop_person_sessions(ColabCli(Path("/fake/colab"), run=fake), "p1", {"p-aaaaaaaaaaaa-n3"})
+    assert stopped == 2
+    assert [args[3:] for args, _ in fake.calls][1:] == [
+        ["stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3"], ["stop", "-s", _life_session("p1")]]
+    none = Listing("[colab] No active sessions found on server.\n")
+    assert stop_person_sessions(ColabCli(Path("/fake/colab"), run=none), "p1", set()) == 0

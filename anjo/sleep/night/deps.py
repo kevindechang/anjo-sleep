@@ -282,6 +282,8 @@ class NightDeps:
     expectations: Expectations = field(default_factory=NoExpectations)
     intentions: IntentionSource = field(default_factory=NoIntentions)
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)
+    # Removes what a step wrote after the person was deleted mid-step (RF2, Task 9); idempotent.
+    purge: Callable[[str], None] = field(default=lambda user_id: None)
     timer: Callable[[], float] | None = None
     hosted_in_training: bool = False
     # Every paid step holds its worst case here first (holds.py); None holds nothing (tests).

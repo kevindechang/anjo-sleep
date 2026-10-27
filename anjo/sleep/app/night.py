@@ -23,6 +23,7 @@ Notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -36,6 +37,8 @@ from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource
+from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
+from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
 from anjo.sleep.app.intentions import LedgerIntentions
 from anjo.sleep.app.policy import build_policy
 from anjo.sleep.app.recall import MiniLmRecall
@@ -74,9 +77,9 @@ from anjo.sleep.serving import backend
 from anjo.sleep.serving.client import VllmClient
 from anjo.sleep.types import Probe
 
-SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour", USD list prices
 FIELDS_ENV: Final = "ANJO_SLEEP_FIELDS"  # a real person's field domains for the collapse gate, comma-separated
+logger = logging.getLogger(__name__)
 PERSONAS: Final = Path(__file__).parents[1] / "personas"
 PROBE_MODEL: Final = "muse-spark"  # evaluation only (§3)
 
@@ -145,17 +148,13 @@ def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...
     return lambda user_id: known.get(user_id, real)
 
 
-def _logs_root(user_id: str) -> Path:
-    """A synthetic person's nights go to the results tree that is published; a real one's don't."""
-    tree = "results" if is_synthetic(user_id) else "private_results"
-    return data_root() / SLEEP_DIR / tree / user_id / "nights"
-
-
 def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     require_sleep_host()
     for user_id, persona in options.personas.items():
         if not is_synthetic(user_id):
             raise ValueError(f"{persona} runs only on an account registered as synthetic")
+    if (outstanding := retry_pending()):  # remote deletes an earlier delete or erasure could not finish
+        logger.warning("%d remote cleanups are still outstanding", len(outstanding))
     registry = checkpoint_registry()
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
     client = serving.client()
@@ -184,7 +183,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         registry=registry, notifier=OutreachNotifier(),
         note_writer=GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed),
         note_check=passes_reply_check, ledger=ledger,
-        logs=_logs_root, is_synthetic=is_synthetic, settings=night_settings, prices=night_prices,
+        logs=night_logs, cancel=cancel_flag().watcher(), purge=purge, is_synthetic=is_synthetic,
+        settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now,
