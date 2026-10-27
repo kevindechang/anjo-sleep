@@ -25,8 +25,10 @@ from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.provenance import GLIMMER, union
 from anjo.sleep.serving import config
 from anjo.sleep.tests.sleep_fakes import probe
+from tests.test_bedrock_sol import FakeRuntime
 from tests.test_gemma_cloud_chat_stream import _last_reply, _post, _shown
-from tests.test_sol_chat_stream import _current_user_id, _mock_gemini_stream
+from tests.test_sol_chat_stream import _current_user_id, _mock_gemini_stream, post_turn
+from tests.test_talker_choice import phone_says
 
 paid_env = _sol_chat.paid_env
 REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -575,6 +577,110 @@ def test_when_glimmer_is_down_a_cleared_turn_fails_and_any_other_falls_back(
         assert not gemini.called and _replies(flagged) == before  # no stand-in, nothing stored
     else:
         assert _shown(events) == "Gemini here." and _replies(flagged) == before + 1
+
+
+def _failed_quietly(events: Any, gemini: Any, user_id: str, before: int) -> bool:
+    """The turn ended with the route's error: nothing shown, no other model called, no reply stored."""
+    errors = [kind for kind, _ in events if kind == "error"]
+    return bool(errors) and _shown(events) == "" and not gemini.called and _replies(user_id) == before
+
+
+def test_a_cleared_reply_broken_off_before_any_words_fails_the_turn(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Glimmer starts, then breaks off: the open-model stream re-raises, and nothing stands in."""
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
+    started = {"id": "c", "model": config.MODEL, "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
+    modal = Modal([started, TransportError(None)])
+    _serve(monkeypatch, modal)
+    before = _replies(flagged)
+
+    events, _spend, gemini = _post(auth_client, gemini_streams=[_mock_gemini_stream("Gemini here.")])
+
+    assert len(modal.opened) == 1 and _failed_quietly(events, gemini, flagged, before)
+
+
+class _HonestLineGuard:
+    """A grounding guard that replaces the whole reply with its fixed honest line."""
+
+    emptied = False
+
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        from anjo.core.grounding import GROUNDING_FALLBACK
+
+        self.line: str = GROUNDING_FALLBACK
+
+    def feed(self, _text: str) -> str:
+        return ""
+
+    def flush(self) -> str:
+        return self.line
+
+    def final_text(self) -> str:
+        return self.line
+
+
+@pytest.mark.parametrize("replaced", ["regenerated", "honest_line"])
+def test_a_cleared_reply_the_grounding_guard_replaces_fails_the_turn(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch, replaced: str,
+) -> None:
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from tests.test_device_handoff import _EmptyingGuard
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
+    monkeypatch.setenv("ANJO_GROUNDING", "1")
+    _serve(monkeypatch, Modal(_chunks("Last time you told me about your sister.")))
+    rewrites: list[str] = []
+
+    def rewrite(*_args: Any, model_id: str = "", **_kwargs: Any) -> str:
+        rewrites.append(model_id)
+        return "cloud rewrite."
+
+    monkeypatch.setattr(
+        "anjo.dashboard.routes.chat_routes.StreamingGroundingGuard",
+        _EmptyingGuard if replaced == "regenerated" else _HonestLineGuard,
+    )
+    monkeypatch.setattr("anjo.dashboard.routes.chat_routes._regenerate_grounded_reply", rewrite)
+    before = _replies(flagged)
+
+    events, _spend, gemini = _post(auth_client, gemini_streams=[_mock_gemini_stream("Gemini here.")])
+
+    assert rewrites == []  # no other model rewrites it
+    assert _failed_quietly(events, gemini, flagged, before)
+
+
+def test_a_cleared_session_never_hands_a_turn_to_the_phone(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    from anjo.core.subscription import set_subscription
+    from anjo.core.talker_choice import set_talker_choice
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
+    # Offered the phone talker as tests/test_talker_choice.py on_device_offered does, after the
+    # flagged person chose the open model.
+    set_subscription(flagged, "active", "premium")
+    monkeypatch.setenv("ANJO_ON_DEVICE_TALKER_ENABLED", "1")
+    monkeypatch.setenv("ANJO_ON_DEVICE_TALKER_USER_IDS", flagged)
+    set_talker_choice(flagged, "on_device")
+    _serve(monkeypatch, Modal(_chunks("never sent")))
+    before = _replies(flagged)
+
+    with patch("anjo.core.on_device_turns.wait_for_reply", return_value=phone_says("phone says hello.")) as waited:
+        events, _spend, gemini = post_turn(
+            auth_client, runtime=FakeRuntime([]), device_ready=True,
+            gemini_streams=[_mock_gemini_stream("Gemini here.")],
+        )
+
+    assert not waited.called and not [kind for kind, _ in events if kind == "on_device_generate"]
+    assert _failed_quietly(events, gemini, flagged, before)
 
 
 def test_a_cleared_turn_the_open_model_route_refuses_fails(
