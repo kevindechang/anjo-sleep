@@ -87,12 +87,12 @@ def test_meta_chat_sends_an_openai_style_request_and_parses_the_reply() -> None:
     assert str(request.url) == f"{META_BASE}/chat/completions"
     assert request.headers["authorization"] == f"Bearer {FAKE_KEY}"
     body = json.loads(request.content)
-    assert body == {"model": "muse-spark", "messages": MESSAGES, "tools": TOOLS, "temperature": 0.0}
+    assert body == {"model": "muse-spark-1.3", "messages": MESSAGES, "tools": TOOLS, "temperature": 0.0}
     assert result.text == "hi there"
     assert [(c.id, c.name, c.arguments) for c in result.tool_calls] == [
         ("call_1", "search", '{"q": "lenses"}'),
     ]
-    assert (result.model, result.input_tokens, result.output_tokens) == ("muse-spark", 12, 3)
+    assert (result.model, result.input_tokens, result.output_tokens) == ("muse-spark-1.3", 12, 3)
     assert result.finish_reason == "tool_calls"
 
 
@@ -108,10 +108,37 @@ def test_baseten_chat_calls_spark_open_on_its_openai_compatible_endpoint() -> No
     assert result.model == "meta-models/muse-spark-open-1026"
 
 
-def test_meta_base_url_must_be_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_meta_base_url_defaults_to_the_meta_api_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(meta_api.BASE_ENV)
-    with pytest.raises(ModelApiError, match=meta_api.BASE_ENV):
-        _meta(httpx.MockTransport(lambda r: httpx.Response(200, json=_ok("muse-spark"))))
+    seen: list[httpx.Request] = []
+    _meta(_recording(seen, lambda r: httpx.Response(200, json=_ok("muse-spark-1.3"))))
+    (request,) = seen
+    assert str(request.url) == "https://api.meta.ai/v1/chat/completions"
+
+
+def test_meta_base_url_override_replaces_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(meta_api.BASE_ENV, "  https://override.example.test/v1/  ")
+    seen: list[httpx.Request] = []
+    _meta(_recording(seen, lambda r: httpx.Response(200, json=_ok("muse-spark-1.3"))))
+    (request,) = seen
+    assert str(request.url) == "https://override.example.test/v1/chat/completions"
+
+
+@pytest.mark.parametrize(
+    ("public", "pinned"),
+    [("muse-spark", "muse-spark-1.3"), ("muse-wonder", "muse-wonder-1.0")],
+)
+def test_meta_sends_and_records_the_pinned_version(public: str, pinned: str) -> None:
+    assert meta_api.PINNED_MODELS[public] == pinned  # type: ignore[index]
+    seen: list[httpx.Request] = []
+    result = meta_api.chat(
+        public,  # type: ignore[arg-type]
+        MESSAGES, None, 30.0,
+        transport=_recording(seen, lambda r: httpx.Response(200, json=_ok("echoed-alias"))),
+    )
+    (request,) = seen
+    assert json.loads(request.content)["model"] == pinned
+    assert result.model == pinned
 
 
 @pytest.mark.parametrize("client", sorted(CLIENTS))
