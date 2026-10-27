@@ -332,7 +332,7 @@ class NightRunner:
         p.spend.part = "extract"
         source = self.deps.extractor(p.spend.wrap_extract(self.deps.extract_chat))
         with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS):
-            items = source.extract_day(p.uid, p.night, p.window)
+            items = source.extract_day(p.uid, p.night, p.window, p.as_of)
         since = self._since(p)
         fresh = [
             item for item in p.store.trainable(p.night)
