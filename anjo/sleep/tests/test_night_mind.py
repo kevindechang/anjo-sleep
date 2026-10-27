@@ -177,8 +177,9 @@ def test_a_life_dated_before_the_wall_clock_runs_as_one_dated_after_it(tmp_path:
         found = workspace(fake.world, FAKE_USER).workspace().findings
         lived.append((len(fake.thinker.prompts), [(f.kind, f.statement, f.cites) for f in found],
                       [step(r.log_path, "notice")["questions_opened"] for r in results],
-                      [step(r.log_path, "choose")["action"] for r in results]))
-    assert lived[0] == lived[1] and lived[0][0] > 0 and lived[0][1]
+                      [step(r.log_path, "choose")["action"] for r in results],
+                      [step(r.log_path, "note")["outcome"] for r in results]))
+    assert lived[0] == lived[1] and lived[0][0] > 0 and lived[0][1] and lived[0][-1][-1] == "held"
 
 
 # ── Close marks: on a close only, read from her log ──────────────────────────
