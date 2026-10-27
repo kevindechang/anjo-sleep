@@ -378,9 +378,20 @@ existing: def _is_available(user_id: str, choice: str) -> bool:
 +        return cloud_talker_choice_enabled(user_id) and gemma_offered(user_id)
 ```
 
-## `anjo/dashboard/app.py` (+6 -0)
+## `anjo/dashboard/app.py` (+11 -0)
 
-At line 546, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+At line 216, added by `fix: open only the live demo to anonymous visitors on the sleep host [task13a]`:
+
+```diff
+existing: async def dispatch(self, request: Request, call_next):
++        # Exact path prefixes a host's own registration opens to anonymous visitors (Anjo Sleep's
++        # live demo, on its host only); none elsewhere. Normalized paths only: no //, . or .. form.
++        path, public = request.url.path, getattr(request.app.state, "public_prefixes", ())
++        if posixpath.normpath(path) == path and any(path == p or path.startswith(p + "/") for p in public):
++            return await call_next(request)
+```
+
+At line 551, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
 
 ```diff
 +# Anjo Sleep (hackathon): its route, runtime and prompt hooks and its dev API, on its host only.
@@ -427,6 +438,33 @@ existing: async def event_stream():
 +                            if _sole and (grounding_guard.emptied or grounding_guard.final_text() == GROUNDING_FALLBACK):
 +                                yield f"event: error\ndata: {json.dumps({'error': 'Service temporarily unavailable'})}\n\n"
 +                                break  # Glimmer's reply can't stand: nothing replaces it, nothing is stored
+```
+
+## `anjo/memory/long_term.py` (+9 -0)
+
+At line 433, added by `fix: Sleep's arms and the demo read her memory without writing to it [task13a]`:
+
+```diff
+existing: def _query_ranked(
++    *, record: bool = True,  # False: rank only, no recall count or surface record (read_memories)
+```
+
+At line 542, added by `fix: Sleep's arms and the demo read her memory without writing to it [task13a]`:
+
+```diff
++    if not record:
++        return final_items
+```
+
+At line 565, added by `fix: Sleep's arms and the demo read her memory without writing to it [task13a]`:
+
+```diff
++def read_memories(message: str, user_id: str, n_results: int = 4) -> list[tuple[float, str]]:
++    """``query_memories``' ranking with no write: no recall count, no sensitive-surface record.
++    For reads no conversation of the person's shows (Anjo Sleep's probes and its public demo)."""
++    return [item for _mem_id, item in _query_ranked(message, user_id, n_results, record=False)]
++
++
 ```
 
 ## `pyproject.toml` (+20 -2)
