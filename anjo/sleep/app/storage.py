@@ -18,16 +18,21 @@ from anjo.core.erasure import _user_dir  # the directory account erasure removes
 from anjo.core.user_data_guard import user_data_guard
 from anjo.core.user_file_lock import user_lock
 from anjo.sleep.app.flags import require_sleep_host
+from anjo.sleep.checkpoints import ROOT_DIR, CheckpointRegistry
+from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.evidence.extractions import ExtractionLog
 from anjo.sleep.evidence.jsonl import Guard
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
+from anjo.sleep.practice.transcripts import JsonlTranscriptStore
 
 SLEEP_DIR: Final = "sleep"
 EVIDENCE_FILE: Final = "evidence.jsonl"
 TARGETS_FILE: Final = "targets.jsonl"
 CLEARED_FILE: Final = "cleared_sessions.jsonl"
 EXTRACTIONS_FILE: Final = "extractions.jsonl"
+BRIEFS_FILE: Final = "briefs.jsonl"  # the served and training briefs (Task 5)
+PRACTICE_FILE: Final = "practice.jsonl"  # the night's practice transcripts (Task 5)
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 
 
@@ -83,3 +88,25 @@ def extraction_log(user_id: str) -> ExtractionLog:
     return ExtractionLog(
         sleep_dir(user_id) / EXTRACTIONS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id),
     )
+
+
+def brief_store(user_id: str) -> JsonlBriefStore:
+    require_sleep_host()
+    return JsonlBriefStore(sleep_dir(user_id) / BRIEFS_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
+
+
+def transcript_store(user_id: str) -> JsonlTranscriptStore:
+    require_sleep_host()
+    return JsonlTranscriptStore(sleep_dir(user_id) / PRACTICE_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
+
+
+def data_root() -> Path:
+    """The app's data dir (``ANJO_DATA_DIR`` on the host), read when called."""
+    from anjo.core import paths
+
+    return Path(paths.DATA_ROOT)
+
+
+def checkpoint_registry() -> CheckpointRegistry:
+    """Every person's promoted checkpoints: ``<data dir>/sleep/checkpoints``."""
+    return CheckpointRegistry(data_root() / SLEEP_DIR / ROOT_DIR)

@@ -268,3 +268,17 @@ class NightDeps:
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)
     timer: Callable[[], float] | None = None
     hosted_in_training: bool = False
+
+
+@dataclass(frozen=True)
+class NightOptions:
+    """What the command line (``python -m anjo.sleep.night``) hands the app's wiring with the
+    trainer: the batch's night, and each synthetic person's persona (their sealed probes and the
+    collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``."""
+
+    night: date
+    personas: Mapping[str, str]
+    allow_real: bool = False
+
+
+Wiring = Callable[[Trainer, NightOptions], NightDeps]
