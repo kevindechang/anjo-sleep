@@ -424,68 +424,68 @@
    },
    {
     "id": "rh-h004",
-    "text": "Reports GPU-hours for every run in a table.",
-    "domain": "compute reporting"
-   },
-   {
-    "id": "rh-h005",
-    "text": "Builds slides in a dark theme packed with plots.",
-    "domain": "slides"
-   },
-   {
-    "id": "rh-h006",
-    "text": "Posts a paper on arXiv the day it is submitted.",
-    "domain": "arxiv"
-   },
-   {
-    "id": "rh-h007",
-    "text": "Replies to preprint comments within a day, often with a new run.",
-    "domain": "preprint comments"
-   },
-   {
-    "id": "rh-h008",
-    "text": "Goes to several large conferences a year to meet people.",
-    "domain": "conference travel"
-   },
-   {
-    "id": "rh-h009",
     "text": "Answers a hard question in a talk with a backup slide holding the ablation.",
     "domain": "question"
    },
    {
-    "id": "rh-h010",
-    "text": "Returns comments on a labmate's draft as a marked-up PDF.",
-    "domain": "peer draft"
-   },
-   {
-    "id": "rh-h011",
-    "text": "Takes a summer placement at a company lab with a huge cluster.",
-    "domain": "internships"
-   },
-   {
-    "id": "rh-h012",
-    "text": "Ends a paper with a concrete list of next experiments.",
-    "domain": "future work"
-   },
-   {
-    "id": "rh-h013",
+    "id": "rh-h005",
     "text": "Explains a paper online through a thread of its main plot and number.",
     "domain": "outreach"
    },
    {
+    "id": "rh-h006",
+    "text": "Treats a surprise similar paper as a new baseline and compares numbers against it.",
+    "domain": "scooped"
+   },
+   {
+    "id": "rh-h007",
+    "text": "Answers a stranger's question about a paper by sending the script that reproduces the figure.",
+    "domain": "correspondence"
+   },
+   {
+    "id": "rh-h008",
+    "text": "Pins a printed grid of the latest result plots to the wall.",
+    "domain": "office"
+   },
+   {
+    "id": "rh-h009",
+    "text": "Spends an extra page on more results and one more ablation.",
+    "domain": "camera-ready"
+   },
+   {
+    "id": "rh-h010",
+    "text": "Trims writing polish on the last night and keeps the runs.",
+    "domain": "deadline triage"
+   },
+   {
+    "id": "rh-h011",
+    "text": "Starts the side project that gives a number within a week.",
+    "domain": "side projects"
+   },
+   {
+    "id": "rh-h012",
+    "text": "Checks a doubtful published result by reproducing it and posting the table.",
+    "domain": "errata"
+   },
+   {
+    "id": "rh-h013",
+    "text": "Runs a workshop session as a challenge with a leaderboard.",
+    "domain": "organizing"
+   },
+   {
     "id": "rh-h014",
-    "text": "Organizes a thesis as the published papers, chapter by chapter.",
-    "domain": "thesis"
+    "text": "Responds to a rejection by running what the reviewers asked for.",
+    "domain": "rejection"
    },
    {
     "id": "rh-h015",
-    "text": "Lists each hyperparameter in an exhaustive table at the back.",
-    "domain": "hyperparameters"
+    "text": "Helps a stuck student by debugging their config together.",
+    "domain": "debugging help"
    },
    {
     "id": "rh-h016",
-    "text": "Records a failed idea as a row in the results spreadsheet.",
-    "domain": "failed idea"
+    "text": "Settles a disagreement with a coauthor through a controlled experiment.",
+    "domain": "disagreement"
    }
   ],
   "taste_ab": [
@@ -522,96 +522,16 @@
    {
     "id": "rp-t04",
     "pref_id": "rh-h004",
-    "prompt": "What does the paper say about compute?",
+    "prompt": "A question in a talk exposes a gap. What happens?",
     "options": [
-     "Only the problem sizes the argument needs",
-     "GPU-hours for every run, in a table"
+     "Say it is open and sketch the argument at the board",
+     "Show a backup slide with the ablation"
     ],
     "pick": 1
    },
    {
     "id": "rp-t05",
     "pref_id": "rh-h005",
-    "prompt": "What do the slides look like?",
-    "options": [
-     "Dark theme, dense plots, small captions",
-     "Plain white, large type, few words"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "rp-t06",
-    "pref_id": "rh-h006",
-    "prompt": "When does the paper go on arXiv?",
-    "options": [
-     "After a collaborator has checked the proof",
-     "The day it is submitted"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "rp-t07",
-    "pref_id": "rh-h007",
-    "prompt": "Someone comments on the arXiv preprint. What happens?",
-    "options": [
-     "Reply within a day with a new run",
-     "Reply when there is something worth adding"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "rp-t08",
-    "pref_id": "rh-h008",
-    "prompt": "Which meetings get attended?",
-    "options": [
-     "One or two small workshops with the right people",
-     "Several large conferences a year for networking"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "rp-t09",
-    "pref_id": "rh-h009",
-    "prompt": "A question in a talk exposes a gap. What happens?",
-    "options": [
-     "Show a backup slide with the ablation",
-     "Say it is open and sketch the argument at the board"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "rp-t10",
-    "pref_id": "rh-h010",
-    "prompt": "A labmate sends a draft for comments. What goes back?",
-    "options": [
-     "A call to talk through the main idea",
-     "A marked-up PDF with numbered comments"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "rp-t11",
-    "pref_id": "rh-h011",
-    "prompt": "Where does the summer go?",
-    "options": [
-     "An internship at an industry lab with big compute",
-     "A visit to a theory group"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "rp-t12",
-    "pref_id": "rh-h012",
-    "prompt": "What does the future-work paragraph hold?",
-    "options": [
-     "One conjecture stated precisely",
-     "A concrete list of next experiments"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "rp-t13",
-    "pref_id": "rh-h013",
     "prompt": "How is the paper explained to a wider audience?",
     "options": [
      "A thread with the main plot and the headline number",
@@ -620,32 +540,112 @@
     "pick": 0
    },
    {
+    "id": "rp-t06",
+    "pref_id": "rh-h006",
+    "prompt": "Days before submission a paper with a similar result appears. What happens?",
+    "options": [
+     "Study how its argument differs and cite it in the story",
+     "Add it as a baseline and compare numbers"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t07",
+    "pref_id": "rh-h007",
+    "prompt": "A stranger emails with a question about the paper.",
+    "options": [
+     "Send the script that reproduces the figure",
+     "Write back a short explanation of the idea"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t08",
+    "pref_id": "rh-h008",
+    "prompt": "What is on the office wall?",
+    "options": [
+     "A half-erased derivation on a whiteboard",
+     "A printed grid of the latest result plots"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t09",
+    "pref_id": "rh-h009",
+    "prompt": "One extra page is allowed at camera-ready.",
+    "options": [
+     "More results and one more ablation",
+     "More discussion of the intuition behind the proof"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t10",
+    "pref_id": "rh-h010",
+    "prompt": "It is the night before the deadline. What gets cut?",
+    "options": [
+     "One run, keep the argument tight",
+     "The writing polish, keep the runs"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t11",
+    "pref_id": "rh-h011",
+    "prompt": "Two side-project ideas are on the table. Which first?",
+    "options": [
+     "The one that gives a number within a week",
+     "The one with a clean statement"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t12",
+    "pref_id": "rh-h012",
+    "prompt": "A published result looks wrong. What happens?",
+    "options": [
+     "Write down the counterexample",
+     "Reproduce it and post the table"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t13",
+    "pref_id": "rh-h013",
+    "prompt": "Organizing a workshop session. What format?",
+    "options": [
+     "A challenge with a leaderboard",
+     "A panel at a whiteboard"
+    ],
+    "pick": 0
+   },
+   {
     "id": "rp-t14",
     "pref_id": "rh-h014",
-    "prompt": "How is the thesis organized?",
+    "prompt": "The paper is rejected. First step?",
     "options": [
-     "One narrative around a single question",
-     "Chapters are the published papers"
+     "Decide what the paper is really about",
+     "Run what the reviewers asked for"
     ],
     "pick": 1
    },
    {
     "id": "rp-t15",
     "pref_id": "rh-h015",
-    "prompt": "Where do the hyperparameters go?",
+    "prompt": "A fellow student is stuck.",
     "options": [
-     "A full table in the appendix",
-     "Only those the theory depends on, in the text"
+     "Debug their config together",
+     "Ask them to explain the problem on paper"
     ],
     "pick": 0
    },
    {
     "id": "rp-t16",
     "pref_id": "rh-h016",
-    "prompt": "How is a failed idea recorded?",
+    "prompt": "A coauthor disagrees about a claim.",
     "options": [
-     "A paragraph in the paper notebook on why it failed",
-     "A row in the results spreadsheet"
+     "Settle it with a written argument",
+     "Settle it with a controlled experiment"
     ],
     "pick": 1
    }

@@ -410,149 +410,129 @@
   "preferences": [
    {
     "id": "fk-h001",
-    "text": "Commissions a studio shot with controlled light for the page.",
-    "domain": "photography"
-   },
-   {
-    "id": "fk-h002",
     "text": "Writes privately to a harsh reviewer and leaves the review untouched.",
     "domain": "reviews"
    },
    {
-    "id": "fk-h003",
+    "id": "fk-h002",
     "text": "Sends a free review unit only to creators whose work has been studied.",
     "domain": "sampling"
    },
    {
-    "id": "fk-h004",
+    "id": "fk-h003",
     "text": "Takes a returned unit apart and rebuilds it before anyone else receives it.",
     "domain": "returns"
    },
    {
-    "id": "fk-h005",
+    "id": "fk-h004",
     "text": "Sells one complete thing at checkout and nothing alongside.",
     "domain": "bundles"
    },
    {
-    "id": "fk-h006",
-    "text": "Launches in two considered colors, each checked in daylight.",
-    "domain": "variants"
-   },
-   {
-    "id": "fk-h007",
+    "id": "fk-h005",
     "text": "Writes customers one longer letter each season.",
     "domain": "newsletter"
    },
    {
-    "id": "fk-h008",
+    "id": "fk-h006",
     "text": "Hosts a small invitation-only salon for a few people to see the object.",
     "domain": "events"
    },
    {
-    "id": "fk-h009",
-    "text": "Won't show an object in public until the finish is right.",
-    "domain": "demos"
-   },
-   {
-    "id": "fk-h010",
+    "id": "fk-h007",
     "text": "Declines crowdfunding because it sells a product before it is finished.",
     "domain": "crowdfunding"
    },
    {
-    "id": "fk-h011",
+    "id": "fk-h008",
     "text": "Sends a replacement unit with a handwritten note and asks for the old one back.",
     "domain": "spare parts"
    },
    {
-    "id": "fk-h012",
-    "text": "Partners only with brands that match the product's character.",
-    "domain": "partnerships"
-   },
-   {
-    "id": "fk-h013",
+    "id": "fk-h009",
     "text": "Ignores copycats and trusts that care cannot be copied.",
     "domain": "patents"
    },
    {
-    "id": "fk-h014",
+    "id": "fk-h010",
     "text": "Hands orders to a fulfillment partner who follows a strict packing standard.",
     "domain": "fulfillment"
    },
    {
-    "id": "fk-h015",
+    "id": "fk-h011",
     "text": "Sends new owners a handwritten card and offers a phone call.",
     "domain": "onboarding"
    },
    {
-    "id": "fk-h016",
+    "id": "fk-h012",
     "text": "Describes the environmental benefit in one modest sentence without figures.",
     "domain": "impact claims"
+   },
+   {
+    "id": "fk-h013",
+    "text": "Turns down custom versions because the product has a point of view.",
+    "domain": "custom requests"
+   },
+   {
+    "id": "fk-h014",
+    "text": "Enters design awards with a considered submission.",
+    "domain": "awards"
+   },
+   {
+    "id": "fk-h015",
+    "text": "Accepts only long, unhurried conversations and prepares for them.",
+    "domain": "interviews"
+   },
+   {
+    "id": "fk-h016",
+    "text": "Takes a summer student only when there is time to teach the craft properly.",
+    "domain": "interns"
    }
   ],
   "taste_ab": [
    {
     "id": "fp-t01",
     "pref_id": "fk-h001",
-    "prompt": "A product page needs a hero photo. What goes up?",
+    "prompt": "A harsh one-star review appears under the product. What happens?",
     "options": [
-     "A phone photo of the unit on a real counter",
-     "A studio shot with controlled light"
+     "Reply publicly within the hour and offer a fix",
+     "Write privately to the reviewer and let the review stand"
     ],
     "pick": 1
    },
    {
     "id": "fp-t02",
     "pref_id": "fk-h002",
-    "prompt": "A harsh one-star review appears under the product. What happens?",
+    "prompt": "A creator asks for a free review unit.",
     "options": [
-     "Write privately to the reviewer and let the review stand",
-     "Reply publicly within the hour and offer a fix"
+     "Send one only if you have seen their work",
+     "Send one with a tracking link"
     ],
     "pick": 0
    },
    {
     "id": "fp-t03",
     "pref_id": "fk-h003",
-    "prompt": "A creator asks for a free review unit.",
+    "prompt": "A returned unit comes back in good shape. What now?",
     "options": [
-     "Send one with a tracking link",
-     "Send one only if you have seen their work"
+     "Resell it as refurbished at a discount",
+     "Take it apart and rebuild it before it goes anywhere"
     ],
     "pick": 1
    },
    {
     "id": "fp-t04",
     "pref_id": "fk-h004",
-    "prompt": "A returned unit comes back in good shape. What now?",
+    "prompt": "Should there be an accessory bundle at checkout?",
     "options": [
-     "Take it apart and rebuild it before it goes anywhere",
-     "Resell it as refurbished at a discount"
+     "No, sell one complete thing",
+     "Yes, add a cleaning kit and a spare part as upsells"
     ],
     "pick": 0
    },
    {
     "id": "fp-t05",
     "pref_id": "fk-h005",
-    "prompt": "Should there be an accessory bundle at checkout?",
-    "options": [
-     "Yes, add a cleaning kit and a spare part as upsells",
-     "No, sell one complete thing"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "fp-t06",
-    "pref_id": "fk-h006",
-    "prompt": "How many colors at launch?",
-    "options": [
-     "Two considered colors, each tested in daylight",
-     "One, to keep inventory simple"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "fp-t07",
-    "pref_id": "fk-h007",
     "prompt": "How often do customers hear from the team?",
     "options": [
      "A short note every Friday",
@@ -561,8 +541,8 @@
     "pick": 1
    },
    {
-    "id": "fp-t08",
-    "pref_id": "fk-h008",
+    "id": "fp-t06",
+    "pref_id": "fk-h006",
     "prompt": "There is budget for one event. Which?",
     "options": [
      "A small invitation-only salon",
@@ -571,48 +551,28 @@
     "pick": 0
    },
    {
-    "id": "fp-t09",
-    "pref_id": "fk-h009",
-    "prompt": "Demo day is tomorrow and the prototype has a loose panel. What now?",
-    "options": [
-     "Show the working prototype as it is",
-     "Show photographs and keep the object in its case"
-    ],
-    "pick": 1
-   },
-   {
-    "id": "fp-t10",
-    "pref_id": "fk-h010",
+    "id": "fp-t07",
+    "pref_id": "fk-h007",
     "prompt": "Should there be a crowdfunding campaign?",
     "options": [
-     "No, it sells a product before it is finished",
-     "Yes, run one to validate demand and raise cash"
-    ],
-    "pick": 0
-   },
-   {
-    "id": "fp-t11",
-    "pref_id": "fk-h011",
-    "prompt": "A part cracks after a year. What does the owner get?",
-    "options": [
-     "A link to buy the spare part",
-     "A replacement unit with a handwritten note"
+     "Yes, run one to validate demand and raise cash",
+     "No, it sells a product before it is finished"
     ],
     "pick": 1
    },
    {
-    "id": "fp-t12",
-    "pref_id": "fk-h012",
-    "prompt": "A well-known cooking channel offers a partnership.",
+    "id": "fp-t08",
+    "pref_id": "fk-h008",
+    "prompt": "A part cracks after a year. What does the owner get?",
     "options": [
-     "Decline unless the brand fits the product exactly",
-     "Accept, and co-market with their community"
+     "A replacement unit with a handwritten note",
+     "A link to buy the spare part"
     ],
     "pick": 0
    },
    {
-    "id": "fp-t13",
-    "pref_id": "fk-h013",
+    "id": "fp-t09",
+    "pref_id": "fk-h009",
     "prompt": "A competitor's design looks similar. What now?",
     "options": [
      "File a provisional patent this week",
@@ -621,8 +581,8 @@
     "pick": 1
    },
    {
-    "id": "fp-t14",
-    "pref_id": "fk-h014",
+    "id": "fp-t10",
+    "pref_id": "fk-h010",
     "prompt": "Who packs the orders?",
     "options": [
      "A fulfillment partner with a strict packing standard",
@@ -631,8 +591,8 @@
     "pick": 0
    },
    {
-    "id": "fp-t15",
-    "pref_id": "fk-h015",
+    "id": "fp-t11",
+    "pref_id": "fk-h011",
     "prompt": "What does a new owner receive after buying?",
     "options": [
      "A three-email setup sequence",
@@ -641,12 +601,52 @@
     "pick": 1
    },
    {
-    "id": "fp-t16",
-    "pref_id": "fk-h016",
+    "id": "fp-t12",
+    "pref_id": "fk-h012",
     "prompt": "How is the environmental benefit described on the page?",
     "options": [
      "In one modest sentence with no figures",
      "With a running counter of the impact it claims"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t13",
+    "pref_id": "fk-h013",
+    "prompt": "A large customer asks for a custom version. What happens?",
+    "options": [
+     "Say yes if they prepay, and build it fast",
+     "Say no; the product has a point of view"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t14",
+    "pref_id": "fk-h014",
+    "prompt": "A design award invites entries.",
+    "options": [
+     "Enter, with a considered submission",
+     "Skip it; the time belongs to customers"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fp-t15",
+    "pref_id": "fk-h015",
+    "prompt": "A podcast invites the founder for a chat.",
+    "options": [
+     "Say yes the same day to anything with an audience",
+     "Say yes only to a long, unhurried conversation"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fp-t16",
+    "pref_id": "fk-h016",
+    "prompt": "A student offers to work for the summer.",
+    "options": [
+     "Only if there is time to teach the craft properly",
+     "Yes, with real tasks from the first morning"
     ],
     "pick": 0
    }
