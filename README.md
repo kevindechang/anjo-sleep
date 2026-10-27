@@ -34,7 +34,7 @@ flowchart LR
 
     subgraph sleep["Anjo Sleep (this repo, built during the hackathon)"]
         route["Route override"]
-        glimmer["Her own Glimmer 30B on Modal (vLLM + LoRA)"]
+        glimmer["Her own Glimmer 30B on SageMaker (vLLM + LoRA)"]
         evidence["Evidence store and targets"]
         chooser["Her chooser: wants, choices, receipts"]
         mind["MIND: questions, hypotheses, findings"]

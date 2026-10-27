@@ -214,6 +214,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.checkpoints import DATA_DIR_ENV
     from anjo.sleep.night import __main__ as night_command
     from anjo.sleep.night.sweep import NightBusy, swept_night
+    from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
     from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
     from anjo.sleep.train.trainer import LoraTrainer
@@ -245,8 +246,9 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       on_day=lives.note_day, on_scoring=lives.note_scoring, vm_record=lambda uid, night: _vm_record(lives, uid, night),
                       score=score)
-            results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
-                                            label=args.label, sweep=swept)
+            with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
+                results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
+                                                label=args.label, sweep=swept)
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None
     sha = git_sha()

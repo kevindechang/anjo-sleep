@@ -35,6 +35,7 @@ from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night.run import Window
 from anjo.sleep.probes.morning import run_morning
+from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -133,11 +134,12 @@ def run_night_phase(
 ) -> NightResult:
     plan = night_plan(now)
     missed = missed_day(markers, persona, plan)
-    result = nights(wiring=WIRING, night=plan.night, users=[user], personas={user: persona},
-                    windows={user: plan.window}, days={} if missed is None else {user: missed})[user]
-    if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
-        ports = (morning or _morning())(user, persona, plan.night)
-        score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")
+    with phase():  # one phase: Glimmer stays up from the night into the morning, then sleeps once
+        result = nights(wiring=WIRING, night=plan.night, users=[user], personas={user: persona},
+                        windows={user: plan.window}, days={} if missed is None else {user: missed})[user]
+        if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
+            ports = (morning or _morning())(user, persona, plan.night)
+            score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")
     return result
 
 

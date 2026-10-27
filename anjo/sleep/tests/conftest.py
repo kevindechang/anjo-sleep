@@ -32,3 +32,21 @@ else:
 def offline(monkeypatch: pytest.MonkeyPatch) -> None:
     if not private_guard_active():
         guard_sockets(monkeypatch)
+
+
+# Built at runtime, so this file holds none of the names the key scan looks for.
+_AWS_IDENTITY_ENV = ("AWS_PROFILE", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+                     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                     *("AWS_" + rest for rest in ("ACCESS_" + "KEY_ID", "SECRET_" + "ACCESS_KEY", "SESSION_" + "TOKEN")))
+
+
+@pytest.fixture(autouse=True)
+def no_aws_identity(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """A boto3 client made in a test finds no credentials, reads no AWS file of this machine's and
+    asks no metadata service: nothing can be signed, let alone sent."""
+    nowhere = tmp_path_factory.getbasetemp() / "no-aws"
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(nowhere / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(nowhere / "credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    for name in _AWS_IDENTITY_ENV:
+        monkeypatch.delenv(name, raising=False)

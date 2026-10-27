@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadWeightsAndAdaptersOnly",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::anjo-sleep-sagemaker-<BUCKET_SUFFIX>/weights/*",
+        "arn:aws:s3:::anjo-sleep-sagemaker-<BUCKET_SUFFIX>/adapters/*"
+      ]
+    },
+    {
+      "Sid": "ListWeightsAndAdaptersOnly",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": ["arn:aws:s3:::anjo-sleep-sagemaker-<BUCKET_SUFFIX>"],
+      "Condition": {"StringLike": {"s3:prefix": ["weights/*", "adapters/*"]}}
+    },
+    {
+      "Sid": "PullOurImageOnly",
+      "Effect": "Allow",
+      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+      "Resource": ["arn:aws:ecr:us-east-1:<ACCOUNT_ID>:repository/anjo-sleep-glimmer"]
+    },
+    {
+      "Sid": "EcrSignIn",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "OurLogsOnly",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"],
+      "Resource": [
+        "arn:aws:logs:us-east-1:<ACCOUNT_ID>:log-group:/aws/sagemaker/*",
+        "arn:aws:logs:us-east-1:<ACCOUNT_ID>:log-group:/aws/sagemaker/*:log-stream:*"
+      ]
+    },
+    {
+      "Sid": "SageMakerMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {"StringLike": {"cloudwatch:namespace": ["/aws/sagemaker/*", "AWS/SageMaker"]}}
+    }
+  ]
+}

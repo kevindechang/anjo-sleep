@@ -17,8 +17,8 @@ second command while one is live stops before it touches anything.
 
 This is the composition root. The engine core never imports the app (the import contract), so the
 app's wiring is named here and loaded by name. The trainer is built here: Colab trains (synthetic
-people only, unless ``--allow-real``), and each finished adapter is uploaded to the serving volume
-through Task 4's ``put_adapter``, which refuses a name that exists.
+people only, unless ``--allow-real``), and each finished adapter is uploaded to the serving backend
+(``serving.backend``: SageMaker's bucket, or Modal's volume), which refuses a name that exists.
 """
 from __future__ import annotations
 
@@ -60,9 +60,10 @@ def _colab_cli() -> ColabCli:
 
 
 def _publish(folder: Path, name: str) -> None:
-    from anjo.sleep.serving.modal_app import put_adapter  # needs the modal package: imported only to upload
+    """Upload a finished adapter to the serving backend (SageMaker's bucket, or Modal's volume)."""
+    from anjo.sleep.serving import backend
 
-    put_adapter(folder, name)
+    backend.from_env().upload_adapter(folder, name)
 
 
 def execute(

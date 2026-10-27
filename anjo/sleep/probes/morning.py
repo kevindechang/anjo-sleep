@@ -46,6 +46,7 @@ from anjo.sleep.probes.score import (
     score_outcomes,
 )
 from anjo.sleep.reports import results
+from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady, WakeResult
 from anjo.sleep.types import CheckpointRef, Probe
 
@@ -77,6 +78,7 @@ class Morning:
     root: Path | None = None
     timer: Callable[[], float] = time.monotonic
     wake: Callable[[], WakeResult] | None = None  # wakes Glimmer before any arm calls it
+    sleep: Callable[[], None] | None = None  # puts it back to sleep when the run ends, however it ends
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,15 @@ def _worst_judge_calls(probes: Sequence[Probe]) -> int:
 
 
 def run_morning(
+    user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
+    label: str = "development", promoted: bool = True,
+) -> MorningResult:
+    """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends."""
+    with phase(morning.sleep):
+        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted)
+
+
+def _run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
     label: str = "development", promoted: bool = True,
 ) -> MorningResult:

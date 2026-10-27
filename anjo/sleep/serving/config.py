@@ -41,9 +41,12 @@ REVISION_ENV: Final = "ANJO_SLEEP_GLIMMER_REVISION"
 TOOL_PARSER_ENV: Final = "ANJO_SLEEP_TOOL_CALL_PARSER"
 SNAPSHOT_ENV: Final = "ANJO_SLEEP_GPU_SNAPSHOT"
 VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
-# The vLLM release the image installs unless the deploy names another. The Oct 28 check confirms
-# that it loads Glimmer, applies an adapter at the serving precision and parses its tool calls.
-DEFAULT_VLLM_VERSION: Final = "0.11.0"
+# The vLLM release both backends serve with (Modal's image installs it, SageMaker's image is built
+# FROM vllm/vllm-openai at this tag) unless the deploy names another. 0.28.0 is the first release
+# whose model registry has Glimmer's architecture, MuseGlimmerForConditionalGeneration (vLLM #51655,
+# merged 2026-08-14); 0.11.0 can't load it. The Oct 28 check confirms that it loads Glimmer, applies
+# an adapter at the serving precision and parses its tool calls.
+DEFAULT_VLLM_VERSION: Final = "0.28.0"
 
 # Every function has a timeout (§12.1). Serving scales to zero after ten idle minutes, and one
 # container serves for at most three hours before Modal replaces it.
@@ -139,13 +142,18 @@ def weights_path(revision: str) -> str:
     return f"{WEIGHTS_DIR}/{MODEL}/{revision}"
 
 
-def vllm_command(config: ServeConfig) -> list[str]:
+def vllm_command(
+    config: ServeConfig, *, model_path: str | None = None, host: str = "0.0.0.0", port: int = PORT,
+) -> list[str]:
     """The server's command line. The API key is read from VLLM_API_KEY (the Modal secret), never
-    passed as an argument, so it never shows in a process list."""
+    passed as an argument, so it never shows in a process list. ``model_path`` is where the pinned
+    weights sit (Modal's weights volume by default; SageMaker copies them to its own model folder)."""
+    revision = config.pinned_revision()  # no server starts unpinned, wherever its weights sit
+    path = weights_path(revision) if model_path is None else model_path
     command = [
-        "vllm", "serve", weights_path(config.pinned_revision()),
+        "vllm", "serve", path,
         "--served-model-name", MODEL,
-        "--host", "0.0.0.0", "--port", str(PORT),
+        "--host", host, "--port", str(port),
         "--dtype", config.precision.dtype,
         "--max-model-len", str(MAX_MODEL_LEN),
         "--gpu-memory-utilization", str(GPU_MEMORY_UTILIZATION),

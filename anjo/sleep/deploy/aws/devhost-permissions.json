@@ -1,0 +1,33 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeOurEndpointOnly",
+      "Effect": "Allow",
+      "Action": ["sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"],
+      "Resource": [
+        "arn:aws:sagemaker:us-east-1:<ACCOUNT_ID>:endpoint/anjo-sleep-glimmer",
+        "arn:aws:sagemaker:us-east-1:<ACCOUNT_ID>:inference-component/anjo-sleep-glimmer-ic"
+      ]
+    },
+    {
+      "Sid": "WakeAndSleepOurComponentOnly",
+      "Effect": "Allow",
+      "Action": ["sagemaker:DescribeInferenceComponent", "sagemaker:UpdateInferenceComponentRuntimeConfig"],
+      "Resource": ["arn:aws:sagemaker:us-east-1:<ACCOUNT_ID>:inference-component/anjo-sleep-glimmer-ic"]
+    },
+    {
+      "Sid": "AdaptersOnly",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": ["arn:aws:s3:::anjo-sleep-sagemaker-<BUCKET_SUFFIX>/adapters/*"]
+    },
+    {
+      "Sid": "ListAdaptersOnly",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": ["arn:aws:s3:::anjo-sleep-sagemaker-<BUCKET_SUFFIX>"],
+      "Condition": {"StringLike": {"s3:prefix": ["adapters/*"]}}
+    }
+  ]
+}

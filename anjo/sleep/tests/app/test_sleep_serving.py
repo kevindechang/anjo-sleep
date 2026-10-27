@@ -85,6 +85,12 @@ def _crisis_case(tier: str) -> str:
     return text
 
 
+@pytest.fixture(autouse=True)
+def on_modal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests serve through Modal, the fallback backend; SageMaker's are in test_sagemaker*.py."""
+    monkeypatch.setenv("ANJO_SLEEP_BACKEND", "modal")
+
+
 def _never(_pin: object) -> Any:
     raise AssertionError("only the sleep runtime may serve a flagged person here")
 
