@@ -33,12 +33,13 @@ from anjo.sleep.provenance import may_train
 from anjo.sleep.sim.accelerated import FAKE_PERSONA, FAKE_USER, PERSONAS, run_accelerated
 from anjo.sleep.tests.accelerated_rig import FakeAccelerated
 from anjo.sleep.tests.homework_fakes import GUIDE_URL, STUDY_URL, FakeSearch, FakeWonder, research_script, study_web
-from anjo.sleep.tests.inquiry_fakes import FakeScreen, Kill
+from anjo.sleep.tests.inquiry_fakes import FakeResolver, FakeScreen, Kill
 from anjo.sleep.tests.mind_night_fakes import (
     RESEARCH_URL,
     STATEMENT,
     LifeThinker,
     Mumbles,
+    Predicts,
     Researches,
     Retracts,
     Suspects,
@@ -134,7 +135,7 @@ def test_flag_off_night_is_unchanged(tmp_path: Path, ported: bool) -> None:
 
 
 def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(tmp_path: Path) -> None:
-    start = date(2026, 11, 3)
+    start = date(2026, 10, 1)  # before the rig's wall clock, as every accelerated life is
     fake = FakeAccelerated(tmp_path, mind_from=start)  # the commitment is due nine days after night 1
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
     results = run_accelerated(FAKE_USER, person, 3, start, rig=fake.rig(sha="0" * 40))
@@ -166,20 +167,23 @@ def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(tmp_pat
     assert kept.replay_digest() == kept.digest()  # her workspace folds again from its log
 
 
-def test_a_life_dated_before_the_wall_clock_runs_as_one_dated_after_it(tmp_path: Path) -> None:
-    """The rig's wall clock reads 2026-10-28: the same life on virtual dates before it, then after it."""
+def test_a_prediction_made_on_night_one_is_resolved_by_a_later_nights_evidence(tmp_path: Path) -> None:
+    """A past-dated life: each night's items are created at its own clock, so night 1's prediction
+    window sees the items that arrive on nights 2 and 3."""
+    start = date(2026, 10, 1)
+    fake = FakeAccelerated(tmp_path, mind_from=start, thinker=Predicts(targets=("fake-life-t1",)),
+                           resolver=FakeResolver(verdicts={"pilot": "true"}))
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
-    lived = []
-    for start in (date(2026, 10, 1), date(2026, 11, 3)):
-        fake = FakeAccelerated(tmp_path / start.isoformat(), mind_from=start)
-        results = run_accelerated(FAKE_USER, person, 3, start, rig=fake.rig(sha="0" * 40))
-        assert fake.thinker is not None
-        found = workspace(fake.world, FAKE_USER).workspace().findings
-        lived.append((len(fake.thinker.prompts), [(f.kind, f.statement, f.cites) for f in found],
-                      [step(r.log_path, "notice")["questions_opened"] for r in results],
-                      [step(r.log_path, "choose")["action"] for r in results],
-                      [step(r.log_path, "note")["outcome"] for r in results]))
-    assert lived[0] == lived[1] and lived[0][0] > 0 and lived[0][1] and lived[0][-1][-1] == "held"
+    results = run_accelerated(FAKE_USER, person, 3, start, rig=fake.rig(sha="0" * 40))
+    assert [r.status for r in results] == ["promoted"] * 3
+    assert step(results[0].log_path, "choose")["inquiry"]["ops"].get("PREDICT") == 1
+    events = workspace(fake.world, FAKE_USER).events()
+    [prediction] = workspace(fake.world, FAKE_USER).workspace().predictions
+    assert prediction.committed_at == datetime.combine(start + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    [resolved] = [e.step for e in events if isinstance(e.step.entry, it.Resolved)]
+    assert isinstance(resolved.entry, it.Resolved) and resolved.entry.outcome == "true"
+    assert resolved.at > prediction.committed_at and {ref.day for ref in resolved.entry.seen} == {start + timedelta(days=1)}
+    assert all(prediction.committed_at < ref.created_at <= resolved.at for ref in resolved.entry.seen)
 
 
 # ── Close marks: on a close only, read from her log ──────────────────────────

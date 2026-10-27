@@ -126,6 +126,27 @@ class TwoQuestions(LifeThinker):
 
 
 @dataclass
+class Predicts(LifeThinker):
+    """Hypothesizes, commits one prediction on its question, then has nothing to add: the question
+    waits for evidence the prediction's window can see."""
+
+    predicted: bool = False
+
+    def _cycle(self, prompt: str) -> str:
+        held = [line[2:].split(":", 1)[0] for line in _section(prompt, "## Hypotheses (credences are heuristic)")
+                if line.startswith("- ")]
+        if not held:
+            return super()._cycle(prompt)
+        if self.predicted:
+            return "Nothing to add until she says more."
+        self.predicted = True
+        first = next(h for h in held if not h.endswith(".else"))
+        op = it.PredictOp(_question(prompt), "She rehearses the pilot demo before its date",
+                          {h: 0.9 if h == first else 0.2 for h in held}, horizon_days=3)
+        return json.dumps(op_to_json(op))
+
+
+@dataclass
 class Mumbles(LifeThinker):
     """Opens its question, then answers every cycle with something no operation parses from."""
 
@@ -194,14 +215,16 @@ class Researches:
 
 
 def mind_night(
-    world: World, thinker: Any, *, screen: Any = None, research: Callable[[MindCall], Any] | None = None, **kw: Any,
+    world: World, thinker: Any, *, screen: Any = None, research: Callable[[MindCall], Any] | None = None,
+    resolver: Any = None, **kw: Any,
 ) -> MindNight:
     """``MindNight`` over ``world``'s files with fake models; ``screen`` may take the step's Spark
     wrapper (``screen(spark)``) to build a real screen on a fake chat."""
 
     def models(user_id: str, spark: SparkWrap) -> MindModels:
         built = screen(spark) if callable(screen) else screen or FakeScreen()
-        return MindModels(thinker=thinker, world=FakeWorld(), screen=built, resolver=FakeResolver(), model=GLIMMER)
+        return MindModels(thinker=thinker, world=FakeWorld(), screen=built, resolver=resolver or FakeResolver(),
+                          model=GLIMMER)
 
     return MindNight(models=models, log=lambda uid: workspace(world, uid), prices=world.deps().prices,
                      research=research, timer=world.tick, **kw)

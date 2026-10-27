@@ -11,11 +11,18 @@ index, so no accelerated result can be read as a real person's.
 A window that is empty, or starts before the life's previous window ended, stops the run: a
 second night reading the first day's lines again would train on them twice.
 
+**A life is dated in the past.** Its last virtual night must end by the wall time the run starts
+(``check_dates``), and ``--start`` defaults to the latest such date, today minus ``--days`` on the
+run's clock. Each record is stamped at its window's wall end or the night's clock, whichever is
+earlier, which on a past date is always the virtual time: chat on the wall clock sees everything
+that exists, and the night's masks, its prediction windows and the person's last message all read
+one clock. A start after that is refused before any day is simulated or any night runs.
+
     python -m anjo.sleep.sim.accelerated --fake --days 3          # the daily integration gate, offline
     python -m anjo.sleep.sim.accelerated --fake --days 3 --mind   # the same, with MIND's inquiry on (Task 17)
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.sim.accelerated --wiring anjo.sleep.app.night:build \\
         --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona founder \\
-        --days 2 --start 2026-11-03
+        --days 2                                                   # starts two days ago; --start 2026-10-01 dates it earlier
 
 After each night the morning probe run scores every arm (`probes.morning`). Real runs train on Colab, one VM per life (``ColabLives``), synthetic people only.
 """
@@ -31,7 +38,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
@@ -80,6 +87,22 @@ class Rig:
     score: Callable[[str, date, str, NightResult], object] | None = None
     on_scoring: Callable[[str, float], None] | None = None
     timer: Callable[[], float] = time.monotonic
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # the wall clock, read as the run starts
+
+
+def latest_start(now: datetime, days: int) -> date:
+    """The latest start whose ``days`` nights all end by ``now``: today (UTC) minus ``days``."""
+    return now.astimezone(timezone.utc).date() - timedelta(days=days)
+
+
+def check_dates(start: date, days: int, now: datetime) -> None:
+    """Refuse a life whose last virtual night ends after ``now``: dated in the future, its records
+    would sit on the wall clock while its nights read the virtual one."""
+    last_end = day_window(start + timedelta(days=days - 1))[1]
+    if last_end > now:
+        raise AcceleratedError(
+            f"the life's last night ends {last_end.isoformat()}, after the run starts ({now.isoformat()}): "
+            f"accelerated lives are dated in the past, so start on or before {latest_start(now, days).isoformat()}")
 
 
 def git_sha(repo: Path = REPO) -> str:
@@ -122,9 +145,11 @@ def run_accelerated_batch(
     lives: Sequence[tuple[str, Persona]], days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
     label: str = "development", sweep: Sweep | None = None,
 ) -> dict[str, list[NightResult]]:
-    """Run ``days`` days for every life in lockstep; each night is the life's own virtual date."""
+    """Run ``days`` days for every life in lockstep; each night is the life's own virtual date, in
+    the past (``check_dates``, before anything runs)."""
     if days < 1:
         raise ValueError("days is at least 1")
+    check_dates(start, days, rig.now())
     kind = _check_label(label)
     if len({uid for uid, _ in lives}) != len(lives):
         raise ValueError("each life has its own user id")
@@ -192,13 +217,25 @@ def _report(
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
 
 
-def _fake(days: int, start: date, seed: int, mind: bool = False) -> int:
-    """The whole loop on fakes: no model, no GPU, no network, no data dir. ``mind`` turns on MIND's
-    inquiry on a fake thinker."""
+def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: datetime) -> date:
+    """``start``, or the latest past one on the run's clock; a future life is refused here."""
+    dated = start or latest_start(now, days)
+    try:
+        check_dates(dated, days, now)
+    except AcceleratedError as late:
+        parser.error(str(late))
+    return dated
+
+
+def _fake(days: int, start: date | None, seed: int, mind: bool, parser: argparse.ArgumentParser) -> int:
+    """The whole loop on fakes: no model, no GPU, no network, no data dir, on the rig's fake clock.
+    ``mind`` turns on MIND's inquiry on a fake thinker."""
     rig_module = importlib.import_module("anjo.sleep.tests.accelerated_rig")  # test support, loaded only here
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
+    clock = rig_module.FakeClock()
+    start = _dated(parser, start, days, clock.now)
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
-        fake = rig_module.FakeAccelerated(Path(root), mind_from=start if mind else None)
+        fake = rig_module.FakeAccelerated(Path(root), clock=clock, mind_from=start if mind else None)
         results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
@@ -222,10 +259,11 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
     from anjo.sleep.train.trainer import LoraTrainer
 
-    if not (args.wiring and args.simulate and args.morning and args.users and args.personas and args.start):
-        parser.error("a real run needs --wiring, --simulate, --morning, --start and a --user with its --persona (or --fake)")
+    if not (args.wiring and args.simulate and args.morning and args.users and args.personas):
+        parser.error("a real run needs --wiring, --simulate, --morning and a --user with its --persona (or --fake)")
     if len(args.personas) != len(args.users):
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
+    start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
@@ -251,7 +289,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                       on_day=lives.note_day, on_scoring=lives.note_scoring, vm_record=lambda uid, night: _vm_record(lives, uid, night),
                       score=score)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
-                results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
+                results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept)
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None
@@ -265,7 +303,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run synthetic lives day by day, a night after each.")
     parser.add_argument("--fake", action="store_true", help="the whole loop on fakes, offline (the daily gate)")
     parser.add_argument("--days", type=int, default=2)
-    parser.add_argument("--start", type=date.fromisoformat, default=date(2026, 11, 3))
+    parser.add_argument("--start", type=date.fromisoformat, default=None,
+                        help="the first virtual date, in the past (default: today minus --days)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--label", choices=LABELS, default="development")
     parser.add_argument("--wiring", help="the app's NightDeps builder, <module>:<function>")
@@ -278,7 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.days < 1:
         parser.error("--days is at least 1")
     if args.fake:
-        return _fake(args.days, args.start, args.seed, mind=args.mind)
+        return _fake(args.days, args.start, args.seed, args.mind, parser)
     return _real(args, parser)
 
 

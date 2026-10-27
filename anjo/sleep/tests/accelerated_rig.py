@@ -106,6 +106,7 @@ class FakeAccelerated:
     heard: dict[str, list[Heard]] = field(default_factory=dict)
     mind_from: date | None = None  # MIND's inquiry on, from this first night (Task 17)
     thinker: LifeThinker | None = None
+    resolver: Any = None  # MIND's prediction resolver; the default answers undetermined
 
     def __post_init__(self) -> None:
         self.world = World(self.root)
@@ -164,6 +165,7 @@ class FakeAccelerated:
         deps = self.world.deps(extractor=lambda chat: self)
         if self.mind_from is not None:
             self.thinker = self.thinker or LifeThinker(targets=("fake-life-t1", "fake-life-c1"), queries=["pilot"])
-            mind = mind_night(self.world, self.thinker)
+            mind = mind_night(self.world, self.thinker, resolver=self.resolver)
             deps = replace(deps, settings=replace(deps.settings, mind_inquiry=True), inquiry=mind, notice=mind)
-        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha, score=self.score)
+        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha, score=self.score,
+                   now=lambda: self.clock.now)

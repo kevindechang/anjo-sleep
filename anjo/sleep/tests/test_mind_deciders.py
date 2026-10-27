@@ -333,7 +333,7 @@ def test_night_without_estimator_or_synthetic_person_records_less(tmp_path: Path
 
 def test_accelerated_night_decides_on_the_virtual_clock(tmp_path: Path) -> None:
     fake = FakeAccelerated(tmp_path)
-    virtual = date(2026, 11, 20)  # weeks after the wall clock the fake day is simulated on
+    virtual = date(2026, 10, 5)  # weeks before the wall clock the fake day is simulated on
     fake.world.targets("u1").upsert(replace(thread("u1", "sorting black film"), last_mentioned=virtual))
     homework = StudyingHomework(fake.world)
     coefficients = expect.Coefficients(intercept=-0.5, understand=0.4, unacted=0.3, days=-0.05, base_rate=0.3, n=12)
@@ -341,7 +341,7 @@ def test_accelerated_night_decides_on_the_virtual_clock(tmp_path: Path) -> None:
         extractor=lambda chat: fake, homework=homework, estimator=coefficients))
     [result] = run_accelerated("u1", FOUNDER, 1, virtual, rig=rig)
     end = night_run.day_window(virtual)[1]
-    assert datetime.fromisoformat(summary(result.log_path)["night_end"]) < end  # the window stays wall-clock
+    assert datetime.fromisoformat(summary(result.log_path)["night_end"]) > end  # the window stays wall-clock
     pre, post = _points(result.log_path)
     assert pre.raw.as_of == end and post.raw.as_of == end
     assert homework.studied == ["u1-t1"]  # the target first seen on the virtual date is open on it
