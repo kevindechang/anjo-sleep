@@ -215,13 +215,33 @@ def test_warm_time_is_bought_once_capped_per_day_and_paid_for() -> None:
     assert paid[-1] == 2100
 
 
-def test_warm_time_the_budget_refuses_is_not_bought() -> None:
-    store = MemoryStore()
+def test_a_payment_the_ledger_refuses_closes_the_live_side_for_the_day() -> None:
+    store, paid = MemoryStore(), list[float]()
     limiter = Limiter(store)
     refused = _refused(lambda: limiter.buy_warm_time(NOW, 600, covered_until=None, pay=_pay(ok=False)))
-    assert refused.reason == "live_spent" and (store.saved or {}).get("warm_s", 0) == 0
-    limiter.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())
-    assert store.saved is not None and store.saved["warm_s"] == 600
+    assert refused.reason == "live_spent" and store.saved is not None
+    assert (store.saved["warm_s"], store.saved["pay_refused"]) == (0, 1)  # saved: a restart keeps it closed
+    later = NOW + timedelta(hours=2)
+    assert limiter.live_state(later, 600, covered_until=None) == "spent"
+    assert Limiter(store).live_state(later, 600, covered_until=None) == "spent"
+    again = _refused(lambda: limiter.buy_warm_time(later, 600, covered_until=None, pay=_pay(paid)))
+    assert again.reason == "live_spent" and paid == []  # the ledger isn't even asked again today
+    window_end = (later + timedelta(hours=1)).timestamp()  # a keep-warm window someone else holds
+    assert limiter.live_state(later, 600, covered_until=window_end) == "open"
+    limiter.buy_warm_time(NOW + timedelta(days=1), 600, covered_until=None, pay=_pay(paid))
+    assert paid == [600]
+
+
+def test_after_a_refused_payment_no_ask_reaches_glimmer_that_day() -> None:
+    arms = FakeArms()
+    service, _ = _service(arms, pay_ok=False)
+    reasons = []
+    for n in range(6):  # 29 minutes apart: on SageMaker each ping would hold her up 30 more, unpaid
+        at = NOW + timedelta(minutes=29 * n)
+        token = service.start_visit(f"c{n}", True, at)
+        reasons.append(_refused(service.ask, f"c{n}", token, "Is she up?", at).reason)
+    assert reasons == ["live_spent"] * 6 and (arms.pings, arms.calls) == (1, 0)
+    assert service.scenes("x", NOW + timedelta(hours=3)).live == "spent"
 
 
 def test_live_hours_close_waking_and_extending_but_not_a_window_held_by_someone_else() -> None:
@@ -339,16 +359,12 @@ def test_a_pair_takes_one_stored_vote_then_reveals() -> None:
     assert withheld.value.reason == "not_votable" and len(votes.stored) == 1
 
 
-def test_a_visit_votes_once_per_scene_and_only_on_its_own_pairs() -> None:
+def test_a_visit_votes_only_on_its_own_pairs() -> None:
     registry, votes = PairRegistry(), Votes()
     product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
     registry.open("p1", visit="v", scene="credit", left=product, right=baseline, votable=True, now=NOW)
     registry.vote("p1", "left", visit="v", now=NOW, record=votes)
-    # The scene's texts are fixed: once its sides are revealed, this visit's later opens are not blind.
-    registry.open("p2", visit="v", scene="credit", left=baseline, right=product, votable=True, now=NOW)
-    with pytest.raises(Refused) as again:
-        registry.vote("p2", "tie", visit="v", now=NOW, record=votes)
-    assert (again.value.status, again.value.reason) == (409, "scene_voted")
+    assert registry.scene_of("p1", visit="v") == "credit" and registry.scene_of("p1", visit="w") is None
     registry.open("p3", visit="w", scene="credit", left=product, right=baseline, votable=True, now=NOW)
     with pytest.raises(Refused) as not_theirs:
         registry.vote("p3", "tie", visit="v", now=NOW, record=votes)
@@ -380,9 +396,15 @@ def test_open_pairs_are_capped_per_visit_and_never_evicted() -> None:
     assert (flood.value.status, flood.value.reason) == (429, "too_many_open")
     registry.vote("a0", "tie", visit="a", now=NOW, record=votes)  # a vote frees a place
     registry.open("a-more", visit="a", votable=True, now=NOW, left=left, right=right)
+    with pytest.raises(Refused) as no_room:
+        registry.check_room("a", NOW)  # what an ask checks before it spends its calls
+    assert no_room.value.reason == "too_many_open"
     full = PairRegistry(max_pairs=2)
     full.open("p", visit="judge", votable=True, now=NOW, left=left, right=right)
     full.open("q", visit="other", votable=True, now=NOW, left=left, right=right)
+    with pytest.raises(Refused) as full_up:
+        full.check_room("flood", NOW)
+    assert full_up.value.reason == "busy"
     with pytest.raises(Refused) as busy:
         full.open("r", visit="flood", votable=True, now=NOW, left=left, right=right)
     assert (busy.value.status, busy.value.reason) == (503, "busy")
@@ -435,13 +457,15 @@ class FakeWaker:
 
 def _service(arms: FakeArms, *, coin: Iterator[bool] | None = None, ids: Iterator[str] | None = None,
              starters: StarterSet | None = None, waker: FakeWaker | None = None, limits: Limits = Limits(),
-             paid: list[float] | None = None) -> tuple[DemoService, Votes]:
+             paid: list[float] | None = None, pay_ok: bool = True,
+             store: MemoryStore | None = None) -> tuple[DemoService, Votes]:
     votes = Votes()
     flips = coin or iter(lambda: True, None)
     names = ids or (f"id-{n:020d}" for n in range(10_000))
-    upkeep = Upkeep(idle_s=600.0, answer_s=300.0, wake_s=600.0, covered_until=lambda: None, pay=_pay(paid))
+    upkeep = Upkeep(idle_s=600.0, answer_s=300.0, wake_s=600.0, covered_until=lambda: None,
+                    pay=_pay(paid, ok=pay_ok))
     service = DemoService(
-        config=DemoConfig("2C", KEY, 3.6), limiter=Limiter(MemoryStore(), limits), pairs=PairRegistry(),
+        config=DemoConfig("2C", KEY, 3.6), limiter=Limiter(store or MemoryStore(), limits), pairs=PairRegistry(),
         floor=PassFloor(), reply_check=PassCheck(), arms=arms, starters=lambda: starters, votes=votes,
         upkeep=upkeep, waker=waker, coin=lambda: next(flips), new_id=lambda: next(names),
     )
@@ -572,16 +596,48 @@ def test_starter_pairs_serve_with_no_model_and_only_for_their_baseline() -> None
     assert page.source is None and not any(view.ready for view in page.scenes)
 
 
-def test_a_starter_scene_takes_one_vote_per_visit() -> None:
+def test_a_starter_scene_takes_one_vote_per_address_a_day() -> None:
+    """A scene's two texts are fixed: once an address has seen them revealed, its later pairs of that
+    scene aren't blind, whichever visit they come in (a reload starts a new one)."""
     service, votes = _service(FakeArms(up=False), starters=_starters())
     token = service.start_visit("c", True, NOW)
-    first = service.starter("c", token, "credit", NOW)
-    service.vote("c", token, first.pair_id, "left", NOW)
-    second = service.starter("c", token, "credit", NOW)
-    assert _refused(service.vote, "c", token, second.pair_id, "right", NOW).reason == "scene_voted"
-    other = service.start_visit("c", True, NOW)
-    service.vote("c", other, service.starter("c", other, "credit", NOW).pair_id, "tie", NOW)
-    assert len(votes.stored) == 2
+    service.vote("c", token, service.starter("c", token, "credit", NOW).pair_id, "left", NOW)
+    for visit in (token, service.start_visit("c", True, NOW), service.start_visit("c", True, NOW)):
+        again = service.starter("c", visit, "credit", NOW)
+        refused = _refused(service.vote, "c", visit, again.pair_id, "right", NOW)
+        assert (refused.status, refused.reason) == (409, "scene_voted")
+    other = service.start_visit("d", True, NOW)  # another address
+    service.vote("d", other, service.starter("d", other, "credit", NOW).pair_id, "tie", NOW)
+    service.vote("c", token, service.starter("c", token, "dialect", NOW).pair_id, "tie", NOW)  # another scene
+    tomorrow = NOW + timedelta(days=1)
+    fresh = service.start_visit("c", True, tomorrow)
+    service.vote("c", fresh, service.starter("c", fresh, "credit", tomorrow).pair_id, "tie", tomorrow)
+    assert len(votes.stored) == 4
+
+
+def test_a_scene_vote_is_saved_before_it_counts_and_given_back_if_not_stored() -> None:
+    store = MemoryStore()
+    service, votes = _service(FakeArms(up=False), starters=_starters(), store=store)
+    token = service.start_visit("c", True, NOW)
+    pair = service.starter("c", token, "credit", NOW)
+    store.fail_save = True  # the claim can't be saved: the vote is refused, nothing stored
+    assert _refused(service.vote, "c", token, pair.pair_id, "left", NOW).reason == "resting"
+    store.fail_save, votes.fail = False, True  # the vote can't be stored: the scene goes back
+    assert _refused(service.vote, "c", token, pair.pair_id, "left", NOW).reason == "resting"
+    votes.fail = False
+    service.vote("c", token, pair.pair_id, "left", NOW)
+    assert len(votes.stored) == 1 and store.saved is not None and store.saved["scene_votes"] == {"c": ["credit"]}
+
+
+def test_an_ask_without_room_for_its_pair_spends_nothing() -> None:
+    arms = FakeArms()
+    service, _ = _service(arms, starters=_starters())
+    token = service.start_visit("c", True, NOW)
+    opened = [service.starter("c", token, "credit", NOW) for _ in range(OPEN_PER_VISIT)]
+    refused = _refused(service.ask, "c", token, "One of my own?", NOW)
+    assert (refused.status, refused.reason) == (429, "too_many_open") and (arms.pings, arms.calls) == (0, 0)
+    service.vote("c", token, opened[0].pair_id, "tie", NOW)  # a vote makes room
+    assert isinstance(service.ask("c", token, "One of my own?", NOW), PairView) and arms.calls == 2
 
 
 def test_starter_scenes_not_in_training_or_sealed_sets() -> None:

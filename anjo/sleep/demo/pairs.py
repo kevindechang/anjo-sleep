@@ -7,11 +7,11 @@ through ``record`` (the choice, the side mapping and the time: never a word of t
 either reply), and only then reveals the sides. A pair takes one vote, and a pair with a withheld
 side takes none.
 
-**Per visit.** A pair belongs to the visit that opened it; to any other it doesn't exist. A starter
-scene's two texts are fixed and only their order is drawn again, so once a visit has seen a scene's
-sides revealed its later pairs of that scene are no longer blind: a visit votes once per scene. A
-visit takes at most ``VOTES_PER_VISIT`` votes and holds at most ``OPEN_PER_VISIT`` pairs open, so
-one visit's flood can't crowd the registry.
+**Per visit.** A pair belongs to the visit that opened it; to any other it doesn't exist. A visit
+takes at most ``VOTES_PER_VISIT`` votes and holds at most ``OPEN_PER_VISIT`` pairs open, so one
+visit's flood can't crowd the registry. ``check_room`` refuses an ask before it spends its calls on a
+pair ``open`` would refuse. One vote per starter scene is the address's, a day
+(``Limiter.claim_scene_vote``), since a reload starts a new visit.
 
 Pairs live in memory for ``PAIR_TTL_S``. Past ``MAX_PAIRS`` a new pair is refused (``busy``) rather
 than the oldest dropped, so a flood never expires someone's pair before they vote. A restart forgets
@@ -24,7 +24,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Final, Literal, get_args
+from typing import Final, Literal, get_args
 
 from anjo.sleep.demo.limits import Refused
 
@@ -88,7 +88,6 @@ class PairRegistry:
         self._pairs: OrderedDict[str, _Pair] = OrderedDict()
         self._waiting: dict[str, int] = {}
         self._votes: OrderedDict[str, int] = OrderedDict()
-        self._voted_scenes: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._lock = threading.Lock()
 
     def open(
@@ -99,13 +98,22 @@ class PairRegistry:
             self._sweep(now)
             if pair_id in self._pairs:
                 raise ValueError("a pair id is used once")
-            if votable and self._waiting.get(visit, 0) >= OPEN_PER_VISIT:
-                raise Refused(429, "too_many_open")
-            if len(self._pairs) >= self._max:
-                raise Refused(503, "busy")
+            self._room(visit, votable)
             pair = _Pair(visit, scene, left, right, votable, now.timestamp() + self._ttl_s)
             self._pairs[pair_id] = pair
             self._count(pair, 1)
+
+    def check_room(self, visit: str, now: datetime) -> None:
+        """Refuse now what opening one more of ``visit``'s pairs would: too many open, or no room."""
+        with self._lock:
+            self._sweep(now)
+            self._room(visit, votable=True)
+
+    def scene_of(self, pair_id: str, *, visit: str) -> str | None:
+        """The starter scene of ``visit``'s pair, or None: a question of its own, or no such pair."""
+        with self._lock:
+            pair = self._pairs.get(pair_id)
+            return None if pair is None or pair.visit != visit else pair.scene
 
     def vote(
         self, pair_id: str, choice: str, *, visit: str, now: datetime, record: Callable[[Vote], None],
@@ -125,9 +133,13 @@ class PairRegistry:
             self._count(pair, -1)
             self._pairs[pair_id] = replace(pair, voted=True)
             self._remember(self._votes, visit, self._votes.get(visit, 0) + 1)
-            if pair.scene is not None:
-                self._remember(self._voted_scenes, (visit, pair.scene), None)
             return Reveal(vote, pair.left, pair.right)
+
+    def _room(self, visit: str, votable: bool) -> None:
+        if votable and self._waiting.get(visit, 0) >= OPEN_PER_VISIT:
+            raise Refused(429, "too_many_open")
+        if len(self._pairs) >= self._max:
+            raise Refused(503, "busy")
 
     def _check(self, pair: _Pair) -> None:
         if pair.voted:
@@ -136,8 +148,6 @@ class PairRegistry:
             raise Refused(409, "not_votable")
         if self._votes.get(pair.visit, 0) >= VOTES_PER_VISIT:
             raise Refused(429, "votes_spent")
-        if pair.scene is not None and (pair.visit, pair.scene) in self._voted_scenes:
-            raise Refused(409, "scene_voted")
 
     def _count(self, pair: _Pair, change: int) -> None:
         if not pair.waiting:
@@ -159,7 +169,7 @@ class PairRegistry:
             self._count(pair, -1)
 
     @staticmethod
-    def _remember(table: OrderedDict[Any, Any], key: Any, value: Any) -> None:
+    def _remember(table: OrderedDict[str, int], key: str, value: int) -> None:
         table[key] = value
         table.move_to_end(key)
         while len(table) > MAX_TRACKED:

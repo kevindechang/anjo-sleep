@@ -16,8 +16,9 @@
   5. arm 4 and the baseline answer (``LiveArms.answer_pair``), and the hold is settled.
 - Every reply, pre-generated or live, passes the reply check (``ReplyCheck``) before it is shown. A
   side that trips is withheld and the check's own text stands in its place; that pair takes no vote.
-- ``vote``: through ``pairs.PairRegistry``, which reveals the sides only after the vote is stored,
-  takes one vote per starter scene per visit and caps a visit's votes and open pairs.
+- ``vote``: through ``pairs.PairRegistry``, which reveals the sides only after the vote is stored
+  and caps a visit's votes and open pairs. A starter scene takes one vote per address a day
+  (``Limiter.claim_scene_vote``, claimed first and given back if the vote isn't stored).
 
 Stateless: the question lives only in this call. Nothing here stores, logs or returns it, and the
 ports only read (``LiveArms`` answers through ``arms.reply``, which writes nothing).
@@ -235,6 +236,7 @@ class DemoService:
         live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
         if live != "open":  # before even a status ping: on SageMaker a ping keeps her up too
             raise Refused(429, f"live_{live}")
+        self._pairs.check_room(visit, now)  # before the calls are spent on a pair it couldn't open
         hold = self._limiter.admit(client, visit, CALLS_PER_ASK, now)
         ran, used = False, hold.tokens
         try:
@@ -257,7 +259,15 @@ class DemoService:
     def vote(self, client: str, token: str, pair_id: str, choice: str, now: datetime) -> Reveal:
         visit = self._visit(token, now)
         self._limiter.request(client, now)
-        return self._pairs.vote(pair_id, choice, visit=visit, now=now, record=self._votes)
+        scene = self._pairs.scene_of(pair_id, visit=visit)
+        if scene is None:
+            return self._pairs.vote(pair_id, choice, visit=visit, now=now, record=self._votes)
+        self._limiter.claim_scene_vote(client, scene, now)
+        try:
+            return self._pairs.vote(pair_id, choice, visit=visit, now=now, record=self._votes)
+        except Refused:
+            self._limiter.release_scene_vote(client, scene, now)
+            raise
 
     # ── helpers ───────────────────────────────────────────────────────────────
 

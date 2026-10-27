@@ -112,6 +112,20 @@ def _client(service: Any) -> Any:
     return TestClient(app)
 
 
+def _behind_caddy(app: Any) -> Any:
+    """``app`` as the dev host serves it: Caddy on loopback in front, uvicorn's proxy headers."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    proxied = ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")
+
+    async def caddy(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            scope = {**scope, "client": ("127.0.0.1", 50123)}
+        await proxied(scope, receive, send)
+
+    return caddy
+
+
 def _page(model: ScriptedModel | None = None, serving: FakeServing | None = None, **arms: Any) -> Any:
     from anjo.sleep.app.demo_live import build_service
 
@@ -153,7 +167,7 @@ def _case(expect: str) -> str:
 # ── the page ──────────────────────────────────────────────────────────────────
 
 
-def test_page_served_only_with_sleep_host(auth_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page_served_only_with_sleep_host(unmounted_app: Any, auth_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -268,8 +282,14 @@ def test_replies_pass_reply_crisis_check(account: str) -> None:
 
 
 def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
+    from fastapi.testclient import TestClient
+
+    from anjo.sleep.app.demo_live import build_service
+
     _write_starters()
-    client = _page()
+    serving = FakeServing()
+    client = TestClient(_behind_caddy(_client(build_service(serving=serving, arms=_arms(ScriptedModel(), serving))).app),
+                        headers={"X-Forwarded-For": "8.8.8.8"})
     lefts, pairs = set(), []
     for n in range(24):  # under the 30-a-minute request limit; one order every time has odds 2**-23
         if n % OPEN_PER_VISIT == 0:  # a visit holds this many unvoted pairs at most
@@ -283,11 +303,12 @@ def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
         lefts.add(pair["left"]["text"])
         pairs.append((pair, headers))
     assert lefts == {"P:credit", "B:credit"}  # the server shuffles every pair
-    product_first = [(p, h) for p, h in pairs if p["left"]["text"] == "P:credit"]
-    baseline_first = [(p, h) for p, h in pairs if p["left"]["text"] == "B:credit"]
-    # A visit votes once a scene: one pair of each order, from two visits.
-    for pair, headers in next((a, b) for a in product_first for b in baseline_first if a[1] != b[1]):
-        reveal = client.post(VOTE, json={"pair_id": pair["pair_id"], "choice": "left"}, headers=headers).json()
+    # An address votes once a scene a day: one pair of each order, the second from another address.
+    product_first = next((p, h) for p, h in pairs if p["left"]["text"] == "P:credit")
+    baseline_first = next((p, h) for p, h in pairs if p["left"]["text"] == "B:credit")
+    for (pair, headers), address in ((product_first, "8.8.8.8"), (baseline_first, "1.1.1.1")):
+        reveal = client.post(VOTE, json={"pair_id": pair["pair_id"], "choice": "left"},
+                             headers={**headers, "X-Forwarded-For": address}).json()
         product_left = pair["left"]["text"] == "P:credit"
         assert reveal["left"]["arm"] == ("4" if product_left else "2C")
         assert reveal["right"]["arm"] == ("2C" if product_left else "4")
@@ -326,20 +347,6 @@ def test_vote_offers_only_the_four_choices(account: str) -> None:
 
 
 # ── the limits ────────────────────────────────────────────────────────────────
-
-
-def _behind_caddy(app: Any) -> Any:
-    """``app`` as the dev host serves it: Caddy on loopback in front, uvicorn's proxy headers."""
-    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-
-    proxied = ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")
-
-    async def caddy(scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope["type"] == "http":
-            scope = {**scope, "client": ("127.0.0.1", 50123)}
-        await proxied(scope, receive, send)
-
-    return caddy
 
 
 def test_demo_rate_limited(account: str, monkeypatch: pytest.MonkeyPatch) -> None:

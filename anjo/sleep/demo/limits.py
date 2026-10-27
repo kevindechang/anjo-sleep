@@ -12,7 +12,11 @@ The page is public and unauthenticated, and a visitor's own question costs a mod
   every wake on demand first buys the time it keeps Glimmer up (``buy_warm_time``): only the part no
   earlier answer, wake or keep-warm window already covers, debited to the budget ledger (``pay``)
   and capped per day (``warm_minutes_per_day``), and only within the live hours when they are set.
-  Past the cap the page runs on its starter pairs and says so.
+  Past the cap, or once the ledger has refused a payment that day, the page runs on its starter
+  pairs and says so, and asks Glimmer nothing: on SageMaker even a status ping keeps her up;
+- **blind votes:** a starter scene's two texts are fixed and only their order is drawn again, so once
+  an address has seen a scene's sides revealed, its later pairs of that scene aren't blind. An
+  address votes once per scene a day (``claim_scene_vote``), saved with the day's counters.
 
 **Worst-case admission.** An ask holds its worst case in the same locked step as the checks: every
 call at Glimmer's whole window, which prompt and reply together never exceed. When the calls
@@ -141,11 +145,15 @@ class Day:
     wakes: int = 0
     warm_s: int = 0  # warm time bought today, in seconds
     warm_until: int = 0  # what has been bought keeps her up until here (epoch seconds)
+    pay_refused: int = 0  # payments the ledger refused today: one closes the live side for the day
+    scene_votes: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     def dump(self) -> dict[str, Any]:
         return {"day": self.day, "visits": self.visits, "visits_by_client": dict(self.visits_by_client),
                 "asks_by_client": dict(self.asks_by_client), "calls": self.calls, "tokens": self.tokens,
-                "wakes": self.wakes, "warm_s": self.warm_s, "warm_until": self.warm_until}
+                "wakes": self.wakes, "warm_s": self.warm_s, "warm_until": self.warm_until,
+                "pay_refused": self.pay_refused,
+                "scene_votes": {client: list(scenes) for client, scenes in self.scene_votes.items()}}
 
 
 def _count(data: Mapping[str, Any], key: str) -> int:
@@ -162,6 +170,15 @@ def _by_client(data: Mapping[str, Any], key: str) -> Mapping[str, int]:
     return MappingProxyType({str(k): _count(found, k) for k in found})
 
 
+def _scenes(data: Mapping[str, Any]) -> Mapping[str, tuple[str, ...]]:
+    found = data.get("scene_votes", {})
+    if not isinstance(found, dict) or not all(
+        isinstance(scenes, list) and all(isinstance(each, str) for each in scenes) for scenes in found.values()
+    ):
+        raise CounterError("the demo counters' scene_votes is not an object of scene lists")
+    return MappingProxyType({str(client): tuple(scenes) for client, scenes in found.items()})
+
+
 def _parse(data: Mapping[str, Any] | None, today: str) -> Day:
     if data is None or data.get("day") != today:
         return Day(today)
@@ -169,7 +186,7 @@ def _parse(data: Mapping[str, Any] | None, today: str) -> Day:
         today, visits=_count(data, "visits"), visits_by_client=_by_client(data, "visits_by_client"),
         asks_by_client=_by_client(data, "asks_by_client"), calls=_count(data, "calls"),
         tokens=_count(data, "tokens"), wakes=_count(data, "wakes"), warm_s=_count(data, "warm_s"),
-        warm_until=_count(data, "warm_until"),
+        warm_until=_count(data, "warm_until"), pay_refused=_count(data, "pay_refused"), scene_votes=_scenes(data),
     )
 
 
@@ -264,7 +281,8 @@ class Limiter:
         earlier purchase, or ``covered_until``: a keep-warm window someone else holds) is bought: it
         counts against the day's warm minutes and ``pay`` debits it to the budget ledger, all or
         nothing. ``wake`` also takes one of the day's wakes. Refused outside the live hours
-        (``live_closed``), and past the warm minutes, the wakes or what ``pay`` allows (``live_spent``)."""
+        (``live_closed``), and past the warm minutes, the wakes or what ``pay`` allows (``live_spent``).
+        A refused payment is saved, and closes the live side for the rest of the day."""
         with self._lock:
             day = self._today(now)
             extra = self._extra(day, now, seconds, covered_until)
@@ -274,16 +292,18 @@ class Limiter:
                 raise Refused(429, "live_closed")
             if wake and day.wakes >= self.limits.wakes_per_day:
                 raise Refused(429, "live_spent")
-            if day.warm_s + extra > self.limits.warm_minutes_per_day * 60:
+            if day.pay_refused or day.warm_s + extra > self.limits.warm_minutes_per_day * 60:
                 raise Refused(429, "live_spent")
             if extra and not pay(float(extra)):
+                self._commit(replace(day, pay_refused=day.pay_refused + 1))
                 raise Refused(429, "live_spent")
             until = max(day.warm_until, math.ceil(now.timestamp() + seconds))
             self._commit(replace(day, warm_s=day.warm_s + extra, warm_until=until, wakes=day.wakes + int(wake)))
 
     def live_state(self, now: datetime, seconds: float, *, covered_until: float | None) -> str:
         """What an answer now would meet: ``open``, ``closed`` (outside the live hours) or ``spent``
-        (the day's warm minutes can't cover it). Inside a window someone else holds, ``open``."""
+        (the day's warm minutes can't cover it, or the ledger refused a payment today). Inside a window
+        someone else holds, ``open``."""
         with self._lock:
             day = self._today(now)
             extra = self._extra(day, now, seconds, covered_until)
@@ -291,7 +311,30 @@ class Limiter:
                 return "open"
             if not self._live_hour(now):
                 return "closed"
-            return "spent" if day.warm_s + extra > self.limits.warm_minutes_per_day * 60 else "open"
+            spent = day.pay_refused or day.warm_s + extra > self.limits.warm_minutes_per_day * 60
+            return "spent" if spent else "open"
+
+    def claim_scene_vote(self, client: str, scene: str, now: datetime) -> None:
+        """``client``'s one vote on starter ``scene`` today, saved before it counts; refused when it
+        has voted on the scene already (``scene_voted``)."""
+        with self._lock:
+            day = self._today(now)
+            had = day.scene_votes.get(client, ())
+            if scene in had:
+                raise Refused(409, "scene_voted")
+            self._commit(replace(day, scene_votes=MappingProxyType({**day.scene_votes, client: (*had, scene)})))
+
+    def release_scene_vote(self, client: str, scene: str, now: datetime) -> None:
+        """A claimed vote that wasn't stored gives its scene back. Not saved: the scene stays voted."""
+        with self._lock:
+            try:
+                day = self._today(now)
+                had = day.scene_votes.get(client, ())
+                if scene in had:
+                    left = tuple(each for each in had if each != scene)
+                    self._commit(replace(day, scene_votes=MappingProxyType({**day.scene_votes, client: left})))
+            except Refused:
+                logger.warning("a demo scene vote wasn't given back; the scene stays voted today")
 
     # ── under the lock ────────────────────────────────────────────────────────
 

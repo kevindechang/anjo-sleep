@@ -152,7 +152,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "not_ready": "That scene's replies haven't been generated yet.",
     "pair_gone": "That pair has expired. Ask again to vote.",
     "already_voted": "You've already voted on this pair.",
-    "scene_voted": "You've already voted on this question in this visit.",
+    "scene_voted": "You've already voted on this question today.",
     "votes_spent": "That's all the votes for this visit. Reload the page to start a new one.",
     "too_many_open": "Vote on the pairs you have open before asking for more.",
     "bad_choice": "Pick left, right, about the same or neither.",
