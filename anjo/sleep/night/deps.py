@@ -112,8 +112,8 @@ class InquiryOutcome:
 @dataclass(frozen=True)
 class MindCall:
     """What a MIND step reads of one person's night (Task 17): her stores, her meters, the night's
-    clock (``as_of``) and the wall-clock stamp (``at``), the step's job key for its holds, and the
-    cancel flag, read before each write (RF2)."""
+    clock (``as_of``) and her records' stamp (``at``: the window's wall-clock end, never after
+    ``as_of``), the step's job key for its holds, and the cancel flag, read before each write (RF2)."""
 
     user_id: str
     night: date
@@ -130,12 +130,17 @@ class MindCall:
 
 class Inquiry(Protocol):
     """Task 17's step 4 and the share side of step 10: the questions her workspace holds (for the
-    snapshot), an inquiry into one, the results her findings raise ``share`` with, and a shared
-    finding's facts for the note."""
+    snapshot), the close marks the questions closed tonight owe (``settle``), the results that still
+    stand (``results``), an inquiry into one question, the results her findings raise ``share``
+    with, and a shared finding's facts for the note."""
 
     available: bool
 
     def questions(self, call: MindCall) -> tuple[QuestionState, ...]: ...
+
+    def settle(self, call: MindCall) -> list[str]: ...
+
+    def results(self, call: MindCall) -> tuple[Result, ...]: ...
 
     def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome: ...
 
@@ -151,6 +156,12 @@ class NoInquiry:
 
     def questions(self, call: MindCall) -> tuple[QuestionState, ...]:
         return ()
+
+    def settle(self, call: MindCall) -> list[str]:
+        return []
+
+    def results(self, call: MindCall) -> tuple[Result, ...]:
+        return tuple(call.targets.results())
 
     def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome:
         raise RuntimeError("no inquiry port")

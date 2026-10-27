@@ -57,8 +57,9 @@ def test_two_accelerated_days_extract_separate_evidence(tmp_path: Path) -> None:
     store = fake.world.evidence("u1")
     one, two = ([i for i in store.for_day(d) if i.kind == "lesson"] for d in (START, START + timedelta(days=1)))
     assert one and two and not {i.id for i in one} & {i.id for i in two}
-    assert all(first_start <= i.created_at < first_end for i in one)
-    assert all(second_start <= i.created_at < second_end for i in two)
+    # stamped as the history source stamps them: at their own window's end (the night's clock is later)
+    assert all(i.created_at == first_end for i in one)
+    assert all(i.created_at == second_end for i in two)
 
 
 def test_a_window_that_overlaps_the_last_day_is_refused(tmp_path: Path) -> None:

@@ -110,7 +110,8 @@ class FakeAccelerated:
     def __post_init__(self) -> None:
         self.world = World(self.root)
 
-    # the person's own lines, as the history source reads them from the window
+    # the person's own lines, as the history source reads them from the window and stamps them: at
+    # the window's end or the night's clock, whichever is earlier
     def extract_day(self, user_id: str, day: date, window: tuple[datetime, datetime],
                     as_of: datetime | None = None) -> list[Evidence]:
         self.world.events.append(("extract", user_id, day, window))
@@ -118,7 +119,8 @@ class FakeAccelerated:
             raise self.world.extract_fails[user_id]
         items = [
             Evidence(id=f"{user_id}-{h.at.isoformat()}", person_id=user_id, day=day, kind="lesson", text=h.text,
-                     source=f"message:{h.at.isoformat()}", held_out=False, created_at=h.at, ancestry=h.ancestry)
+                     source=f"message:{h.at.isoformat()}", held_out=False,
+                     created_at=min(window[1], as_of or window[1]), ancestry=h.ancestry)
             for h in self.heard.get(user_id, []) if window[0] <= h.at < window[1]
         ]
         self.world.evidence(user_id).add(items)

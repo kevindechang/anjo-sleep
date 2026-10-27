@@ -8,7 +8,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
@@ -16,6 +16,7 @@ from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
 from anjo.sleep.mind.inquiry.ops import op_to_json
 from anjo.sleep.night.deps import MindCall
+from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.mind import MindModels, MindNight, SparkWrap
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.tests.inquiry_fakes import FakeResolver, FakeScreen, FakeWorld
@@ -91,6 +92,64 @@ class LifeThinker:
         else:
             op = it.InvestigateOp(qid, self.tool, self.queries.pop(0) if len(self.queries) > 1 else self.queries[0])
         return json.dumps(op_to_json(op))
+
+
+def _question(prompt: str) -> str:
+    return _section(prompt, "## Your question")[0].split(" ", 1)[0]
+
+
+@dataclass
+class Suspects(LifeThinker):
+    """A ``LifeThinker`` that reports a suspicion where it would resolve, so the question stays live."""
+
+    def _cycle(self, prompt: str) -> str:
+        reply = json.loads(super()._cycle(prompt))
+        return json.dumps({**reply, "kind": "suspicion"} if reply["op"] == "CONCLUDE" else reply)
+
+
+@dataclass
+class TwoQuestions(LifeThinker):
+    """Opens two questions on the same targets, works the first to its close, then fails (a reply
+    the night can't use) on the second's first cycle."""
+
+    first: str | None = None
+
+    def _notice(self, prompt: str) -> str:
+        ops = json.loads(super()._notice(prompt))
+        return json.dumps([*ops, {**ops[0], "subject": "the plan's missing venue"}] if ops else ops)
+
+    def _cycle(self, prompt: str) -> str:
+        self.first = self.first or _question(prompt)
+        if _question(prompt) != self.first:
+            raise ValueError("a reply the night can't use")
+        return super()._cycle(prompt)
+
+
+@dataclass
+class Mumbles(LifeThinker):
+    """Opens its question, then answers every cycle with something no operation parses from."""
+
+    def _cycle(self, prompt: str) -> str:
+        return "I'm not sure yet."
+
+
+@dataclass
+class Retracts:
+    """Withdraws the question it is asked about."""
+
+    prompts: list[str] = field(default_factory=list)
+
+    def propose(self, rendered: str, max_tokens: int) -> it.ModelReply:
+        self.prompts.append(rendered)
+        op = it.RetractOp(_question(rendered), "The rehearsal is booked after all", ())
+        return it.ModelReply(text=json.dumps(op_to_json(op)), tokens=10, model=GLIMMER)
+
+
+def mind_call(world: World, uid: str, night: date, as_of: datetime) -> MindCall:
+    """A step's call outside a night's run: no Wonder, no paid action, never cancelled."""
+    return MindCall(user_id=uid, night=night, as_of=as_of, at=as_of, store=world.evidence(uid), targets=world.targets(uid),
+                    spend=SpendMeter(spark_in_per_m=0.2, spark_out_per_m=0.6), wonder=WonderMeter(0, 0.0),
+                    actions_left=0, job=f"test:{uid}", cancelled=lambda: False)
 
 
 @dataclass

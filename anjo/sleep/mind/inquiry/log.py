@@ -5,7 +5,9 @@ Each event is one record (``codec.event_to_json``), appended under the file's lo
 and writer guard the caller names: the app passes the account's encryption and guard
 (``anjo.sleep.app.storage.workspace_log``), tests and the public example ``PLAIN`` and
 ``NO_GUARD``. An append is refused unless its step's seq is the log's next and its ``before`` is
-the log's last ``after``, so the log stays one unbroken chain. The live digest is the last event's
+the log's last ``after``, so the log stays one unbroken chain; ``extend`` checks a run of events
+the same way and writes them in one record, so a kill keeps all of them or none (the night's notice
+pass, Task 17). The live digest is the last event's
 ``after``; ``replay_digest`` folds the whole log from scratch, and the two must agree.
 ``records_digest`` covers her records alone, without the run history: the part of the person's
 digest a resumed night must reproduce.
@@ -15,6 +17,7 @@ build doesn't know) still exports its events, with ``state`` None.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -38,6 +41,13 @@ def _check_next(events: tuple[WorkspaceEvent, ...], event: WorkspaceEvent) -> No
         raise WorkspaceLogError(f"event {event.step.seq} doesn't continue the log's last digest")
 
 
+def _chained(events: tuple[WorkspaceEvent, ...], more: Sequence[WorkspaceEvent]) -> tuple[WorkspaceEvent, ...]:
+    for event in more:
+        _check_next(events, event)
+        events = (*events, event)
+    return events
+
+
 def _export(events: tuple[WorkspaceEvent, ...]) -> dict[str, object]:
     try:
         state: dict[str, object] | None = records_document(fold(events))
@@ -57,6 +67,9 @@ class MemoryWorkspaceLog:
     def append(self, event: WorkspaceEvent) -> None:
         _check_next(self._events, event)
         self._events = (*self._events, event)
+
+    def extend(self, events: Sequence[WorkspaceEvent]) -> None:
+        self._events = _chained(self._events, events)
 
     def events(self) -> tuple[WorkspaceEvent, ...]:
         return self._events
@@ -88,6 +101,12 @@ class JsonlWorkspaceLog:
         with self._guard():
             _check_next(self.events(), event)
             append_records(self.path, self._codec, [record])
+
+    def extend(self, events: Sequence[WorkspaceEvent]) -> None:
+        records = [event_to_json(event) for event in events]
+        with self._guard():
+            _chained(self.events(), events)
+            append_records(self.path, self._codec, records)
 
     def workspace(self) -> Workspace:
         return fold(self.events())

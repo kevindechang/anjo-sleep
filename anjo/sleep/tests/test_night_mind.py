@@ -20,6 +20,7 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
+from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.model_api import ChatResult
@@ -32,8 +33,20 @@ from anjo.sleep.provenance import may_train
 from anjo.sleep.sim.accelerated import FAKE_PERSONA, FAKE_USER, PERSONAS, run_accelerated
 from anjo.sleep.tests.accelerated_rig import FakeAccelerated
 from anjo.sleep.tests.homework_fakes import GUIDE_URL, STUDY_URL, FakeSearch, FakeWonder, research_script, study_web
-from anjo.sleep.tests.inquiry_fakes import Kill
-from anjo.sleep.tests.mind_night_fakes import RESEARCH_URL, STATEMENT, LifeThinker, Researches, mind_night, workspace
+from anjo.sleep.tests.inquiry_fakes import FakeScreen, Kill
+from anjo.sleep.tests.mind_night_fakes import (
+    RESEARCH_URL,
+    STATEMENT,
+    LifeThinker,
+    Mumbles,
+    Researches,
+    Retracts,
+    Suspects,
+    TwoQuestions,
+    mind_call,
+    mind_night,
+    workspace,
+)
 from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, step, steps, summary, thread
 from anjo.sleep.tests.test_ownership import Ports
 from anjo.sleep.types import NightResult, Target
@@ -49,6 +62,7 @@ def _commitment(uid: str, due: datetime) -> Target:
 
 
 DUE_SOON = datetime.combine(NIGHT + timedelta(days=4), time(9), tzinfo=timezone.utc)  # within 7 days of the night
+NIGHT_END = datetime.combine(NIGHT + timedelta(days=1), time.min, tzinfo=timezone.utc)
 
 
 def _world(root: Path, *, due: datetime | None = None, nights: int = 1) -> World:
@@ -152,6 +166,64 @@ def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(tmp_pat
     assert kept.replay_digest() == kept.digest()  # her workspace folds again from its log
 
 
+def test_a_life_dated_before_the_wall_clock_runs_as_one_dated_after_it(tmp_path: Path) -> None:
+    """The rig's wall clock reads 2026-10-28: the same life on virtual dates before it, then after it."""
+    person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
+    lived = []
+    for start in (date(2026, 10, 1), date(2026, 11, 3)):
+        fake = FakeAccelerated(tmp_path / start.isoformat(), mind_from=start)
+        results = run_accelerated(FAKE_USER, person, 3, start, rig=fake.rig(sha="0" * 40))
+        assert fake.thinker is not None
+        found = workspace(fake.world, FAKE_USER).workspace().findings
+        lived.append((len(fake.thinker.prompts), [(f.kind, f.statement, f.cites) for f in found],
+                      [step(r.log_path, "notice")["questions_opened"] for r in results],
+                      [step(r.log_path, "choose")["action"] for r in results]))
+    assert lived[0] == lived[1] and lived[0][0] > 0 and lived[0][1]
+
+
+# ── Close marks: on a close only, read from her log ──────────────────────────
+
+
+def test_close_marks_survive_a_kill_before_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = _world(tmp_path)
+    thinker = LifeThinker(targets=(f"{UID}-t1",))
+    marking = EventLogTargetStore.mark_acted
+    killed: list[str] = []
+
+    def kill_first(store: EventLogTargetStore, target_id: str, revision: int) -> None:
+        if not killed:
+            killed.append(target_id)
+            raise Kill()
+        marking(store, target_id, revision)
+
+    monkeypatch.setattr(EventLogTargetStore, "mark_acted", kill_first)
+    with pytest.raises(Kill):  # the question concluded; the kill came before its close marks
+        _night(world, mind_night(world, thinker))
+    assert world.targets(UID).get(f"{UID}-t1").acted_revision == 0  # type: ignore[union-attr]
+
+    rerun = _night(world, mind_night(world, thinker))
+    assert step(rerun.log_path, "choose")["action"] is None  # marked first, so no paid revisit of a closed topic
+    thread_now = world.targets(UID).get(f"{UID}-t1")
+    assert thread_now is not None and thread_now.acted_revision == thread_now.revision
+
+
+def test_close_marks_survive_a_failure_after_the_close(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    result = _night(world, mind_night(world, TwoQuestions(targets=(f"{UID}-t1",))))
+    assert step(result.log_path, "notice")["questions_opened"] == 2
+    inquiry = step(result.log_path, "choose")["inquiry"]
+    assert inquiry["stopped"] == "failed" and inquiry["consumed"] == [f"{UID}-t1"]  # the first closed, the second failed
+    assert result.status == "promoted"
+
+
+def test_a_cycle_without_a_close_marks_nothing(tmp_path: Path) -> None:
+    world = _world(tmp_path, due=DUE_SOON)
+    result = _night(world, mind_night(world, Mumbles(targets=(f"{UID}-t1", f"{UID}-c1"))))
+    inquiry = step(result.log_path, "choose")["inquiry"]
+    assert inquiry["cycles"] > 0 and inquiry["rejected"] and inquiry["consumed"] == []
+    assert {t.id: t.acted_revision for t in world.targets(UID).open_targets(NIGHT_END)} == {f"{UID}-t1": 0, f"{UID}-c1": 0}
+
+
 # ── Step 10: share only with an anchor ───────────────────────────────────────
 
 
@@ -184,6 +256,44 @@ def test_finding_anchor_rules_for_share(tmp_path: Path) -> None:
     assert step(result.log_path, "note")["outcome"] == "held"
     _, facts = sourced.writer.calls[-1]
     assert {f.source for f in facts} == {RESEARCH_URL} and STATEMENT in [f.text for f in facts]
+
+
+class Broken:
+    """A note writer that fails: the note never goes out, so the result it would carry stays unconsumed."""
+
+    def write(self, user_id: str, topic: str, facts: Any) -> str | None:
+        raise RuntimeError("the writer is down")
+
+
+def _suspected(root: Path) -> tuple[World, Any]:
+    """Night 1: a suspicion shared on the commitment due soon, its note never sent."""
+    world = _world(root, due=DUE_SOON)
+    mind = mind_night(world, Suspects(targets=(f"{UID}-t1", f"{UID}-c1"), tokens=4000))  # its tokens end the run
+    result = _night(world, mind, note_writer=Broken())
+    assert step(result.log_path, "note")["outcome"] == "note_failed"
+    [shared] = world.targets(UID).results()
+    assert (shared.id.endswith(".suspicion"), shared.basis, shared.consumed) == (True, "evidence", False)
+    return world, mind
+
+
+def test_a_shared_result_lapses_with_its_retracted_finding(tmp_path: Path) -> None:
+    world, mind = _suspected(tmp_path)
+    second = NIGHT + timedelta(days=1)
+    call = mind_call(world, UID, second, NIGHT_END + timedelta(days=1))
+    assert [f.text for f in mind.facts(call, f"{UID}-c1")] == [STATEMENT]  # it stands, until...
+    question = workspace(world, UID).workspace().questions[0].id
+    mind_night(world, Retracts()).inquire(call, question)  # ...night 2's inquiry withdraws the finding
+    assert mind.results(call) == () and mind.facts(call, f"{UID}-c1") == []
+
+    after = _night(world, mind, n=1)  # nothing new from the person: the stale result would have been news
+    assert step(after.log_path, "choose")["action"] != "hold_note" and world.notifier.queued == []
+
+
+def test_a_shared_result_lapses_with_its_anchor(tmp_path: Path) -> None:
+    world, mind = _suspected(tmp_path)
+    due = NIGHT + timedelta(days=4)  # the commitment's date has passed by this night's end
+    lapsed = mind_call(world, UID, due, datetime.combine(due + timedelta(days=1), time.min, tzinfo=timezone.utc))
+    assert mind.results(lapsed) == () and mind.facts(lapsed, f"{UID}-c1") == []  # it rides along on no later note
 
 
 # ── Findings without a source never train ────────────────────────────────────
@@ -243,6 +353,25 @@ def test_spent_wonder_offers_no_research(tmp_path: Path) -> None:
     inquiry = step(result.log_path, "choose")["inquiry"]
     assert not inquiry["research_offered"] and inquiry["rejected"].get("unavailable") and research.made == []
     assert summary(result.log_path)["paid_actions"] == 0
+
+
+def test_research_that_reached_wonder_spends_an_action_when_the_inquiry_then_fails(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+
+    class Refused:  # Wonder answered; storing what it found then failed
+        def __init__(self, call: MindCall) -> None:
+            self.call = call
+
+        def research(self, question_id: str, query: str) -> Any:
+            self.call.wonder.require()
+            self.call.wonder.debit(0.05)
+            raise ValueError("the store refused the item")
+
+    thinker = LifeThinker(targets=(f"{UID}-t1",), tool="research", queries=["demo rehearsal schedules"])
+    result = _night(world, mind_night(world, thinker, research=Refused))
+    inquiry = step(result.log_path, "choose")["inquiry"]
+    assert (inquiry["stopped"], inquiry["research_calls"]) == ("failed", 1)
+    assert (summary(result.log_path)["paid_actions"], summary(result.log_path)["wonder_calls"]) == (1, 1)
 
 
 def test_wonder_research_screens_its_query_and_stores_hosted_sources(tmp_path: Path) -> None:
@@ -305,6 +434,26 @@ def test_budget_stop_ends_mind_steps_cleanly(tmp_path: Path) -> None:
     assert choose["inquiry"]["stopped"] == "budget" and choose["inquiry"]["cycles"] == 0
     assert second.status == "promoted"  # the step ended; the night went on
     assert len(workspace(world, UID).events()) == held and len(thinker.prompts) == asked
+
+
+def test_a_notice_pass_killed_before_its_questions_are_logged_offers_its_items_again(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    thinker = LifeThinker(targets=(f"{UID}-t1",), notices=2)
+    killed: list[str] = []
+
+    def kill_at_the_screen(text: str, purpose: it.ScreenPurpose) -> bool:  # after the reply, before its ops
+        if not killed:
+            killed.append(purpose)
+            raise Kill()
+        return False
+
+    with pytest.raises(Kill):
+        _night(world, mind_night(world, thinker, screen=FakeScreen(refuse=kill_at_the_screen)))
+    assert killed == ["question"] and workspace(world, UID).events() == ()  # the pass wrote nothing
+
+    rerun = _night(world, mind_night(world, thinker))
+    notice = step(rerun.log_path, "notice")
+    assert notice["new"] == 3 and notice["questions_opened"] == 1
 
 
 def test_killed_inquiry_resumes_its_cut_off_tool(tmp_path: Path) -> None:

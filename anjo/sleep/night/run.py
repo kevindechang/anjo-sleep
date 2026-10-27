@@ -33,8 +33,9 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
 the person's own night's, never the wall clock's: her snapshot, its eligibility and her expectations
-read the night's clock (``as_of``, the virtual night end); the window's wall-clock end only stamps
-records and drives budgets and timeouts.
+read the night's clock (``as_of``, the virtual night end). Records are stamped at the window's
+wall-clock end or ``as_of``, whichever is earlier (``_Night.stamp``), so readers on either clock see
+them; the wall-clock end alone drives budgets and timeouts.
 """
 from __future__ import annotations
 
@@ -79,6 +80,7 @@ from anjo.sleep.types import (
     NightResult,
     NightStatus,
     Probe,
+    Result,
     Target,
     WantSnapshot,
 )
@@ -144,8 +146,13 @@ class _Night:
 
     @property
     def end(self) -> datetime:
-        """The window's wall-clock end: stamps, budget holds and timeouts read it, never a date."""
+        """The window's wall-clock end: budget holds and timeouts read it, never a date."""
         return self.window[1]
+
+    @property
+    def stamp(self) -> datetime:
+        """What the night's records are created at: never after the wall clock, never after its own."""
+        return min(self.end, self.as_of)
 
 
 def _safe_error(error: BaseException) -> str:
@@ -361,7 +368,7 @@ class NightRunner:
         return self.deps.settings.mind_inquiry and self.deps.inquiry.available
 
     def _call(self, p: _Night, step: str) -> MindCall:
-        return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.end, store=p.store, targets=p.targets,
+        return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
                         spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
                         cancelled=lambda: self.deps.cancel(p.uid))
 
@@ -384,13 +391,15 @@ class NightRunner:
 
     def _raw(self, p: _Night) -> points.RawSnapshot:
         """Her state's raw input to ``snapshot.build`` (Task 7a), on the person's night clock, before
-        any eligibility filter. Her questions come from her workspace with ``mind_inquiry`` on (Task 17),
-        which applies a question's close marks once, when step 4 closes it; else none."""
+        any eligibility filter. With ``mind_inquiry`` on (Task 17) her questions come from her
+        workspace, after the close marks tonight's closes owe; else none."""
         own = [item.created_at for item in p.store.stored(p.night) if item.kind in PERSON_KINDS]
+        if self._mind():
+            self.deps.inquiry.settle(self._call(p, "choose"))
         targets = p.targets.open_targets(p.as_of)
         questions = self.deps.inquiry.questions(self._call(p, "choose")) if self._mind() else ()
         return points.RawSnapshot(
-            tuple(targets), tuple(p.targets.results()), p.as_of, max(own) if own else None,
+            tuple(targets), self._results(p), p.as_of, max(own) if own else None,
             intentions=self.deps.intentions.intentions(p.uid, p.as_of), questions=questions,
         )
 
@@ -471,7 +480,7 @@ class NightRunner:
         p.paid_actions += 1
         calls_before = p.wonder.calls
         try:
-            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.end)
+            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.stamp)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
         except STUDY_FAILURES as error:  # the study failed, not the night: its calls stay debited
@@ -510,7 +519,7 @@ class NightRunner:
             return {"folded": 0, "why": "no evidence since the last fold"}
         p.spend.part = "brief"
         with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS):
-            briefs.fold(p.night, new, at=p.end, hosted_in_training=self.deps.hosted_in_training,
+            briefs.fold(p.night, new, at=p.stamp, hosted_in_training=self.deps.hosted_in_training,
                         chat=p.spend.wrap_chat(self.deps.spark_chat))
         return {"folded": len(new)}
 
@@ -530,7 +539,7 @@ class NightRunner:
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
-            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
+            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.stamp)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
@@ -680,8 +689,12 @@ class NightRunner:
         targets: Sequence[Target] = p.targets.open_targets(p.as_of)
         return next((t.label for t in targets if t.id == target_id), "something you are working on")
 
+    def _results(self, p: _Night) -> tuple[Result, ...]:
+        """The target log's results; with MIND on, a shared finding's only while it stands (Task 17)."""
+        return self.deps.inquiry.results(self._call(p, "choose")) if self._mind() else tuple(p.targets.results())
+
     def _facts(self, p: _Night, target_id: str) -> list[Fact]:
-        wanted = {r.homework_id for r in p.targets.results() if r.target_id == target_id and not r.consumed}
+        wanted = {r.homework_id for r in self._results(p) if r.target_id == target_id and not r.consumed}
         items: list[Evidence] = [e for e in p.store.stored(p.night) if e.kind == "homework" and e.id in wanted]
         facts = [Fact(text=item.text, source=item.source) for item in items]
         return facts + self.deps.inquiry.facts(self._call(p, "note"), target_id) if self._mind() else facts
