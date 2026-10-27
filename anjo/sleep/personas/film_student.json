@@ -1,0 +1,808 @@
+{
+ "visible": {
+  "person_id": "film_student",
+  "name": "Mara Quillen",
+  "age": 22,
+  "field": "film school",
+  "line": "Mara Quillen, 22, is in her final year at a small film school by the sea and is making her thesis short, a quiet fifteen-minute film about her grandmother's last season working a passenger ferry.",
+  "project": {
+   "title": "Salt Line",
+   "logline": "A fifteen-minute observational short following a retired ferry worker through her final week on the route she has crewed for forty years, shot mostly on 16mm with a crew of five.",
+   "constraints": [
+    "Final cut must run 15 minutes or less for the school's festival slot.",
+    "Total budget is 1,800 dollars, mostly film stock, processing and a sound recordist.",
+    "Shooting is only possible on weekends, because the ferry runs a reduced timetable.",
+    "The cast is the real ferry crew; none of them can give more than two takes without tiring.",
+    "The school's lab needs five working days to process and scan 16mm."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "fs-p001",
+    "text": "Holds a shot well past the point where the scene \"ends\" and lets the actors' faces go slack.",
+    "domain": "camera"
+   },
+   {
+    "id": "fs-p002",
+    "text": "Keeps the camera handheld and slightly behind the character, like a person following at a polite distance.",
+    "domain": "camera"
+   },
+   {
+    "id": "fs-p003",
+    "text": "Favors long takes of ninety seconds or more and plans scenes around them.",
+    "domain": "camera"
+   },
+   {
+    "id": "fs-p004",
+    "text": "Will accept a soft, slightly missed focus if the moment was real.",
+    "domain": "camera"
+   },
+   {
+    "id": "fs-p005",
+    "text": "Shoots mostly on a 35mm because it feels like standing in the room.",
+    "domain": "lenses"
+   },
+   {
+    "id": "fs-p006",
+    "text": "Thinks wide lenses flatter locations and should be used for rooms, not faces.",
+    "domain": "lenses"
+   },
+   {
+    "id": "fs-p007",
+    "text": "Prefers available light and will wait for the sun rather than set up a lamp.",
+    "domain": "light"
+   },
+   {
+    "id": "fs-p008",
+    "text": "Likes overcast days, flat grey skies and window light that falls off into darkness.",
+    "domain": "light"
+   },
+   {
+    "id": "fs-p009",
+    "text": "Wants a muted, slightly desaturated palette with one warm note, such as a yellow raincoat.",
+    "domain": "color"
+   },
+   {
+    "id": "fs-p010",
+    "text": "Grades by eye for what the day felt like, not by matching a reference still.",
+    "domain": "color"
+   },
+   {
+    "id": "fs-p011",
+    "text": "Likes the subject off-center with a lot of empty space for the room to breathe.",
+    "domain": "framing"
+   },
+   {
+    "id": "fs-p012",
+    "text": "Likes doorways, windows and reflections that frame a character from a distance.",
+    "domain": "framing"
+   },
+   {
+    "id": "fs-p013",
+    "text": "Shoots on 16mm whenever the budget allows, grain included.",
+    "domain": "format"
+   },
+   {
+    "id": "fs-p014",
+    "text": "Prefers the 1.37:1 Academy frame because it makes people look taller and alone.",
+    "domain": "format"
+   },
+   {
+    "id": "fs-p015",
+    "text": "Cuts slowly and lets the audience's attention wander inside a shot.",
+    "domain": "editing"
+   },
+   {
+    "id": "fs-p016",
+    "text": "Is wary of match cuts and smash cuts as showing off.",
+    "domain": "editing"
+   },
+   {
+    "id": "fs-p017",
+    "text": "Leaves awkward pauses in the cut because people really pause.",
+    "domain": "editing"
+   },
+   {
+    "id": "fs-p018",
+    "text": "Assembles a rough cut in chronological order and moves things only when it hurts.",
+    "domain": "editing"
+   },
+   {
+    "id": "fs-p019",
+    "text": "Believes sound design is half the film and records room tone at every location without exception.",
+    "domain": "sound"
+   },
+   {
+    "id": "fs-p020",
+    "text": "Likes real, slightly messy location sound: traffic, gulls, a distant radio.",
+    "domain": "sound"
+   },
+   {
+    "id": "fs-p021",
+    "text": "Prefers silence under a heavy moment and distrusts music that tells the audience what to feel.",
+    "domain": "sound"
+   },
+   {
+    "id": "fs-p022",
+    "text": "Uses source music that a character could actually hear, such as a ferry radio.",
+    "domain": "music"
+   },
+   {
+    "id": "fs-p023",
+    "text": "Likes sparse solo instruments, such as a single cello line or an out-of-tune piano.",
+    "domain": "music"
+   },
+   {
+    "id": "fs-p024",
+    "text": "Writes spare dialogue where people talk around the thing and often say nothing useful.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fs-p025",
+    "text": "Is fine with overlapping, mumbled lines when real people would talk like that.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fs-p026",
+    "text": "Cuts voiceover as a crutch except for one letter read once.",
+    "domain": "dialogue"
+   },
+   {
+    "id": "fs-p027",
+    "text": "Prefers non-actors and friends who have lived the setting.",
+    "domain": "performance"
+   },
+   {
+    "id": "fs-p028",
+    "text": "Rehearses very little so the first takes feel found.",
+    "domain": "performance"
+   },
+   {
+    "id": "fs-p029",
+    "text": "Will let an actor change lines in the moment if it sounds truer.",
+    "domain": "performance"
+   },
+   {
+    "id": "fs-p030",
+    "text": "Likes episodic, circular structures where the end rhymes with the start.",
+    "domain": "structure"
+   },
+   {
+    "id": "fs-p031",
+    "text": "Is comfortable with an ending that leaves a question open.",
+    "domain": "structure"
+   },
+   {
+    "id": "fs-p032",
+    "text": "Starts a film in the middle of a routine and lets the story arrive slowly.",
+    "domain": "structure"
+   },
+   {
+    "id": "fs-p033",
+    "text": "Trusts images to carry backstory; explains nothing.",
+    "domain": "structure"
+   },
+   {
+    "id": "fs-p034",
+    "text": "Writes a loose treatment and finds the film in the edit.",
+    "domain": "process"
+   },
+   {
+    "id": "fs-p035",
+    "text": "Keeps a notebook of overheard lines and photographs of places and builds scenes from them.",
+    "domain": "process"
+   },
+   {
+    "id": "fs-p036",
+    "text": "Scouts locations alone with a still camera before any crew sees them.",
+    "domain": "process"
+   },
+   {
+    "id": "fs-p037",
+    "text": "Prefers a crew of five or fewer so the set stays quiet.",
+    "domain": "process"
+   },
+   {
+    "id": "fs-p038",
+    "text": "Likes shooting in short bursts over several weekends so there is time to think between days.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fs-p039",
+    "text": "Treats a rainy day as a gift and shoots whatever the weather gives.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fs-p040",
+    "text": "Edits in a free, simple editor and avoids plug-ins.",
+    "domain": "tools"
+   },
+   {
+    "id": "fs-p041",
+    "text": "Logs footage by hand in a paper notebook.",
+    "domain": "tools"
+   },
+   {
+    "id": "fs-p042",
+    "text": "Doesn't use stabilizing software; she wants the footage as shot.",
+    "domain": "tools"
+   },
+   {
+    "id": "fs-p043",
+    "text": "Is steered by slow cinema: long, quiet films about work and travel.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p044",
+    "text": "Watches one film repeatedly, shot by shot, with the sound off.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p045",
+    "text": "Prefers documentary and essay films for formal ideas.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p046",
+    "text": "Admires directors who work with a small, steady circle of collaborators.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p047",
+    "text": "Reads poetry and short stories for rhythm.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p048",
+    "text": "Thinks silent film comedies are the best lesson in staging a gag with no words.",
+    "domain": "references"
+   },
+   {
+    "id": "fs-p049",
+    "text": "Makes films for a small audience of patient viewers and does not mind if a festival passes.",
+    "domain": "audience"
+   },
+   {
+    "id": "fs-p050",
+    "text": "Is happy with a film that a viewer needs a second watch to understand.",
+    "domain": "audience"
+   },
+   {
+    "id": "fs-p051",
+    "text": "Likes a Q&A where nobody asks about plot.",
+    "domain": "audience"
+   },
+   {
+    "id": "fs-p052",
+    "text": "Wants the sound mix to suit a living room.",
+    "domain": "audience"
+   },
+   {
+    "id": "fs-p053",
+    "text": "Wants to be told what the notes-giver saw and felt before any suggestions.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fs-p054",
+    "text": "Likes notes in the form of questions.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fs-p055",
+    "text": "Prefers feedback from one trusted person over a group screening.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fs-p056",
+    "text": "Hates being told a scene is great and wants it described instead.",
+    "domain": "feedback"
+   },
+   {
+    "id": "fs-p057",
+    "text": "Spends the money on sound and a good camera operator and nothing on props.",
+    "domain": "budget"
+   },
+   {
+    "id": "fs-p058",
+    "text": "Prefers to borrow, trade and shoot where people are already working.",
+    "domain": "budget"
+   },
+   {
+    "id": "fs-p059",
+    "text": "Would rather finish a small film on time than ask for extra funds.",
+    "domain": "budget"
+   },
+   {
+    "id": "fs-p060",
+    "text": "Prefers real places with their own history, such as an actual ferry terminal.",
+    "domain": "location"
+   },
+   {
+    "id": "fs-p061",
+    "text": "Likes working in the daytime among strangers who ignore the camera.",
+    "domain": "location"
+   },
+   {
+    "id": "fs-p062",
+    "text": "Wants costumes to look worn, with mismatched sleeves and a coat that has been mended.",
+    "domain": "design"
+   },
+   {
+    "id": "fs-p063",
+    "text": "Likes empty rooms and a single object on a table.",
+    "domain": "design"
+   },
+   {
+    "id": "fs-p064",
+    "text": "Likes plain white titles in a small serif on black, at the start or the end.",
+    "domain": "titles"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "fs-t1",
+    "text": "Tell me what you see in the work before you tell me what to change."
+   },
+   {
+    "id": "fs-t2",
+    "text": "Keep answers short unless I ask for more. No bullet lists for creative notes."
+   },
+   {
+    "id": "fs-t3",
+    "text": "Don't call anything powerful, stunning or moving. Describe it instead."
+   },
+   {
+    "id": "fs-t4",
+    "text": "If you aren't sure, say so plainly instead of sounding confident."
+   },
+   {
+    "id": "fs-t5",
+    "text": "Skip the pep talk about deadlines; I know the date."
+   },
+   {
+    "id": "fs-t6",
+    "text": "If I'm hiding behind a reference, say so."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "fs-v1",
+    "text": "Sound is half the film and gets five percent of the attention."
+   },
+   {
+    "id": "fs-v2",
+    "text": "Most festival shorts are too polished and too eager to be liked."
+   },
+   {
+    "id": "fs-v3",
+    "text": "A film should be allowed to be boring for a minute if the minute is true."
+   },
+   {
+    "id": "fs-v4",
+    "text": "You can't fake a person's relationship to their own workplace."
+   },
+   {
+    "id": "fs-v5",
+    "text": "Coverage is a way of not deciding."
+   }
+  ],
+  "plans": [
+   {
+    "day": 3,
+    "text": "On Day 3 I'm collecting the 16mm stock from the school's lab and testing the light meter on the pier."
+   },
+   {
+    "day": 6,
+    "text": "On Day 6 I'm scouting the ferry terminal with my sound recordist, just the two of us."
+   },
+   {
+    "day": 10,
+    "text": "On Day 10 I'm showing a rough cut to my advisor in her office."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "fs-h001",
+    "text": "Holds on the face after the final line and lets the silence finish the scene.",
+    "domain": "cut"
+   },
+   {
+    "id": "fs-h002",
+    "text": "Opens a film on a patient static image and lets the sound set the place.",
+    "domain": "open"
+   },
+   {
+    "id": "fs-h003",
+    "text": "Wants a quiet scene scored with whatever a real kitchen would sound like.",
+    "domain": "score"
+   },
+   {
+    "id": "fs-h004",
+    "text": "Casts small roles from the neighborhood of the shoot, even with no experience.",
+    "domain": "cast"
+   },
+   {
+    "id": "fs-h005",
+    "text": "Leaves a hard scene unrehearsed so the first take stays alive.",
+    "domain": "rehearse"
+   },
+   {
+    "id": "fs-h006",
+    "text": "Covers a dinner table in a single wide take and lets the overlap stay.",
+    "domain": "coverage"
+   },
+   {
+    "id": "fs-h007",
+    "text": "Shows a lie by keeping the whole room visible rather than pushing in.",
+    "domain": "lens"
+   },
+   {
+    "id": "fs-h008",
+    "text": "Ends a film on a gesture and leaves the audience unsure what happened.",
+    "domain": "ending"
+   },
+   {
+    "id": "fs-h009",
+    "text": "Carries a time jump with light and sound rather than a spoken line.",
+    "domain": "voice"
+   },
+   {
+    "id": "fs-h010",
+    "text": "Ends a film with plain credits and quiet.",
+    "domain": "credits"
+   },
+   {
+    "id": "fs-h011",
+    "text": "Likes a poster that is one quiet photograph with small type.",
+    "domain": "poster"
+   },
+   {
+    "id": "fs-h012",
+    "text": "Trims a cut evenly and protects the long held moments.",
+    "domain": "runtime"
+   },
+   {
+    "id": "fs-h013",
+    "text": "Shows a rough cut to one trusted person in a quiet room.",
+    "domain": "screening"
+   },
+   {
+    "id": "fs-h014",
+    "text": "Cuts without temp music and adds sound only when the picture asks.",
+    "domain": "temp"
+   },
+   {
+    "id": "fs-h015",
+    "text": "Leaves the street noise rough and lets the dialogue sit inside it.",
+    "domain": "street"
+   },
+   {
+    "id": "fs-h016",
+    "text": "Keeps a grey exterior grey, even a little flat.",
+    "domain": "grade"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "ds-t01",
+    "pref_id": "fs-h001",
+    "prompt": "A scene ends on a quiet line of dialogue. How should the cut come?",
+    "options": [
+     "Hold on her face for several seconds after the line",
+     "Cut away on the last word"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t02",
+    "pref_id": "fs-h002",
+    "prompt": "Which opening shot suits a short about a night ferry crossing?",
+    "options": [
+     "A fast tracking shot through the crowd boarding the ferry",
+     "A long static shot of the empty deck, with the engine hum"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t03",
+    "pref_id": "fs-h003",
+    "prompt": "A quiet kitchen scene needs a decision on music. What goes under it?",
+    "options": [
+     "The refrigerator hum and a distant radio",
+     "A low, slow string line that tightens"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t04",
+    "pref_id": "fs-h004",
+    "prompt": "A bit part in a scene has three lines. Who plays it?",
+    "options": [
+     "A drama student who auditioned",
+     "A neighbour who has never acted"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t05",
+    "pref_id": "fs-h005",
+    "prompt": "The night before a hard scene, what should the director do?",
+    "options": [
+     "Sleep and keep the cast fresh and unrehearsed",
+     "Run the scene again twice with the cast"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t06",
+    "pref_id": "fs-h006",
+    "prompt": "A dinner scene with four people. How should it be covered?",
+    "options": [
+     "A master, then singles of each speaker and reaction shots",
+     "One wide take that lets the table talk over each other"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t07",
+    "pref_id": "fs-h007",
+    "prompt": "A character is lying in a conversation. Which lens helps?",
+    "options": [
+     "A normal lens that keeps the room visible",
+     "A long lens that fills the frame with her face"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t08",
+    "pref_id": "fs-h008",
+    "prompt": "How should the film end?",
+    "options": [
+     "A final reveal that explains what the box held",
+     "Cut to black mid-gesture, with the question open"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t09",
+    "pref_id": "fs-h009",
+    "prompt": "A scene jumps three weeks forward. What carries the audience across?",
+    "options": [
+     "A change of light and a shift in sound",
+     "A line of voiceover that states the gap"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t10",
+    "pref_id": "fs-h010",
+    "prompt": "How should the end credits run?",
+    "options": [
+     "A designed sequence with music and stills",
+     "White text on black in near silence"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t11",
+    "pref_id": "fs-h011",
+    "prompt": "What goes on the poster for the thesis short?",
+    "options": [
+     "A single quiet photograph and the title in small type",
+     "A bold illustrated image with a tagline"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t12",
+    "pref_id": "fs-h012",
+    "prompt": "The festival wants fifteen minutes. The cut is eighteen. What goes?",
+    "options": [
+     "Drop a whole subplot scene and keep the pace",
+     "Trim the establishing shots evenly and keep every held beat"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t13",
+    "pref_id": "fs-h013",
+    "prompt": "Before locking the cut, who sees it?",
+    "options": [
+     "One trusted teacher, alone, with the sound up",
+     "A roomful of classmates, watching reactions"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t14",
+    "pref_id": "fs-h014",
+    "prompt": "While cutting, what should the temp track be?",
+    "options": [
+     "A reference score from a film she loves",
+     "No music until the picture has told her what it wants"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "ds-t15",
+    "pref_id": "fs-h015",
+    "prompt": "A street scene is noisy. In the mix, what happens to the traffic?",
+    "options": [
+     "Leave it rough and let the dialogue fight it",
+     "Clean it and rebuild it under the lines"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "ds-t16",
+    "pref_id": "fs-h016",
+    "prompt": "The final grade for a grey, rainy exterior.",
+    "options": [
+     "Add contrast and cool the shadows for a look",
+     "Keep it grey and let it sit a little flat"
+    ],
+    "pick": 1
+   }
+  ],
+  "new_work": [
+   {
+    "id": "fs-w01",
+    "day": 2,
+    "parent_project": "Salt Line",
+    "text": "I shot the pickup of the harbour at dawn and the sun flared across the lens for about forty seconds of one take. The scene is the grandmother's last morning on the route. Do I keep the flare, reshoot with a hood, or cut to the safe take? One safe take has no flare but looks dull."
+   },
+   {
+    "id": "fs-w02",
+    "day": 2,
+    "parent_project": "Salt Line",
+    "text": "I have to cut the ferry deck scene from three minutes to ninety seconds for the festival version. It has a long exchange where the grandmother and her deckhand say almost nothing while they coil rope. What do I protect and what do I lose?"
+   },
+   {
+    "id": "fs-w03",
+    "day": 3,
+    "parent_project": "Salt Line",
+    "text": "The sound recordist sent me the deck recording and there is a constant diesel hum under all of it. Do I clean it, keep it, or build a quieter bed and bring the hum up only at the engine room door?"
+   },
+   {
+    "id": "fs-w04",
+    "day": 3,
+    "parent_project": "Salt Line",
+    "text": "My advisor said the opening is too slow and wants a hook in the first thirty seconds. The film currently opens on a minute of the empty pier at low tide. Do I defend it or move something up?"
+   },
+   {
+    "id": "fs-w05",
+    "day": 4,
+    "parent_project": "Salt Line",
+    "text": "I need a title card for the film's second act. I'm thinking white serif type on black with no animation, but a classmate wants the title to fade up over the waves. Which one fits the film I'm making?"
+   },
+   {
+    "id": "fs-w06",
+    "day": 4,
+    "parent_project": "Salt Line",
+    "text": "The grandmother actor, who is a retired ferry worker and not an actor, froze in front of the camera on the second take. The first take was stiffer but the third was warm. Which one do I use and do I schedule another day?"
+   },
+   {
+    "id": "fs-w07",
+    "day": 5,
+    "parent_project": "Salt Line",
+    "text": "I have a three-minute scene in a ferry cafe. I can shoot it in one take with the camera moving between tables or in six angles. The cafe is very small and crowded. What would you do?"
+   },
+   {
+    "id": "fs-w08",
+    "day": 5,
+    "parent_project": "Salt Line",
+    "text": "I got the 16mm scan back and the grain looks heavier than I expected on the night exteriors. Do I scrub it, leave it, or reshoot the nights digitally?"
+   },
+   {
+    "id": "fs-w09",
+    "day": 6,
+    "parent_project": "Salt Line",
+    "text": "A classmate wants to lend me an original cello piece for the final scene. I had planned on leaving the scene silent except for the water. How do I decide, and how do I say no without hurting her?"
+   },
+   {
+    "id": "fs-w10",
+    "day": 6,
+    "parent_project": "Salt Line",
+    "text": "I'm stuck on whether the grandmother should speak the closing line out loud or whether the audience should just see her look at the shore. The line is \"I won't be back on Tuesday.\""
+   },
+   {
+    "id": "fs-w11",
+    "day": 7,
+    "parent_project": "Salt Line",
+    "text": "The ferry company refused permission to film inside the engine room. I can build a corner of it in the sculpture studio, shoot through the doorway, or drop the scene. I have two days."
+   },
+   {
+    "id": "fs-w12",
+    "day": 7,
+    "parent_project": "Salt Line",
+    "text": "I rewrote the middle of the film so the argument between the grandmother and her son happens in the car park instead of on deck. Now the sea is only heard through a wall. Is that a loss or a gain?"
+   },
+   {
+    "id": "fs-w13",
+    "day": 8,
+    "parent_project": "Salt Line",
+    "text": "Here's a note I wrote on my edit: \"Cut the shot of the gulls.\" The gulls are the only living thing in the scene's first minute. Am I cutting them because I'm afraid of looking sentimental?"
+   },
+   {
+    "id": "fs-w14",
+    "day": 8,
+    "parent_project": "Salt Line",
+    "text": "A teacher said my film feels like a pastiche of two directors I love. I'm scared she is right. How do I find what is mine in the next two weeks of editing?"
+   },
+   {
+    "id": "fs-w15",
+    "day": 9,
+    "parent_project": "Salt Line",
+    "text": "I recorded the grandmother actor reading a letter and the room has a faint echo. The echo makes it feel like an empty house, which is almost right. Do I re-record in a dead space or keep the echo?"
+   },
+   {
+    "id": "fs-w16",
+    "day": 9,
+    "parent_project": "Salt Line",
+    "text": "Rain is forecast for the final shoot day, and the scene is a sunny morning on the water. I can wait for a clear day I don't have, move it indoors or accept the grey. What should I do?"
+   },
+   {
+    "id": "fs-w17",
+    "day": 10,
+    "parent_project": "Salt Line",
+    "text": "I have three possible edits for the last two minutes. One ends on her hand on the railing, one ends on the empty seat, one ends on the shoreline with the engine sound dropping out. I can't choose."
+   },
+   {
+    "id": "fs-w18",
+    "day": 10,
+    "parent_project": "Salt Line",
+    "text": "The poster for the screening needs a still. The best frame is a slightly out-of-focus portrait of the grandmother with the harbour behind her. The department prefers sharp, bright stills. Do I push back?"
+   },
+   {
+    "id": "fs-w19",
+    "day": 11,
+    "parent_project": "Salt Line",
+    "text": "My producer friend wants me to add a short opening title that states the year and the route in text. I think the audience should work it out. Is she being practical or am I being precious?"
+   },
+   {
+    "id": "fs-w20",
+    "day": 11,
+    "parent_project": "Salt Line",
+    "text": "A festival form asks me to describe the film in one line, and mine always sounds like a mood board. Can you help me say what happens without killing the film?"
+   },
+   {
+    "id": "fs-w21",
+    "day": 12,
+    "parent_project": "Salt Line",
+    "text": "I have to decide between a slow dissolve and a hard cut from the harbour to the kitchen. The cut feels abrupt but true, the dissolve feels like a film school choice."
+   },
+   {
+    "id": "fs-w22",
+    "day": 12,
+    "parent_project": "Salt Line",
+    "text": "The only footage of the lighthouse was shot on my phone from the ferry because the camera battery died. It looks raw and shaky. Do I use it, reshoot it, or leave the lighthouse out?"
+   },
+   {
+    "id": "fs-w23",
+    "day": 13,
+    "parent_project": "Salt Line",
+    "text": "My classmate watched the cut and said she cried at the end. I do not know whether to trust that or ask what exactly she felt. Is it fine to ask?"
+   },
+   {
+    "id": "fs-w24",
+    "day": 13,
+    "parent_project": "Salt Line",
+    "text": "I'm thinking of recording the deckhand's voice over a black screen at the very start, just breathing and counting ropes. Is that a good idea or a stunt?"
+   },
+   {
+    "id": "fs-w25",
+    "day": 14,
+    "parent_project": "Salt Line",
+    "text": "I wrote an alternative ending in which the ferry sails without her and we stay on the pier. It would change the film's meaning. Should I shoot it even though I have no budget left?"
+   },
+   {
+    "id": "fs-w26",
+    "day": 15,
+    "parent_project": "Salt Line",
+    "text": "The final mix is due tomorrow. I have time for one more pass. Should I spend it on levels in the dialogue, on the ambience, or on the very quiet end?"
+   }
+  ]
+ }
+}

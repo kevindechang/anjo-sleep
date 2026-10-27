@@ -1,0 +1,178 @@
+{
+ "version": 1,
+ "registered_on": "2026-10-27",
+ "spec": "docs/hackathon sleep spec 5.1, 5.1b and Task 2",
+ "placeholders": [
+  "bootstrap.seed",
+  "night_token_cap"
+ ],
+ "planned_nights_development": 8,
+ "nights_per_life_final": null,
+ "general_skills": {
+  "items": 200,
+  "sources": [
+   "mmlu",
+   "arc_challenge",
+   "hellaswag"
+  ],
+  "scoring": "log_likelihood",
+  "judge": false,
+  "reject_if_accuracy_drops_more_than_points": 2.0
+ },
+ "collapse": {
+  "prompts": 60,
+  "judged_as": "dragged into the field or not",
+  "reject_if_above_base_rate_by_points": 5.0
+ },
+ "safety": {
+  "max_regressions": 0
+ },
+ "arms": {
+  "headline": [
+   "3 vs 1",
+   "3 vs 3x"
+  ],
+  "fairness": [
+   "4 vs 2C",
+   "4 vs 2F"
+  ],
+  "fairness_kind": "new_work",
+  "reported_only": [
+   "4 vs 3"
+  ]
+ },
+ "dimensions": {
+  "knowledge": {
+   "kinds": [
+    "new_work",
+    "vocab"
+   ]
+  },
+  "interaction": {
+   "kinds": [
+    "tone_hold",
+    "taste_ab"
+   ]
+  }
+ },
+ "reported_only_kinds": [
+  "pushback"
+ ],
+ "counts_per_life": {
+  "new_work": 25,
+  "vocab": 15,
+  "tone_hold": 15,
+  "taste_ab": 15,
+  "pushback": 10
+ },
+ "scoring": {
+  "win": 1.0,
+  "tie": 0.5,
+  "loss": 0.0,
+  "order": "both orders; a flipped verdict is a tie",
+  "taste_ab": "log-probability forced choice, both orders, no judge"
+ },
+ "bootstrap": {
+  "kind": "paired block bootstrap",
+  "resamples": 10000,
+  "ci": 0.95,
+  "seed": 20261101,
+  "resample_within": "each (life, kind)",
+  "blocks": {
+   "new_work": "held-out source item with every probe derived from it",
+   "taste_ab": "held-out source item; a shared item is one block across both matched-pair lives, resampled jointly",
+   "vocab": "single probe",
+   "tone_hold": "single probe",
+   "pushback": "single probe"
+  }
+ },
+ "win": {
+  "ci_lower_bound_above": 0.5,
+  "overall_score_at_least": 0.55,
+  "decisive_share_at_least": 0.58,
+  "decisive_share_definition": "W/(W+L)",
+  "lives_ahead_at_least": 2,
+  "lives_total": 3,
+  "life_ahead_when": "its own tie-inclusive score is above 0.50",
+  "vs_3x_requires_both_matched_pair_lives_ahead": true,
+  "single_life_vs_3x": "field check: reported, never needed for a claim row",
+  "unpromoted_donor": "counts as not ahead on 3 vs 3x and is left out of the pooled 3x score and CI; stated as inconclusive"
+ },
+ "loss": "the same rule in the other direction",
+ "inconclusive": "everything else; never becomes 'matches'",
+ "fairness": {
+  "arms": [
+   "2C",
+   "2F"
+  ],
+  "kind": "new_work",
+  "non_inferiority_margin": 0.45,
+  "win_or_loss": "same rule as win and loss above",
+  "matches": "CI lower bound above the margin, without a win; at or below the margin is never called a match"
+ },
+ "development": {
+  "pooled_lives": [
+   "film_student",
+   "film_student_donor"
+  ],
+  "min_probes_per_dimension": 40,
+  "lives_rule": null,
+  "same_ci_and_score_rule": true,
+  "kevin_reported_separately": true
+ },
+ "claim_table": {
+  "applied": "to each dimension separately; the first matching row wins",
+  "rows": [
+   {
+    "id": "headline",
+    "when": "3 wins against both 1 and 3x, and both matched-pair lives are ahead against 3x",
+    "claim": "With every note removed, her own weights [know her world / talk her way] better than the base model, and better than another person's trained weights, on 3 lives drawn after the code froze."
+   },
+   {
+    "id": "base_only",
+    "when": "3 wins against 1; against 3x it is inconclusive or a loss",
+    "claim": "With every note removed, sleep made her weights better than the base model at [her kind of work / the way she wants to be talked to]. Against another person's trained weights it was [inconclusive / a loss], so we don't claim it learned her in particular."
+   },
+   {
+    "id": "none",
+    "when": "neither of the above",
+    "claim": "A week of nightly training didn't make her weights measurably better [in knowledge / in interaction] without notes. Here is exactly what we measured."
+   }
+  ],
+  "qualifiers": [
+   {
+    "id": "style_neutral",
+    "when": "a knowledge win did not survive style-neutral re-judging",
+    "claim": "once style was flattened, the result was [win / inconclusive / loss], so we don't claim it's substance"
+   },
+   {
+    "id": "second_judge",
+    "when": "a comparison the Gemini judge scored as a loss",
+    "claim": "a second judge from another model family disagreed, with both numbers"
+   },
+   {
+    "id": "cost",
+    "when": "always",
+    "claim": "the measured cost per person per month at the registered configuration; over the ceiling the wording is: her weights learned, but not yet at a viable cost ($X a month)"
+   },
+   {
+    "id": "memory",
+    "when": "always, after the headline rows",
+    "claim": "4 against 2C and 4 against 2F on new_work, each as win, loss, inconclusive or matches, beside 2F's prompt length and cost per turn"
+   }
+  ]
+ },
+ "cost": {
+  "ceiling_usd_per_person_month": 10.0,
+  "ceiling_usd_per_night_if_every_night_trains": 0.33,
+  "excludes": [
+   "mind"
+  ]
+ },
+ "night_token_cap": 16384,
+ "min_new_examples": 1,
+ "judge_checks": {
+  "kevin_dev_pairs_per_week": 20,
+  "kevin_final_pairs": 30
+ }
+}

@@ -1,0 +1,60 @@
+{"id": "c01", "domain": "cooking", "prompt": "I have half a cabbage and some leftover rice. What can I make for dinner in about 20 minutes?"}
+{"id": "c02", "domain": "cooking", "prompt": "How do I keep chicken breasts from drying out when I pan-fry them?"}
+{"id": "c03", "domain": "baking", "prompt": "My cookies spread too much in the oven. What should I change next time?"}
+{"id": "c04", "domain": "baking", "prompt": "Can you give me a simple recipe for banana bread with no nuts?"}
+{"id": "c05", "domain": "travel", "prompt": "I have three days in Lisbon in November. Which neighborhoods are worth walking?"}
+{"id": "c06", "domain": "travel", "prompt": "What is the best way to get from the airport to downtown at midnight?"}
+{"id": "c07", "domain": "home repair", "prompt": "My kitchen faucet drips even when it is fully closed. What should I check first?"}
+{"id": "c08", "domain": "home repair", "prompt": "How do I patch a small hole in drywall so it does not show after painting?"}
+{"id": "c09", "domain": "gardening", "prompt": "My tomato plants have yellow leaves near the bottom. What usually causes that?"}
+{"id": "c10", "domain": "gardening", "prompt": "When should I move a potted fern to a bigger pot?"}
+{"id": "c11", "domain": "pets", "prompt": "My cat keeps knocking things off the counter at night. Any simple ways to stop it?"}
+{"id": "c12", "domain": "pets", "prompt": "How often should I wash a dog's food bowl?"}
+{"id": "c13", "domain": "trivia", "prompt": "Who painted The Garden of Earthly Delights, and roughly when?"}
+{"id": "c14", "domain": "trivia", "prompt": "What is the tallest mountain in South America?"}
+{"id": "c15", "domain": "budgeting", "prompt": "I am planning a five-day trip and want to keep food costs under $40 a day. How should I split it?"}
+{"id": "c16", "domain": "budgeting", "prompt": "What is a reasonable monthly amount to set aside for car repairs?"}
+{"id": "c17", "domain": "spreadsheets", "prompt": "How do I make a column in a spreadsheet add up only the cells that contain numbers?"}
+{"id": "c18", "domain": "spreadsheets", "prompt": "What is an easy way to highlight every row that has a duplicate name?"}
+{"id": "c19", "domain": "music", "prompt": "What are some easy songs to learn on a keyboard with only a few chords?"}
+{"id": "c20", "domain": "music", "prompt": "How can I make a playlist that flows well for a long dinner party?"}
+{"id": "c21", "domain": "greeting cards", "prompt": "Help me write a short note in a birthday card for a coworker I do not know well."}
+{"id": "c22", "domain": "greeting cards", "prompt": "What is a nice way to sign a thank-you card to a neighbor?"}
+{"id": "c23", "domain": "laundry", "prompt": "How do I get a faint coffee stain out of a white cotton shirt?"}
+{"id": "c24", "domain": "laundry", "prompt": "Should I wash towels with sheets or separately?"}
+{"id": "c25", "domain": "cleaning", "prompt": "What is the quickest way to get rid of hard water spots on a shower door?"}
+{"id": "c26", "domain": "cleaning", "prompt": "How do I clean a greasy range hood filter without harsh chemicals?"}
+{"id": "c27", "domain": "car care", "prompt": "My car's tire pressure warning light came on in cold weather. What should I do?"}
+{"id": "c28", "domain": "car care", "prompt": "How often should windshield wipers be replaced?"}
+{"id": "c29", "domain": "packing", "prompt": "What should I pack for a week of cool, rainy weather in a carry-on?"}
+{"id": "c30", "domain": "packing", "prompt": "How do I keep a suitcase from smelling musty after storage?"}
+{"id": "c31", "domain": "gift ideas", "prompt": "What is a good housewarming gift under $30 for someone I barely know?"}
+{"id": "c32", "domain": "gift ideas", "prompt": "Any ideas for a practical gift for someone who just started commuting by train?"}
+{"id": "c33", "domain": "language", "prompt": "What are the most useful phrases to learn before a week in Italy?"}
+{"id": "c34", "domain": "language", "prompt": "How do I remember new vocabulary words without flashcards?"}
+{"id": "c35", "domain": "decor", "prompt": "What color curtains would work in a small room with pale blue walls?"}
+{"id": "c36", "domain": "decor", "prompt": "How do I hang a gallery wall without making it look cluttered?"}
+{"id": "c37", "domain": "weather", "prompt": "What does a 40 percent chance of rain actually mean?"}
+{"id": "c38", "domain": "weather", "prompt": "How do I read the pressure lines on a weather map?"}
+{"id": "c39", "domain": "history", "prompt": "Why did the Library of Alexandria decline?"}
+{"id": "c40", "domain": "geography", "prompt": "Which countries border Switzerland?"}
+{"id": "c41", "domain": "movies", "prompt": "Can you suggest a light comedy for a family movie night?"}
+{"id": "c42", "domain": "movies", "prompt": "What are some good movies set in small towns?"}
+{"id": "c43", "domain": "books", "prompt": "I liked a slow mystery with a coastal setting. What should I read next?"}
+{"id": "c44", "domain": "books", "prompt": "How do I get back into reading after barely reading for a year?"}
+{"id": "c45", "domain": "board games", "prompt": "What is a good two-player board game that takes under an hour?"}
+{"id": "c46", "domain": "board games", "prompt": "How do I explain rules quickly to a group that has never played?"}
+{"id": "c47", "domain": "hiking", "prompt": "What should I bring on a four-hour day hike in the hills?"}
+{"id": "c48", "domain": "hiking", "prompt": "How do I keep my feet from getting blisters on long walks?"}
+{"id": "c49", "domain": "camping", "prompt": "What is a simple way to start a campfire in damp conditions?"}
+{"id": "c50", "domain": "camping", "prompt": "How do I keep food cold for two days without a powered cooler?"}
+{"id": "c51", "domain": "transit", "prompt": "How do I figure out the best subway route in an unfamiliar city?"}
+{"id": "c52", "domain": "transit", "prompt": "Is it cheaper to buy a weekly transit pass or pay per ride?"}
+{"id": "c53", "domain": "etiquette", "prompt": "What is the polite way to leave a dinner party early?"}
+{"id": "c54", "domain": "etiquette", "prompt": "Should I bring something when a friend invites me over for lunch?"}
+{"id": "c55", "domain": "time zones", "prompt": "If it is 3 p.m. in Chicago, what time is it in Berlin?"}
+{"id": "c56", "domain": "conversions", "prompt": "How many cups are in 750 milliliters?"}
+{"id": "c57", "domain": "cocktails", "prompt": "What is an easy three-ingredient drink I can make for guests?"}
+{"id": "c58", "domain": "picnic", "prompt": "What is a good picnic menu that travels well and does not need reheating?"}
+{"id": "c59", "domain": "moving", "prompt": "What is the best order to pack boxes when moving apartments?"}
+{"id": "c60", "domain": "recycling", "prompt": "Can greasy pizza boxes go in the paper recycling bin?"}
