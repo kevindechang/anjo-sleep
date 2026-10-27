@@ -6,6 +6,8 @@ verdicts, never a person's words.
   Anjo system (``uses``), names that system, and says when its port is a no-op.
 - ``summary.json``: the ``NightResult``, serialized field by field (its mappings are read-only, so
   ``dataclasses.asdict`` can't copy it), with the night's receipts. Written once, atomically.
+- ``mind_points.jsonl``: a synthetic life's two decision points (Task 16, ``mind.points``), ids,
+  numbers and times only.
 
 A night run again on the same date gets its own folder (``<date>.2``, ``<date>.3``), so no log is
 ever overwritten. A log whose folder was removed (the person deleted their data, Task 9) writes
@@ -26,6 +28,7 @@ from anjo.sleep.types import Choice, GateResult, NightResult
 
 LOG: Final = "log.jsonl"
 SUMMARY: Final = "summary.json"
+POINTS: Final = "mind_points.jsonl"
 Uses = Literal["new", "existing"]
 StepStatus = Literal["ok", "skipped", "failed"]
 
@@ -106,6 +109,15 @@ class NightLog:
         if not self.path.exists():
             return []
         return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line]
+
+    def point(self, record: Mapping[str, Any]) -> None:
+        _write_line(self.folder / POINTS, record)
+
+    def points(self) -> list[dict[str, Any]]:
+        path = self.folder / POINTS
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
     def finish(self, result: NightResult, receipts: Mapping[str, Any]) -> None:
         if not self.folder.is_dir():

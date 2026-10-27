@@ -11,7 +11,9 @@ import it.
   offers no study action (the chooser records ``action_not_offered``).
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
   ``NoNotice``.
-- ``Expectations`` (Task 16): ``NoExpectations`` records nothing.
+
+``estimator`` is Task 16's registered ``p_needed`` estimator: ``None`` until its coefficients are
+registered, and a chosen study then records no expectation.
 
 The chooser is her own (Task 7a's ``StateChooser``); ``RuleChooser`` stays as the labeled fallback.
 """
@@ -22,12 +24,13 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Final, Literal, Protocol
+from typing import Final, Protocol
 
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
+from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.night.meter import ExtractChat, WonderMeter
 from anjo.sleep.note.hold import NoteWriter
 from anjo.sleep.ports import (
@@ -44,7 +47,6 @@ from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.types import (
     CheckpointRef,
-    Choice,
     Commitment,
     Evidence,
     GateResult,
@@ -52,7 +54,6 @@ from anjo.sleep.types import (
     Probe,
     Result,
     Target,
-    WantSnapshot,
 )
 
 STUDY_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread"})
@@ -132,24 +133,6 @@ class NoNotice:
 
     def notice(self, user_id: str, night: date, new: Sequence[Evidence]) -> int:
         return 0
-
-
-Phase = Literal["pre_study", "post_result"]
-
-
-class Expectations(Protocol):
-    """Task 16: the snapshot before a study and after its result, and her expectation."""
-
-    available: bool
-
-    def record(self, user_id: str, phase: Phase, snapshot: WantSnapshot, choice: Choice) -> None: ...
-
-
-class NoExpectations:
-    available: bool = False
-
-    def record(self, user_id: str, phase: Phase, snapshot: WantSnapshot, choice: Choice) -> None:
-        return None
 
 
 class NoIntentions:
@@ -279,7 +262,7 @@ class NightDeps:
     homework: Homework = field(default_factory=NoHomework)
     inquiry: Inquiry = field(default_factory=NoInquiry)
     notice: Notice = field(default_factory=NoNotice)
-    expectations: Expectations = field(default_factory=NoExpectations)
+    estimator: Coefficients | None = None  # Task 16's registered estimator
     intentions: IntentionSource = field(default_factory=NoIntentions)
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)
     # Removes what a step wrote after the person was deleted mid-step (RF2, Task 9); idempotent.

@@ -11,7 +11,8 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    artifact as hosted evidence and its ``research`` result, and marks the target's revision acted.
    Wonder's dollars are what the person's rolling $3-a-month cap has left; with none left no study
    runs, and the record says so (``wonder_month``). No study is offered while the homework port is
-   a no-op. ``hold_note`` is written at step 10.
+   a no-op. ``hold_note`` is written at step 10. A chosen study records her expectation once the
+   estimator is registered (Task 16), and a synthetic life records the offer's decision point.
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
    training brief is the pre-practice one).
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
@@ -21,12 +22,16 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    runs inside one GPU session. Below it, the night is ``nothing_new`` and those items carry over.
 9. ``promote``: every gate passed, or the night is rejected and the previous checkpoint serves.
 10. ``note``: a ``hold_note`` choice, or a second offer (``allowed_actions={"hold_note"}``) after a
-    result with a verified source; at most one note, which the writer may decline.
+    result with a verified source; at most one note, which the writer may decline. A synthetic life
+    records this offer's decision point too, before the note settles its target, offered or not: a
+    night with no second offer records one that allows nothing.
 11. ``finish``: the ``NightResult`` and every receipt.
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
-the person's own night's, never the wall clock's.
+the person's own night's, never the wall clock's: her snapshot, its eligibility and her expectations
+read the night's clock (``as_of``, the virtual night end); the window's wall-clock end only stamps
+records and drives budgets and timeouts.
 """
 from __future__ import annotations
 
@@ -50,7 +55,7 @@ from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
-from anjo.sleep.mind import receipt, snapshot
+from anjo.sleep.mind import expect, points, receipt, snapshot
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
@@ -70,7 +75,6 @@ from anjo.sleep.types import (
     NightResult,
     NightStatus,
     Probe,
-    QuestionView,
     Target,
     WantSnapshot,
 )
@@ -114,6 +118,7 @@ class _Night:
     actions_left: int
     store: EvidenceStore
     targets: TargetStore
+    as_of: datetime  # the night's clock: the virtual night end, which the window's end is in real time
     failed_at: str | None = None
     status: NightStatus | None = None
     due: bool = False
@@ -134,6 +139,7 @@ class _Night:
 
     @property
     def end(self) -> datetime:
+        """The window's wall-clock end: stamps, budget holds and timeouts read it, never a date."""
         return self.window[1]
 
 
@@ -156,18 +162,22 @@ class NightRunner:
     def run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None = None,
         days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
+        as_of: Mapping[str, datetime] | None = None,
     ) -> dict[str, NightResult]:
         """The batch as one phase: Glimmer goes back to sleep when it ends, however it ends."""
         with phase(self.deps.sleep):
-            return self._run_batch(nights, windows, days, sweep)
+            return self._run_batch(nights, windows, days, sweep, as_of or {})
 
     def _run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None,
-        days: Mapping[str, DayRun] | None, sweep: Sweep | None,
+        days: Mapping[str, DayRun] | None, sweep: Sweep | None, as_of: Mapping[str, datetime],
     ) -> dict[str, NightResult]:
         days = days or {}
         windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}
-        people = [self._start(uid, night, windows.get(uid) or day_window(night)) for uid, night in nights.items()]
+        people = []
+        for uid, night in nights.items():
+            window = windows.get(uid) or day_window(night)
+            people.append(self._start(uid, night, window, as_of.get(uid) or window[1]))
         for p in people:
             if sweep is not None:  # what the command's start swept for this batch, as counts
                 p.log.step("sweep", "ok", uses="new", system=None, holds_settled=sweep.holds_settled,
@@ -250,7 +260,7 @@ class NightRunner:
 
     # ── step plumbing ────────────────────────────────────────────────────────
 
-    def _start(self, uid: str, night: date, window: Window) -> _Night:
+    def _start(self, uid: str, night: date, window: Window, as_of: datetime) -> _Night:
         deps = self.deps
         deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
@@ -261,7 +271,7 @@ class NightRunner:
             uid=uid, night=night, window=window, log=log,
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),
             wonder=WonderMeter(deps.settings.homework_call_cap, max(0.0, deps.settings.wonder_usd_month - wonder_spent)),
-            actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid),
+            actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid), as_of=as_of,
             wonder_month_spent=wonder_spent,
         )
 
@@ -358,19 +368,41 @@ class NightRunner:
         p.sealed = list(sealed)
         return {"sealed": len(p.sealed), "how": how}
 
-    def _snapshot(self, p: _Night) -> WantSnapshot:
-        """Her state for the chooser (Task 7a's ``snapshot.build``), on the person's night clock.
-        Questions stay empty until Task 17; their close marks are applied all the same."""
+    def _raw(self, p: _Night) -> points.RawSnapshot:
+        """Her state's raw input to ``snapshot.build`` (Task 7a), on the person's night clock, before
+        any eligibility filter. Questions stay empty until Task 17; their close marks are applied all
+        the same."""
         own = [item.created_at for item in p.store.stored(p.night) if item.kind in PERSON_KINDS]
-        targets = p.targets.open_targets(p.end)
-        questions: tuple[QuestionView, ...] = ()
+        targets = p.targets.open_targets(p.as_of)
+        questions: tuple[points.QuestionState, ...] = ()
         for question in questions:
-            for target_id, revision in snapshot.close_marks(question, targets):
+            for target_id, revision in snapshot.close_marks(question.view, targets):
                 p.targets.mark_acted(target_id, revision)
-        return snapshot.build(
-            targets, p.targets.results(), p.end, max(own) if own else None,
-            intentions=self.deps.intentions.intentions(p.uid, p.end), questions=questions,
+        return points.RawSnapshot(
+            tuple(targets), tuple(p.targets.results()), p.as_of, max(own) if own else None,
+            intentions=self.deps.intentions.intentions(p.uid, p.as_of), questions=questions,
         )
+
+    def _point(self, p: _Night, phase: points.Phase, raw: points.RawSnapshot, ctx: ChoiceContext,
+               choice: Choice | None) -> None:
+        """Task 16: every night of a synthetic life records both offers' decision points."""
+        if self.deps.is_synthetic(p.uid):
+            p.log.point(points.point_record(points.DecisionPoint(p.night, phase, raw, ctx, choice)))
+
+    def _expect(self, p: _Night, raw: points.RawSnapshot, choice: Choice) -> str | None:
+        """Task 16: a chosen study records how likely she thinks the person is to need it."""
+        if self.deps.estimator is None or choice.want is None:
+            return None
+        if choice.action == "inquire" and all(q.view.id != choice.question_id for q in raw.questions):
+            return None  # a question the snapshot doesn't hold has no first target to expect on
+        target_id = points.study_target(choice, raw)
+        target = next((t for t in raw.targets if t.id == target_id), None)
+        if target is None:
+            return None
+        made = expect.expectation(target, choice.want.kind, p.as_of, self.deps.estimator)
+        if all(kept.id != made.id for kept in p.targets.expectations()):  # a rerun of the night records it once
+            p.targets.record_expectation(made)
+        return made.id
 
     def _offered(self) -> frozenset[str]:
         offered = set(ALL_ACTIONS)
@@ -382,11 +414,13 @@ class NightRunner:
 
     def _choose(self, p: _Night) -> Mapping[str, Any]:
         deps = self.deps
-        state = self._snapshot(p)
+        raw = self._raw(p)
+        state = points.build(raw)
         offered = self._offered()
         ctx = ChoiceContext(policy=deps.policy, allowance=p.wonder.allowance(p.actions_left), allowed_actions=offered)
         choice = deps.chooser.choose("away", deps.chooser.derive(state), ctx)
         p.choices.append(choice)
+        self._point(p, "pre_study", raw, ctx, choice)
         action = choice.action
         cap = deps.settings.wonder_usd_month
         month = {"cap_usd": cap, "spent_usd": round(p.wonder_month_spent, 6),
@@ -402,9 +436,10 @@ class NightRunner:
                 "chooser": type(deps.chooser).__name__,
                 "homework": homework,
                 "inquiry": "available" if deps.inquiry.available else "no-op (Task 17)",
-                "expectations": "available" if deps.expectations.available else "no-op (Task 16)",
+                "expectations": "registered" if deps.estimator else "estimator not registered (Task 16)",
             },
             "not_offered": sorted({c.want_id for c in choice.considered if c.reason == "action_not_offered"}),
+            "expectation": self._expect(p, raw, choice),
         }
         outcome: receipt.Outcome | None = None
         if action in STUDY_ACTIONS:
@@ -422,7 +457,6 @@ class NightRunner:
     def _study(self, p: _Night, state: WantSnapshot, choice: Choice) -> Mapping[str, Any]:
         deps = self.deps
         target = next(t for t in state.targets if t.id == choice.target_id)
-        deps.expectations.record(p.uid, "pre_study", state, choice)
         p.actions_left -= 1  # a study that started is a spent action, even if it then fails
         p.paid_actions += 1
         calls_before = p.wonder.calls
@@ -554,21 +588,27 @@ class NightRunner:
     def _second_offer(self, p: _Night) -> Choice | None:
         verified = p.study is not None and p.study.result is not None and p.study.result.verified_sources > 0
         anchored = p.inquiry is not None and p.inquiry.result is not None and p.inquiry.result.basis == "evidence"
-        if not (verified or anchored):
+        offer = p.note_choice is None and (verified or anchored)
+        if not (offer or self.deps.is_synthetic(p.uid)):
             return None
-        state = self._snapshot(p)
+        raw = self._raw(p)
+        allowed = frozenset({"hold_note"}) if offer else frozenset()  # what this point really offered
         ctx = ChoiceContext(policy=self.deps.policy, allowance=p.wonder.allowance(max(0, p.actions_left)),
-                            allowed_actions=frozenset({"hold_note"}))
-        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(state), ctx)
+                            allowed_actions=allowed)
+        if not offer:
+            self._point(p, "post_result", raw, ctx, None)
+            return None
+        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(points.build(raw)), ctx)
         p.choices.append(choice)
-        self.deps.expectations.record(p.uid, "post_result", state, choice)
+        self._point(p, "post_result", raw, ctx, choice)
         if choice.action != "hold_note":
             p.receipts["second_offer"] = receipt.record(choice, None)
             return None
         return choice
 
     def _note(self, p: _Night) -> Mapping[str, Any]:
-        choice = p.note_choice or self._second_offer(p)
+        offered = self._second_offer(p)  # a step-4 note still records the post-result point
+        choice = p.note_choice or offered
         if choice is None or choice.target_id is None:
             return {"outcome": "no_reason", "offered_again": "second_offer" in p.receipts,
                     "second_offer_receipt": p.receipts.get("second_offer")}
@@ -621,7 +661,7 @@ class NightRunner:
                 "receipt": receipt.record(choice, outcome)}
 
     def _topic(self, p: _Night, target_id: str) -> str:
-        targets: Sequence[Target] = p.targets.open_targets(p.end)
+        targets: Sequence[Target] = p.targets.open_targets(p.as_of)
         return next((t.label for t in targets if t.id == target_id), "something you are working on")
 
     def _facts(self, p: _Night, target_id: str) -> list[Fact]:
@@ -677,14 +717,20 @@ def _inside(summary: Mapping[str, Any], end: datetime, span: timedelta) -> bool:
 def run_night_batch_with(
     deps: NightDeps, nights: Mapping[str, date], *, windows: Mapping[str, Window] | None = None,
     accelerated: bool = False, days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
+    as_of: Mapping[str, datetime] | None = None,
 ) -> dict[str, NightResult]:
     """``run_night_batch`` over the given ports. ``accelerated`` runs pass each simulated day's
     window; the steps are the same. ``days`` are simulated days run just before the night: each
     one's window is the night's, and its log starts with the day's counts. ``sweep`` is what the
-    night command's start swept (``sweep.py``), logged first."""
+    night command's start swept (``sweep.py``), logged first. ``as_of`` is each person's night
+    clock, the virtual night end that her snapshot, its dates and her expectations read; it is the
+    window's end in real time (the two clocks are equal) and, on an accelerated run, the end of
+    the virtual date."""
     if accelerated and not (windows or days):
         raise ValueError("an accelerated run passes each person's simulated window")
-    return NightRunner(deps).run_batch(nights, windows, days, sweep)
+    if accelerated:
+        as_of = {**{uid: day_window(night)[1] for uid, night in nights.items()}, **(as_of or {})}
+    return NightRunner(deps).run_batch(nights, windows, days, sweep, as_of)
 
 
 _DEFAULT: list[Callable[[], NightDeps]] = []

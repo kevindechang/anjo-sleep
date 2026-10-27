@@ -27,14 +27,14 @@ import importlib
 import json
 import os
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from anjo.sleep.budget import default_ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night.deps import NightOptions, Wiring
-from anjo.sleep.night.run import Window, run_night_batch_with
+from anjo.sleep.night.run import Window, day_window, run_night_batch_with
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
 from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
@@ -70,11 +70,13 @@ def execute(
     *, wiring: str, night: date, users: Sequence[str], personas: Mapping[str, str], allow_real: bool = False,
     practice_scenes: int = 16, teacher: bool = True, simulate: str | None = None, day: int | None = None,
     seed: int = 20261028, windows: Mapping[str, Window] | None = None, days: Mapping[str, DayRun] | None = None,
+    as_of: Mapping[str, datetime] | None = None,
 ) -> dict[str, NightResult]:
     """The night for ``users`` under the lock and sweep, with Colab training and the adapter upload.
     ``windows`` gives each person's own window (the real-time schedule's previous day); a simulated
     ``day`` gives the window of the day it played. ``days`` are days already lived (or missed: a day
-    with a ``failure`` fails the night at ``simulate``). Also used by ``night/daily.py``."""
+    with a ``failure`` fails the night at ``simulate``). ``as_of`` is each person's night clock; a
+    day played here decides at the end of the virtual ``night``. Also used by ``night/daily.py``."""
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or _no_data_dir())
     options = NightOptions(night=night, personas=dict(personas), allow_real=allow_real,
                            practice_scenes=practice_scenes, practice_teacher=teacher)
@@ -90,9 +92,10 @@ def execute(
             deps = _wiring(wiring)(trainer, options)
             play = _named(simulate) if simulate else None
             played = {user: play(user, persona, day, seed) for user, persona in personas.items()} if play else {}
+            clocks = {**{user: day_window(night)[1] for user in played}, **(as_of or {})}
             return run_night_batch_with(deps, {user: night for user in users}, windows=windows,
                                         days={**played, **(days or {})},
-                                        sweep=swept)
+                                        sweep=swept, as_of=clocks)
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None
 
