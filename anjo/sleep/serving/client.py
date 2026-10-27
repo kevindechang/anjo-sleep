@@ -15,7 +15,9 @@ from here. Errors name the endpoint and the status, never a message's words.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final
 
 import httpx
@@ -29,9 +31,73 @@ TOP_K: Final = 64
 MAX_TOKENS: Final = 1024
 REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own limit
 
+# Waking a scaled-to-zero server (``wake``): poll until it answers, under one hard total timeout.
+WAKE_TOTAL_TIMEOUT_S: Final = 600.0  # a cold start of the 30B model, with room to spare
+WAKE_POLL_TIMEOUT_S: Final = 10.0  # one poll; Modal's proxy may hold it while the container starts
+WAKE_BACKOFF_START_S: Final = 2.0
+WAKE_BACKOFF_MAX_S: Final = 20.0
+WAKE_PATH: Final = "/v1/models"  # needs the bearer token and reaches vLLM, so it resets Modal's idle timer
+
 
 class ServingError(RuntimeError):
     """The server refused or failed a request, or sent a reply that can't be read."""
+
+
+class GlimmerNotReady(ServingError):
+    """The server didn't answer in time. The message is a code, never a request."""
+
+    def __init__(self) -> None:
+        super().__init__("glimmer_not_ready")
+
+
+@dataclass(frozen=True)
+class WakeResult:
+    """How long the wake took, and whether the server answered."""
+
+    seconds: float
+    ok: bool
+
+
+def ping(
+    base_url: str, token: str, *, timeout_s: float = WAKE_POLL_TIMEOUT_S,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """One cheap authenticated request that only a ready vLLM answers with 200. Modal holds the
+    request while it starts a container and may redirect it (303) to keep it open, so redirects are
+    followed. A failure is False, never an exception, and no message carries the token."""
+    try:
+        with httpx.Client(
+            base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
+            transport=transport, timeout=timeout_s, follow_redirects=True,
+        ) as http:
+            return bool(http.get(WAKE_PATH).status_code == 200)
+    except httpx.HTTPError:
+        return False  # still starting, or unreachable: the caller polls again or gives up
+
+
+def wake(
+    base_url: str, token: str, timeout_s: float = WAKE_TOTAL_TIMEOUT_S, *,
+    transport: httpx.BaseTransport | None = None, clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> WakeResult:
+    """Poll the served endpoint until it answers, for at most ``timeout_s`` in all."""
+    if not base_url.startswith("https://"):
+        raise ServingError("the serving URL is https")
+    if not token:
+        raise ServingError("the serving token is set")
+    started = clock()
+    backoff = WAKE_BACKOFF_START_S
+    while True:
+        remaining = timeout_s - (clock() - started)
+        if remaining <= 0:
+            return WakeResult(clock() - started, False)
+        if ping(base_url, token, timeout_s=min(WAKE_POLL_TIMEOUT_S, remaining), transport=transport):
+            return WakeResult(clock() - started, True)
+        remaining = timeout_s - (clock() - started)
+        if remaining <= 0:
+            return WakeResult(clock() - started, False)
+        sleep(min(backoff, remaining))
+        backoff = min(backoff * 2, WAKE_BACKOFF_MAX_S)
 
 
 def model_name(adapter: CheckpointRef | None) -> str:

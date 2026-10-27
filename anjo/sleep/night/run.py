@@ -44,6 +44,7 @@ from anjo.sleep.night.deps import (
     NightDeps,
     StudyOutcome,
 )
+from anjo.sleep.serving.client import GlimmerNotReady
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
@@ -125,6 +126,8 @@ class _Night:
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)
     paid_actions: int = 0
+    wake_seconds: float | None = None
+    gates_wake_seconds: float | None = None
     wonder_month_spent: float = 0.0
     receipts: dict[str, Any] = field(default_factory=dict)
 
@@ -162,8 +165,14 @@ class NightRunner:
                            sessions_stopped=sweep.sessions_stopped, sessions_not_ours=sweep.sessions_not_ours)
             if p.uid in days:  # a short day (a turn Glimmer couldn't answer) is recorded, never an error
                 day = days[p.uid]
+                if day.failure is not None:  # the day never started: that is a failure, not a short day
+                    p.failed_at, p.status = "simulate", "failed"
+                    p.log.step("simulate", "failed", uses="existing", system="chat route", error=day.failure,
+                               wake_seconds=day.wake_seconds)
+                    continue
+                extra: dict[str, Any] = {} if day.wake_seconds is None else {"wake_seconds": day.wake_seconds}
                 p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
-                           failed_turns=day.failed, short_day=day.short)
+                           failed_turns=day.failed, short_day=day.short, **extra)
             for step, fn in (("close_day", self._close_day), ("extract", self._extract), ("notice", self._notice),
                              ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
                 self._do(p, step, fn)
@@ -184,6 +193,8 @@ class NightRunner:
 
     def _gpu_job(self, due: list[_Night]) -> None:
         """Practice, dataset, training and gates for the due people, in one GPU session."""
+        if not self._wake(due):
+            return
         try:
             with self.deps.gpu.open([p.uid for p in due]):
                 for p in due:
@@ -192,6 +203,36 @@ class NightRunner:
                         self._do(p, step, fn)
         except Exception as error:  # the session itself failed: every person it held stops
             self._fail_ungated(due, error)
+
+    def _wake(self, due: list[_Night]) -> bool:
+        """Wake Glimmer before the first Modal step. The seconds go in each night's summary; a
+        server that can't be woken fails these nights at practice with a code, not a message."""
+        wake = self.deps.wake
+        if wake is None:
+            return True
+        try:
+            woke = wake()
+        except Exception as error:  # a bad URL or token: a recorded failure for each person, not an aborted batch
+            for p in due:
+                self._fail(p, "practice", error)
+            return False
+        for p in due:
+            p.wake_seconds = woke.seconds
+        if woke.ok:
+            return True
+        for p in due:
+            self._fail(p, "practice", GlimmerNotReady())
+        return False
+
+    def _wake_again(self, p: _Night) -> float | None:
+        """Wake Glimmer again right before the gates; a server that stays cold fails this person."""
+        if self.deps.wake is None:
+            return None
+        woke = self.deps.wake()
+        p.gates_wake_seconds = woke.seconds
+        if not woke.ok:
+            raise GlimmerNotReady()
+        return woke.seconds
 
     def _fail_ungated(self, due: list[_Night], error: Exception) -> None:
         for p in due:
@@ -468,12 +509,14 @@ class NightRunner:
 
     def _gates(self, p: _Night) -> Mapping[str, Any]:
         assert p.checkpoint is not None
+        woke = self._wake_again(p)  # training takes long enough for Modal to idle out
         started = self._timer()
         for name, check in self.deps.gates.for_person(p.uid).items():
             p.gates[name] = check(p.checkpoint)
         p.gated = True
         return {"gates": {name: gate_record(result) for name, result in p.gates.items()},
-                "seconds": self._serving(p, "gates", started)}
+                "seconds": self._serving(p, "gates", started),
+                **({} if woke is None else {"wake_seconds": woke})}
 
     def _promote(self, p: _Night) -> Mapping[str, Any]:
         assert p.checkpoint is not None
@@ -578,6 +621,8 @@ class NightRunner:
         p.log.finish(result, {
             "user_id_hash": None, "night": p.night.isoformat(), "night_end": p.end.isoformat(),
             "trained": p.checkpoint is not None, "trained_adapter": _id(p.checkpoint),
+            **({} if p.wake_seconds is None else {"wake_seconds": p.wake_seconds}),
+            **({} if p.gates_wake_seconds is None else {"gates_wake_seconds": p.gates_wake_seconds}),
             "paid_actions": p.paid_actions, "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd,
             "steps": [record["step"] for record in p.log.steps()],
         })

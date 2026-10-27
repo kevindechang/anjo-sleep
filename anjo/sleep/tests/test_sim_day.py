@@ -16,6 +16,7 @@ from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.model_api import ChatResult
+from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.sim.day import SparkSim, TurnFailed, run_day
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps
 
@@ -111,3 +112,41 @@ def test_spark_sim_meters_the_tokens_it_spends() -> None:
     for n in range(2):
         assert sim.complete("system", [{"role": "user", "content": "go"}], temperature=0.9, seed=n) == "A line."
     assert sim.tokens == (200, 40)
+
+
+def _wake(order: list[str], ok: bool = True) -> object:
+    def wake() -> WakeResult:
+        order.append("wake")
+        return WakeResult(33.0, ok)
+    return wake
+
+
+class Ordered(Transport):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self.order = order
+
+    def send(self, session_id: str, text: str, *, cleared: bool) -> str:
+        self.order.append("turn")
+        return super().send(session_id, text, cleared=cleared)
+
+
+def test_sim_day_wakes_before_first_turn() -> None:
+    order: list[str] = []
+    day = run_day(PERSONA, 1, 7, model=Model(), transport=Ordered(order), replies=Served(), clock=_clock(),  # type: ignore[arg-type]
+                  wake=_wake(order))  # type: ignore[arg-type]
+    assert order[:2] == ["wake", "turn"] and order.count("wake") == 1
+    assert day.wake_seconds == 33.0 and day.failure is None and not day.short
+
+
+def test_sim_day_does_not_start_when_wake_fails(tmp_path: Path) -> None:
+    order: list[str] = []
+    day = run_day(PERSONA, 1, 7, model=Model(), transport=Ordered(order), replies=Served(), clock=_clock(),  # type: ignore[arg-type]
+                  wake=_wake(order, ok=False))  # type: ignore[arg-type]
+    assert order == ["wake"] and day.failure == "glimmer_not_ready" and day.turns == () and not day.short
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    result = run_night_batch_with(world.deps(), {"p1": NIGHT}, days={"p1": day})["p1"]
+    assert result.status == "failed" and result.failed_at == "simulate"  # an error, not a short day
+    record = step(result.log_path, "simulate")
+    assert record["status"] == "failed" and record["error"] == "glimmer_not_ready" and "short_day" not in record

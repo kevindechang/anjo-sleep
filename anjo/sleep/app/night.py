@@ -71,7 +71,7 @@ from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
-from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.serving.client import VllmClient, wake
 from anjo.sleep.types import Probe
 
 SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
@@ -186,5 +186,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         logs=_logs_root, is_synthetic=is_synthetic, settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
+        wake=lambda: wake(_env(URL_ENV), _env(TOKEN_ENV)),
     )
 

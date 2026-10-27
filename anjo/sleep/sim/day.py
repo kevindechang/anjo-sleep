@@ -1,5 +1,8 @@
 """One simulated day before a synthetic person's night (Task 5 over Task 2's ``simulate_day``).
 
+Glimmer is woken before the first turn (``wake``): a server that can't be woken means the day does
+not start, and the night records ``glimmer_not_ready`` as a failure, not a short day.
+
 A cleared session is answered only by Glimmer: when it can't answer, the turn fails and nothing is
 stored (Task 4). The transport raises ``TurnFailed`` for such a turn, and the day ends there as a
 short day, never an error: the night still runs on what was stored, and its log records how many
@@ -19,9 +22,11 @@ from typing import Any, Final
 from anjo.sleep import baseten_api
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.personas.model import Persona
+from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.sim.persona_sim import ChatTransport, ReplyAncestry, SimModel, Turn, simulate_day
 
 SIM_TIMEOUT_S: Final = 120.0
+NOT_READY: Final = "glimmer_not_ready"
 
 
 class TurnFailed(RuntimeError):
@@ -34,6 +39,8 @@ class DayRun:
     answered: int
     failed: int
     turns: tuple[Turn, ...]  # every line, for a day that ran to its end; empty for a short day
+    wake_seconds: float | None = None  # how long waking Glimmer took, when the day woke it
+    failure: str | None = None  # a code when the day never started (``glimmer_not_ready``)
 
     @property
     def short(self) -> bool:
@@ -54,15 +61,20 @@ class _Counting:
 def run_day(
     person: Persona, day_index: int, seed: int, *, model: SimModel, transport: ChatTransport,
     replies: ReplyAncestry, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    wake: Callable[[], WakeResult] | None = None,
 ) -> DayRun:
     counting = _Counting(transport)
     start = clock()
+    woke = None if wake is None else wake()
+    if woke is not None and not woke.ok:
+        return DayRun((start, clock()), 0, 0, (), wake_seconds=woke.seconds, failure=NOT_READY)
     try:
         turns = tuple(simulate_day(person, day_index, seed, model=model, transport=counting, replies=replies))
         failed = 0
     except TurnFailed:
         turns, failed = (), 1
-    return DayRun((start, clock()), counting.answered, failed, turns)
+    return DayRun((start, clock()), counting.answered, failed, turns,
+                  wake_seconds=None if woke is None else woke.seconds)
 
 
 class SparkSim:
