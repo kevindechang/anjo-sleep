@@ -56,3 +56,49 @@ def test_gate_sets_match_thresholds():
 
     assert len(load_general()) == T["general_skills"]["items"]
     assert len(load_collapse()) == T["collapse"]["prompts"]
+
+
+def test_thresholds_pin_the_review_items():
+    # 1. the win rule is applied per dimension, and each dimension is claimed separately
+    assert T["win"]["applies_per"] == "dimension"
+    assert T["win"]["applies_to"] == ["knowledge", "interaction"]
+    assert T["win"]["comparisons"] == ["3 vs 1", "3 vs 3x"]
+    # 2. checkpoint rule
+    c = T["checkpoint_rule"]
+    assert "last promoted" in c["scored"] and "base model" in c["scored"]
+    assert c["never"] == "the best night" and c["scoring_runs"] == 1
+    # 3. placeholders
+    ph = T["placeholders"]
+    assert {"bootstrap.seed", "night_token_cap", "nights_per_life_final"} <= set(ph)
+    assert ph["nights_per_life_final"] == "set at the Nov 1 freeze, before the reveal (null until then)"
+    assert T["nights_per_life_final"] is None
+    # 4. fairness: two separate comparisons, no donor conditions
+    f = T["fairness"]
+    assert [x["id"] for x in f["comparisons"]] == ["4_vs_2C", "4_vs_2F"]
+    assert all(x["kind"] == "new_work" for x in f["comparisons"])
+    assert "above 45%" in f["each_comparison_rule"]["matches"]
+    assert "3x" not in f["each_comparison_rule"]["win"]
+    assert f["reported"] == "once"
+    # 5. collapse scope
+    assert "field_domains" in T["collapse"]["scope"]
+    # 6. donor rule in full
+    d = T["donor_rule"]
+    assert "one pair plus one single life" in d["draw"]
+    assert "each other's 3x" in d["pair_members"]
+    assert "first member" in d["single_life_donor"]
+    assert "fixed at the draw and logged" in d["fixed"]
+    # 7. bootstrap blocks and scope
+    b = T["bootstrap"]
+    assert "every probe derived from it" in b["blocks"]["taste_ab"]
+    assert "not a population estimate" in b["interval_scope"]
+    # 8. human check, judges, working product, fallback
+    h = T["human_check"]
+    assert (h["final_pairs"], h["strata"]) == (30, ["3 vs 1", "3 vs 3x"])
+    assert "sample_seed" in h and "human_check.sample_seed" in ph
+    assert T["judging"]["style_neutral"]["kinds"] == ["new_work", "vocab"]
+    assert "interaction" not in T["judging"]["style_neutral"]["kinds"]
+    assert "per life and per dimension" in T["judging"]["second_judge"]["report"]
+    assert "not yet at a viable cost" in T["working_product"]["over_ceiling_wording"]
+    assert "MIND" in T["no_win_fallback"]["claim"]
+    # 9. hand-written note
+    assert "final lives" in T["hand_written"]["film_student_and_donor_taste_ab"]

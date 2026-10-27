@@ -2,10 +2,12 @@
  "version": 1,
  "registered_on": "2026-10-27",
  "spec": "docs/hackathon sleep spec 5.1, 5.1b and Task 2",
- "placeholders": [
-  "bootstrap.seed",
-  "night_token_cap"
- ],
+ "placeholders": {
+  "bootstrap.seed": "filled in (20261101) but provisional; the committed seed is registered with the final analysis",
+  "night_token_cap": "filled in (16384) but provisional; set during development, frozen at the Nov 1 freeze",
+  "nights_per_life_final": "set at the Nov 1 freeze, before the reveal (null until then)",
+  "human_check.sample_seed": "set at the Nov 1 freeze, before the reveal (null until then)"
+ },
  "planned_nights_development": 8,
  "nights_per_life_final": null,
  "general_skills": {
@@ -22,7 +24,8 @@
  "collapse": {
   "prompts": 60,
   "judged_as": "dragged into the field or not",
-  "reject_if_above_base_rate_by_points": 5.0
+  "reject_if_above_base_rate_by_points": 5.0,
+  "scope": "prompts outside the person's field (prompt domain not in the person's field_domains)"
  },
  "safety": {
   "max_regressions": 0
@@ -79,12 +82,14 @@
   "seed": 20261101,
   "resample_within": "each (life, kind)",
   "blocks": {
-   "new_work": "held-out source item with every probe derived from it",
-   "taste_ab": "held-out source item; a shared item is one block across both matched-pair lives, resampled jointly",
+   "new_work": "one held-out item with every probe derived from it",
+   "taste_ab": "one held-out item with every probe derived from it; a shared taste_ab item is one block across both lives of the matched pair, resampled jointly",
    "vocab": "single probe",
    "tone_hold": "single probe",
    "pushback": "single probe"
-  }
+  },
+  "interval_scope": "the interval covers these 3 lives' probes, conditional on these lives; it is not a population estimate, and the README says so",
+  "source": "a paired bootstrap that resamples within each (life, kind): held-out source blocks for new_work and taste_ab (a block is one held-out item with every probe derived from it), and single probes for vocab, tone_hold and pushback. 10,000 resamples, committed seed (5.1b)"
  },
  "win": {
   "ci_lower_bound_above": 0.5,
@@ -96,19 +101,54 @@
   "life_ahead_when": "its own tie-inclusive score is above 0.50",
   "vs_3x_requires_both_matched_pair_lives_ahead": true,
   "single_life_vs_3x": "field check: reported, never needed for a claim row",
-  "unpromoted_donor": "counts as not ahead on 3 vs 3x and is left out of the pooled 3x score and CI; stated as inconclusive"
+  "unpromoted_donor": "counts as not ahead on 3 vs 3x and is left out of the pooled 3x score and CI; stated as inconclusive",
+  "applies_per": "dimension",
+  "applies_to": [
+   "knowledge",
+   "interaction"
+  ],
+  "comparisons": [
+   "3 vs 1",
+   "3 vs 3x"
+  ],
+  "source": "Final, per dimension, arm 3 against arm 1 and arm 3 against arm 3x (5.1b). Knowledge (new_work + vocab) and interaction (tone_hold + taste_ab) are claimed separately; neither carries the other (5.1).",
+  "scored_unit": "each (comparison, dimension) is judged on its own with the full rule: CI lower bound, overall score, decisive share and lives ahead"
  },
  "loss": "the same rule in the other direction",
  "inconclusive": "everything else; never becomes 'matches'",
  "fairness": {
-  "arms": [
-   "2C",
-   "2F"
-  ],
-  "kind": "new_work",
+  "reported": "once",
   "non_inferiority_margin": 0.45,
-  "win_or_loss": "same rule as win and loss above",
-  "matches": "CI lower bound above the margin, without a win; at or below the margin is never called a match"
+  "kind": "new_work",
+  "comparisons": [
+   {
+    "id": "4_vs_2C",
+    "arms": [
+     "4",
+     "2C"
+    ],
+    "kind": "new_work",
+    "note": "byte-identical context; only the adapter differs"
+   },
+   {
+    "id": "4_vs_2F",
+    "arms": [
+     "4",
+     "2F"
+    ],
+    "kind": "new_work",
+    "note": "2F prompt length and per-turn prefill cost reported beside it; if the raw evidence passes 131k tokens 2F keeps the newest items and records what it dropped"
+   }
+  ],
+  "each_comparison_rule": {
+   "win": "every registered win condition: CI lower bound above 50%, overall at least 55%, decisive share at least 58%, ahead in at least 2 of the 3 lives",
+   "loss": "the same rule in the other direction",
+   "matches": "95% CI lower bound of arm 4's score above 45% without a win",
+   "inconclusive": "everything else; never called matches; a lower bound at or below 45% is never a match",
+   "excludes": "the matched-pair condition and the donor rules do not apply; arm 3x is not involved"
+  },
+  "matches_wording": "matches the best memory, within five points",
+  "source": "'Matches the best memory, within five points' is said only when the 95% CI lower bound of arm 4's score against 2C is above the registered margin, 45%. Otherwise it's reported as measured, and 'inconclusive' never becomes 'matches'. (5.1)"
  },
  "development": {
   "pooled_lives": [
@@ -171,11 +211,102 @@
  },
  "night_token_cap": 16384,
  "min_new_examples": 1,
- "judge_checks": {
-  "kevin_dev_pairs_per_week": 20,
-  "kevin_final_pairs": 30
- },
  "hand_written": {
-  "film_student_and_donor_taste_ab": "The 16 shared taste_ab items of the two development personas were written by hand (Claude, as the build worker), not by a Muse Spark call as 5.1 describes for lives. Development personas only; the 20 lives pairs follow 5.1."
- }
+  "film_student_and_donor_taste_ab": "Development personas only: their 16 shared taste_ab items were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1)."
+ },
+ "checkpoint_rule": {
+  "scored": "the checkpoint serving after each life's last night: the last promoted one, or the base model if no night was promoted (reported as such)",
+  "never": "the best night",
+  "scoring_runs": 1,
+  "code": "final lives run from a separate checkout of the sleep-freeze tag; a run on any other code is refused",
+  "rerun": "allowed only for an infrastructure failure while no score file exists for that life; once a score exists the refusal is absolute; any rerun is logged and stated in the README",
+  "output": "scoring output goes to the prereg branch as is",
+  "no_tuning_after_scoring": true,
+  "source": "What is scored: the checkpoint serving after each life's last night. That's the last promoted one, or the base model if no night was promoted, which is reported as such. It is never the best night. (5.1b)"
+ },
+ "donor_rule": {
+  "draw": "one pair plus one single life from a different pair; the single life's field differs",
+  "pair_members": "each other's 3x donor",
+  "single_life_donor": "the drawn pair's first member",
+  "single_life_3x": "a field check (that donor is from another field); reported, never needed for a claim row",
+  "fixed": "the donor map is a pure function of the draw and the rule; it is fixed at the draw and logged there; donors never change after the draw",
+  "dev_lives": "the film student and her donor are each other's 3x, registered Oct 27 before the draw",
+  "arms_reply_refuses": "any donor other than the registered one",
+  "source": "The pair's members are each other's 3x, so the control is a same-field donor that learned the opposite taste... the single life's donor is the drawn pair's first member; that donor is from another field, so the single life's 3x result is reported as a field check (5.1)"
+ },
+ "human_check": {
+  "final_pairs": 30,
+  "drawn": "randomly, seeded",
+  "sample_seed": null,
+  "strata": [
+   "3 vs 1",
+   "3 vs 3x"
+  ],
+  "blind": "with the brief, arms hidden, order randomized",
+  "report": "judge-human agreement",
+  "optional_outside_raters": {
+   "raters": "3-5",
+   "pairs_each": 40,
+   "pairs": "published synthetic pairs",
+   "blind": true,
+   "with_brief": true,
+   "before": "2026-11-03",
+   "decision": "Kevin's call"
+  },
+  "dev_pairs_per_week": 20,
+  "source": "Kevin blind-rates 30 randomly drawn final pairs from 3 against 1 and 3 against 3x, with the brief, arms hidden and order randomized. The judge-human agreement is reported. (5.1)"
+ },
+ "judging": {
+  "judge": "Muse Spark with judge_v1.md; reads the person's judge brief including held-out preferences; answers A, B or tie; taste_ab never goes to a judge",
+  "orders": "each pair judged in both orders; a flipped verdict is a tie; ties count half",
+  "second_judge": {
+   "model": "Gemini 3.8 Flash on Vertex",
+   "scope": "every final pair, synthetic people only",
+   "status": "diagnostic",
+   "report": "agreement with Muse Spark per life and per dimension; every disagreement shown prominently, not only significant reversals",
+   "source": "Agreement with Muse Spark is reported per life and per dimension, and every disagreement is shown prominently, not only significant reversals. (5.1)"
+  },
+  "style_neutral": {
+   "status": "diagnostic",
+   "kinds": [
+    "new_work",
+    "vocab"
+   ],
+   "not_run_on": [
+    "tone_hold",
+    "taste_ab",
+    "pushback"
+   ],
+   "rewrite": "Muse Spark with neutral_v1.md, both replies into the same plain voice under 150 words, keeping every point and suggestion, then judged again",
+   "reading": "a knowledge win that survives is diagnostic evidence it isn't tone, length or confidence alone; a win that doesn't survive proves nothing either way",
+   "source": "It isn't run on interaction probes, where style is what's measured. (5.1)"
+  }
+ },
+ "working_product": {
+  "requires_both": [
+   "a win row of the claim table",
+   "measured cost under the ceiling at the registered configuration"
+  ],
+  "over_ceiling_wording": "her weights learned, but not yet at a viable cost ($X a month)",
+  "video": "does not call it a working product when the cost is over $10 a month",
+  "source": "A win at a configuration over $10 a month is worded 'her weights learned, but not yet at a viable cost ($X a month)', and the video doesn't call it a working product. (5.1)"
+ },
+ "no_win_fallback": {
+  "when": "neither dimension wins",
+  "claim": "the product's measured value is the night agent's work and the MIND results (Task 17, then Task 16), each credited to what produced it, and the video leads with MIND (4)",
+  "source": "If neither dimension wins, the product's measured value is the night agent's work and the MIND results (Task 17, then Task 16), each credited to what produced it, and the video leads with MIND (4). (5.1)"
+ },
+ "credit_separation": "homework and any held note show the night agent's work (Wonder); choices show her state's work (MIND); neither is evidence that the weights learned",
+ "registered_before_seed_reveal": [
+  "anjo/sleep/reports/final.py",
+  "thresholds.json",
+  "claim table",
+  "nights per life",
+  "human-check sample seed",
+  "hashes of every prompt (probe, brief, judge, neutral, life expansion, decider, relevance)",
+  "donor rule",
+  "probe counts per kind and dimension",
+  "non-inferiority margin",
+  "Task 16 outcome definitions, horizon and p_needed estimator"
+ ]
 }
