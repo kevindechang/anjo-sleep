@@ -13,9 +13,10 @@ reads the stored items back without calling the model.
 
 The window says which turns are read. The night's clock is ``as_of``: the targets shown to the model
 are those open at it (a target is first seen on its day's virtual date). Items are created at the
-window's end, which is wall time: retrieval filters ``created_at`` on it, and a virtual date may lie
-in the future. ``as_of`` is the window's end in real time; an accelerated run passes the virtual
-night end, so seven simulated days stay seven days.
+window's end or ``as_of``, whichever is earlier, so a reader on either clock sees them: chat-time
+retrieval on the wall clock (a virtual date may lie in the future) and the night's tools, masked to
+``as_of`` (a virtual date may lie in the past). ``as_of`` is the window's end in real time, so the two
+are equal there; an accelerated run passes the virtual night end, so seven simulated days stay seven days.
 """
 from __future__ import annotations
 
@@ -109,9 +110,10 @@ class HistorySource:
                 raise ValueError("a committed extraction names items the evidence store doesn't hold")
             return [stored[item_id] for item_id in committed], None
         targets = target_store(user_id)
+        night = end if as_of is None else as_of
         extraction = extract(
             user_id, day, turns, imported=() if synthetic else own_imports(user_id),
-            targets=targets.open_targets(end if as_of is None else as_of), known_ids=evidence.ids(), now=end, chat=self._chat,
+            targets=targets.open_targets(night), known_ids=evidence.ids(), now=min(end, night), chat=self._chat,
         )
         if extraction.refused:
             logger.warning("sleep extraction left out %d malformed items", len(extraction.refused))

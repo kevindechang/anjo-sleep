@@ -349,6 +349,33 @@ def test_a_two_day_accelerated_life_on_future_dates_keeps_retrieval_and_targets_
     assert {item.id for item in store.search("cut", night_one, 10)} == {one.id, two.id}
 
 
+def test_a_two_day_accelerated_life_on_past_dates_keeps_retrieval_and_the_night_consistent() -> None:
+    """Windows are wall time (October 28); the life's days are virtual (October 1 and 2, in the past)."""
+    from anjo.sleep.app.storage import evidence_store
+    from anjo.sleep.night.mind import StoreSearch
+
+    day_one, day_two = date(2026, 10, 1), date(2026, 10, 2)
+    night_one, night_two = datetime(2026, 10, 2, tzinfo=timezone.utc), datetime(2026, 10, 3, tzinfo=timezone.utc)
+    first, second = (START, START + timedelta(hours=1)), (START + timedelta(hours=1), START + timedelta(hours=2))
+    _message(REAL, "user", "I'll lock the cut by Friday.", at=START + timedelta(minutes=10))
+    _message(REAL, "user", "Cut is locked, onto the score.", at=START + timedelta(minutes=70))
+    source = _source(EchoSparkOpen())
+
+    [one] = source.extract_day(REAL, day_one, first, night_one)
+    [two] = source.extract_day(REAL, day_two, second, night_two)
+
+    assert (one.created_at, two.created_at) == (night_one, night_two)  # each night's clock, before the wall
+    # Day two's chat-time retrieval, on the wall clock inside its window, sees day one's evidence.
+    store = evidence_store(REAL)
+    assert [item.id for item in store.stored(day_two)] == [one.id, two.id]
+    assert {item.id for item in store.search("cut", second[0] + timedelta(minutes=30), 10)} == {one.id, two.id}
+    # MIND's night two, masked to its own clock, sees it too; night one never sees day two's.
+    search = StoreSearch(store)
+    assert {item.id for item in search.search("cut", night_two, 10)} == {one.id, two.id}
+    assert [item.id for item in search.get([one.id, two.id], night_two)] == [one.id, two.id]
+    assert [item.id for item in search.get([one.id, two.id], night_one)] == [one.id]
+
+
 def test_extraction_needs_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app.flags import SleepHostOff
 

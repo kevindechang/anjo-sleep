@@ -44,7 +44,8 @@ class EvidenceSource(Protocol):
         """Read the person's turns inside ``window`` and return evidence stamped with ``day``.
 
         ``as_of`` is the night's clock: the targets shown are those open at it; items are created at
-        the window's end (wall time). It defaults to the window's end (real time); an accelerated run passes the virtual one.
+        the window's end (wall time) or ``as_of``, whichever is earlier, so neither clock's readers miss
+        them. It defaults to the window's end (real time); an accelerated run passes the virtual one.
 
         Only the person's own turns are read; for a synthetic person, only cleared sessions.
         Items imported from existing stores enter once across nights. The app's source also

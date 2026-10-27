@@ -359,7 +359,7 @@ def anchored(target_id: str, raw: RawSnapshot) -> bool:
     )
     changed = any(
         r.target_id == target_id and not r.consumed
-        and (raw.last_message_at is None or r.created_at > raw.last_message_at)
+        and (raw.last_message_at is None or r.created_at >= raw.last_message_at)  # as wants.py reads it
         for r in built.results
     )
     return due or changed

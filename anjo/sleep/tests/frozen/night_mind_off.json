@@ -1,0 +1,1816 @@
+{
+ "evidence": [
+  "hw-p1-c1-2026-10-29",
+  "hw-p1-t1-2026-10-28",
+  "p1-2026-10-28-e0",
+  "p1-2026-10-28-e1",
+  "p1-2026-10-28-e2",
+  "p1-2026-10-29-e0",
+  "p1-2026-10-29-e1",
+  "p1-2026-10-30-e0",
+  "pr-011a31021a9be4e2",
+  "pr-0e6cbfa04fb7c21f",
+  "pr-175f2659ca364404",
+  "pr-1c859bfaaa5c299f",
+  "pr-22d91a726d20b1cf",
+  "pr-2eb4cef7d8fbd730",
+  "pr-2f1ec48eee660f2d",
+  "pr-3e2fa5e74de72565",
+  "pr-4cc7d69305ad8ab8",
+  "pr-5499b0bbc01dfbc9",
+  "pr-6e4b91beabb9b250",
+  "pr-7b922364794cb67f",
+  "pr-8635cc5e672cb4c6",
+  "pr-915b5ce884e0207d",
+  "pr-91ea04ac0fe5415b",
+  "pr-9a05dc9a13da3614",
+  "pr-9a48935e96947f28",
+  "pr-ac5c6ac520529fe2",
+  "pr-b0a0c8d0f2b1d6b3",
+  "pr-cfb56998607ab06d",
+  "pr-df8a63b4f2801f2c",
+  "pr-e65ae6d189bc72a9",
+  "pr-f853edc6001d5c1e",
+  "pr-fc488a43eaf02e0a"
+ ],
+ "nights": [
+  {
+   "points": [
+    {
+     "as_of": "2026-10-29T00:00:00+00:00",
+     "choice": {
+      "considered": [
+       {
+        "action": "revisit_thread",
+        "kind": "understand",
+        "reason": null,
+        "status": "won",
+        "strength": 0.5,
+        "target_id": "p1-t1",
+        "want_id": "understand:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "want": {
+       "action": "revisit_thread",
+       "id": "understand:p1-t1",
+       "kind": "understand",
+       "priority_class": "active_thread",
+       "question_id": null,
+       "strength": 0.5,
+       "target_id": "p1-t1",
+       "weight": 1.0
+      }
+     },
+     "ctx": {
+      "allowance": {
+       "actions_left": 2,
+       "calls_left": 12,
+       "usd_left": 3.0
+      },
+      "allowed_actions": [
+       "hold_note",
+       "prepare_commitment",
+       "revisit_thread"
+      ],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-28T12:02:00+00:00",
+     "night": "2026-10-28",
+     "phase": "pre_study",
+     "questions": [],
+     "results": [],
+     "targets": [
+      {
+       "acted_revision": 0,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "as_of": "2026-10-29T00:00:00+00:00",
+     "choice": {
+      "considered": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-t1",
+        "want_id": "share:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "want": {
+       "action": "hold_note",
+       "id": "share:p1-t1",
+       "kind": "share",
+       "priority_class": "active_thread",
+       "question_id": null,
+       "strength": 0.7,
+       "target_id": "p1-t1",
+       "weight": 1.0
+      }
+     },
+     "ctx": {
+      "allowance": {
+       "actions_left": 1,
+       "calls_left": 11,
+       "usd_left": 2.9
+      },
+      "allowed_actions": [
+       "hold_note"
+      ],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-28T12:02:00+00:00",
+     "night": "2026-10-28",
+     "phase": "post_result",
+     "questions": [],
+     "results": [
+      {
+       "basis": "research",
+       "consumed": false,
+       "created_at": "2026-10-28T23:40:00+00:00",
+       "homework_id": "hw-p1-t1-2026-10-28",
+       "id": "r-p1-t1-2026-10-28",
+       "target_id": "p1-t1",
+       "user_cites": 0,
+       "verified_sources": 1
+      }
+     ],
+     "targets": [
+      {
+       "acted_revision": 1,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    }
+   ],
+   "steps": [
+    {
+     "night": "2026-10-28",
+     "noop": false,
+     "status": "ok",
+     "step": "close_day",
+     "system": null,
+     "uses": "new",
+     "window": [
+      "2026-10-28T00:00:00+00:00",
+      "2026-10-29T00:00:00+00:00"
+     ]
+    },
+    {
+     "items": 3,
+     "kinds": {
+      "lesson": 3
+     },
+     "min_new_examples": 1,
+     "new_since_last_training": 3,
+     "noop": false,
+     "status": "ok",
+     "step": "extract",
+     "system": "history store",
+     "training_night": true,
+     "uses": "existing"
+    },
+    {
+     "noop": true,
+     "port": "notice (Task 17): no-op",
+     "status": "ok",
+     "step": "notice",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "how": "sealed once",
+     "noop": false,
+     "sealed": 1,
+     "status": "ok",
+     "step": "probes",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "action": "revisit_thread",
+     "allowance": {
+      "actions_left": 2,
+      "calls_left": 12,
+      "usd_left": 3.0
+     },
+     "expectation": null,
+     "noop": false,
+     "not_offered": [],
+     "offered": [
+      "hold_note",
+      "prepare_commitment",
+      "revisit_thread"
+     ],
+     "ports": {
+      "chooser": "StateChooser",
+      "expectations": "estimator not registered (Task 16)",
+      "homework": "available",
+      "inquiry": "no-op (Task 17)"
+     },
+     "receipt": {
+      "candidates": [
+       {
+        "action": "revisit_thread",
+        "kind": "understand",
+        "reason": null,
+        "status": "won",
+        "strength": 0.5,
+        "target_id": "p1-t1",
+        "want_id": "understand:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "outcome": "ran",
+      "outcome_reason": null,
+      "question_id": null,
+      "winner": "understand:p1-t1"
+     },
+     "status": "ok",
+     "step": "choose",
+     "study": {
+      "homework_items": 1,
+      "result": "r-p1-t1-2026-10-28",
+      "stopped": null,
+      "wonder_calls": 1,
+      "wonder_usd": 0.1
+     },
+     "system": null,
+     "target_id": "p1-t1",
+     "uses": "new",
+     "wonder_month": {
+      "cap_usd": 3.0,
+      "left_usd": 3.0,
+      "spent_usd": 0.0
+     }
+    },
+    {
+     "folded": 4,
+     "noop": false,
+     "status": "ok",
+     "step": "brief",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "critic_unreadable": 0,
+     "dropped_cued": 0,
+     "dropped_cut": 0,
+     "f_items": 3,
+     "homework": null,
+     "noop": false,
+     "pairs": 0,
+     "scenes": 8,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "practice",
+     "system": null,
+     "targets": {
+      "glimmer": 8,
+      "teacher": 0,
+      "teacher_share": 0.0
+     },
+     "teacher_alarm": false,
+     "teacher_targets": 0,
+     "uses": "new"
+    },
+    {
+     "context_dropped": 5,
+     "dropped": {
+      "hosted": 0,
+      "missing": 0,
+      "over_cap": 0,
+      "probe": 0,
+      "truncated": 0
+     },
+     "examples": 8,
+     "new": 8,
+     "noop": false,
+     "probe_dropped": 0,
+     "replay": 0,
+     "sealed": 1,
+     "status": "ok",
+     "step": "dataset",
+     "system": null,
+     "token_cap": 16384,
+     "tokens": 832,
+     "uses": "new"
+    },
+    {
+     "adapter": "p-0622d3fedfc2-n1",
+     "from_last_promoted": null,
+     "noop": false,
+     "parent": null,
+     "receipt": {
+      "epochs": 4,
+      "examples": 8,
+      "gpu_minutes": 12.0,
+      "steps": 8,
+      "train_minutes": 5.0
+     },
+     "status": "ok",
+     "step": "train",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "gates": {
+      "collapse": {
+       "gate": "collapse",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "general": {
+       "gate": "general",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "safety": {
+       "gate": "safety",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      }
+     },
+     "noop": false,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "gates",
+     "system": "crisis check",
+     "uses": "existing"
+    },
+    {
+     "noop": false,
+     "promoted": "p-0622d3fedfc2-n1",
+     "serving": "p-0622d3fedfc2-n1",
+     "status": "ok",
+     "step": "promote",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "held_back": false,
+     "noop": false,
+     "note_id": "note-41c99f87f014faf8",
+     "outcome": "held",
+     "pushed": false,
+     "receipt": {
+      "candidates": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-t1",
+        "want_id": "share:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "outcome": "ran",
+      "outcome_reason": null,
+      "question_id": null,
+      "winner": "share:p1-t1"
+     },
+     "second_offer": true,
+     "sources": 1,
+     "status": "ok",
+     "step": "note",
+     "system": "outreach",
+     "target_id": "p1-t1",
+     "uses": "existing"
+    },
+    {
+     "night_status": "promoted",
+     "noop": false,
+     "status": "ok",
+     "step": "finish",
+     "system": null,
+     "uses": "new"
+    }
+   ],
+   "summary": {
+    "checkpoint": {
+     "id": "p-0622d3fedfc2-n1",
+     "night": "2026-10-28",
+     "parent_id": null,
+     "person_id": "p1",
+     "uri": "modal-volume://anjo-sleep-adapters/p-0622d3fedfc2-n1"
+    },
+    "choices": [
+     {
+      "action": "revisit_thread",
+      "considered": [
+       {
+        "action": "revisit_thread",
+        "kind": "understand",
+        "reason": null,
+        "status": "won",
+        "strength": 0.5,
+        "target_id": "p1-t1",
+        "want_id": "understand:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "question_id": null,
+      "target_id": "p1-t1"
+     },
+     {
+      "action": "hold_note",
+      "considered": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-t1",
+        "want_id": "share:p1-t1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "question_id": null,
+      "target_id": "p1-t1"
+     }
+    ],
+    "cost_parts": {
+     "brief": 9.999999999999999e-05,
+     "extract": 0.0,
+     "gates": 0.0325,
+     "mind": 0.0,
+     "practice": 0.03255,
+     "training": 0.5
+    },
+    "cost_usd": 0.56515,
+    "failed_at": null,
+    "gates": {
+     "collapse": {
+      "gate": "collapse",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "general": {
+      "gate": "general",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "safety": {
+      "gate": "safety",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     }
+    },
+    "night": "2026-10-28",
+    "night_end": "2026-10-29T00:00:00+00:00",
+    "paid_actions": 2,
+    "status": "promoted",
+    "steps": [
+     "close_day",
+     "extract",
+     "notice",
+     "probes",
+     "choose",
+     "brief",
+     "practice",
+     "dataset",
+     "train",
+     "gates",
+     "promote",
+     "note",
+     "finish"
+    ],
+    "trained": true,
+    "trained_adapter": "p-0622d3fedfc2-n1",
+    "user_id_hash": null,
+    "wonder_calls": 1,
+    "wonder_usd": 0.1
+   }
+  },
+  {
+   "points": [
+    {
+     "as_of": "2026-10-30T00:00:00+00:00",
+     "choice": {
+      "considered": [
+       {
+        "action": "prepare_commitment",
+        "kind": "follow_up",
+        "reason": null,
+        "status": "won",
+        "strength": 0.6,
+        "target_id": "p1-c1",
+        "want_id": "follow_up:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "want": {
+       "action": "prepare_commitment",
+       "id": "follow_up:p1-c1",
+       "kind": "follow_up",
+       "priority_class": "user_commitment",
+       "question_id": null,
+       "strength": 0.6,
+       "target_id": "p1-c1",
+       "weight": 1.0
+      }
+     },
+     "ctx": {
+      "allowance": {
+       "actions_left": 2,
+       "calls_left": 12,
+       "usd_left": 2.9
+      },
+      "allowed_actions": [
+       "hold_note",
+       "prepare_commitment",
+       "revisit_thread"
+      ],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-29T12:01:00+00:00",
+     "night": "2026-10-29",
+     "phase": "pre_study",
+     "questions": [],
+     "results": [
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-28T23:40:00+00:00",
+       "homework_id": "hw-p1-t1-2026-10-28",
+       "id": "r-p1-t1-2026-10-28",
+       "target_id": "p1-t1",
+       "user_cites": 0,
+       "verified_sources": 1
+      }
+     ],
+     "targets": [
+      {
+       "acted_revision": 0,
+       "check_after": "2026-10-31T09:00:00+00:00",
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-c1",
+       "kind": "commitment",
+       "label": "",
+       "last_mentioned": "2026-10-29",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      },
+      {
+       "acted_revision": 1,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "as_of": "2026-10-30T00:00:00+00:00",
+     "choice": {
+      "considered": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-c1",
+        "want_id": "share:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "want": {
+       "action": "hold_note",
+       "id": "share:p1-c1",
+       "kind": "share",
+       "priority_class": "user_commitment",
+       "question_id": null,
+       "strength": 0.7,
+       "target_id": "p1-c1",
+       "weight": 1.0
+      }
+     },
+     "ctx": {
+      "allowance": {
+       "actions_left": 1,
+       "calls_left": 11,
+       "usd_left": 2.8
+      },
+      "allowed_actions": [
+       "hold_note"
+      ],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-29T12:01:00+00:00",
+     "night": "2026-10-29",
+     "phase": "post_result",
+     "questions": [],
+     "results": [
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-28T23:40:00+00:00",
+       "homework_id": "hw-p1-t1-2026-10-28",
+       "id": "r-p1-t1-2026-10-28",
+       "target_id": "p1-t1",
+       "user_cites": 0,
+       "verified_sources": 1
+      },
+      {
+       "basis": "research",
+       "consumed": false,
+       "created_at": "2026-10-29T23:40:00+00:00",
+       "homework_id": "hw-p1-c1-2026-10-29",
+       "id": "r-p1-c1-2026-10-29",
+       "target_id": "p1-c1",
+       "user_cites": 0,
+       "verified_sources": 1
+      }
+     ],
+     "targets": [
+      {
+       "acted_revision": 1,
+       "check_after": "2026-10-31T09:00:00+00:00",
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-c1",
+       "kind": "commitment",
+       "label": "",
+       "last_mentioned": "2026-10-29",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      },
+      {
+       "acted_revision": 1,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    }
+   ],
+   "steps": [
+    {
+     "night": "2026-10-29",
+     "noop": false,
+     "status": "ok",
+     "step": "close_day",
+     "system": null,
+     "uses": "new",
+     "window": [
+      "2026-10-29T00:00:00+00:00",
+      "2026-10-30T00:00:00+00:00"
+     ]
+    },
+    {
+     "items": 2,
+     "kinds": {
+      "lesson": 2
+     },
+     "min_new_examples": 1,
+     "new_since_last_training": 2,
+     "noop": false,
+     "status": "ok",
+     "step": "extract",
+     "system": "history store",
+     "training_night": true,
+     "uses": "existing"
+    },
+    {
+     "noop": true,
+     "port": "notice (Task 17): no-op",
+     "status": "ok",
+     "step": "notice",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "how": "sealed once",
+     "noop": false,
+     "sealed": 1,
+     "status": "ok",
+     "step": "probes",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "action": "prepare_commitment",
+     "allowance": {
+      "actions_left": 2,
+      "calls_left": 12,
+      "usd_left": 2.9
+     },
+     "expectation": null,
+     "noop": false,
+     "not_offered": [],
+     "offered": [
+      "hold_note",
+      "prepare_commitment",
+      "revisit_thread"
+     ],
+     "ports": {
+      "chooser": "StateChooser",
+      "expectations": "estimator not registered (Task 16)",
+      "homework": "available",
+      "inquiry": "no-op (Task 17)"
+     },
+     "receipt": {
+      "candidates": [
+       {
+        "action": "prepare_commitment",
+        "kind": "follow_up",
+        "reason": null,
+        "status": "won",
+        "strength": 0.6,
+        "target_id": "p1-c1",
+        "want_id": "follow_up:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "outcome": "ran",
+      "outcome_reason": null,
+      "question_id": null,
+      "winner": "follow_up:p1-c1"
+     },
+     "status": "ok",
+     "step": "choose",
+     "study": {
+      "homework_items": 1,
+      "result": "r-p1-c1-2026-10-29",
+      "stopped": null,
+      "wonder_calls": 1,
+      "wonder_usd": 0.1
+     },
+     "system": null,
+     "target_id": "p1-c1",
+     "uses": "new",
+     "wonder_month": {
+      "cap_usd": 3.0,
+      "left_usd": 2.9,
+      "spent_usd": 0.1
+     }
+    },
+    {
+     "folded": 11,
+     "noop": false,
+     "status": "ok",
+     "step": "brief",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "critic_unreadable": 0,
+     "dropped_cued": 0,
+     "dropped_cut": 0,
+     "f_items": 5,
+     "homework": null,
+     "noop": false,
+     "pairs": 0,
+     "scenes": 8,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "practice",
+     "system": null,
+     "targets": {
+      "glimmer": 8,
+      "teacher": 0,
+      "teacher_share": 0.0
+     },
+     "teacher_alarm": false,
+     "teacher_targets": 0,
+     "uses": "new"
+    },
+    {
+     "context_dropped": 11,
+     "dropped": {
+      "hosted": 0,
+      "missing": 0,
+      "over_cap": 0,
+      "probe": 0,
+      "truncated": 0
+     },
+     "examples": 16,
+     "new": 8,
+     "noop": false,
+     "probe_dropped": 0,
+     "replay": 8,
+     "sealed": 1,
+     "status": "ok",
+     "step": "dataset",
+     "system": null,
+     "token_cap": 16384,
+     "tokens": 1633,
+     "uses": "new"
+    },
+    {
+     "adapter": "p-fad2377ab084-n2",
+     "from_last_promoted": "p-0622d3fedfc2-n1",
+     "noop": false,
+     "parent": "p-0622d3fedfc2-n1",
+     "receipt": {
+      "epochs": 4,
+      "examples": 16,
+      "gpu_minutes": 12.0,
+      "steps": 8,
+      "train_minutes": 5.0
+     },
+     "status": "ok",
+     "step": "train",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "gates": {
+      "collapse": {
+       "gate": "collapse",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "general": {
+       "gate": "general",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "safety": {
+       "gate": "safety",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      }
+     },
+     "noop": false,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "gates",
+     "system": "crisis check",
+     "uses": "existing"
+    },
+    {
+     "noop": false,
+     "promoted": "p-fad2377ab084-n2",
+     "serving": "p-fad2377ab084-n2",
+     "status": "ok",
+     "step": "promote",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "held_back": false,
+     "noop": false,
+     "note_id": "note-da72115eaa59e928",
+     "outcome": "held",
+     "pushed": false,
+     "receipt": {
+      "candidates": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-c1",
+        "want_id": "share:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "outcome": "ran",
+      "outcome_reason": null,
+      "question_id": null,
+      "winner": "share:p1-c1"
+     },
+     "second_offer": true,
+     "sources": 1,
+     "status": "ok",
+     "step": "note",
+     "system": "outreach",
+     "target_id": "p1-c1",
+     "uses": "existing"
+    },
+    {
+     "night_status": "promoted",
+     "noop": false,
+     "status": "ok",
+     "step": "finish",
+     "system": null,
+     "uses": "new"
+    }
+   ],
+   "summary": {
+    "checkpoint": {
+     "id": "p-fad2377ab084-n2",
+     "night": "2026-10-29",
+     "parent_id": "p-0622d3fedfc2-n1",
+     "person_id": "p1",
+     "uri": "modal-volume://anjo-sleep-adapters/p-fad2377ab084-n2"
+    },
+    "choices": [
+     {
+      "action": "prepare_commitment",
+      "considered": [
+       {
+        "action": "prepare_commitment",
+        "kind": "follow_up",
+        "reason": null,
+        "status": "won",
+        "strength": 0.6,
+        "target_id": "p1-c1",
+        "want_id": "follow_up:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "question_id": null,
+      "target_id": "p1-c1"
+     },
+     {
+      "action": "hold_note",
+      "considered": [
+       {
+        "action": "hold_note",
+        "kind": "share",
+        "reason": null,
+        "status": "won",
+        "strength": 0.7,
+        "target_id": "p1-c1",
+        "want_id": "share:p1-c1",
+        "weight": 1.0
+       }
+      ],
+      "opportunity": "away",
+      "question_id": null,
+      "target_id": "p1-c1"
+     }
+    ],
+    "cost_parts": {
+     "brief": 9.999999999999999e-05,
+     "extract": 0.0,
+     "gates": 0.0325,
+     "mind": 0.0,
+     "practice": 0.03255,
+     "training": 0.5
+    },
+    "cost_usd": 0.56515,
+    "failed_at": null,
+    "gates": {
+     "collapse": {
+      "gate": "collapse",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "general": {
+      "gate": "general",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "safety": {
+      "gate": "safety",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     }
+    },
+    "night": "2026-10-29",
+    "night_end": "2026-10-30T00:00:00+00:00",
+    "paid_actions": 2,
+    "status": "promoted",
+    "steps": [
+     "close_day",
+     "extract",
+     "notice",
+     "probes",
+     "choose",
+     "brief",
+     "practice",
+     "dataset",
+     "train",
+     "gates",
+     "promote",
+     "note",
+     "finish"
+    ],
+    "trained": true,
+    "trained_adapter": "p-fad2377ab084-n2",
+    "user_id_hash": null,
+    "wonder_calls": 1,
+    "wonder_usd": 0.1
+   }
+  },
+  {
+   "points": [
+    {
+     "as_of": "2026-10-31T00:00:00+00:00",
+     "choice": {
+      "considered": [],
+      "opportunity": "away",
+      "want": null
+     },
+     "ctx": {
+      "allowance": {
+       "actions_left": 2,
+       "calls_left": 12,
+       "usd_left": 2.8
+      },
+      "allowed_actions": [
+       "hold_note",
+       "prepare_commitment",
+       "revisit_thread"
+      ],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-30T12:00:00+00:00",
+     "night": "2026-10-30",
+     "phase": "pre_study",
+     "questions": [],
+     "results": [
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-28T23:40:00+00:00",
+       "homework_id": "hw-p1-t1-2026-10-28",
+       "id": "r-p1-t1-2026-10-28",
+       "target_id": "p1-t1",
+       "user_cites": 0,
+       "verified_sources": 1
+      },
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-29T23:40:00+00:00",
+       "homework_id": "hw-p1-c1-2026-10-29",
+       "id": "r-p1-c1-2026-10-29",
+       "target_id": "p1-c1",
+       "user_cites": 0,
+       "verified_sources": 1
+      }
+     ],
+     "targets": [
+      {
+       "acted_revision": 1,
+       "check_after": "2026-10-31T09:00:00+00:00",
+       "confidence": null,
+       "due_noted": true,
+       "id": "p1-c1",
+       "kind": "commitment",
+       "label": "",
+       "last_mentioned": "2026-10-29",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      },
+      {
+       "acted_revision": 1,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "as_of": "2026-10-31T00:00:00+00:00",
+     "choice": null,
+     "ctx": {
+      "allowance": {
+       "actions_left": 2,
+       "calls_left": 12,
+       "usd_left": 2.8
+      },
+      "allowed_actions": [],
+      "policy": {
+       "away_min": 0.2,
+       "max_candidates": 16,
+       "priority_classes": [
+        "user_commitment",
+        "source_repair",
+        "active_thread",
+        "curiosity",
+        "maintenance"
+       ],
+       "reason_codes": [
+        "action_not_offered",
+        "below_threshold",
+        "budget",
+        "candidate_limit",
+        "dependency_limit",
+        "duplicate_candidate",
+        "expired",
+        "inactive_person",
+        "invalid_estimate",
+        "invalid_score",
+        "lost_to_target",
+        "missing_identity",
+        "missing_target",
+        "not_actionable",
+        "note_declined",
+        "paused_by_you",
+        "quiet_hours",
+        "source_ref_limit",
+        "stale_target",
+        "target_closed",
+        "unauthorized",
+        "unknown_expected_change",
+        "unknown_operation",
+        "unknown_priority_class",
+        "unknown_proposal_reason",
+        "unknown_source",
+        "wrong_event"
+       ],
+       "surface_min": 0.5
+      }
+     },
+     "intentions": [],
+     "last_message_at": "2026-10-30T12:00:00+00:00",
+     "night": "2026-10-30",
+     "phase": "post_result",
+     "questions": [],
+     "results": [
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-28T23:40:00+00:00",
+       "homework_id": "hw-p1-t1-2026-10-28",
+       "id": "r-p1-t1-2026-10-28",
+       "target_id": "p1-t1",
+       "user_cites": 0,
+       "verified_sources": 1
+      },
+      {
+       "basis": "research",
+       "consumed": true,
+       "created_at": "2026-10-29T23:40:00+00:00",
+       "homework_id": "hw-p1-c1-2026-10-29",
+       "id": "r-p1-c1-2026-10-29",
+       "target_id": "p1-c1",
+       "user_cites": 0,
+       "verified_sources": 1
+      }
+     ],
+     "targets": [
+      {
+       "acted_revision": 1,
+       "check_after": "2026-10-31T09:00:00+00:00",
+       "confidence": null,
+       "due_noted": true,
+       "id": "p1-c1",
+       "kind": "commitment",
+       "label": "",
+       "last_mentioned": "2026-10-29",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      },
+      {
+       "acted_revision": 1,
+       "check_after": null,
+       "confidence": null,
+       "due_noted": false,
+       "id": "p1-t1",
+       "kind": "thread",
+       "label": "",
+       "last_mentioned": "2026-10-28",
+       "person_id": "",
+       "revision": 1,
+       "status": "open"
+      }
+     ]
+    }
+   ],
+   "steps": [
+    {
+     "night": "2026-10-30",
+     "noop": false,
+     "status": "ok",
+     "step": "close_day",
+     "system": null,
+     "uses": "new",
+     "window": [
+      "2026-10-30T00:00:00+00:00",
+      "2026-10-31T00:00:00+00:00"
+     ]
+    },
+    {
+     "items": 1,
+     "kinds": {
+      "lesson": 1
+     },
+     "min_new_examples": 1,
+     "new_since_last_training": 1,
+     "noop": false,
+     "status": "ok",
+     "step": "extract",
+     "system": "history store",
+     "training_night": true,
+     "uses": "existing"
+    },
+    {
+     "noop": true,
+     "port": "notice (Task 17): no-op",
+     "status": "ok",
+     "step": "notice",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "how": "sealed once",
+     "noop": false,
+     "sealed": 1,
+     "status": "ok",
+     "step": "probes",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "action": null,
+     "allowance": {
+      "actions_left": 2,
+      "calls_left": 12,
+      "usd_left": 2.8
+     },
+     "expectation": null,
+     "noop": false,
+     "not_offered": [],
+     "offered": [
+      "hold_note",
+      "prepare_commitment",
+      "revisit_thread"
+     ],
+     "ports": {
+      "chooser": "StateChooser",
+      "expectations": "estimator not registered (Task 16)",
+      "homework": "available",
+      "inquiry": "no-op (Task 17)"
+     },
+     "receipt": {
+      "candidates": [],
+      "opportunity": "away",
+      "outcome": null,
+      "outcome_reason": null,
+      "question_id": null,
+      "winner": null
+     },
+     "status": "ok",
+     "step": "choose",
+     "system": null,
+     "target_id": null,
+     "uses": "new",
+     "wonder_month": {
+      "cap_usd": 3.0,
+      "left_usd": 2.8,
+      "spent_usd": 0.2
+     }
+    },
+    {
+     "folded": 9,
+     "noop": false,
+     "status": "ok",
+     "step": "brief",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "critic_unreadable": 0,
+     "dropped_cued": 0,
+     "dropped_cut": 0,
+     "f_items": 6,
+     "homework": null,
+     "noop": false,
+     "pairs": 0,
+     "scenes": 8,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "practice",
+     "system": null,
+     "targets": {
+      "glimmer": 8,
+      "teacher": 0,
+      "teacher_share": 0.0
+     },
+     "teacher_alarm": false,
+     "teacher_targets": 0,
+     "uses": "new"
+    },
+    {
+     "context_dropped": 14,
+     "dropped": {
+      "hosted": 0,
+      "missing": 0,
+      "over_cap": 0,
+      "probe": 0,
+      "truncated": 0
+     },
+     "examples": 24,
+     "new": 8,
+     "noop": false,
+     "probe_dropped": 0,
+     "replay": 16,
+     "sealed": 1,
+     "status": "ok",
+     "step": "dataset",
+     "system": null,
+     "token_cap": 16384,
+     "tokens": 3023,
+     "uses": "new"
+    },
+    {
+     "adapter": "p-7615205d1f08-n3",
+     "from_last_promoted": "p-fad2377ab084-n2",
+     "noop": false,
+     "parent": "p-fad2377ab084-n2",
+     "receipt": {
+      "epochs": 4,
+      "examples": 24,
+      "gpu_minutes": 12.0,
+      "steps": 8,
+      "train_minutes": 5.0
+     },
+     "status": "ok",
+     "step": "train",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "gates": {
+      "collapse": {
+       "gate": "collapse",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "general": {
+       "gate": "general",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      },
+      "safety": {
+       "gate": "safety",
+       "passed": true,
+       "reason": null,
+       "threshold": 0.0,
+       "value": 0.0
+      }
+     },
+     "noop": false,
+     "seconds": 60.0,
+     "status": "ok",
+     "step": "gates",
+     "system": "crisis check",
+     "uses": "existing"
+    },
+    {
+     "noop": false,
+     "promoted": "p-7615205d1f08-n3",
+     "serving": "p-7615205d1f08-n3",
+     "status": "ok",
+     "step": "promote",
+     "system": null,
+     "uses": "new"
+    },
+    {
+     "noop": false,
+     "offered_again": false,
+     "outcome": "no_reason",
+     "second_offer_receipt": null,
+     "status": "ok",
+     "step": "note",
+     "system": "outreach",
+     "uses": "existing"
+    },
+    {
+     "night_status": "promoted",
+     "noop": false,
+     "status": "ok",
+     "step": "finish",
+     "system": null,
+     "uses": "new"
+    }
+   ],
+   "summary": {
+    "checkpoint": {
+     "id": "p-7615205d1f08-n3",
+     "night": "2026-10-30",
+     "parent_id": "p-fad2377ab084-n2",
+     "person_id": "p1",
+     "uri": "modal-volume://anjo-sleep-adapters/p-7615205d1f08-n3"
+    },
+    "choices": [
+     {
+      "action": null,
+      "considered": [],
+      "opportunity": "away",
+      "question_id": null,
+      "target_id": null
+     }
+    ],
+    "cost_parts": {
+     "brief": 9.999999999999999e-05,
+     "extract": 0.0,
+     "gates": 0.0325,
+     "mind": 0.0,
+     "practice": 0.03255,
+     "training": 0.5
+    },
+    "cost_usd": 0.56515,
+    "failed_at": null,
+    "gates": {
+     "collapse": {
+      "gate": "collapse",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "general": {
+      "gate": "general",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     },
+     "safety": {
+      "gate": "safety",
+      "passed": true,
+      "reason": null,
+      "threshold": 0.0,
+      "value": 0.0
+     }
+    },
+    "night": "2026-10-30",
+    "night_end": "2026-10-31T00:00:00+00:00",
+    "paid_actions": 0,
+    "status": "promoted",
+    "steps": [
+     "close_day",
+     "extract",
+     "notice",
+     "probes",
+     "choose",
+     "brief",
+     "practice",
+     "dataset",
+     "train",
+     "gates",
+     "promote",
+     "note",
+     "finish"
+    ],
+    "trained": true,
+    "trained_adapter": "p-7615205d1f08-n3",
+    "user_id_hash": null,
+    "wonder_calls": 0,
+    "wonder_usd": 0.0
+   }
+  }
+ ],
+ "queued": [
+  [
+   "p1",
+   "While you were away I looked into optical sorting for film plastics.\n\nSources:\n- https://example.org/sorting-study",
+   "sleep_note"
+  ],
+  [
+   "p1",
+   "While you were away I looked into optical sorting for film plastics.\n\nSources:\n- https://example.org/sorting-study",
+   "sleep_note"
+  ]
+ ],
+ "targets": {
+  "counted_evidence": [],
+  "expectations": [],
+  "results": [
+   {
+    "basis": "research",
+    "consumed": true,
+    "created_at": "2026-10-28T23:40:00+00:00",
+    "homework_id": "hw-p1-t1-2026-10-28",
+    "id": "r-p1-t1-2026-10-28",
+    "target_id": "p1-t1",
+    "user_cites": 0,
+    "verified_sources": 1
+   },
+   {
+    "basis": "research",
+    "consumed": true,
+    "created_at": "2026-10-29T23:40:00+00:00",
+    "homework_id": "hw-p1-c1-2026-10-29",
+    "id": "r-p1-c1-2026-10-29",
+    "target_id": "p1-c1",
+    "user_cites": 0,
+    "verified_sources": 1
+   }
+  ],
+  "targets": [
+   {
+    "acted_revision": 1,
+    "check_after": "2026-10-31T09:00:00+00:00",
+    "confidence": null,
+    "due_noted": true,
+    "first_seen": "2026-10-29",
+    "id": "p1-c1",
+    "kind": "commitment",
+    "label": "the pilot demo",
+    "last_mentioned": "2026-10-29",
+    "person_id": "p1",
+    "revision": 1,
+    "status": "open"
+   },
+   {
+    "acted_revision": 1,
+    "check_after": null,
+    "confidence": null,
+    "due_noted": false,
+    "first_seen": "2026-10-28",
+    "id": "p1-t1",
+    "kind": "thread",
+    "label": "the sorting line",
+    "last_mentioned": "2026-10-28",
+    "person_id": "p1",
+    "revision": 1,
+    "status": "open"
+   }
+  ]
+ }
+}

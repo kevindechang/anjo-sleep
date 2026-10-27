@@ -3,7 +3,8 @@
 Steps, in order, each writing its log record before the next starts (``nightlog.py``):
 
 1. ``close_day``: the night's window (the calendar day, or an accelerated run's simulated day).
-2. ``extract``: the day's evidence and targets (Task 3). ``notice`` (2b, Task 17) is a no-op port.
+2. ``extract``: the day's evidence and targets (Task 3). ``notice`` (2b, Task 17): with ``mind_inquiry``
+   on, one thinker pass over the person's new items may open questions (``night/mind.py``); else a no-op.
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
 4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
@@ -13,6 +14,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    runs, and the record says so (``wonder_month``). No study is offered while the homework port is
    a no-op. ``hold_note`` is written at step 10. A chosen study records her expectation once the
    estimator is registered (Task 16), and a synthetic life records the offer's decision point.
+   With ``mind_inquiry`` on, her questions join the snapshot and ``inquire`` runs MIND (Task 17).
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
    training brief is the pre-practice one).
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
@@ -22,7 +24,8 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    runs inside one GPU session. Below it, the night is ``nothing_new`` and those items carry over.
 9. ``promote``: every gate passed, or the night is rejected and the previous checkpoint serves.
 10. ``note``: a ``hold_note`` choice, or a second offer (``allowed_actions={"hold_note"}``) after a
-    result with a verified source; at most one note, which the writer may decline. A synthetic life
+    result with a verified source, or an inquiry's anchored one (with ``mind_inquiry`` on, each finding
+    with an unconsumed anchor shares here); at most one note, which the writer may decline. A synthetic life
     records this offer's decision point too, before the note settles its target, offered or not: a
     night with no second offer records one that allows nothing.
 11. ``finish``: the ``NightResult`` and every receipt.
@@ -30,8 +33,9 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
 the person's own night's, never the wall clock's: her snapshot, its eligibility and her expectations
-read the night's clock (``as_of``, the virtual night end); the window's wall-clock end only stamps
-records and drives budgets and timeouts.
+read the night's clock (``as_of``, the virtual night end). Records are stamped at the window's
+wall-clock end or ``as_of``, whichever is earlier (``_Night.stamp``), so readers on either clock see
+them; the wall-clock end alone drives budgets and timeouts.
 """
 from __future__ import annotations
 
@@ -46,6 +50,7 @@ from anjo.sleep.night.deps import (
     ALL_ACTIONS,
     STUDY_ACTIONS,
     InquiryOutcome,
+    MindCall,
     NightDeps,
     StudyOutcome,
 )
@@ -55,7 +60,7 @@ from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
-from anjo.sleep.mind import expect, points, receipt, snapshot
+from anjo.sleep.mind import expect, points, receipt
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
@@ -75,6 +80,7 @@ from anjo.sleep.types import (
     NightResult,
     NightStatus,
     Probe,
+    Result,
     Target,
     WantSnapshot,
 )
@@ -128,6 +134,7 @@ class _Night:
     note_choice: Choice | None = None
     study: StudyOutcome | None = None
     inquiry: InquiryOutcome | None = None
+    shared: tuple[str, ...] = ()  # results MIND's findings shared at step 10 (Task 17)
     data: Dataset | None = None
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)
@@ -139,8 +146,13 @@ class _Night:
 
     @property
     def end(self) -> datetime:
-        """The window's wall-clock end: stamps, budget holds and timeouts read it, never a date."""
+        """The window's wall-clock end: budget holds and timeouts read it, never a date."""
         return self.window[1]
+
+    @property
+    def stamp(self) -> datetime:
+        """What the night's records are created at: never after the wall clock, never after its own."""
+        return min(self.end, self.as_of)
 
 
 def _safe_error(error: BaseException) -> str:
@@ -351,12 +363,21 @@ class NightRunner:
         serving = self.deps.registry.last_promoted(p.uid)
         return None if serving is None else serving.night
 
+    def _mind(self) -> bool:
+        """MIND's inquiry runs only with the setting on (Task 17); off, the night is Task 7a's."""
+        return self.deps.settings.mind_inquiry and self.deps.inquiry.available
+
+    def _call(self, p: _Night, step: str) -> MindCall:
+        return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
+                        spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
+                        cancelled=lambda: self.deps.cancel(p.uid))
+
     def _notice(self, p: _Night) -> Mapping[str, Any]:
         notice = self.deps.notice
-        if not notice.available:
+        if not (self.deps.settings.mind_inquiry and notice.available):
             return {"noop": True, "port": "notice (Task 17): no-op"}
         new = [item for item in p.store.for_day(p.night) if not item.held_out]
-        return {"questions_opened": notice.notice(p.uid, p.night, new) if new else 0}
+        return notice.notice(self._call(p, "notice"), new)
 
     def _probes(self, p: _Night) -> Mapping[str, Any]:
         if self.deps.is_synthetic(p.uid):  # sealed once: nothing is called tonight
@@ -370,16 +391,15 @@ class NightRunner:
 
     def _raw(self, p: _Night) -> points.RawSnapshot:
         """Her state's raw input to ``snapshot.build`` (Task 7a), on the person's night clock, before
-        any eligibility filter. Questions stay empty until Task 17; their close marks are applied all
-        the same."""
+        any eligibility filter. With ``mind_inquiry`` on (Task 17) her questions come from her
+        workspace, after the close marks tonight's closes owe; else none."""
         own = [item.created_at for item in p.store.stored(p.night) if item.kind in PERSON_KINDS]
+        if self._mind():
+            self.deps.inquiry.settle(self._call(p, "choose"))
         targets = p.targets.open_targets(p.as_of)
-        questions: tuple[points.QuestionState, ...] = ()
-        for question in questions:
-            for target_id, revision in snapshot.close_marks(question.view, targets):
-                p.targets.mark_acted(target_id, revision)
+        questions = self.deps.inquiry.questions(self._call(p, "choose")) if self._mind() else ()
         return points.RawSnapshot(
-            tuple(targets), tuple(p.targets.results()), p.as_of, max(own) if own else None,
+            tuple(targets), self._results(p), p.as_of, max(own) if own else None,
             intentions=self.deps.intentions.intentions(p.uid, p.as_of), questions=questions,
         )
 
@@ -408,7 +428,7 @@ class NightRunner:
         offered = set(ALL_ACTIONS)
         if not self.deps.homework.available:
             offered -= STUDY_ACTIONS
-        if not self.deps.inquiry.available:
+        if not self._mind():
             offered.discard("inquire")
         return frozenset(offered)
 
@@ -435,7 +455,7 @@ class NightRunner:
             "ports": {
                 "chooser": type(deps.chooser).__name__,
                 "homework": homework,
-                "inquiry": "available" if deps.inquiry.available else "no-op (Task 17)",
+                "inquiry": "available" if self._mind() else "no-op (Task 17)",
                 "expectations": "registered" if deps.estimator else "estimator not registered (Task 16)",
             },
             "not_offered": sorted({c.want_id for c in choice.considered if c.reason == "action_not_offered"}),
@@ -444,11 +464,10 @@ class NightRunner:
         outcome: receipt.Outcome | None = None
         if action in STUDY_ACTIONS:
             done.update(self._study(p, state, choice))
-            stopped = p.study.stopped if p.study is not None else None
-            outcome = "budget" if stopped == "budget" else "failed" if stopped == "failed" else "ran"
+            outcome = _outcome(p.study.stopped if p.study is not None else None)
         elif action == "inquire":
             done.update(self._inquire(p, choice))
-            outcome = "ran"
+            outcome = _outcome(p.inquiry.stopped if p.inquiry is not None else None)
         elif action == "hold_note":
             p.note_choice = choice  # written at step 10, whose receipt records the outcome
         done["receipt"] = receipt.record(choice, outcome)
@@ -461,7 +480,7 @@ class NightRunner:
         p.paid_actions += 1
         calls_before = p.wonder.calls
         try:
-            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.end)
+            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.stamp)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
         except STUDY_FAILURES as error:  # the study failed, not the night: its calls stay debited
@@ -483,7 +502,7 @@ class NightRunner:
     def _inquire(self, p: _Night, choice: Choice) -> Mapping[str, Any]:
         if choice.question_id is None:
             raise ValueError("an inquire choice names its question")
-        outcome = self.deps.inquiry.inquire(p.uid, choice.question_id, p.night, p.wonder)
+        outcome = self.deps.inquiry.inquire(self._call(p, "inquire"), choice.question_id)
         if outcome.result is not None:
             p.targets.add_result(outcome.result)
         if outcome.research_calls > 0:  # only research is paid; thinker cycles are her own Glimmer
@@ -491,7 +510,7 @@ class NightRunner:
             p.paid_actions += 1
         p.inquiry = outcome
         return {"inquiry": {"cycles": outcome.cycles, "research_calls": outcome.research_calls,
-                            "result": outcome.result.id if outcome.result else None}}
+                            "result": outcome.result.id if outcome.result else None, **outcome.receipt}}
 
     def _brief(self, p: _Night) -> Mapping[str, Any]:
         briefs = self.deps.briefs(p.uid)
@@ -500,7 +519,7 @@ class NightRunner:
             return {"folded": 0, "why": "no evidence since the last fold"}
         p.spend.part = "brief"
         with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS):
-            briefs.fold(p.night, new, at=p.end, hosted_in_training=self.deps.hosted_in_training,
+            briefs.fold(p.night, new, at=p.stamp, hosted_in_training=self.deps.hosted_in_training,
                         chat=p.spend.wrap_chat(self.deps.spark_chat))
         return {"folded": len(new)}
 
@@ -520,7 +539,7 @@ class NightRunner:
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
-            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
+            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.stamp)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
@@ -587,7 +606,9 @@ class NightRunner:
 
     def _second_offer(self, p: _Night) -> Choice | None:
         verified = p.study is not None and p.study.result is not None and p.study.result.verified_sources > 0
-        anchored = p.inquiry is not None and p.inquiry.result is not None and p.inquiry.result.basis == "evidence"
+        if self._mind():  # a finding with an unconsumed anchor shares now (Task 17)
+            p.shared = tuple(r.id for r in self.deps.inquiry.share(self._call(p, "note")))
+        anchored = (p.inquiry is not None and p.inquiry.result is not None) or bool(p.shared)
         offer = p.note_choice is None and (verified or anchored)
         if not (offer or self.deps.is_synthetic(p.uid)):
             return None
@@ -607,6 +628,10 @@ class NightRunner:
         return choice
 
     def _note(self, p: _Night) -> Mapping[str, Any]:
+        done = self._held_note(p)
+        return {**done, "shared": list(p.shared)} if p.shared else done
+
+    def _held_note(self, p: _Night) -> Mapping[str, Any]:
         offered = self._second_offer(p)  # a step-4 note still records the post-result point
         choice = p.note_choice or offered
         if choice is None or choice.target_id is None:
@@ -664,10 +689,15 @@ class NightRunner:
         targets: Sequence[Target] = p.targets.open_targets(p.as_of)
         return next((t.label for t in targets if t.id == target_id), "something you are working on")
 
+    def _results(self, p: _Night) -> tuple[Result, ...]:
+        """The target log's results; with MIND on, a shared finding's only while it stands (Task 17)."""
+        return self.deps.inquiry.results(self._call(p, "choose")) if self._mind() else tuple(p.targets.results())
+
     def _facts(self, p: _Night, target_id: str) -> list[Fact]:
-        wanted = {r.homework_id for r in p.targets.results() if r.target_id == target_id and not r.consumed}
+        wanted = {r.homework_id for r in self._results(p) if r.target_id == target_id and not r.consumed}
         items: list[Evidence] = [e for e in p.store.stored(p.night) if e.kind == "homework" and e.id in wanted]
-        return [Fact(text=item.text, source=item.source) for item in items]
+        facts = [Fact(text=item.text, source=item.source) for item in items]
+        return facts + self.deps.inquiry.facts(self._call(p, "note"), target_id) if self._mind() else facts
 
     def _finish(self, p: _Night) -> NightResult:
         parts = p.spend.parts()
@@ -692,6 +722,10 @@ class NightRunner:
 
 def _id(ckpt: CheckpointRef | None) -> str | None:
     return None if ckpt is None else ckpt.id
+
+
+def _outcome(stopped: str | None) -> receipt.Outcome:
+    return "budget" if stopped == "budget" else "failed" if stopped == "failed" else "ran"
 
 
 def _note_error(stage: str, error: BaseException) -> str:

@@ -1,12 +1,14 @@
 # mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False, disallow-any-generics=False, warn-return-any=False
 """An accelerated rig on fakes (Task 12a): the night's fake world, a simulated day that stamps every
 line with a fake clock, and an extractor that reads back only the lines inside the night's window.
-No model, no GPU, no network. ``python -m anjo.sleep.sim.accelerated --fake`` runs on it."""
+No model, no GPU, no network. ``python -m anjo.sleep.sim.accelerated --fake`` runs on it; with
+``mind_from`` (``--mind``), MIND's inquiry runs in each night on a fake thinker (Task 17), over a
+thread and a commitment due nine days after that date."""
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +20,10 @@ from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
 from anjo.sleep.probes.morning import Morning, run_morning
 from anjo.sleep.probes.score import Verdict
+from anjo.sleep.tests.mind_night_fakes import LifeThinker, mind_night
 from anjo.sleep.tests.night_fakes import World
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy
-from anjo.sleep.types import CheckpointRef, Evidence, NightResult, Probe
+from anjo.sleep.types import CheckpointRef, Evidence, NightResult, Probe, Target
 
 FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
 CLOCK_START = datetime(2026, 10, 28, 8, 0, tzinfo=timezone.utc)
@@ -67,6 +70,16 @@ class Adapters:
 
 
 DONOR_PREFIX = "donor-of-"
+MIND_DUE_DAYS = 9  # the life's commitment is due this many days after its first night
+
+
+def life_targets(user_id: str, first: date) -> tuple[Target, Target]:
+    """A MIND life's thread and the commitment it bears on."""
+    def target(suffix: str, kind: str, label: str, due: datetime | None) -> Target:
+        return Target(id=f"{user_id}-{suffix}", person_id=user_id, kind=kind, label=label, check_after=due,  # type: ignore[arg-type]
+                      status="open", revision=1, acted_revision=0, confidence=None, last_mentioned=first)
+    due = datetime.combine(first + timedelta(days=MIND_DUE_DAYS), time(9), tzinfo=timezone.utc)
+    return target("t1", "thread", "the pilot", None), target("c1", "commitment", "the pilot demo", due)
 
 
 def sealed_probes(user_id: str) -> list[Probe]:
@@ -91,11 +104,15 @@ class FakeAccelerated:
     world: World = field(init=False)
     clock: FakeClock = field(default_factory=FakeClock)
     heard: dict[str, list[Heard]] = field(default_factory=dict)
+    mind_from: date | None = None  # MIND's inquiry on, from this first night (Task 17)
+    thinker: LifeThinker | None = None
+    resolver: Any = None  # MIND's prediction resolver; the default answers undetermined
 
     def __post_init__(self) -> None:
         self.world = World(self.root)
 
-    # the person's own lines, as the history source reads them from the window
+    # the person's own lines, as the history source reads them from the window and stamps them: at
+    # the window's end or the night's clock, whichever is earlier
     def extract_day(self, user_id: str, day: date, window: tuple[datetime, datetime],
                     as_of: datetime | None = None) -> list[Evidence]:
         self.world.events.append(("extract", user_id, day, window))
@@ -103,7 +120,8 @@ class FakeAccelerated:
             raise self.world.extract_fails[user_id]
         items = [
             Evidence(id=f"{user_id}-{h.at.isoformat()}", person_id=user_id, day=day, kind="lesson", text=h.text,
-                     source=f"message:{h.at.isoformat()}", held_out=False, created_at=h.at, ancestry=h.ancestry)
+                     source=f"message:{h.at.isoformat()}", held_out=False,
+                     created_at=min(window[1], as_of or window[1]), ancestry=h.ancestry)
             for h in self.heard.get(user_id, []) if window[0] <= h.at < window[1]
         ]
         self.world.evidence(user_id).add(items)
@@ -117,6 +135,9 @@ class FakeAccelerated:
                 outer.heard.setdefault(user_id, []).append(Heard(outer.clock(), text, None))
                 return f"Reply to {len(text.split())} words."
 
+        if self.mind_from is not None and day_index == 0:
+            for target in life_targets(user_id, self.mind_from):
+                self.world.targets(user_id).upsert(target)
         before = len(self.heard.get(user_id, []))
         day = run_day(person, day_index, seed, model=Line(), transport=Transport(), replies=Replies(), clock=self.clock)
         users = [t for t in day.turns if t.role == "user"]
@@ -142,4 +163,9 @@ class FakeAccelerated:
 
     def rig(self, sha: str = FAKE_SHA) -> Rig:
         deps = self.world.deps(extractor=lambda chat: self)
-        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha, score=self.score)
+        if self.mind_from is not None:
+            self.thinker = self.thinker or LifeThinker(targets=("fake-life-t1", "fake-life-c1"), queries=["pilot"])
+            mind = mind_night(self.world, self.thinker, resolver=self.resolver)
+            deps = replace(deps, settings=replace(deps.settings, mind_inquiry=True), inquiry=mind, notice=mind)
+        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha, score=self.score,
+                   now=lambda: self.clock.now)
