@@ -6,21 +6,30 @@ digests before and after, and ``fold`` rebuilds the workspace from the log and c
 per cycle on a short view of the focal question, runs ``evidence_search`` and ``world_query`` for
 an INVESTIGATE, and stops when no question is live or the budget is spent. ``mind_reply`` is a
 thinker script that walks a question through HYPOTHESIZE, PREDICT (a test of the lead),
-INVESTIGATE and CONCLUDE, so a run's ops follow its state. Lives are small and synthetic.
+INVESTIGATE and CONCLUDE, so a run's ops follow its state. Lives are small and synthetic. ``DiskLog`` and ``kill_setup`` serve
+kill-resume's child processes.
 """
 from __future__ import annotations
 
+import base64
+import copyreg
 import dataclasses
 import hashlib
+import io
 import json
+import os
+import pickle
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from types import MappingProxyType
 
 from anjo.sleep import types as t
 from anjo.sleep.mind.apd import types as apd
 from anjo.sleep.mind.apd.arms import MindCore
+from anjo.sleep.mind.apd.resume import KillSetup
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.inquiry.ports import InquiryPorts, WorkspaceLog
 
@@ -440,3 +449,58 @@ def mind_reply(prompt: str) -> str:
     lead = facts["lead"].rsplit(".", 1)[1]  # h1, h2, ...: id-free, so a resumed run's text matches
     return json.dumps({"op": "CONCLUDE", "question_id": question, "hypothesis_id": facts["lead"], "kind": "resolution",
                        "statement": f"The plan misses what {lead} says", "cites": facts["origin"].split(",")})
+
+
+# ── Kill-resume's children ────────────────────────────────────────────────────
+
+
+def _frozen(mapping: dict[str, float]) -> MappingProxyType[str, float]:
+    return MappingProxyType(mapping)
+
+
+def _proxy(mapping: MappingProxyType[str, float]) -> tuple[Callable[..., object], tuple[dict[str, float]]]:
+    return _frozen, (dict(mapping),)
+
+
+def _dumps(event: it.WorkspaceEvent) -> bytes:
+    buffer = io.BytesIO()
+    pickler = pickle.Pickler(buffer)
+    pickler.dispatch_table = {**copyreg.dispatch_table, MappingProxyType: _proxy}
+    pickler.dump(event)
+    return buffer.getvalue()
+
+
+class DiskLog:
+    """A durable log on one file: a line per event, synced to disk before ``append`` returns.
+    Lines are pickled only because these fakes lack 17-core's JSON codec; each file is the test's
+    own, written and read in its tmp dir."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._count = len(self.events())
+
+    def events(self) -> tuple[it.WorkspaceEvent, ...]:
+        if not self.path.exists():
+            return ()
+        lines = self.path.read_bytes().splitlines()
+        return tuple(pickle.loads(base64.b64decode(line)) for line in lines)
+
+    def append(self, event: it.WorkspaceEvent) -> None:
+        if event.step.seq != self._count:
+            raise ValueError(f"step {event.step.seq} isn't the log's next ({self._count})")
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, base64.b64encode(_dumps(event)) + b"\n")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        self._count += 1
+
+
+KILL_LIFE: Mapping[str, int] = MappingProxyType({"life-1": 3})
+
+
+def kill_setup(life_id: str) -> KillSetup:
+    """The same held-out life, thinker and fake core in every process, over a ``DiskLog``."""
+    days = KILL_LIFE[life_id]
+    return KillSetup(life(days, split="held_out"), models(ScriptThinker(mind_reply)), FakeCore().core(), DiskLog)

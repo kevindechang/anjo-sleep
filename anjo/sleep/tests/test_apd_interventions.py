@@ -5,9 +5,12 @@ resume on the same evidence, each on its own log; a killed run rebuilds from its
 the digest the live run logged, and resumes."""
 from __future__ import annotations
 
+import dataclasses
 import json
+import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -207,26 +210,47 @@ def test_resume_point_rebuilds_budget_and_focus_from_the_log() -> None:
         resume.resume_point(())
 
 
-def test_kill_resume_digest_identical() -> None:
+SETUP = "anjo.sleep.tests.apd_eval_fakes:kill_setup"
+
+
+def test_kill_resume_digest_identical(tmp_path: Path) -> None:
     life = fx.life(3, split="held_out")
-    whole, fake, models = _m_run(life)
+    whole, _, _ = _m_run(life)
     night2 = next(n for n, e in enumerate(whole.events)
                   if isinstance(e.step.entry, it.RunStart) and e.step.entry.call == "inquiry" and e.step.entry.night == life.days[1])
-    for kill_at in (night2 + 2, night2, 0):  # mid-inquiry, on an inquiry's RunStart, in the first notice pass
-        result = resume.kill_resume(life, models, kill_at, core=fx.FakeCore().core())
+    for kill_at in (night2 + 2, 0):  # mid-inquiry, and in the first notice pass
+        result = resume.kill_resume(SETUP, life.id, kill_at, workdir=tmp_path)
         assert result.digest_equal and result.conclusions_agree, kill_at
         assert result.resumed == result.uninterrupted and len(result.resumed) == 3
+        logged = fx.DiskLog(tmp_path / f"{life.id}.kill-{kill_at}.log").events()
+        assert len(logged) > kill_at + 1  # the fresh process resumed on the killed run's own file
+        assert sum(isinstance(e.step.entry, it.RunStart) for e in logged) == sum(
+            isinstance(e.step.entry, it.RunStart) for e in whole.events) + 1  # one RunStart more: the resume's
+    with pytest.raises(ValueError, match="fresh log"):
+        resume.kill_resume(SETUP, life.id, 0, workdir=tmp_path)
     with pytest.raises(ValueError, match="before operation"):
-        resume.kill_resume(life, models, len(whole.events) + 5, core=fake.core())
+        resume.kill_resume(SETUP, life.id, len(whole.events) + 5, workdir=tmp_path)
 
 
-def test_killing_log_kills_once_after_logging() -> None:
+def test_the_kill_is_a_real_process_kill_and_the_rebuild_reads_only_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "life-1.log"
+    killed = resume._child("kill", SETUP, "life-1", path, 60, "--kill-at", "5")
+    assert killed.returncode == -signal.SIGKILL
+    assert [e.step.seq for e in fx.DiskLog(path).events()] == list(range(6))  # durable through the kill, no further
+    tampered = tmp_path / "tampered.log"
+    events = fx.DiskLog(path).events()
+    log = fx.DiskLog(tampered)
+    for event in (*events[:-1], dataclasses.replace(events[-1], after="0" * 64)):
+        log.append(event)
+    rebuilt = resume.rebuild(fx.kill_setup("life-1"), tampered)
+    assert rebuilt == {"digest_equal": False, "conclusions": None}  # a digest that doesn't hold resumes nothing
+
+
+def test_killing_log_kills_once_its_event_is_appended() -> None:
     whole, _, _ = _m_run(fx.life(1))
-    log = resume.KillingLog(2)
-    log.append(whole.events[0])
-    log.append(whole.events[1])
-    with pytest.raises(resume.Killed):
-        log.append(whole.events[2])
-    assert log.events() == whole.events[:3]  # the event was logged before the kill
-    log.append(whole.events[3])
-    assert len(log.events()) == 4
+    kills: list[int] = []
+    inner = arms.MemoryLog()
+    log = resume.KillingLog(inner, 2, kill=lambda: kills.append(len(inner.events())))
+    for event in whole.events[:4]:
+        log.append(event)
+    assert kills == [3] and log.events() == whole.events[:4]  # killed right after event 2 was logged
