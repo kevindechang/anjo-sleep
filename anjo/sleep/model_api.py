@@ -21,13 +21,14 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-class MissingApiKey(RuntimeError):
-    """The environment variable that should hold a provider key is unset or blank."""
-
-
 class ModelApiError(RuntimeError):
     """A provider call failed: missing configuration, transport error, timeout, an HTTP error
     status or a malformed reply."""
+
+
+class MissingApiKey(ModelApiError):
+    """The environment variable that should hold a provider key is unset or blank. A
+    ``ModelApiError``, so one ``except ModelApiError`` catches every failed call."""
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,9 @@ def post_chat(
         raise ModelApiError(f"{where} timed out after {timeout_s:g}s") from None
     except httpx.HTTPError as exc:
         raise ModelApiError(f"{where} failed in transport ({type(exc).__name__})") from None
+    except (httpx.InvalidURL, httpx.CookieConflict, httpx.StreamError) as exc:
+        # httpx errors outside HTTPError; their text can carry the URL, so only the type is kept.
+        raise ModelApiError(f"{where} failed before a reply ({type(exc).__name__})") from None
     if response.is_error:
         raise ModelApiError(f"{where} returned HTTP {response.status_code}")
     result = _parse(response, where)

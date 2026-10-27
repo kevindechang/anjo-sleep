@@ -1,8 +1,9 @@
 """Shared types for Anjo Sleep (spec §12.1): the values every task builds against.
 
 Each is a frozen dataclass, so tasks can build against one contract in parallel. Collections
-inside them are tuples and frozensets. The two mappings on ``NightResult`` are copied when it is
-built, typed read-only and left out of its hash. Every time here is on the night's clock, which
+inside them are tuples and frozensets. The two mappings on ``NightResult`` are copied into
+read-only mappings when it is built and left out of its hash; ``dataclasses.asdict`` can't copy
+those, so a caller serializes a ``NightResult`` field by field. Every time here is on the night's clock, which
 is virtual in accelerated runs; nothing in this module reads the wall clock.
 
 Smaller types that one task names (``Source``, ``Change``, ``HeldNote``) live in that task's own
@@ -16,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 EvidenceKind = Literal["lesson", "correction", "preference", "tone_request", "homework", "practice"]
@@ -165,10 +167,10 @@ class Target:
     due_noted: bool = False
 
     def __post_init__(self) -> None:
-        if not 0 <= self.acted_revision <= self.revision:
-            raise ValueError(
-                f"acted_revision must be in [0, revision], got {self.acted_revision} > {self.revision}"
-            )
+        if self.acted_revision < 0:
+            raise ValueError(f"acted_revision {self.acted_revision} < 0")
+        if self.acted_revision > self.revision:
+            raise ValueError(f"acted_revision {self.acted_revision} > revision {self.revision}")
         if self.confidence is not None:
             _check_unit("confidence", self.confidence)
 
@@ -353,7 +355,11 @@ class Expectation:
 
 @dataclass(frozen=True)
 class NightResult:
-    """What one person's night did. ``cost_usd`` is the sum of ``cost_parts``."""
+    """What one person's night did. ``cost_usd`` is the sum of ``cost_parts``.
+
+    ``gates`` and ``cost_parts`` are copied into read-only mappings when it is built, so a caller's
+    dict can't change it afterwards and assigning a key raises ``TypeError``.
+    """
 
     status: NightStatus
     failed_at: str | None
@@ -365,8 +371,8 @@ class NightResult:
     log_path: Path
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "gates", dict(self.gates))
-        object.__setattr__(self, "cost_parts", dict(self.cost_parts))
+        object.__setattr__(self, "gates", MappingProxyType(dict(self.gates)))
+        object.__setattr__(self, "cost_parts", MappingProxyType(dict(self.cost_parts)))
         total = math.fsum(self.cost_parts.values())
         if not math.isclose(self.cost_usd, total, rel_tol=1e-9, abs_tol=1e-9):
             raise ValueError(f"cost_usd {self.cost_usd} is not the sum of cost_parts ({total})")
