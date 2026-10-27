@@ -108,6 +108,11 @@ def test_shim_ping_waits_for_vllm(tmp_path: Path) -> None:
                           headers={"Content-Type": "application/json"}) as streamed:
             assert streamed.status_code == 200 and streamed.headers["content-type"] == "text/event-stream"
             assert b"".join(streamed.iter_bytes()).endswith(b"data: [DONE]\n\n")
+        # The dev host sends every call on the stream API; a JSON reply goes back chunked too.
+        tokens = httpx.post(f"{base}/invocations", content=_envelope("/tokenize", {"model": config.MODEL}, True),
+                            headers={"Content-Type": "application/json"})
+        assert tokens.status_code == 200 and tokens.headers.get("transfer-encoding") == "chunked"
+        assert tokens.json() == {"model": config.MODEL}
 
 
 def test_shim_loads_adapter_once_and_checks_rank_and_base(tmp_path: Path) -> None:
@@ -157,6 +162,22 @@ def test_shim_forwards_only_the_vllm_paths_the_clients_use(tmp_path: Path) -> No
     assert server.invoke(_envelope("/v1/chat/completions", too_long)).status == 400
     tokens = server.invoke(_envelope("/tokenize", {"model": config.MODEL, "prompt": "x"}))
     assert tokens.status == 200 and "max_tokens" not in vllm.forwarded[-1][2]
+
+
+def test_shim_caps_max_completion_tokens_like_max_tokens(tmp_path: Path) -> None:
+    # OpenAI's newer name for the same limit: held to the same range, and the smaller one wins.
+    server, vllm, _ = _make(tmp_path)
+    chat = {"model": config.MODEL, "messages": []}
+    top = config.MAX_OUTPUT_TOKENS
+    for limits in ({"max_completion_tokens": top + 1}, {"max_completion_tokens": 0},
+                   {"max_completion_tokens": True}, {"max_completion_tokens": "64"},
+                   {"max_tokens": 64, "max_completion_tokens": top + 1}):
+        assert server.invoke(_envelope("/v1/chat/completions", {**chat, **limits})).status == 400, limits
+    for limits, sent in (({"max_completion_tokens": 64}, 64), ({"max_tokens": 64, "max_completion_tokens": 32}, 32),
+                         ({"max_tokens": 32, "max_completion_tokens": 64}, 32)):
+        assert server.invoke(_envelope("/v1/chat/completions", {**chat, **limits})).status == 200
+        forwarded = vllm.forwarded[-1][2]
+        assert forwarded["max_tokens"] == sent and "max_completion_tokens" not in forwarded, limits
 
 
 def test_the_container_serves_from_s3_weights_with_the_registered_flags(tmp_path: Path) -> None:

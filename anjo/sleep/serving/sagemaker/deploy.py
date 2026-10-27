@@ -6,6 +6,7 @@ some start paid GPU time, so only Kevin runs them, with the operator's own crede
     python -m anjo.sleep.serving.sagemaker.deploy up --image-uri <uri>            # model .. scaling, then asleep
     python -m anjo.sleep.serving.sagemaker.deploy upload-adapter --folder <dir> --name p-<hash>-n<night>
     python -m anjo.sleep.serving.sagemaker.deploy stop                            # copy count 0 now
+    python -m anjo.sleep.serving.sagemaker.deploy stop --delete-endpoint          # no instance at all
     python -m anjo.sleep.serving.sagemaker.deploy status
 
 It reads ``ANJO_SLEEP_GLIMMER_REVISION`` (the pin), ``ANJO_SLEEP_S3_BUCKET`` and, if set,
@@ -27,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
 
 from anjo.sleep.serving import config
 from anjo.sleep.serving.sagemaker import settings
@@ -42,6 +43,9 @@ CONTAINER_FILES: Final = (  # all the image carries from the repo: the shim and 
 )
 WAIT_TOTAL_S: Final = 3600.0
 WAIT_POLL_S: Final = 30.0
+TEARDOWN_WAIT_S: Final = 900.0  # how long a teardown waits out a change in progress, and then a delete
+_CHANGING = frozenset({"Creating", "Updating", "SystemUpdating", "RollingBack"})
+_ACCOUNT_ID = re.compile(r"\b[0-9]{12}\b")
 UPLOAD_READ_TIMEOUT_S: Final = 300.0
 SKIPPED_WEIGHTS: Final = re.compile(r"(^|/)original/|\.pth$|^\.gitattributes$")  # not what vLLM loads
 _IMAGE = re.compile(r"[0-9]{12}\.dkr\.ecr\.us-east-1\.amazonaws\.com/" + re.escape(settings.REPOSITORY)
@@ -71,14 +75,17 @@ def _missing(error: ClientError) -> bool:
         or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
 
 
-def _exists(describe: Callable[[], Any]) -> bool:
+def _found(describe: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any] | None:
     try:
-        describe()
+        return describe()
     except ClientError as error:
         if _missing(error):
-            return False
+            return None
         raise
-    return True
+
+
+def _exists(describe: Callable[[], Any]) -> bool:
+    return _found(describe) is not None
 
 
 def weights_prefix(revision: str) -> str:
@@ -179,16 +186,89 @@ def _wait(describe: Callable[[], Mapping[str, Any]], status_key: str, *, clock: 
         sleep(WAIT_POLL_S)
 
 
+def _describe_component(sm: Any) -> Callable[[], Mapping[str, Any]]:
+    return lambda: sm.describe_inference_component(InferenceComponentName=settings.COMPONENT)
+
+
+def _settled(describe: Callable[[], Mapping[str, Any]], status_key: str, *, clock: Callable[[], float],
+             sleep: Callable[[float], None]) -> str | None:
+    """The status once no change is in progress (or ``TEARDOWN_WAIT_S`` has passed), None if missing."""
+    started = clock()
+    while True:
+        found = _found(describe)
+        status = None if found is None else str(found.get(status_key))
+        if status not in _CHANGING or clock() - started > TEARDOWN_WAIT_S:
+            return status
+        sleep(WAIT_POLL_S)
+
+
+def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
+             sleep: Callable[[float], None] = time.sleep) -> None:
+    """Delete the inference component if there is one (and wait until it is gone), then the endpoint
+    and its config: no instance is left, with or without a component. What ``stop --delete-endpoint``
+    and a failed ``up`` run. A delete AWS refuses raises; ``up`` makes it all again."""
+    sm = aws.get("sagemaker")
+    component = _describe_component(sm)
+    found = _settled(component, "InferenceComponentStatus", clock=clock, sleep=sleep)
+    if found is not None:
+        if found != "Deleting":
+            sm.delete_inference_component(InferenceComponentName=settings.COMPONENT)
+        started = clock()
+        while _exists(component):
+            if clock() - started > TEARDOWN_WAIT_S:
+                raise DeployError(f"the inference component is still there after {TEARDOWN_WAIT_S:.0f} s")
+            sleep(WAIT_POLL_S)
+    endpoint = _settled(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
+                        clock=clock, sleep=sleep)
+    if endpoint not in (None, "Deleting"):
+        sm.delete_endpoint(EndpointName=settings.ENDPOINT)
+    if _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
+        sm.delete_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)
+
+
+def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
+          sleep: Callable[[float], None]) -> None:
+    """After a failed ``up``: an earlier run's component is kept, at 0 copies (with whatever model it
+    points at). Otherwise the component this run made, the endpoint and its config go, so no
+    instance is left serving nothing, and so does a model this run made."""
+    sm = aws.get("sagemaker")
+    if "component" not in made and _exists(_describe_component(sm)):
+        SageMakerServing(bucket=None, control=sm, clock=clock, sleep=sleep).sleep_now()
+        return
+    teardown(aws, clock=clock, sleep=sleep)
+    if "model" in made:
+        sm.delete_model(ModelName=model)
+
+
 def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account_id: str | None = None, *,
        clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Model, endpoint config, endpoint, inference component and the idle net, each made if missing
     (a new image gives a new model, which the component is moved to). It waits for the first copy,
-    records how long that took, and sets the copy count to 0 before it returns."""
+    records how long that took, and sets the copy count to 0 before it returns. If any step fails
+    (or is interrupted), ``_undo`` runs before the error goes on: nothing is left billing."""
     sm = aws.get("sagemaker")
     account = account_id or str(aws.get("sts").get_caller_identity()["Account"])
     role = f"arn:aws:iam::{account}:role/{settings.EXECUTION_ROLE}"
     model = model_name(image_uri)
+    made: set[str] = set()
+    try:
+        timings = _up(aws, serve, bucket, image_uri, role, model, made, clock=clock, sleep=sleep)
+    except BaseException as failure:  # paid from create_endpoint on: clean up, then re-raise
+        try:
+            _undo(aws, made, model, clock=clock, sleep=sleep)
+        except (BotoCoreError, ClientError, DeployError) as cleanup:
+            failure.add_note(f"cleanup failed too ({cleanup}): run `deploy stop --delete-endpoint`")
+        raise
+    SageMakerServing(bucket=bucket, control=sm, clock=clock, sleep=sleep).sleep_now()
+    return {"model": model, "endpoint": settings.ENDPOINT, "component": settings.COMPONENT, **timings, "copies": 0}
+
+
+def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: str, model: str,
+        made: set[str], *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
+    """Make what is missing, noting each in ``made``, and wait for the first copy."""
+    sm = aws.get("sagemaker")
     if not _exists(lambda: sm.describe_model(ModelName=model)):
+        made.add("model")
         sm.create_model(ModelName=model, ExecutionRoleArn=role, PrimaryContainer={
             "Image": image_uri, "Environment": _model_env(serve, bucket),
             "ModelDataSource": {"S3DataSource": {
@@ -196,12 +276,14 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
                 "S3DataType": "S3Prefix", "CompressionType": "None"}},
         })
     if not _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
+        made.add("endpoint_config")
         sm.create_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG, ExecutionRoleArn=role, ProductionVariants=[{
             "VariantName": settings.VARIANT, "InstanceType": settings.INSTANCE_TYPE, "InitialInstanceCount": 1,
             "ManagedInstanceScaling": {"Status": "ENABLED", "MinInstanceCount": 0, "MaxInstanceCount": 1},
             "RoutingConfig": {"RoutingStrategy": "LEAST_OUTSTANDING_REQUESTS"},
         }])
     if not _exists(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT)):
+        made.add("endpoint")
         sm.create_endpoint(EndpointName=settings.ENDPOINT, EndpointConfigName=settings.ENDPOINT_CONFIG)
     endpoint_s = _wait(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
                        clock=clock, sleep=sleep)
@@ -210,27 +292,24 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
                                   "ContainerStartupHealthCheckTimeoutInSeconds": settings.STARTUP_HEALTH_TIMEOUT_S},
             "ComputeResourceRequirements": {"NumberOfAcceleratorDevicesRequired": 1,
                                             "MinMemoryRequiredInMb": settings.MIN_MEMORY_MB}}
-    describe_ic = lambda: sm.describe_inference_component(InferenceComponentName=settings.COMPONENT)  # noqa: E731
+    describe_ic = _describe_component(sm)
     if _exists(describe_ic):
         sm.update_inference_component(InferenceComponentName=settings.COMPONENT, Specification=spec,
                                       RuntimeConfig={"CopyCount": 1})
     else:
+        made.add("component")
         sm.create_inference_component(InferenceComponentName=settings.COMPONENT, EndpointName=settings.ENDPOINT,
                                       VariantName=settings.VARIANT, Specification=spec, RuntimeConfig={"CopyCount": 1})
-    try:
-        copy_s = _wait(describe_ic, "InferenceComponentStatus", clock=clock, sleep=sleep)
-        idle_net(aws)
-    finally:  # paid while a copy is up: whatever happened, it goes back to sleep
-        SageMakerServing(bucket=bucket, control=sm, clock=clock, sleep=sleep).sleep_now()
-    return {"model": model, "endpoint": settings.ENDPOINT, "component": settings.COMPONENT,
-            "endpoint_seconds": round(endpoint_s), "first_copy_seconds": round(copy_s), "copies": 0}
+    copy_s = _wait(describe_ic, "InferenceComponentStatus", clock=clock, sleep=sleep)
+    idle_net(aws)
+    return {"endpoint_seconds": round(endpoint_s), "first_copy_seconds": round(copy_s)}
 
 
 def idle_net(aws: Aws) -> None:
     """The AWS-side net: when a copy has been up ``IDLE_MINUTES`` straight with no invocation, the
     alarm's step policy sets the copy count to exactly 0. It reads 1 only while a copy runs (its
-    memory metric exists) and nobody called it that minute, so a sleeping component never breaches
-    and a wake is not undone."""
+    memory metric exists) and nobody called it that minute, so a sleeping component never breaches.
+    A loading copy looks the same as an idle one, so the window is longer than the longest wake."""
     aas, cloudwatch = aws.get("application-autoscaling"), aws.get("cloudwatch")
     target = {"ServiceNamespace": "sagemaker", "ResourceId": settings.scalable_resource(),
               "ScalableDimension": settings.SCALING_DIMENSION}
@@ -258,10 +337,11 @@ def idle_net(aws: Aws) -> None:
 
 
 def status(aws: Aws) -> dict[str, Any]:
+    """What is there now; a missing endpoint or component reads null."""
     sm = aws.get("sagemaker")
-    endpoint = sm.describe_endpoint(EndpointName=settings.ENDPOINT)
+    endpoint = _found(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT)) or {}
     variants = endpoint.get("ProductionVariants") or [{}]
-    component = sm.describe_inference_component(InferenceComponentName=settings.COMPONENT)
+    component = _found(_describe_component(sm)) or {}
     runtime = component.get("RuntimeConfig", {})
     alarms = aws.get("cloudwatch").describe_alarms(AlarmNames=[settings.IDLE_ALARM]).get("MetricAlarms") or [{}]
     return {"endpoint": endpoint.get("EndpointStatus"), "instances": variants[0].get("CurrentInstanceCount"),
@@ -291,7 +371,8 @@ def main(argv: list[str] | None = None, *, aws: Aws | None = None) -> int:
     adapter = steps.add_parser("upload-adapter")
     adapter.add_argument("--folder", type=Path, required=True)
     adapter.add_argument("--name", required=True)
-    steps.add_parser("stop")
+    steps.add_parser("stop").add_argument("--delete-endpoint", action="store_true",
+                                          help="delete the component, endpoint and config: no instance at all")
     steps.add_parser("status")
     args = parser.parse_args(argv)
     aws = aws or Aws()
@@ -304,7 +385,10 @@ def main(argv: list[str] | None = None, *, aws: Aws | None = None) -> int:
         if args.step == "status":
             done: Mapping[str, Any] = status(aws)
         elif args.step == "stop":
-            SageMakerServing(bucket=None, control=aws.get("sagemaker")).sleep_now()
+            if args.delete_endpoint:
+                teardown(aws)
+            elif _exists(_describe_component(aws.get("sagemaker"))):
+                SageMakerServing(bucket=None, control=aws.get("sagemaker")).sleep_now()
             done = status(aws)
         elif args.step == "upload-adapter":
             SageMakerServing(bucket=_bucket(os.environ), s3=aws.get("s3")).upload_adapter(args.folder, args.name)
@@ -313,8 +397,9 @@ def main(argv: list[str] | None = None, *, aws: Aws | None = None) -> int:
             done = stage_weights(aws, serve, _bucket(os.environ), args.scratch)
         else:
             done = up(aws, serve, _bucket(os.environ), args.image_uri, args.account_id)
-    except (DeployError, ValueError) as error:
-        raise SystemExit(str(error)) from None
+    except (DeployError, ValueError, BotoCoreError, ClientError) as error:  # AWS's own words, the account id masked
+        said = " ".join([str(error), *getattr(error, "__notes__", ())])  # with a failed cleanup's note
+        raise SystemExit(_ACCOUNT_ID.sub("<account>", said)) from None
     print(json.dumps(done, sort_keys=True))
     return 0
 

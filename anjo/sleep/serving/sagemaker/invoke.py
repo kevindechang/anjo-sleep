@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import Any
+from contextlib import closing
+from typing import Any, Final
 
 import boto3  # type: ignore[import-untyped]
 from botocore.config import Config  # type: ignore[import-untyped]
@@ -24,6 +25,8 @@ CONNECT_TIMEOUT_S = 10.0
 CONTROL_READ_TIMEOUT_S = 60.0
 CONTROL_ATTEMPTS = 3  # describe and set the copy count: a throttle is worth a retry
 REFUSED = frozenset({401, 403})  # the role can't make this call: an error, never "not ready yet"
+CHAT_PATH: Final = "/v1/chat/completions"
+NO_CAPACITY: Final = "NoCapacity"
 
 
 class InvokeError(Exception):
@@ -48,9 +51,12 @@ def envelope(path: str, body: Mapping[str, Any], *, stream: bool) -> bytes:
 
 
 def invoke_error(error: ClientError) -> InvokeError:
-    """What a refused call maps to: a ModelError carries the container's own status."""
+    """What a refused call maps to: a ModelError carries the container's own status, and a
+    component with no copy up (asleep, or still waking) is a 503, worth a later try, not a 400."""
     details: Mapping[str, Any] = error.response.get("Error", {})
     code = str(details.get("Code", ""))
+    if code == "ValidationError" and "capacity" in str(details.get("Message", "")).lower():
+        return InvokeError(503, NO_CAPACITY)
     status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     original = details.get("OriginalStatusCode")
     if code == "ModelError" and original is not None:
@@ -68,7 +74,7 @@ class Invoker:
         return {"EndpointName": self._endpoint, "InferenceComponentName": self._component}
 
     def call(self, path: str, body: Mapping[str, Any]) -> bytes:
-        """One reply, read whole."""
+        """One reply, read whole, within InvokeEndpoint's 60 s: only the ping, a model list."""
         try:
             reply = self._client.invoke_endpoint(**self._target(), Body=envelope(path, body, stream=False),
                                                  ContentType="application/json", Accept="application/json")
@@ -116,19 +122,50 @@ class Stream:
 
 
 class SageMakerPoster:
-    """``client.Poster`` through the endpoint, for the night's ``VllmClient``."""
+    """``client.Poster`` through the endpoint, for the night's ``VllmClient``. Every call goes
+    through the stream API: InvokeEndpoint gives up after 60 s, which a long reply outlasts, while
+    a stream is bounded only by the runtime client's read timeout. A chat streams from vLLM and is
+    put back together here as one chat completion; any other reply is JSON, read to its end."""
 
     def __init__(self, invoker: Invoker) -> None:
         self._invoker = invoker
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        chat = path == CHAT_PATH
+        sent = {**body, "stream": True, "stream_options": {"include_usage": True}} if chat else body
         try:
-            raw = self._invoker.call(path, body)
+            with closing(self._invoker.stream(path, sent)) as reply:
+                raw = b"".join(reply)
         except InvokeError as error:
             if error.status is None:
                 raise ServingError(f"{path} failed in transport") from None
             raise ServingError(f"{path} returned HTTP {error.status}") from None
-        return json_object(path, raw)
+        return chat_completion(path, raw) if chat else json_object(path, raw)
 
     def close(self) -> None:
         self._invoker.close()
+
+
+def chat_completion(path: str, raw: bytes) -> dict[str, Any]:
+    """vLLM's streamed chat (server-sent events, usage last) as the one chat completion it adds
+    up to. An error event, or a reply that isn't events, is a ``ServingError`` naming neither."""
+    text: list[str] = []
+    reply: dict[str, Any] = {"choices": [{"index": 0, "message": {"role": "assistant"}, "finish_reason": None}]}
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith("data:") or line[5:].strip() == "[DONE]":
+            continue
+        try:
+            event = json.loads(line[5:])
+        except ValueError:
+            raise ServingError(f"{path} sent a malformed event") from None
+        if not isinstance(event, dict) or "error" in event or event.get("object") == "error":
+            raise ServingError(f"{path} reported an error mid-stream") from None
+        reply["model"] = event.get("model", reply.get("model"))
+        if event.get("usage") is not None:
+            reply["usage"] = event["usage"]
+        for choice in event.get("choices") or ():
+            if isinstance(choice, dict) and choice.get("index", 0) == 0:
+                text.append(str((choice.get("delta") or {}).get("content") or ""))
+                reply["choices"][0]["finish_reason"] = choice.get("finish_reason") or reply["choices"][0]["finish_reason"]
+    reply["choices"][0]["message"]["content"] = "".join(text)
+    return reply

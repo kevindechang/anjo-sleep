@@ -42,7 +42,9 @@ Every arm serves at the same precision: the base and the adapters run on the sam
 - **The container** (`serving/sagemaker/Dockerfile`, `shim.py`): vLLM on loopback behind a small
   shim on port 8080. `GET /ping` answers 200 only once vLLM's `/health` does. `POST /invocations`
   takes the envelope `{"path", "body", "stream"}` and forwards it to vLLM, for the four paths the
-  dev host uses, streaming the reply back. The weights come from the bucket (SageMaker copies
+  dev host uses, streaming the reply back (chunked whenever the envelope asks for a stream). The
+  output limit is held to 4,096 under either name, `max_tokens` or `max_completion_tokens`. The
+  weights come from the bucket (SageMaker copies
   `weights/<model>/<revision>/` into `/opt/ml/model`), never from Hugging Face. The shim logs
   request lines, never a body.
 - **Adapters.** On the first request that names `p-<hash>-n<night>`, the shim fetches exactly
@@ -51,9 +53,12 @@ Every arm serves at the same precision: the base and the adapters run on the sam
   nothing else in the folder), and loads them through vLLM's runtime `/v1/load_lora_adapter`, once
   per name. A refused adapter gets a 422 and is never loaded.
 - **The dev host's calls** are SigV4-signed boto3 calls with the `anjo-sleep-devhost` role:
-  `invoke_endpoint_with_response_stream` for turns (read timeout 20 s, one attempt),
-  `invoke_endpoint` for the night's client (300 s, one attempt) and the wake poll (10 s), and the
-  component's copy count to wake and sleep. No bearer token exists on this backend.
+  `invoke_endpoint_with_response_stream` for turns (read timeout 20 s, one attempt) and for every
+  call of the night's client (300 s, one attempt: `invoke_endpoint` gives up after 60 s, which a
+  long reply outlasts; a chat streams and is put back together as one completion),
+  `invoke_endpoint` only for the wake poll (10 s), and the component's copy count to wake and
+  sleep. A component with no copy up refuses with "no capacity": the dev host reads that as a 503,
+  transient, so the frontier talker answers the turn. No bearer token exists on this backend.
 - **Uploads** (`backend.from_env().upload_adapter`, which the night's trainer uses): checked first,
   refused if `adapters/<name>/` holds anything, then written with `IfNoneMatch="*"`, the weights
   first and the config last, so a night's adapter is never overwritten, even by two uploads racing.
@@ -72,10 +77,13 @@ Every arm serves at the same precision: the base and the adapters run on the sam
 - **A turn never wakes SageMaker.** While the copy count is 0 the endpoint refuses at once, and the
   frontier talker answers. Days, nights, mornings and demos wake it first.
 - **The idle net** (AWS side, made by `deploy up`): the alarm `anjo-sleep-idle` reads 1 for each
-  minute in which a copy is up (its memory metric exists) and nobody invoked it, and after 15 such
+  minute in which a copy is up (its memory metric exists) and nobody invoked it, and after 30 such
   minutes in a row its step policy `anjo-sleep-idle-to-zero` sets the copy count to exactly 0. A
-  sleeping component never breaches it, so it doesn't undo a wake. It covers a process that died,
-  a sleep call that failed, and a night's Colab training (nothing pings during training).
+  sleeping component never breaches it. A copy still loading looks the same as an idle one (no
+  metric tells them apart), so the window is the longest wake (1,200 s) plus ten minutes: the net
+  never takes down a copy a wake is still waiting for. A missed sleep costs at most 30 minutes of
+  the instance, about $1.30. It covers a process that died, a sleep call that failed, and a night's
+  Colab training (nothing pings during training).
 
 ### 1.3 Stand-up, in order (Kevin runs every paid step)
 
@@ -102,9 +110,12 @@ python -m anjo.sleep.serving.sagemaker.deploy status
 ```
 
 `stop` sets the copy count to 0 at once; `upload-adapter --folder <dir> --name p-<hash>-n<night>`
-uploads by hand. If `up` fails after the endpoint exists and before the component does, run
-`status`: an instance with no component is billed until `aws sagemaker delete-endpoint
---endpoint-name anjo-sleep-glimmer` (then run `up` again).
+uploads by hand. **If `up` fails** at any step (or is interrupted), it cleans up before it exits:
+a component an earlier run made goes back to 0 copies; otherwise it deletes the component it made,
+the endpoint and its config (an endpoint with no component would bill an idle instance), and the
+model it made, then shows the error. Run `up` again after the fix. If the cleanup itself fails,
+the error says so; then run `stop --delete-endpoint`, which deletes the component (if any), the
+endpoint and its config, so no instance is left, and `status` (all null) to confirm.
 
 The account's AWS policies are AmazonSageMakerFullAccess, AmazonEC2ContainerRegistryFullAccess and
 billing read. The first `up` creates Application Auto Scaling's service-linked role for SageMaker;
@@ -208,7 +219,7 @@ its next start, and the L40S costs about $2 an hour while up.
    prints it), and its parts from the container log and `status`: instance provisioning, image
    pull, weights copy, vLLM load. Nothing of this is measured yet.
 7. **The idle net.** Wake, then leave it idle: `status` should show the alarm in ALARM and the copy
-   count at 0 within about 17 minutes, and a wake right after should not be undone. If the metric
+   count at 0 within about 32 minutes, and a wake right after should not be undone. If the metric
    math misbehaves, replace the alarm with a target-tracking policy on
    `SageMakerInferenceComponentConcurrentRequestsPerCopyHighResolution` and record it here.
 8. **No words in the logs.** The container's CloudWatch log holds request lines and vLLM's own
@@ -401,13 +412,13 @@ and puts it back to sleep when it ends:
 - **A simulated day** wakes before its first turn. If the wake fails the day does not start, and
   the night records a `glimmer_not_ready` failure at `simulate`: an error, not a short day.
 - **A night** wakes before its first serving step (practice) and again right before the gates,
-  since Colab training outlasts the idle window (Modal's 600 s, SageMaker's 15-minute idle net;
+  since Colab training outlasts the idle window (Modal's 600 s, SageMaker's 30-minute idle net;
   nothing pings during training: that would hold a $2.61/h GPU for hours). A wake that fails or raises fails that person with `glimmer_not_ready` at
   `practice` or `gates`. `summary.json` records `wake_seconds` and `gates_wake_seconds`. **A morning
   run** wakes before its first arm call and records `wake_seconds` in its score file.
 - **Demos:** run `python -m anjo.sleep.serving.wake --wake` a few minutes before, and it prints how
   many seconds the wake took. It leaves Glimmer up for the demo (unless the wake failed); on
-  SageMaker the idle net takes it down 15 minutes after the last call, or run
+  SageMaker the idle net takes it down 30 minutes after the last call, or run
   `python -m anjo.sleep.serving.sagemaker.deploy stop` (operator) right after.
 
 **Keep-warm windows** are for live demos and judging, where a cold start in front of people is not
@@ -419,7 +430,7 @@ python -m anjo.sleep.serving.wake --keep-warm-minutes 90   # wakes, then pings e
 
 It uses the backend `ANJO_SLEEP_BACKEND` names and never prints a credential. A window is capped at
 180 minutes, and on SageMaker it ends by setting the copy count to 0, after an error or Ctrl-C too.
-If the process dies, the pings stop and the idle net (SageMaker, 15 minutes) or Modal's own window
+If the process dies, the pings stop and the idle net (SageMaker, 30 minutes) or Modal's own window
 (600 s) takes Glimmer down, so nothing stays up unbounded. The L40S costs about **$2.61 an hour on
 SageMaker** (about $2 on Modal) while it is up, so **each window needs Kevin's OK**.
 

@@ -3,8 +3,9 @@
 The runtime builds the chat body as for any host and names the vLLM path in a ``sagemaker://`` URL;
 this transport sends them as the shim's envelope through ``invoke_endpoint_with_response_stream``,
 signed by the dev host's role, and reads the reply back as server-sent events, exactly as
-``HttpTransport`` does. A refusal before the stream (no capacity while Glimmer sleeps, a container
-error) raises ``TransportError`` with its status; a stream that drops raises it with none. So both
+``HttpTransport`` does. A refusal before the stream (no capacity while Glimmer sleeps, read as a
+503; a container error) raises ``TransportError`` with its status; a stream that drops raises it
+with none. So both
 end the turn the way a Modal failure does, and the frontier talker answers (RF3).
 
 The boto3 client is made once per process, with the reply deadline as its read timeout and one

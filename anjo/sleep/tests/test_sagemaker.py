@@ -21,7 +21,7 @@ from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.serving.config import ServeConfigError
 from anjo.sleep.serving.sagemaker import settings
 from anjo.sleep.serving.sagemaker.serving import SageMakerServing
-from anjo.sleep.tests.aws_fakes import Body, FakeAws, client_error
+from anjo.sleep.tests.aws_fakes import Body, EventBody, FakeAws, client_error
 
 SLEEP_ROOT = Path(anjo.sleep.__file__).resolve().parent
 AWS_DOCS = SLEEP_ROOT / "deploy" / "aws"
@@ -457,24 +457,75 @@ def test_invoke_calls_have_timeouts() -> None:
     assert made["runtime"].meta.config.retries["total_max_attempts"] == 1  # a retry would double the wait
     assert made["ping"].meta.config.read_timeout == client.WAKE_POLL_TIMEOUT_S
 
-    # The night's client speaks the same vLLM API through the endpoint's envelope.
+    # The night's client speaks the same vLLM API through the endpoint's envelope, on the stream API.
     calls: list[dict[str, Any]] = []
 
     def invoke(**params: Any) -> dict[str, Any]:
         calls.append(json.loads(params["Body"]))
-        return {"Body": Body(json.dumps({"tokens": [1, 2]}).encode()), "ContentType": "application/json"}
+        return {"Body": EventBody([b'{"tokens": [1,', b' 2]}']), "ContentType": "application/json"}
 
-    night = SageMakerServing(bucket=BUCKET, runtime=FakeAws("sagemaker-runtime", invoke_endpoint=invoke)).client()
+    night = SageMakerServing(bucket=BUCKET, runtime=FakeAws(
+        "sagemaker-runtime", invoke_endpoint_with_response_stream=invoke)).client()
     assert night._tokens({"model": config.MODEL, "prompt": "x"}) == [1, 2]
-    assert calls == [{"path": "/tokenize", "body": {"model": config.MODEL, "prompt": "x"}, "stream": False}]
+    assert calls == [{"path": "/tokenize", "body": {"model": config.MODEL, "prompt": "x"}, "stream": True}]
 
     def refused(**params: Any) -> dict[str, Any]:
-        raise client_error("ModelError", 424, OriginalStatusCode=503)
+        raise client_error("ModelError", 424, "InvokeEndpointWithResponseStream", OriginalStatusCode=503)
 
-    broken = SageMakerServing(bucket=BUCKET, runtime=FakeAws("sagemaker-runtime", invoke_endpoint=refused)).client()
+    broken = SageMakerServing(bucket=BUCKET, runtime=FakeAws(
+        "sagemaker-runtime", invoke_endpoint_with_response_stream=refused)).client()
     with pytest.raises(client.ServingError, match="HTTP 503") as raised:
         broken.complete(None, [{"role": "user", "content": "private words"}], temperature=1.0)
     assert "private" not in str(raised.value)
+
+
+def _sse(*events: dict[str, Any] | str) -> bytes:
+    return b"".join(b"data: " + (e if isinstance(e, str) else json.dumps(e)).encode() + b"\n\n" for e in events)
+
+
+def test_long_generation_uses_the_stream_api() -> None:
+    # InvokeEndpoint gives up after 60 s; a night's long reply streams, so only the read timeout
+    # bounds it. The deltas come back as one chat completion, cut anywhere on the way.
+    calls: list[dict[str, Any]] = []
+    sent = _sse(
+        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]},
+        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "Good "}}]},
+        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "night \u2014 sleep"},
+                                             "finish_reason": "stop"}]},
+        {"model": config.MODEL, "choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 4}},
+        "[DONE]")
+    bodies: list[EventBody] = []
+
+    def stream(**params: Any) -> dict[str, Any]:
+        calls.append(json.loads(params["Body"]))
+        bodies.append(EventBody(sent[i:i + 7] for i in range(0, len(sent), 7)))  # splits lines and a UTF-8 char
+        return {"Body": bodies[-1], "ContentType": "text/event-stream"}
+
+    only_streams = FakeAws("sagemaker-runtime", invoke_endpoint_with_response_stream=stream)
+    night = SageMakerServing(bucket=BUCKET, runtime=only_streams).client()
+    result = night.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+    assert (result.text, result.finish_reason, result.model) == ("Good night \u2014 sleep", "stop", config.MODEL)
+    assert (result.input_tokens, result.output_tokens) == (12, 4)
+    (call,) = calls
+    assert call["path"] == "/v1/chat/completions" and call["stream"] is True
+    assert call["body"]["stream"] is True and call["body"]["stream_options"] == {"include_usage": True}
+    assert bodies[-1].closed
+
+    # An error event, a stream that ends early or drops, all fail the call, never a word of it.
+    for broken in (_sse({"error": {"message": "private words", "code": 500}}),
+                   _sse({"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "private"}}]})):
+        sent = broken
+        with pytest.raises(client.ServingError) as raised:
+            night.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+        assert "private" not in str(raised.value)
+
+    def dropped(**params: Any) -> dict[str, Any]:
+        return {"Body": EventBody([b"data: {"], end=client_error("ModelStreamError", 400)), "ContentType": "x"}
+
+    cut = SageMakerServing(bucket=BUCKET, runtime=FakeAws(
+        "sagemaker-runtime", invoke_endpoint_with_response_stream=dropped)).client()
+    with pytest.raises(client.ServingError, match="failed in transport"):
+        cut.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
 
 
 # ── No keys, least privilege ─────────────────────────────────────────────────

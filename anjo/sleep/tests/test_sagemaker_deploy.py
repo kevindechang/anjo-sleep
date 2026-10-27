@@ -28,15 +28,16 @@ IMAGE = f"{ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/{settings.REPOSITORY}:vllm0.
 class Plane:
     """SageMaker's control plane for our names: what exists, and every call in order."""
 
-    def __init__(self) -> None:
-        self.exists: set[str] = set()
+    def __init__(self, *exists: str) -> None:
+        self.exists: set[str] = set(exists)
+        self.status: dict[str, str] = {}  # a name's status, InService unless set
         self.copies = 0
         self.order: list[str] = []
 
     def _describe(self, kind: str, name: str, status_key: str) -> dict[str, Any]:
         if name not in self.exists:
             raise client_error("ValidationException", 400, f"Describe{kind}")
-        return {status_key: "InService"}
+        return {status_key: self.status.get(name, "InService")}
 
     def handlers(self) -> dict[str, Any]:
         def made(kind: str, key: str) -> Any:
@@ -57,7 +58,18 @@ class Plane:
             self.copies = params["DesiredRuntimeConfig"]["CopyCount"]
             return {}
 
+        def gone(kind: str, key: str) -> Any:
+            def delete(**params: Any) -> dict[str, Any]:
+                self.order.append(f"delete_{kind}")
+                self.exists.discard(params[key])
+                return {}
+            return delete
+
         return {
+            "delete_model": gone("model", "ModelName"),
+            "delete_endpoint_config": gone("endpoint_config", "EndpointConfigName"),
+            "delete_endpoint": gone("endpoint", "EndpointName"),
+            "delete_inference_component": gone("inference_component", "InferenceComponentName"),
             "describe_model": lambda **p: self._describe("Model", p["ModelName"], "ModelName"),
             "describe_endpoint_config": lambda **p: self._describe("EndpointConfig", p["EndpointConfigName"], "x"),
             "describe_endpoint": lambda **p: self._describe("Endpoint", p["EndpointName"], "EndpointStatus"),
@@ -77,7 +89,8 @@ def _aws(plane: Plane) -> tuple[deploy.Aws, dict[str, FakeAws]]:
         "application-autoscaling": FakeAws(
             "application-autoscaling", register_scalable_target=lambda **p: {},
             put_scaling_policy=lambda **p: {"PolicyARN": "policy-arn"}),
-        "cloudwatch": FakeAws("cloudwatch", put_metric_alarm=lambda **p: {}),
+        "cloudwatch": FakeAws("cloudwatch", put_metric_alarm=lambda **p: {},
+                              describe_alarms=lambda **p: {"MetricAlarms": [{"StateValue": "OK"}]}),
     }
     return deploy.Aws(made=dict(fakes)), fakes
 
@@ -131,19 +144,104 @@ def test_up_builds_everything_once_under_our_names_and_ends_asleep() -> None:
     assert plane.order == ["create_model", "update_component", "copies:0"]
 
 
-def test_up_puts_glimmer_to_sleep_even_when_the_copy_fails() -> None:
+class Boom(RuntimeError):
+    pass
+
+
+def _up(aws: deploy.Aws, image: str = IMAGE) -> None:
+    deploy.up(aws, _serve(), BUCKET, image, clock=lambda: 0.0, sleep=lambda s: None)
+
+
+def test_up_failure_after_endpoint_cleans_up() -> None:
+    # The copy came up, then the idle net failed: everything this run made goes, the component first.
     plane = Plane()
     aws, fakes = _aws(plane)
-    handlers = plane.handlers()
 
-    def failing(**params: Any) -> dict[str, Any]:
-        found = handlers["describe_inference_component"](**params)
-        return {**found, "InferenceComponentStatus": "Failed"}
+    def refused(**params: Any) -> dict[str, Any]:
+        raise Boom("put_metric_alarm refused")
 
-    fakes["sagemaker"]._handlers["describe_inference_component"] = failing
+    fakes["cloudwatch"]._handlers["put_metric_alarm"] = refused
+    with pytest.raises(Boom):
+        _up(aws)
+    assert plane.order[-4:] == ["delete_inference_component", "delete_endpoint", "delete_endpoint_config",
+                                "delete_model"]
+    assert plane.exists == set()  # no endpoint left billing, with or without a component
+
+    # The endpoint never came up: it goes, with its config and the model; no component was made.
+    plane = Plane()
+    aws, fakes = _aws(plane)
+    plane.status[settings.ENDPOINT] = "Failed"
     with pytest.raises(deploy.DeployError, match="Failed"):
-        deploy.up(aws, _serve(), BUCKET, IMAGE, clock=lambda: 0.0, sleep=lambda s: None)
-    assert plane.order[-1] == "copies:0"
+        _up(aws)
+    assert "create_inference_component" not in plane.order and plane.exists == set()
+
+    # The copy failed: the component this run made goes, then the endpoint it would have left empty.
+    plane = Plane()
+    aws, fakes = _aws(plane)
+    plane.status[settings.COMPONENT] = "Failed"
+    with pytest.raises(deploy.DeployError, match="Failed"):
+        _up(aws)
+    assert plane.exists == set()
+
+    # A component from an earlier run stays, at 0 copies; nothing of the earlier run is deleted.
+    plane = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT, settings.COMPONENT)
+    plane.copies = 1
+    aws, fakes = _aws(plane)
+    fakes["sagemaker"]._handlers["update_inference_component"] = refused
+    with pytest.raises(Boom):
+        _up(aws)
+    assert plane.order[-1] == "copies:0" and plane.copies == 0
+    assert {settings.ENDPOINT_CONFIG, settings.ENDPOINT, settings.COMPONENT} <= plane.exists
+    assert not any(step.startswith("delete_") and step != "delete_model" for step in plane.order)
+
+
+def test_stop_delete_endpoint_without_component(capsys: pytest.CaptureFixture[str]) -> None:
+    # What a failed run of the old deploy could leave: an endpoint and its config, no component.
+    plane = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT)
+    aws, _ = _aws(plane)
+    assert deploy.main(["stop"], aws=aws) == 0  # nothing to set: no crash on a missing component
+    assert '"component": null' in capsys.readouterr().out
+    assert deploy.main(["stop", "--delete-endpoint"], aws=aws) == 0
+    assert plane.order == ["delete_endpoint", "delete_endpoint_config"] and plane.exists == set()
+
+    with_component = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT, settings.COMPONENT)
+    aws, _ = _aws(with_component)
+    assert deploy.main(["stop", "--delete-endpoint"], aws=aws) == 0
+    assert with_component.order == ["delete_inference_component", "delete_endpoint", "delete_endpoint_config"]
+
+    # Any refusal from AWS ends the command with a message, never a traceback.
+    denied = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT)
+    aws, fakes = _aws(denied)
+    fakes["sagemaker"]._handlers["delete_endpoint"] = lambda **p: (_ for _ in ()).throw(
+        client_error("AccessDeniedException", 403, "DeleteEndpoint"))
+    with pytest.raises(SystemExit, match="AccessDenied"):
+        deploy.main(["stop", "--delete-endpoint"], aws=aws)
+
+    # A failed `up` whose cleanup is refused too says both, and what to run next.
+    refused_twice = Plane()
+    aws, fakes = _aws(refused_twice)
+    refused_twice.status[settings.ENDPOINT] = "Failed"
+    fakes["sagemaker"]._handlers["delete_endpoint"] = lambda **p: (_ for _ in ()).throw(
+        client_error("AccessDeniedException", 403, "DeleteEndpoint"))
+    env = {config.REVISION_ENV: REVISION, settings.BUCKET_ENV: BUCKET}
+    with pytest.MonkeyPatch.context() as patch:
+        for name, value in env.items():
+            patch.setenv(name, value)
+        with pytest.raises(SystemExit, match=r"Failed.*cleanup failed too.*AccessDenied.*stop --delete-endpoint"):
+            deploy.main(["up", "--image-uri", IMAGE], aws=aws)
+
+
+def test_the_idle_net_spares_a_loading_copy() -> None:
+    # Nothing tells the alarm a copy is still loading, so its window outlasts the longest wake: a
+    # copy can't be zeroed before the wake gives up (and the wake then sleeps it anyway).
+    aws, fakes = _aws(Plane())
+    deploy.idle_net(aws)
+    (alarm,) = fakes["cloudwatch"].named("put_metric_alarm")
+    period = alarm["Metrics"][0]["MetricStat"]["Period"]
+    window_s = alarm["DatapointsToAlarm"] * period
+    assert alarm["DatapointsToAlarm"] == alarm["EvaluationPeriods"]  # every minute in the window idle
+    assert window_s >= settings.WAKE_TOTAL_TIMEOUT_S + 600 and settings.IDLE_MINUTES == 30
+    assert settings.IDLE_MINUTES / 60 * settings.USD_PER_HOUR <= 1.31  # the worst idle cost per miss
 
 
 def test_up_refuses_an_image_outside_our_repository() -> None:

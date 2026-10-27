@@ -45,9 +45,12 @@ MIN_MEMORY_MB: Final = 16384
 
 # The idle net: an alarm that sets the copy count to 0 once a copy has been up for
 # IDLE_MINUTES straight with no invocation. The keep-warm ping (every 240 s) holds it off.
+# Nothing in CloudWatch tells a loading copy from a serving one, so the window outlasts the longest
+# wake (WAKE_TOTAL_TIMEOUT_S) with ten minutes to spare: the net never zeroes a copy still loading.
+# A missed sleep costs at most IDLE_MINUTES of the instance (about $1.30).
 IDLE_ALARM: Final = "anjo-sleep-idle"
 IDLE_POLICY: Final = "anjo-sleep-idle-to-zero"
-IDLE_MINUTES: Final = 15
+IDLE_MINUTES: Final = 30
 SCALING_DIMENSION: Final = "sagemaker:inference-component:DesiredCopyCount"
 
 

@@ -100,7 +100,7 @@ class SageMakerServing:
 
     def ping(self) -> bool:
         """One ``GET /v1/models`` through the endpoint: True only when vLLM answers. No capacity yet
-        (SageMaker's 400) or a container still loading is False; a call the role may not make raises."""
+        (SageMaker's 400, read as a 503) or a container still loading is False; a call the role may not make raises."""
         invoker = Invoker(self._ping_runtime(), self._endpoint, self._component)
         try:
             vllm_client.json_object("/v1/models", invoker.call("/v1/models", {}))

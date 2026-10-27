@@ -117,8 +117,15 @@ def test_a_turn_streams_through_the_envelope_under_the_reply_deadline(on_sagemak
     assert "Authorization" not in json.dumps({k: v for k, v in params.items() if k != "Body"}) + params["Body"].decode()
     # (SigV4 signs the call; no bearer token travels)
 
-    # No capacity (asleep) refuses at once, before any word: the fallback answers, as for a cold Modal.
+    # Any other refusal is the request's fault: rejected, before any word.
     assert _stream(runtime.SleepRuntime(pin, transport=endpoint.transport())) == [Finish("error", "rejected")]
+
+    # No capacity (asleep) refuses at once, before any word: transient, as for a cold Modal, and the
+    # fallback answers.
+    cold = Endpoint(client_error("ValidationError", 400, "InvokeEndpointWithResponseStream",
+                                 Message="Inference Component has no capacity to process this request. "
+                                         "ApplicationAutoScaling may be in-progress (if configured)."))
+    assert _stream(runtime.SleepRuntime(pin, transport=cold.transport())) == [Finish("error", "transient")]
 
     default = runtime.SleepRuntime(pin)
     made: Any = default._transport

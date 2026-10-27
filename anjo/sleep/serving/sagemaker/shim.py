@@ -5,8 +5,10 @@
 - ``GET /ping`` answers 200 only once vLLM's own ``/health`` does, so SageMaker routes nothing to a
   copy still loading Glimmer.
 - ``POST /invocations`` takes the envelope ``{"path", "body", "stream"}`` and forwards it to vLLM:
-  only the paths the dev host uses (``ROUTES``), streamed back as vLLM streams it. A chat or a
-  completion gets the server's output limit when it names none, and is refused above it.
+  only the paths the dev host uses (``ROUTES``), streamed back as vLLM streams it, and chunked
+  whenever the envelope asks for a stream. A chat or a completion gets the server's output limit
+  when it names none, and is refused above it, under either name (``max_tokens``,
+  ``max_completion_tokens``); vLLM gets the smaller as ``max_tokens``.
 - A request naming a personal adapter ``p-<hash>-n<night>`` loads it first, once: exactly
   ``adapter_config.json`` and ``adapter_model.safetensors`` from ``s3://<bucket>/adapters/<name>/``,
   held to the same checks as Modal's upload (``config.check_adapter``), then vLLM's runtime
@@ -27,7 +29,7 @@ import signal
 import subprocess
 import threading
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NoReturn, Protocol
@@ -48,6 +50,7 @@ ROUTES: Final[Mapping[str, str]] = {
     "/v1/chat/completions": "POST", "/v1/completions": "POST", "/tokenize": "POST", "/v1/models": "GET",
 }
 GENERATES: Final = frozenset({"/v1/chat/completions", "/v1/completions"})
+_LIMITS: Final = ("max_tokens", "max_completion_tokens")
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,7 @@ class Reply:
     status: int
     content_type: str
     chunks: Iterable[bytes]
+    chunked: bool = False  # sent chunked even if not events: the caller is on the stream API
 
 
 def _error(status: int, message: str) -> Reply:
@@ -166,6 +170,10 @@ class Shim:
         path, body, stream = request.get("path"), request.get("body"), request.get("stream")
         if not isinstance(path, str) or path not in ROUTES or not isinstance(body, dict) or not isinstance(stream, bool):
             return _error(400, "the envelope is {path, body, stream}, for a path the dev host uses")
+        reply = self._route(path, body)
+        return replace(reply, chunked=True) if stream else reply
+
+    def _route(self, path: str, body: dict[str, Any]) -> Reply:
         if ROUTES[path] == "GET":
             return self._forward("GET", path, None)
         model = body.get("model")
@@ -175,11 +183,12 @@ class Shim:
             refusal = self._adapters.ensure(model)
             if refusal is not None:
                 return refusal
-        if path in GENERATES:
-            limit = body.get("max_tokens", config.MAX_OUTPUT_TOKENS)
-            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= config.MAX_OUTPUT_TOKENS:
-                return _error(400, f"max_tokens is 1 to {config.MAX_OUTPUT_TOKENS}")
-            body = {**body, "max_tokens": limit}
+        if path in GENERATES:  # either name for the output limit, held to the same range; the smaller wins
+            limits = [body.get(name, config.MAX_OUTPUT_TOKENS) for name in _LIMITS]
+            if any(isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= config.MAX_OUTPUT_TOKENS
+                   for n in limits):
+                return _error(400, f"max_tokens and max_completion_tokens are 1 to {config.MAX_OUTPUT_TOKENS}")
+            body = {**{k: v for k, v in body.items() if k not in _LIMITS}, "max_tokens": min(limits)}
         return self._forward("POST", path, json.dumps(body).encode())
 
     def _forward(self, method: str, path: str, body: bytes | None) -> Reply:
@@ -270,7 +279,7 @@ def http_server(shim: Shim, host: str, port: int) -> ThreadingHTTPServer:
             self.send_response(reply.status)
             self.send_header("Content-Type", reply.content_type)
             try:
-                if reply.content_type.startswith("text/event-stream"):
+                if reply.chunked or reply.content_type.startswith("text/event-stream"):
                     self.send_header("Transfer-Encoding", "chunked")
                     self.end_headers()
                     for chunk in reply.chunks:
