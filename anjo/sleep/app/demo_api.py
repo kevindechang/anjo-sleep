@@ -12,10 +12,17 @@ every route answers 404 unless ``ANJO_SLEEP_HOST=1``:
 - with that token in ``X-Demo-Visit``: ``POST /api/sleep/demo/starters/<scene>`` (a pre-generated
   pair), ``POST /api/sleep/demo/ask`` (her own question, live) and ``POST /api/sleep/demo/vote``.
 
-The page is public: there is no account, no cookie and no stored message. The app's rate-limit
-middleware covers ``/api/*`` per address too, but the demo's own limits are the ones that hold
-(``demo.limits``), counted on the real client address the way that middleware reads it: X-Real-IP
-from a trusted proxy only. A refusal's ``detail`` is the visitor's text from ``words.COPY``.
+The page is public: there is no account, no cookie and no stored message. ``PUBLIC_PREFIXES`` are
+the only paths ``register_sleep`` opens to anonymous visitors (the app's auth middleware reads them
+from ``app.state.public_prefixes``); every other Sleep route still needs a signed-in person.
+
+**The visitor's address.** The demo's own limits are the ones that hold (``demo.limits``; the app's
+rate-limit middleware covers ``/api/*`` too). They count ``request.client``, the address uvicorn's
+proxy headers take from the X-Forwarded-For that Caddy sets on the dev host (``anjo-dashboard``
+leaves them on, trusting loopback). Caddy sets no X-Real-IP, so the demo never reads one: a visitor
+can't name their own bucket. If the proxy headers were ever off, every visitor would arrive as
+Caddy's loopback address and share one bucket (``visits.client_key``), which fails closed. A
+refusal's ``detail`` is the visitor's text from ``words.COPY``.
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ from anjo.sleep.demo.visits import client_key
 from anjo.sleep.demo.words import COPY
 
 PREFIX: Final = "/sleep/demo"
+PUBLIC_PREFIXES: Final = (PREFIX, f"/api{PREFIX}")  # the page, then its API: nothing else is public
 NO_STORE: Final = {"Cache-Control": "no-store"}
 
 router = APIRouter(prefix=PREFIX)
@@ -69,9 +77,8 @@ def _now() -> datetime:
 
 
 def _client(request: Request, service: DemoService) -> str:
-    from anjo.dashboard.middleware.rate_limit import _get_client_ip
-
-    return client_key(_get_client_ip(request), service.config.secret)
+    """The visitor's bucket: the proxied client address (see the module's note), never a header."""
+    return client_key(request.client.host if request.client else "", service.config.secret)
 
 
 def _refusal(refused: Refused) -> HTTPException:

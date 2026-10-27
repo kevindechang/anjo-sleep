@@ -27,6 +27,7 @@ from anjo.core import erasure, open_model_turn, outreach, talker_choice
 from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
 from anjo.sleep.app.cleared_sessions import in_cleared_session
+from anjo.sleep.app.demo_api import PUBLIC_PREFIXES as DEMO_PUBLIC
 from anjo.sleep.app.demo_api import page_router as demo_page_router
 from anjo.sleep.app.demo_api import router as demo_router
 from anjo.sleep.app.delivery import held
@@ -83,8 +84,10 @@ def unregister_hooks() -> None:
 
 def register_sleep(app: Any) -> None:
     """The hooks, the dev API under ``/api``, and the live demo page (Task 13a): the page at
-    ``/sleep/demo`` and its routes under ``/api/sleep/demo``."""
+    ``/sleep/demo`` and its routes under ``/api/sleep/demo``, the only paths opened to anonymous
+    visitors (``app.state.public_prefixes``, read by the app's auth middleware)."""
     register_hooks()
     app.include_router(router, prefix="/api")
     app.include_router(demo_router, prefix="/api")
     app.include_router(demo_page_router)
+    app.state.public_prefixes = DEMO_PUBLIC
