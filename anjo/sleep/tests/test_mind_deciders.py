@@ -35,7 +35,10 @@ from anjo.sleep.night import run as night_run
 from anjo.sleep.night.deps import NightDeps
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import run_night_batch_with
-from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, own, step, thread, window
+from anjo.sleep.personas.model import load_person_file
+from anjo.sleep.sim.accelerated import PERSONAS, run_accelerated
+from anjo.sleep.tests.accelerated_rig import FakeAccelerated
+from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, own, step, summary, thread, window
 from anjo.sleep.types import (
     ChoiceContext,
     NightAllowance,
@@ -50,6 +53,7 @@ AS_OF = datetime(2026, 11, 4, tzinfo=timezone.utc)
 CTX = ChoiceContext(policy=PUBLIC_DEFAULT, allowance=NightAllowance(actions_left=2, calls_left=8, usd_left=3.0))
 NOTE_ONLY = replace(CTX, allowed_actions=frozenset({"hold_note"}))
 STUDIES = frozenset({"prepare_commitment", "revisit_thread"})
+FOUNDER = load_person_file(PERSONAS / "founder.json").visible
 
 
 def _thread(target_id: str, revision: int = 2, acted: int = 0, **changes: Any) -> Target:
@@ -322,3 +326,24 @@ def test_night_without_estimator_or_synthetic_person_records_less(tmp_path: Path
     real, real_homework = _world(tmp_path / "real")
     done = run_night_batch_with(real.deps(homework=real_homework, is_synthetic=lambda uid: False), {"p1": NIGHT})
     assert _points(done["p1"].log_path) == []  # only a synthetic life's nights are recorded
+
+
+# ── Review fixes: the night's clock ───────────────────────────────────────────
+
+
+def test_accelerated_night_decides_on_the_virtual_clock(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    virtual = date(2026, 11, 20)  # weeks after the wall clock the fake day is simulated on
+    fake.world.targets("u1").upsert(replace(thread("u1", "sorting black film"), last_mentioned=virtual))
+    homework = StudyingHomework(fake.world)
+    coefficients = expect.Coefficients(intercept=-0.5, understand=0.4, unacted=0.3, days=-0.05, base_rate=0.3, n=12)
+    rig = replace(fake.rig(), deps_for=lambda night: fake.world.deps(
+        extractor=lambda chat: fake, homework=homework, estimator=coefficients))
+    [result] = run_accelerated("u1", FOUNDER, 1, virtual, rig=rig)
+    end = night_run.day_window(virtual)[1]
+    assert datetime.fromisoformat(summary(result.log_path)["night_end"]) < end  # the window stays wall-clock
+    pre, post = _points(result.log_path)
+    assert pre.raw.as_of == end and post.raw.as_of == end
+    assert homework.studied == ["u1-t1"]  # the target first seen on the virtual date is open on it
+    [made] = fake.world.targets("u1").expectations()
+    assert (made.made_at, made.horizon) == (end, end + timedelta(days=7))

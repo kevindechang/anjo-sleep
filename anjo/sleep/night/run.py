@@ -28,7 +28,9 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
-the person's own night's, never the wall clock's.
+the person's own night's, never the wall clock's: her snapshot, its eligibility and her expectations
+read the night's clock (``as_of``, the virtual night end); the window's wall-clock end only stamps
+records and drives budgets and timeouts.
 """
 from __future__ import annotations
 
@@ -115,6 +117,7 @@ class _Night:
     actions_left: int
     store: EvidenceStore
     targets: TargetStore
+    as_of: datetime  # the night's clock: the virtual night end, which the window's end is in real time
     failed_at: str | None = None
     status: NightStatus | None = None
     due: bool = False
@@ -135,6 +138,7 @@ class _Night:
 
     @property
     def end(self) -> datetime:
+        """The window's wall-clock end: stamps, budget holds and timeouts read it, never a date."""
         return self.window[1]
 
 
@@ -157,18 +161,22 @@ class NightRunner:
     def run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None = None,
         days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
+        as_of: Mapping[str, datetime] | None = None,
     ) -> dict[str, NightResult]:
         """The batch as one phase: Glimmer goes back to sleep when it ends, however it ends."""
         with phase(self.deps.sleep):
-            return self._run_batch(nights, windows, days, sweep)
+            return self._run_batch(nights, windows, days, sweep, as_of or {})
 
     def _run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None,
-        days: Mapping[str, DayRun] | None, sweep: Sweep | None,
+        days: Mapping[str, DayRun] | None, sweep: Sweep | None, as_of: Mapping[str, datetime],
     ) -> dict[str, NightResult]:
         days = days or {}
         windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}
-        people = [self._start(uid, night, windows.get(uid) or day_window(night)) for uid, night in nights.items()]
+        people = []
+        for uid, night in nights.items():
+            window = windows.get(uid) or day_window(night)
+            people.append(self._start(uid, night, window, as_of.get(uid) or window[1]))
         for p in people:
             if sweep is not None:  # what the command's start swept for this batch, as counts
                 p.log.step("sweep", "ok", uses="new", system=None, holds_settled=sweep.holds_settled,
@@ -251,7 +259,7 @@ class NightRunner:
 
     # ── step plumbing ────────────────────────────────────────────────────────
 
-    def _start(self, uid: str, night: date, window: Window) -> _Night:
+    def _start(self, uid: str, night: date, window: Window, as_of: datetime) -> _Night:
         deps = self.deps
         log = NightLog(night_folder(deps.logs(uid), night))
         history = summaries(deps.logs(uid))
@@ -261,7 +269,7 @@ class NightRunner:
             uid=uid, night=night, window=window, log=log,
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),
             wonder=WonderMeter(deps.settings.homework_call_cap, max(0.0, deps.settings.wonder_usd_month - wonder_spent)),
-            actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid),
+            actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid), as_of=as_of,
             wonder_month_spent=wonder_spent,
         )
 
@@ -352,14 +360,14 @@ class NightRunner:
         any eligibility filter. Questions stay empty until Task 17; their close marks are applied all
         the same."""
         own = [item.created_at for item in p.store.stored(p.night) if item.kind in PERSON_KINDS]
-        targets = p.targets.open_targets(p.end)
+        targets = p.targets.open_targets(p.as_of)
         questions: tuple[points.QuestionState, ...] = ()
         for question in questions:
             for target_id, revision in snapshot.close_marks(question.view, targets):
                 p.targets.mark_acted(target_id, revision)
         return points.RawSnapshot(
-            tuple(targets), tuple(p.targets.results()), p.end, max(own) if own else None,
-            intentions=self.deps.intentions.intentions(p.uid, p.end), questions=questions,
+            tuple(targets), tuple(p.targets.results()), p.as_of, max(own) if own else None,
+            intentions=self.deps.intentions.intentions(p.uid, p.as_of), questions=questions,
         )
 
     def _point(self, p: _Night, phase: points.Phase, raw: points.RawSnapshot, ctx: ChoiceContext,
@@ -378,7 +386,7 @@ class NightRunner:
         target = next((t for t in raw.targets if t.id == target_id), None)
         if target is None:
             return None
-        made = expect.expectation(target, choice.want.kind, p.end, self.deps.estimator)
+        made = expect.expectation(target, choice.want.kind, p.as_of, self.deps.estimator)
         if all(kept.id != made.id for kept in p.targets.expectations()):  # a rerun of the night records it once
             p.targets.record_expectation(made)
         return made.id
@@ -639,7 +647,7 @@ class NightRunner:
                 "receipt": receipt.record(choice, outcome)}
 
     def _topic(self, p: _Night, target_id: str) -> str:
-        targets: Sequence[Target] = p.targets.open_targets(p.end)
+        targets: Sequence[Target] = p.targets.open_targets(p.as_of)
         return next((t.label for t in targets if t.id == target_id), "something you are working on")
 
     def _facts(self, p: _Night, target_id: str) -> list[Fact]:
@@ -695,14 +703,20 @@ def _inside(summary: Mapping[str, Any], end: datetime, span: timedelta) -> bool:
 def run_night_batch_with(
     deps: NightDeps, nights: Mapping[str, date], *, windows: Mapping[str, Window] | None = None,
     accelerated: bool = False, days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
+    as_of: Mapping[str, datetime] | None = None,
 ) -> dict[str, NightResult]:
     """``run_night_batch`` over the given ports. ``accelerated`` runs pass each simulated day's
     window; the steps are the same. ``days`` are simulated days run just before the night: each
     one's window is the night's, and its log starts with the day's counts. ``sweep`` is what the
-    night command's start swept (``sweep.py``), logged first."""
+    night command's start swept (``sweep.py``), logged first. ``as_of`` is each person's night
+    clock, the virtual night end that her snapshot, its dates and her expectations read; it is the
+    window's end in real time (the two clocks are equal) and, on an accelerated run, the end of
+    the virtual date."""
     if accelerated and not (windows or days):
         raise ValueError("an accelerated run passes each person's simulated window")
-    return NightRunner(deps).run_batch(nights, windows, days, sweep)
+    if accelerated:
+        as_of = {**{uid: day_window(night)[1] for uid, night in nights.items()}, **(as_of or {})}
+    return NightRunner(deps).run_batch(nights, windows, days, sweep, as_of)
 
 
 _DEFAULT: list[Callable[[], NightDeps]] = []

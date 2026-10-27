@@ -136,7 +136,8 @@ def run_night_phase(
     missed = missed_day(markers, persona, plan)
     with phase():  # one phase: Glimmer stays up from the night into the morning, then sleeps once
         result = nights(wiring=WIRING, night=plan.night, users=[user], personas={user: persona},
-                        windows={user: plan.window}, days={} if missed is None else {user: missed})[user]
+                        windows={user: plan.window}, days={} if missed is None else {user: missed},
+                        as_of={user: plan.window[1]})[user]  # real time: the night's clock is the wall's
         if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
             ports = (morning or _morning())(user, persona, plan.night)
             score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")

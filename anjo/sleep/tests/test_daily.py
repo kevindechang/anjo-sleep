@@ -44,6 +44,7 @@ def test_night_phase_uses_previous_day_window_and_virtual_date_equals_real_date(
         score=lambda *a, **kw: scored.append((a, kw)))
     assert result.status == "promoted"
     assert seen["night"] == plan.night and seen["windows"] == {"acct": plan.window}
+    assert seen["as_of"] == {"acct": plan.window[1]}  # real time: the night's clock is the window's end
     assert seen["users"] == ["acct"] and seen["personas"] == {"acct": "founder"}
     (args, kw), = scored  # the morning run follows the night, on the same date
     assert args == ("acct", plan.night, None) and kw["promoted"] is True

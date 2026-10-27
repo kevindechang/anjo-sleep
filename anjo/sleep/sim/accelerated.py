@@ -36,7 +36,7 @@ from typing import Any, Final, Literal, cast
 
 from anjo.sleep.night.deps import NightDeps, NightOptions
 from anjo.sleep.night.nightlog import SUMMARY
-from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.probes.morning import run_morning
@@ -141,7 +141,8 @@ def run_accelerated_batch(
                 rig.on_day(uid, (day.window[1] - day.window[0]).total_seconds())
             runs[uid] = day
         results = run_night_batch_with(rig.deps_for(night), {uid: night for uid in runs}, accelerated=True,
-                                       days=runs, sweep=sweep if i == 0 else None)
+                                       days=runs, sweep=sweep if i == 0 else None,
+                                       as_of={uid: day_window(night)[1] for uid in runs})
         for uid, result in results.items():
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
             _stamp(result, sha=sha, label=kind, day_index=i, vm=vm)
