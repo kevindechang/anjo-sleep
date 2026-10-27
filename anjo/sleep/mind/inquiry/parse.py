@@ -128,3 +128,14 @@ def parse_notices(text: str) -> tuple[NoticeOp, ...] | Rejected:
             return tuple(op for op in ops if isinstance(op, NoticeOp))
         return MALFORMED
     return MALFORMED
+
+
+def field_value(text: str, key: str) -> object | None:
+    """``key``'s value in the first JSON object in ``text`` that holds it, or ``None``: how the
+    resolver's verdict and the screen's answer are read."""
+    for value in _values(text):
+        for candidate in value if isinstance(value, list) else [value]:
+            if isinstance(candidate, Mapping) and key in candidate:
+                found: object = candidate[key]
+                return found
+    return None
