@@ -34,11 +34,10 @@ ServedBy = Literal["sleep_modal", "fallback"]
 
 @dataclass(frozen=True)
 class ContextPart:
-    """One part of a turn's context: where it came from, its words, and what they derive from
-    (empty for the person's own words, ``None`` when unknown)."""
+    """One part of a turn's context: where it came from, and what its words derive from (empty
+    for the person's own words, ``None`` when unknown)."""
 
     source: str
-    text: str
     ancestry: frozenset[str] | None
 
 

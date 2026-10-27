@@ -19,10 +19,12 @@ import pytest
 
 import tests.test_sol_chat_stream as _sol_chat
 from anjo.core.anjo_model.transport import TransportError
-from anjo.sleep.app import ancestry, runtime
+from anjo.sleep.app import ancestry, prompt, runtime
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving import config
+from anjo.sleep.tests.sleep_fakes import probe
 from tests.test_gemma_cloud_chat_stream import _last_reply, _post, _shown
 from tests.test_sol_chat_stream import _current_user_id, _mock_gemini_stream
 
@@ -103,6 +105,7 @@ def sleep_hooks(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
     unregister_hooks()
     runtime.set_adapter_source(None)
+    prompt.set_context_setup(None)
 
 
 @pytest.fixture
@@ -541,8 +544,8 @@ def test_a_cleared_turn_sees_only_the_cleared_context(auth_client: Any, flagged:
 
 def test_a_cleared_turns_ancestry_is_known_once_its_history_is() -> None:
     parts = [
-        ancestry.ContextPart("evidence:e1", "a lesson", frozenset()),
-        ancestry.ContextPart("cleared_history", "", frozenset({SPARK_OPEN})),
+        ancestry.ContextPart("evidence:e1", frozenset()),
+        ancestry.ContextPart("cleared_history", frozenset({SPARK_OPEN})),
     ]
     assert ancestry.union(part.ancestry for part in parts) == frozenset({SPARK_OPEN})
     assert ancestry.union([frozenset(), None]) is None
@@ -555,7 +558,7 @@ def test_the_reply_ancestry_is_exported_and_erased_with_the_account(auth_client:
 
     user_id = _current_user_id(auth_client)
     ancestry.record_context(user_id, "t1", "s-1", cleared=True, parts=[
-        ancestry.ContextPart("evidence:e1", "a lesson", frozenset({SPARK_OPEN})),
+        ancestry.ContextPart("evidence:e1", frozenset({SPARK_OPEN})),
     ])
     ancestry.record_served(user_id, "t1", model=config.MODEL)
     check_inventory(user_id)
@@ -622,27 +625,98 @@ def _evidence(user_id: str, ident: str, kind: Any, text: str, item_ancestry: fro
     )
 
 
-def test_recall_reaches_a_served_turn_and_cleared_recall_keeps_only_what_may_train(
-    auth_client: Any, flagged: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from anjo.sleep.app.prompt import context_parts
+ASKED = "what tea do I like"
+
+
+class _Briefs:
+    def __init__(self, text: str, made_from: frozenset[str] | None) -> None:
+        self.brief = StoredBrief(text, datetime.now(timezone.utc) - timedelta(days=1), made_from)
+
+    def served(self, user_id: str) -> StoredBrief | None:
+        return self.brief
+
+
+@pytest.fixture
+def sources(flagged: str, offline_embedder: None, monkeypatch: pytest.MonkeyPatch) -> prompt.ContextSetup:
+    """What C reads for the flagged person: two briefs, Anjo's memory, an explicit preference in
+    their words and one stored as a field and value, and evidence of each kind recall must sort."""
+    from anjo.core import personal_preferences
+    from anjo.memory import long_term
     from anjo.sleep.app.storage import evidence_store
 
+    setup = prompt.ContextSetup(
+        served_briefs=_Briefs("SERVED-BRIEF: she drinks oolong.", None),
+        training_briefs=_Briefs("TRAINING-BRIEF: she drinks oolong.", frozenset({SPARK_OPEN})),
+    )
+    prompt.set_context_setup(setup)
+    monkeypatch.setattr(long_term, "query_memories", lambda *_a, **_k: [(0.9, "MEMORY-LINE her kettle is named Fern")])
+    at = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(personal_preferences, "list_explicit_preferences", lambda *_a, **_k: [
+        {"preference_id": "p1", "field": "verbosity", "value": "short", "receipt": "keep it short", "created_at": at},
+        {"preference_id": "p2", "field": "tone", "value": "GATE-FIELD-VALUE", "receipt": "", "created_at": at},
+    ])
     evidence_store(flagged).add([
         _evidence(flagged, "e-lesson", "lesson", "She brews oolong tea before deep work.", frozenset()),
-        _evidence(flagged, "e-homework", "homework", "Oolong tea notes from homework.", frozenset()),
-        _evidence(flagged, "e-unknown", "lesson", "Tea, as Anjo's memory put it.", None),
+        _evidence(flagged, "e-homework", "homework", "HOMEWORK-LINE oolong tasting notes.", frozenset()),
+        _evidence(flagged, "e-unknown", "lesson", "UNKNOWN-LINE tea, as Anjo's memory put it.", None),
     ])
+    return setup
 
-    served = {part.source for part in context_parts(flagged, "what tea do I like", "s-1", cleared=False)}
-    cleared = {part.source for part in context_parts(flagged, "what tea do I like", "s-1", cleared=True)}
-    assert served == {"evidence:e-lesson", "evidence:e-homework", "evidence:e-unknown"}
-    assert cleared == {"evidence:e-lesson"}
+
+def _sent_text(modal: Modal) -> str:
+    """Every message's words, as the server got them (C opens the turn's own message)."""
+    return "\n".join(str(m["content"]) for m in modal.opened[0][2]["messages"])
+
+
+def test_a_served_turn_gets_the_same_context_c_as_the_arms(
+    auth_client: Any, flagged: str, sources: prompt.ContextSetup, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
 
     modal = Modal(_chunks("Oolong, before deep work."))
     _serve(monkeypatch, modal)
-    _post(auth_client, text="what tea do I like")
-    sent = json.dumps(modal.opened[0][2]["messages"])
-    assert "She brews oolong tea before deep work." in sent
+    _post(auth_client, text=ASKED)
+
+    today = datetime.now(timezone.utc).date()
+    arm = anjo_context_builder(sources.served_briefs, until=today, settings=RECALL)
+    context_c = arm.build(flagged, probe(prompt=ASKED, person=flagged))
+    assert context_c in _sent_text(modal)
+    for shown in ("MEMORY-LINE", "SERVED-BRIEF", "keep it short", "GATE-FIELD-VALUE", "[e-lesson]",
+                  "[e-homework]", "[e-unknown]"):
+        assert shown in context_c
     (context,) = [r for r in _records(flagged) if r["kind"] == "context"]
+    assert context["parts"][0] == {"source": "anjo_memory", "ancestry": None}
     assert {"source": "evidence:e-lesson", "ancestry": []} in context["parts"]
+
+
+def test_a_cleared_turns_context_has_no_memory_homework_or_notes(
+    auth_client: Any, flagged: str, sources: prompt.ContextSetup, dev_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.app.context_builder import RECALL, cleared_context_builder
+
+    now = datetime.now(timezone.utc)
+    register_synthetic(flagged, at=now)
+    # A note Anjo held overnight is delivered in an uncleared session, never a cleared one.
+    _message(flagged, "assistant", "NOTE-LINE I read up on oolong for you.", "s-open", now - timedelta(hours=1))
+    session_id = dev_api.post("/api/sleep/dev/sessions", json={"cleared": True}).json()["session_id"]
+    modal = Modal(_chunks("Oolong."))
+    _serve(monkeypatch, modal)
+    _post(auth_client, text=ASKED)
+
+    cleared = cleared_context_builder(sources.training_briefs, until=now.date(), settings=RECALL)
+    context_c = cleared.build(flagged, probe(prompt=ASKED, person=flagged))
+    assert context_c in _sent_text(modal)
+    assert "TRAINING-BRIEF" in context_c and "keep it short" in context_c and "[e-lesson]" in context_c
+    sent = _sent_text(modal)
+    for absent in ("MEMORY-LINE", "HOMEWORK-LINE", "NOTE-LINE", "SERVED-BRIEF", "GATE-FIELD-VALUE",
+                   "UNKNOWN-LINE"):
+        assert absent not in sent
+    (context,) = [r for r in _records(flagged) if r["kind"] == "context"]
+    assert context["session_id"] == session_id and context["cleared"] is True
+    assert context["parts"][:3] == [
+        {"source": "brief", "ancestry": [SPARK_OPEN]},
+        {"source": "preferences", "ancestry": [SPARK_OPEN]},  # a synthetic person's own words
+        {"source": "evidence:e-lesson", "ancestry": []},
+    ]

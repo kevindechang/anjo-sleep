@@ -11,26 +11,27 @@ turn with a crisis tier, a session in distress, or a person who is not flagged. 
 any model call, so the chat route's fallback answers with the frontier talker, and the floor's
 resource line follows that reply as on any turn.
 
-**Served turn (context C).** The prompt the route built, whose blocks carry Anjo's memory, plus,
-as fenced optional context: the training brief when a source gives one, recall from the person's
-evidence, and their explicit preferences and corrections. Its ancestry is unknown, because Anjo's
-memory has no recorded source.
+**Context C.** One ``ContextBuilder`` (``anjo.sleep.app.context_builder``) builds it, the one arms
+2C and 4 use, so a served reply and an arm's reply see the same C for the same message. It goes
+in as one fenced optional part.
+
+**Served turn.** The prompt the route built, whose blocks carry Anjo's memory, plus C from the
+served brief. Its ancestry is unknown, because Anjo's memory has no recorded source.
 
 **Cleared turn.** In a cleared session (Task 2) nothing of Anjo's memory, homework or notes reaches
-the model. The instructions are Anjo's fixed persona text and medical boundary; the context is
-the brief, cleared recall (items that may train, homework left out) and the person's own
-preferences and corrections; the history is the recent turns of their cleared sessions only.
-No exemplars, no voice plan and no tools.
+the model. The instructions are Anjo's fixed persona text and medical boundary; C is the cleared
+builder's (the training brief, cleared recall, and the person's own preferences and corrections);
+the history is the recent turns of their cleared sessions only. No exemplars, no voice plan and
+no tools.
 
-Each turn records its context's ancestry (``ancestry.record_context``).
+Each turn records what its context was read from, and its ancestry (``ancestry.record_context``).
 """
 from __future__ import annotations
 
 import dataclasses
-import re
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Protocol
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Final
 
 from anjo.agent.records import TurnFacts
 from anjo.core.anjo_model.pin import HostPin
@@ -40,21 +41,20 @@ from anjo.core.crisis import NO_CRISIS
 from anjo.core.retrieved_context import RetrievedContext
 from anjo.sleep.app.ancestry import ContextPart, record_context, reply_ancestries, union
 from anjo.sleep.app.cleared_sessions import cleared_sessions, is_synthetic
+from anjo.sleep.app.context_builder import RECALL, NoBrief, anjo_context_builder, cleared_context_builder
 from anjo.sleep.app.flags import sleep_enabled_for
 from anjo.sleep.app.runtime import GlimmerPin
-from anjo.sleep.app.storage import evidence_store
 from anjo.sleep.baseten_api import SPARK_OPEN
-from anjo.sleep.provenance import may_train
+from anjo.sleep.context.builder import BriefSource, ComposedContext, ComposedContextBuilder
+from anjo.sleep.context.recall_common import estimate_tokens
+from anjo.sleep.types import Probe
 
-RECALL_K: Final = 6
-RECALL_BUDGET_TOKENS: Final = 1200
 CLEARED_HISTORY_DAYS: Final = 14
 CLEARED_HISTORY_ROWS: Final = 24
-CHARS_PER_TOKEN: Final = 4
 MEMORY_SOURCE: Final = "anjo_memory"
+CONTEXT_SOURCE: Final = "sleep_context"
 # A synthetic person's words are Spark Open's (Task 2's simulator plays them).
 _SIMULATED: Final = frozenset({SPARK_OPEN})
-_SOURCE_CHARS = re.compile(r"[^A-Za-z0-9._:/%+#~-]")
 
 ToolDefs = Sequence[Mapping[str, Any]]
 
@@ -64,77 +64,67 @@ class SleepTurnRefused(RuntimeError):
     route's fallback answers it."""
 
 
-class BriefSource(Protocol):
-    """The person's served training brief (Task 2), with its ancestry, or None before one."""
+@dataclasses.dataclass(frozen=True)
+class ContextSetup:
+    """The brief stores C reads (Task 5): the served brief for served turns, the training brief
+    for cleared ones. Without a store, C has no brief."""
 
-    def __call__(self, user_id: str) -> ContextPart | None: ...
-
-
-_brief: list[BriefSource] = []
-
-
-def set_brief_source(source: BriefSource | None) -> None:
-    _brief[:] = [] if source is None else [source]
+    served_briefs: BriefSource = dataclasses.field(default_factory=NoBrief)
+    training_briefs: BriefSource = dataclasses.field(default_factory=NoBrief)
 
 
-def _tokens(text: str) -> int:
-    return len(text) // CHARS_PER_TOKEN + 1
+_setup: list[ContextSetup] = [ContextSetup()]
+_builders: dict[tuple[date, bool], ComposedContextBuilder] = {}
 
 
-def _recall(user_id: str, query: str, *, cleared: bool) -> list[ContextPart]:
-    items = evidence_store(user_id).search(query, datetime.now(timezone.utc), RECALL_K)
-    if cleared:
-        items = [
-            item for item in items
-            if item.kind != "homework" and may_train(item.ancestry, hosted_in_training=False)
-        ]
-    parts: list[ContextPart] = []
-    budget = RECALL_BUDGET_TOKENS
-    for item in items:
-        budget -= _tokens(item.text)
-        if budget < 0:
-            break
-        parts.append(ContextPart(f"evidence:{item.id}", item.text, item.ancestry))
-    return parts
+def set_context_setup(setup: ContextSetup | None) -> None:
+    """Set the brief stores (``None`` for none). Builders made before are dropped."""
+    _setup[:] = [setup if setup is not None else ContextSetup()]
+    _builders.clear()
 
 
-def _own_words(user_id: str, session_id: str | None) -> list[ContextPart]:
-    """Explicit preferences that apply now, and stored corrections, in the person's own words."""
-    from anjo.core.personal_preferences import list_explicit_preferences
-    from anjo.sleep.app.history_source import own_imports
-
-    own = _SIMULATED if is_synthetic(user_id) else frozenset()
-    parts: list[ContextPart] = []
-    for preference in list_explicit_preferences(user_id, session_id=session_id):
-        if not preference.get("applies_now"):
-            continue
-        quote = str(preference.get("receipt") or "").strip()
-        text = f"{preference['field']}: {preference['value']}" + (f' ("{quote}")' if quote else "")
-        parts.append(ContextPart(f"preference:{preference['preference_id']}", text, own if quote else None))
-    for imported in own_imports(user_id):
-        if imported.kind == "correction":
-            ancestry = None if imported.ancestry is None else imported.ancestry | own
-            parts.append(ContextPart(imported.source, imported.text, ancestry))
-    return parts
-
-
-def context_parts(user_id: str, query: str, session_id: str | None, *, cleared: bool) -> list[ContextPart]:
-    brief = _brief[0](user_id) if _brief else None
-    return [
-        *([brief] if brief is not None else []),
-        *_recall(user_id, query, cleared=cleared),
-        *_own_words(user_id, session_id),
-    ]
-
-
-def _retrieved(parts: Sequence[ContextPart]) -> tuple[RetrievedContext, ...]:
-    return tuple(
-        RetrievedContext(
-            source_ref=_SOURCE_CHARS.sub("-", part.source)[:256], revision=0,
-            rank=len(parts) - index, token_cost=_tokens(part.text), text=part.text,
+def _builder(*, cleared: bool) -> ComposedContextBuilder:
+    """Today's builder: one a day per kind, so recall embeds each stored item once a day."""
+    today = datetime.now(timezone.utc).date()
+    if (today, cleared) not in _builders:
+        for stale in [key for key in list(_builders) if key[0] != today]:
+            _builders.pop(stale, None)
+        setup = _setup[0]
+        _builders[(today, cleared)] = (
+            cleared_context_builder(setup.training_briefs, until=today, settings=RECALL)
+            if cleared else anjo_context_builder(setup.served_briefs, until=today, settings=RECALL)
         )
-        for index, part in enumerate(parts) if part.text.strip()
+    return _builders[(today, cleared)]
+
+
+def _context(user_id: str, turn: AnjoTurnInput, *, cleared: bool) -> ComposedContext:
+    probe = Probe(
+        id=turn.turn_id, person_id=user_id, kind="new_work", prompt=turn.user_text,
+        options=None, expected=None, source_ids=(),
     )
+    return _builder(cleared=cleared).compose(user_id, probe)
+
+
+def _part(turn: AnjoTurnInput, text: str) -> RetrievedContext:
+    """C as one optional part, ranked above every part the turn holds (ranks are unique)."""
+    ranks = [
+        *(part.rank for part in turn.optional), *(() if turn.carry is None else (turn.carry.rank,)),
+        *(exchange.rank for exchange in (*turn.exemplars, *turn.history)),
+    ]
+    return RetrievedContext(
+        source_ref=CONTEXT_SOURCE, revision=0, rank=max(ranks, default=0) + 1,
+        token_cost=estimate_tokens(text), text=text,
+    )
+
+
+def _read_from(context: ComposedContext, preferences: frozenset[str] | None) -> list[ContextPart]:
+    """Where C's parts came from. Empty parts read "none", which derives from no model."""
+    brief = context.brief
+    return [
+        ContextPart("brief", brief.ancestry if brief is not None else frozenset()),
+        ContextPart("preferences", preferences if context.since else frozenset()),
+        *(ContextPart(f"evidence:{item.id}", item.ancestry) for item in context.found),
+    ]
 
 
 def _cleared_history(user_id: str, sessions: frozenset[str]) -> tuple[tuple[Exchange, ...], ContextPart]:
@@ -167,7 +157,7 @@ def _cleared_history(user_id: str, sessions: frozenset[str]) -> tuple[tuple[Exch
     exchanges, _unanswered = exchanges_from_messages(
         [(str(row["role"]), str(row["content"])) for row in rows], id_prefix="c",
     )
-    return exchanges, ContextPart("cleared_history", "", union(of(row) for row in rows))
+    return exchanges, ContextPart("cleared_history", union(of(row) for row in rows))
 
 
 def _persona() -> tuple[Segment, ...]:
@@ -199,18 +189,21 @@ def sleep_turn_hook(
     tools: ToolDefs = tool_defs if glimmer[0].traits.tool_calls == "native" else ()
     sessions = cleared_sessions(user_id)
     cleared = session_id is not None and session_id in sessions
-    parts = context_parts(user_id, turn.user_text, session_id, cleared=cleared)
+    context = _context(user_id, turn, cleared=cleared)
     if cleared:
         history, history_part = _cleared_history(user_id, sessions)
-        built = dataclasses.replace(
-            turn, instructions=_persona(), corrections=(), optional=_retrieved(parts), carry=None,
+        bare = dataclasses.replace(
+            turn, instructions=_persona(), corrections=(), optional=(), carry=None,
             exemplars=(), history=history, voice_plan=None, tools=(), tool_steps=(),
         )
-        recorded = [*parts, history_part]
+        built = dataclasses.replace(bare, optional=(_part(bare, context.text),))
+        # Only the person's own words reach a cleared C's preferences.
+        own = _SIMULATED if is_synthetic(user_id) else frozenset()
+        recorded = [*_read_from(context, own), history_part]
         tools = ()
     else:
-        built = dataclasses.replace(turn, optional=(*turn.optional, *_retrieved(parts)))
-        recorded = [ContextPart(MEMORY_SOURCE, "", None), *parts]
+        built = dataclasses.replace(turn, optional=(*turn.optional, _part(turn, context.text)))
+        recorded = [ContextPart(MEMORY_SOURCE, None), *_read_from(context, None)]
     with best_effort("record a sleep turn's context ancestry", user_id=user_id):
         record_context(user_id, turn.turn_id, session_id, cleared=cleared, parts=recorded)
     return built, tools
