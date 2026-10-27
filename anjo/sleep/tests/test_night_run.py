@@ -5,9 +5,10 @@ halfway keeps yesterday's checkpoint serving, holds no note, and the next night 
 promoted one), batches, the allowance and the note."""
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,23 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.choose import StateChooser
-from anjo.sleep.night.deps import InquiryOutcome, MindCall, NightSettings, NoInquiry
+from anjo.sleep.night.deps import InquiryOutcome, MindCall, NightSettings, NoInquiry, StudyOutcome
 from anjo.sleep.night.meter import WonderMeter
 from anjo.sleep.night.run import PROBES_WORST_USD, run_night_batch_with
 from anjo.sleep.note.hold import HELD_BACK_LINE
 from anjo.sleep.stops import BudgetStop
-from anjo.sleep.tests.night_fakes import NIGHT, SOURCE_URL, Homework, World, step, steps, summary, thread, window
+from anjo.sleep.tests.night_fakes import (
+    NIGHT,
+    SOURCE_URL,
+    Homework,
+    World,
+    own,
+    step,
+    steps,
+    summary,
+    thread,
+    window,
+)
 from anjo.sleep.types import (
     Choice,
     ChoiceContext,
@@ -320,6 +332,93 @@ def test_at_most_one_note_per_night(tmp_path: Path) -> None:
     result = _one(world, chooser=AlwaysNote(), homework=Homework(world))
     assert len(world.notifier.queued) == 1 and len(world.writer.calls) == 1
     assert len(result.choices) == 1  # a step-4 note leaves no second offer
+
+
+# ── a same-night result is news ───────────────────────────────────────────────
+
+
+class SameMoment(Homework):
+    """Studies as the real homework port does: its item and result stamped at the night's ``at``,
+    which in real time is the window's end."""
+
+    def __init__(self, world: World) -> None:
+        super().__init__(world)
+        self.stamps: list[datetime | None] = []
+
+    def study(self, user_id: str, target: Any, night: date, meter: WonderMeter, *, action: str = "",
+              at: datetime | None = None) -> StudyOutcome:
+        self.stamps.append(at)
+        done = super().study(user_id, target, night, meter, action=action, at=at)
+        assert at is not None and done.result is not None
+        return replace(done, result=replace(done.result, created_at=at),
+                       evidence=tuple(replace(item, created_at=at) for item in done.evidence))
+
+
+def _said_at_the_end(world: World, night: date, uid: str = "p1") -> None:
+    """Her day as the history source stamps it in real time: every item at the window's end."""
+    world.planned[(uid, night)] = [replace(own(uid, night, i), created_at=window(night)[1]) for i in range(3)]
+
+
+def _paid_an_hour_ago(world: World, uid: str = "p1") -> None:
+    """An earlier run whose three paid actions fall inside the rolling 24 hours before ``NIGHT``'s end."""
+    folder = world.logs(uid) / (NIGHT - timedelta(days=1)).isoformat()
+    folder.mkdir(parents=True)
+    ended = window(NIGHT)[1] - timedelta(hours=1)
+    (folder / "summary.json").write_text(json.dumps({"night_end": ended.isoformat(), "paid_actions": 3}))
+
+
+def _share(note: dict[str, Any]) -> list[tuple[str, str, str | None]]:
+    """The second offer's candidates, as (want, status, reason)."""
+    record = note.get("receipt") or note["second_offer_receipt"]
+    return [(c["want_id"], c["status"], c["reason"]) for c in record["candidates"]]
+
+
+@pytest.mark.parametrize(("gate", "deps", "outcome", "share"), [
+    ("none", {}, "held", ("won", None)),
+    ("allowance", {"settings": NightSettings(token_cap=16384, min_new_examples=1, rolling_actions=1)}, "no_reason",
+     ("held_back", "budget")),
+    ("cadence", {}, "no_reason", ("held_back", "budget")),  # the rolling 24 hours' paid actions
+    ("crisis", {"note_check": lambda text: False}, "note_declined", ("won", None)),
+])
+def test_a_same_night_study_stamped_with_her_last_words_is_news_under_every_gate(
+    tmp_path: Path, gate: str, deps: dict[str, Any], outcome: str, share: tuple[str, str | None],
+) -> None:
+    """Behaviour change (``>=`` in the news check): in real time her day and the study's result are
+    both stamped at the window's end, and the result is news, so a note follows when every other
+    gate allows it. On the trunk (``>``) the share want never rose and no note followed."""
+    world = World(tmp_path)
+    _said_at_the_end(world, NIGHT)
+    _with_thread(world)
+    if gate == "cadence":
+        _paid_an_hour_ago(world)
+    homework = SameMoment(world)
+    result = _one(world, homework=homework, **deps)
+    assert homework.stamps == [window(NIGHT)[1]]
+    [found] = world.targets("p1").results()
+    assert found.created_at == window(NIGHT)[1]  # the same moment as her last words
+    assert step(result.log_path, "choose")["action"] == "revisit_thread"
+    note = step(result.log_path, "note")
+    assert note["outcome"] == outcome and _share(note) == [("share:p1-t1", *share)]
+    assert len(world.notifier.queued) == (outcome == "held")
+
+
+@pytest.mark.parametrize(("wrote", "outcome", "queued"), [(False, "held", 1), (True, "no_reason", 0)],
+                         ids=["quiet since", "wrote again"])
+def test_an_earlier_nights_result_stops_being_news_once_she_writes_again(
+    tmp_path: Path, wrote: bool, outcome: str, queued: int,
+) -> None:
+    world = World(tmp_path)
+    _said_at_the_end(world, NIGHT)
+    _with_thread(world)
+    tight = NightSettings(token_cap=16384, min_new_examples=1, rolling_actions=1)  # the study, then no note
+    _one(world, settings=tight, homework=SameMoment(world))
+    [left] = world.targets("p1").results()
+    assert not left.consumed and world.notifier.queued == []
+    after = NIGHT + timedelta(days=1)
+    if wrote:
+        _said_at_the_end(world, after)
+    result = _one(world, night=after)
+    assert step(result.log_path, "note")["outcome"] == outcome and len(world.notifier.queued) == queued
 
 
 # ── the allowance ─────────────────────────────────────────────────────────────

@@ -7,7 +7,8 @@ folder), folded on every read, so it is exported, erased and replayed with her o
 - **Step 2b, notice:** one thinker pass (``loop.notice``) over the person's own new items that her
   workspace hasn't received yet, so a rerun of the night passes nothing twice. The pass is written
   to her log in one record when it ends, so its items reach her only with the questions they opened.
-  It opens questions and acts on nothing.
+  A pass that fails writes only its ``RunStart`` and the tokens it spent, which tonight's budget
+  counts. It opens questions and acts on nothing.
 - **The snapshot's questions:** every question she holds, with its priority's parts. One
   ``continues`` while it is live, its next step is ready and tonight's budget lasts.
 - **Step 4, inquire:** ``loop.run_inquiry`` on the chosen question under the night's one budget
@@ -62,6 +63,7 @@ from anjo.sleep.mind.inquiry.types import (
     CYCLE_CAP,
     LIVE_STATUSES,
     OP_CLASSES,
+    Applied,
     Budget,
     InquiryRun,
     InvestigateOp,
@@ -69,6 +71,7 @@ from anjo.sleep.mind.inquiry.types import (
     NoticeOp,
     Question,
     RunStart,
+    Step,
     Workspace,
     WorkspaceEvent,
 )
@@ -237,8 +240,9 @@ class _Watched:
 class _Batched:
     """Her log for the notice pass: its events are held, then written in one record (``commit``),
     so the day's items reach her (``kernel.known_items``) only with the questions they opened. A
-    kill or a failure before then writes nothing, and the next pass offers the items again. The
-    cancel flag is read before each event and before the record (RF2)."""
+    kill before then writes nothing; a failure writes only what the pass spent (``debit``). Either
+    way the next pass offers the items again. The cancel flag is read before each event and before
+    each record (RF2)."""
 
     inner: NightLog
     cancelled: Callable[[], bool]
@@ -256,6 +260,21 @@ class _Batched:
         if self.cancelled():
             raise Cancelled("the night was cancelled")
         self.inner.extend(tuple(self.held))
+
+    def debit(self) -> None:
+        """For a failed pass: its ``RunStart`` and one step carrying every token it logged (no
+        operation came of it: ``malformed``), so tonight's budget (``tonight``) still counts its
+        thinker and screen calls. Nothing else reaches her."""
+        tokens = sum(event.step.tokens for event in self.held)
+        if tokens == 0:
+            return
+        if self.cancelled():
+            raise Cancelled("the night was cancelled")
+        start = self.held[0]
+        begun = kernel.fold((*self.inner.events(), start))
+        spent = kernel.apply(begun, Step(seq=begun.seq, at=start.step.at, entry=None, code="malformed", tokens=tokens))
+        assert isinstance(spent, Applied)  # a step without an operation always applies
+        self.inner.extend((start, spent.event))
 
 
 @dataclass(frozen=True)
@@ -321,6 +340,7 @@ class MindNight:
         except BudgetStop:
             return {"new": len(fresh), "questions_opened": 0, "stopped": "budget", **step.meters.counts()}
         except MIND_FAILURES as error:
+            batched.debit()
             return {"new": len(fresh), "questions_opened": 0, "stopped": "failed", "error": type(error).__name__}
         opened = sum(1 for e in run.events if isinstance(e.step.entry, NoticeOp) and e.step.applied)
         return {"new": len(fresh), "questions_opened": opened, **_counts(run, step.meters)}

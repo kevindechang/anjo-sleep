@@ -23,9 +23,10 @@ from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.mind.inquiry import types as it
-from anjo.sleep.model_api import ChatResult
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import MindCall, NightSettings
 from anjo.sleep.night.meter import WonderMeter
+from anjo.sleep.night.mind import tonight
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.ownership.delete import delete_all, erase_stored
 from anjo.sleep.personas.model import load_person_file
@@ -459,6 +460,26 @@ def test_a_notice_pass_killed_before_its_questions_are_logged_offers_its_items_a
     rerun = _night(world, mind_night(world, thinker))
     notice = step(rerun.log_path, "notice")
     assert notice["new"] == 3 and notice["questions_opened"] == 1
+
+
+def test_a_notice_pass_that_fails_after_its_reply_still_spends_tonights_tokens(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    thinker = LifeThinker(targets=(f"{UID}-t1",), notices=2, tokens=1500)
+
+    def down(text: str, purpose: it.ScreenPurpose) -> bool:  # the screen fails after the thinker replied
+        raise ModelApiError("the screen's provider is down")
+
+    failed = _night(world, mind_night(world, thinker, screen=FakeScreen(refuse=down)))
+    assert step(failed.log_path, "notice")["stopped"] == "failed" and len(thinker.prompts) == 1
+    start, spent = workspace(world, UID).events()  # its RunStart and its spend: no item, no question
+    assert isinstance(start.step.entry, it.RunStart) and start.step.entry.call == "notice"
+    assert (spent.step.entry, spent.step.code, spent.step.tokens) == (None, "malformed", 1500)
+    assert tonight(workspace(world, UID).events(), NIGHT).tokens_used == 1500
+
+    rerun = _night(world, mind_night(world, thinker))
+    notice = step(rerun.log_path, "notice")
+    assert notice["new"] == 3 and notice["questions_opened"] == 1  # its items are offered again
+    assert notice["budget"]["tokens_used"] == 1500 + 1500 + FakeScreen().tokens  # the failed pass counts
 
 
 def test_killed_inquiry_resumes_its_cut_off_tool(tmp_path: Path) -> None:
