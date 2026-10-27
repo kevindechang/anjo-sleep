@@ -6,19 +6,25 @@ never has (and pytest never runs this)::
 
     uv venv --python 3.13 <venv>
     uv pip install --python <venv>/bin/python <TRAIN_PACKAGES...> <TORCH>   # from colab_train.py
-    python -m anjo.sleep.train.smoke --python <venv>/bin/python
+    python -m anjo.sleep.train.smoke --python <venv>/bin/python [--tokenizer <folder>]
 
-The run, all offline (the Hugging Face libraries are told so, and nothing is downloaded):
+``--tokenizer`` names a local folder with Glimmer's own ``tokenizer.json``, ``tokenizer_config.json``
+and ``chat_template.jinja`` (no weights): the tiny model then trains on Glimmer's real tokenizer and
+chat template. The run, all offline (the Hugging Face libraries are told so, and nothing is
+downloaded):
 
-1. checks that the training Python has exactly ``TRAIN_PACKAGES`` and ``TORCH``;
+1. checks that the training Python has exactly ``TRAIN_PACKAGES`` and ``TORCH`` and, with
+   ``--tokenizer``, that its special tokens are ``config.CONTROL_TOKENS``, id for id;
 2. builds the tiny model and its tokenizer there (``smoke_model.py``);
 3. writes a night's dataset with ``Dataset.to_jsonl`` and its recipe with ``training_config``, the
    host's own code, including one example and one pair longer than ``max_seq_length``;
 4. runs ``colab_train.py`` as the VM does, with ``ANJO_TRAIN_SMOKE_MODEL`` naming the tiny model
-   (fp32 on the CPU, no 4-bit): night 1 cold with ``sft_dpo``, night 2 a warm start with ``sft``;
-5. checks each receipt (both long rows dropped and counted) and each adapter: ``target_modules`` is
-   the text-decoder pattern, and every tensor in ``adapter_model.safetensors`` is a LoRA on one of
-   the text decoder's projections, every projection of every layer covered, none in the vision tower.
+   (fp32 on the CPU, no 4-bit): night 1 cold with ``sft_dpo``, night 2 a warm start with ``sft``.
+   The script checks every row's tokens against the chat template before it trains;
+5. checks each receipt (both long rows dropped and counted, every row's tokens checked) and each
+   adapter: ``target_modules`` is the text-decoder pattern, and every tensor in
+   ``adapter_model.safetensors`` is a LoRA on one of the text decoder's projections, every
+   projection of every layer covered, none in the vision tower.
 
 It prints one line per step and exits 1 on the first failed check.
 """
@@ -79,12 +85,13 @@ def _installed(python: str) -> dict[str, str | None]:
 
 
 def smoke_dataset() -> Dataset:
-    """Four short examples and one too long to train; two pairs and one too long to train."""
+    """Four short examples (the last without its context, so with no system turn) and one too long
+    to train; two pairs and one too long to train."""
     words = smoke_model.WORDS
     prompt = (("system", "you are her"), ("user", "what did i say about the garden"))
     examples = tuple(
-        Example(id=f"e{i}", prompt=prompt, completion=" ".join(words[5 + i:15 + i]), context_dropped=False,
-                tokens=40, new=True)
+        Example(id=f"e{i}", prompt=prompt if i < 3 else prompt[1:], completion=" ".join(words[5 + i:15 + i]),
+                context_dropped=i == 3, tokens=40, new=True)
         for i in range(4)
     ) + (Example(id="e-long", prompt=prompt, completion=" ".join([words[13]] * LONG_WORDS),
                  context_dropped=False, tokens=LONG_WORDS, new=True),)
@@ -95,6 +102,18 @@ def smoke_dataset() -> Dataset:
     ) + (Pair(id="p-long", prompt=prompt, chosen="that is fine", rejected=" ".join([words[13]] * LONG_WORDS),
               chosen_from="glimmer", rejected_from="glimmer", tokens=LONG_WORDS),)
     return Dataset(examples=examples, tokens=sum(e.tokens for e in examples), dropped={}, pairs=pairs)
+
+
+def check_control_tokens(folder: Path) -> int:
+    """The special tokens in ``folder``'s ``tokenizer.json`` are ``config.CONTROL_TOKENS``, each at
+    its id. Returns how many there are."""
+    added = json.loads((folder / "tokenizer.json").read_text(encoding="utf-8"))["added_tokens"]
+    found = {token["id"]: token["content"] for token in added if token["special"]}
+    want = {config.FIRST_SPECIAL_ID + offset: token for offset, token in enumerate(config.CONTROL_TOKENS)}
+    if found != want:
+        wrong = sorted(set(found.items()) ^ set(want.items()))[:3]
+        raise SmokeError(f"the tokenizer's special tokens are not CONTROL_TOKENS: {wrong}")
+    return len(found)
 
 
 def _safetensors_keys(path: Path) -> list[str]:
@@ -159,36 +178,43 @@ def _expect(receipt: Mapping[str, object], **want: object) -> None:
         raise SmokeError(f"the receipt has {wrong}, expected {dict((key, want[key]) for key in wrong)}")
 
 
-def smoke(python: str, root: Path) -> list[str]:
-    """The whole run in ``root``; returns the lines it reports."""
+def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
+    """The whole run in ``root``, on Glimmer's tokenizer in ``tokenizer`` or the tiny one; returns
+    the lines it reports."""
     lines = []
     missing = pin_mismatches(_installed(python))
     if missing:
         raise SmokeError(f"the training Python doesn't have the pins: {', '.join(missing)}")
     lines.append("pins: " + ", ".join(f"{name} {version}" for name, version in pins().items()))
+    if tokenizer is not None:
+        lines.append(f"tokenizer: Glimmer's, {check_control_tokens(tokenizer)} special tokens, "
+                     "each one in CONTROL_TOKENS at its id")
     base = root / "base"
-    _run([python, "-I", str(Path(smoke_model.__file__)), str(base)], env={**os.environ, **OFFLINE},
-         label="smoke_model.py")
+    _run([python, "-I", str(Path(smoke_model.__file__)), str(base), *([str(tokenizer)] if tokenizer else [])],
+         env={**os.environ, **OFFLINE}, label="smoke_model.py")
     layers = smoke_model.LAYERS
     data = smoke_dataset()
     cold = LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS)
     first = _night(python, base, root / "night1", training_config(cold, len(data.examples), warm=False,
                                                                   revision=REVISION), data, None)
     _expect(first, examples=4, dropped_truncated=1, pairs=2, pairs_dropped_truncated=1, steps=MIN_STEPS,
-            objective="sft_dpo", gpu="cpu")
+            objective="sft_dpo", gpu="cpu", rows_checked=6)
     if not isinstance(first["dpo_steps"], int) or first["dpo_steps"] < 1:
         raise SmokeError("the DPO pass made no optimizer step")
     modules = check_adapter(root / "night1" / "out", layers=layers, r=cold.r)
     lines.append(f"night 1 (sft_dpo, cold): {first['steps']} SFT steps on {first['examples']} examples "
                  f"({first['dropped_truncated']} too long, dropped), {first['dpo_steps']} DPO steps on "
                  f"{first['pairs']} pairs ({first['pairs_dropped_truncated']} too long, dropped)")
+    lines.append(f"tokens: all {first['rows_checked']} rows as the template renders them at reasoning strength "
+                 f"{config.reasoning_strength()}: the prompt is the server's generation prompt plus the header "
+                 f"{config.USER_CHANNEL!r}, the loss falls on the reply and {config.REPLY_END} only")
     lines.append(f"adapter: {modules} LoRA modules, {layers} text-decoder layers x "
                  f"{modules // layers} projections, none outside the text decoder")
     warm = LoraCfg(objective="sft", min_optimizer_steps=MIN_STEPS)
     second = _night(python, base, root / "night2", training_config(warm, len(data.examples), warm=True,
                                                                    revision=REVISION), data,
                     root / "night1" / "out")
-    _expect(second, examples=4, dropped_truncated=1, steps=MIN_STEPS, dpo_steps=0, objective="sft")
+    _expect(second, examples=4, dropped_truncated=1, steps=MIN_STEPS, dpo_steps=0, objective="sft", rows_checked=4)
     check_adapter(root / "night2" / "out", layers=layers, r=warm.r)
     lines.append(f"night 2 (sft, warm from night 1): {second['steps']} SFT steps, adapter checked the same way")
     for night in ("night1", "night2"):
@@ -202,10 +228,11 @@ def smoke(python: str, root: Path) -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - needs the training stack
     parser = argparse.ArgumentParser(prog="python -m anjo.sleep.train.smoke")
     parser.add_argument("--python", required=True, help="a Python with TRAIN_PACKAGES and TORCH installed")
+    parser.add_argument("--tokenizer", type=Path, help="a folder with Glimmer's tokenizer and chat template")
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="anjo-train-smoke-") as root:
         try:
-            lines = smoke(args.python, Path(root))
+            lines = smoke(args.python, Path(root), args.tokenizer)
         except (SmokeError, subprocess.TimeoutExpired) as error:
             print(f"smoke failed: {error}", file=sys.stderr)
             return 1

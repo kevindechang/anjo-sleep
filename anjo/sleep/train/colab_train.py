@@ -10,6 +10,13 @@ compute, a LoRA of rank r (at most 32) and alpha 2r on the attention and MLP pro
 on the completion (her reply) only, no packing, and every row longer than ``max_seq_length``
 dropped and counted rather than cut. A warm start loads the previous adapter as trainable.
 
+**Train as served.** Each row goes to TRL as plain text, rendered the way the server renders a
+request: Glimmer's chat template at the night's ``reasoning_strength`` with the generation prompt
+(``<|start|>assistant``), then the reply's channel header ``" to=user<|message|>"`` on the prompt
+side, and the reply closed by ``<|eot|>``. So the loss falls on the reply and ``<|eot|>`` only.
+(TRL's conversational form would train the header too.) Before a step is taken, every row's tokens,
+as TRL prepared them, are checked against the template's own render (``_check_tokens``).
+
 Glimmer is multimodal (``MuseGlimmerForConditionalGeneration``, which transformers maps under
 ``AutoModelForImageTextToText``, not ``AutoModelForCausalLM``). Its vision tower has ``q_proj``,
 ``k_proj`` and ``v_proj`` too, and PEFT matches a list of names as suffixes anywhere, so the LoRA's
@@ -67,8 +74,13 @@ MAX_ACCUMULATION = 16
 MAX_EPOCHS = 4
 _KEYS = (
     "r", "alpha", "dropout", "target_modules", "learning_rate", "seed", "max_seq_length", "packing",
-    "accumulation", "epochs", "batch_size", "warm_start", "revision", "objective",
+    "accumulation", "epochs", "batch_size", "warm_start", "revision", "objective", "reasoning_strength",
 )
+# Standalone copies of anjo.sleep.serving.config's (a test holds them equal): Glimmer's reasoning
+# levels, the reply's channel header after the generation prompt, and the end of its turn.
+REASONING_LEVELS = ("low", "medium", "high", "xhigh")
+USER_CHANNEL = " to=user<|message|>"
+REPLY_END = "<|eot|>"
 # A 3% linear warmup: transformers 5 dropped ``warmup_ratio``, and ``warmup_steps`` under 1 is the share.
 WARMUP = 0.03
 SMOKE_ENV = "ANJO_TRAIN_SMOKE_MODEL"
@@ -115,6 +127,8 @@ def load_config(raw: str) -> dict[str, Any]:
         _int(cfg, "min_optimizer_steps", 1, 10_000)
     if not isinstance(cfg["revision"], str) or not cfg["revision"]:
         raise ValueError("the base model's revision is pinned")
+    if cfg["reasoning_strength"] not in REASONING_LEVELS:
+        raise ValueError(f"reasoning_strength is one of {', '.join(REASONING_LEVELS)}")
     return cfg
 
 
@@ -187,11 +201,78 @@ def _rows(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _fits(tokenizer: Any, row: dict[str, Any], max_length: int) -> bool:
-    sides = [row["completion"]] if "completion" in row else [row["chosen"], row["rejected"]]
-    # transformers 5 returns a dict by default when it tokenizes; the length of the ids is wanted
-    return all(len(tokenizer.apply_chat_template(row["prompt"] + side, tokenize=True, return_dict=False)) <= max_length
-               for side in sides)
+def _sides(row: dict[str, Any]) -> tuple[str, ...]:
+    return ("completion",) if "completion" in row else ("chosen", "rejected")
+
+
+def _reply(side: Any) -> str:
+    """A row's reply: one assistant message whose content is text."""
+    if (not isinstance(side, list) or len(side) != 1 or not isinstance(side[0], dict)
+            or side[0].get("role") != "assistant" or not isinstance(side[0].get("content"), str)):
+        raise ValueError("a row's reply is one assistant message of text")
+    return str(side[0]["content"])
+
+
+def template_kwargs(cfg: dict[str, Any], today: str) -> dict[str, str]:
+    """The chat template's arguments for every row of the run: the night's reasoning strength and one
+    date. The template dates a prompt that has no system turn from the clock, so one date keeps the
+    rows of a night that crosses midnight alike."""
+    return {"reasoning_strength": cfg["reasoning_strength"], "current_date": today}
+
+
+def plain_row(tokenizer: Any, row: dict[str, Any], template: dict[str, str]) -> dict[str, str]:
+    """``row`` as TRL's plain-text prompt and reply (or chosen and rejected): the chat template's
+    prompt (with ``template``'s arguments) and the generation prompt and the reply's channel header,
+    each reply closed by ``<|eot|>``. TRL tokenizes plain text with the tokenizer's special tokens
+    on, which puts the BOS first itself, so the template's own BOS is left off: one BOS, as the
+    server has."""
+    prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False, **template)
+    if not isinstance(prompt, str) or not prompt.startswith(tokenizer.bos_token):
+        raise ValueError("the chat template's prompt starts with the BOS")
+    return {"prompt": prompt[len(tokenizer.bos_token):] + USER_CHANNEL,
+            **{side: _reply(row[side]) + REPLY_END for side in _sides(row)}}
+
+
+def _fits(tokenizer: Any, plain: dict[str, str], max_length: int) -> bool:
+    """Whether every side of a plain row is at most ``max_length`` tokens, counted as TRL counts."""
+    return all(len(tokenizer(text=plain["prompt"] + plain[side])["input_ids"]) <= max_length
+               for side in _sides(plain))
+
+
+def _rendered(tokenizer: Any, rows: list[dict[str, Any]], max_length: int,
+              template: dict[str, str]) -> list[tuple[dict[str, Any], dict[str, str]]]:
+    """Each row with its plain form, the rows longer than ``max_length`` left out."""
+    both = [(row, plain_row(tokenizer, row, template)) for row in rows]
+    return [(row, plain) for row, plain in both if _fits(tokenizer, plain, max_length)]
+
+
+def _check_tokens(tokenizer: Any, row: dict[str, Any], side: str, prompt_ids: Sequence[int],
+                  reply_ids: Sequence[int], template: dict[str, str]) -> None:  # pragma: no cover - needs the training stack
+    """What TRL prepared for one side of ``row`` is what the server renders: the prompt is the
+    template's prompt with the generation prompt, then the header (as the night's client asks vLLM
+    to tokenize them), the trained tokens are the reply and ``<|eot|>``, and the two together are
+    the template's own render of the conversation, reply included."""
+    ids = {"tokenize": True, "return_dict": False, **template}
+    served = [*tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, **ids),
+              *tokenizer(USER_CHANNEL, add_special_tokens=False)["input_ids"]]
+    reply = [*tokenizer(_reply(row[side]), add_special_tokens=False)["input_ids"],
+             tokenizer.convert_tokens_to_ids(REPLY_END)]
+    whole = list(tokenizer.apply_chat_template(row["prompt"] + row[side], **ids))
+    if list(prompt_ids) != served or list(reply_ids) != reply or [*prompt_ids, *reply_ids] != whole:
+        raise ValueError(f"the {side} tokens TRL prepared differ from the chat template's render")
+
+
+def _check_sft(tokenizer: Any, kept: list[tuple[dict[str, Any], dict[str, str]]], prepared: Any,
+               template: dict[str, str]) -> int:  # pragma: no cover - needs the training stack
+    """Every SFT row's tokens and labels, as TRL prepared them, against the template: the labels are
+    -100 (no loss) on the prompt and the tokens themselves from the reply's first token on."""
+    for (row, _), done in zip(kept, prepared, strict=True):
+        ids, labels = list(done["input_ids"]), list(done["labels"])
+        start = next((i for i, label in enumerate(labels) if label != -100), len(labels))
+        if labels != [-100] * start + ids[start:]:
+            raise ValueError("the loss falls on more than the reply")
+        _check_tokens(tokenizer, row, "completion", ids[:start], ids[start:], template)
+    return len(kept)
 
 
 def _smoke_model() -> str | None:
@@ -222,14 +303,18 @@ def _load_model(cfg: dict[str, Any], settings: dict[str, Any], smoke: str | None
     return prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
 
-def _dpo(model: Any, tokenizer: Any, pairs: list[dict[str, Any]], settings: dict[str, Any], out: Path) -> int:  # pragma: no cover - GPU VM only
+def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str, str]]], settings: dict[str, Any],
+         out: Path, template: dict[str, str]) -> int:  # pragma: no cover - GPU VM only
     """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off."""
     from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
     from trl import DPOConfig, DPOTrainer  # type: ignore[import-not-found, unused-ignore]
 
-    data = Dataset.from_list([{k: row[k] for k in ("prompt", "chosen", "rejected")} for row in pairs])
+    data = Dataset.from_list([plain for _, plain in pairs])
     trainer = DPOTrainer(model=model, ref_model=None, args=DPOConfig(output_dir=str(out / "dpo"), **settings),
                          train_dataset=data, processing_class=tokenizer)
+    for (row, _), done in zip(pairs, trainer.train_dataset, strict=True):
+        for side in ("chosen", "rejected"):
+            _check_tokens(tokenizer, row, side, done["prompt_ids"], done[f"{side}_ids"], template)
     # TRL 1.x adds a frozen copy of the trained adapter ("ref") and scores the reference with it. With
     # only the trained adapter left, it scores the reference with the adapter switched off.
     for name in [name for name in trainer.model.peft_config if name != "default"]:
@@ -256,27 +341,32 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     torch.manual_seed(cfg["seed"])
     set_seed(cfg["seed"])
     tokenizer = AutoTokenizer.from_pretrained(smoke or MODEL, revision=None if smoke else cfg["revision"])
+    # TRL ends a plain-text reply with the tokenizer's EOS unless it ends with it already. Glimmer's
+    # turn ends with <|eot|> (its EOS is <|end_of_text|>), and each reply is closed by it.
+    tokenizer.eos_token = REPLY_END
+    template = template_kwargs(cfg, time.strftime("%Y-%m-%d"))
     rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
-    kept = [row for row in rows if _fits(tokenizer, row, cfg["max_seq_length"])]
-    pairs = [row for row in pair_rows if _fits(tokenizer, row, cfg["max_seq_length"])] if "dpo" in settings else []
+    kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
+    pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
     model = _load_model(cfg, settings, smoke)
     peft_config = None
     if prev:
         model = PeftModel.from_pretrained(model, prev, is_trainable=True)
     else:
         peft_config = LoraConfig(**settings["lora"])
-    data = Dataset.from_list([{"prompt": row["prompt"], "completion": row["completion"]} for row in kept])
+    data = Dataset.from_list([plain for _, plain in kept])
     trainer = SFTTrainer(
         model=model, args=SFTConfig(output_dir=str(out / "run"), **settings["sft"]),
         train_dataset=data, processing_class=tokenizer, peft_config=peft_config,
     )
+    checked = _check_sft(tokenizer, kept, trainer.train_dataset, template)
     started = time.monotonic()
     trainer.train()
     dpo_steps = 0
     if pairs:
         accumulation, epochs = dpo_plan(len(pairs), cfg)
         dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
-        dpo_steps = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out)
+        dpo_steps = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template)
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     receipt = {
@@ -285,6 +375,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu", "objective": cfg["objective"],
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
+        "rows_checked": checked + len(pairs),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

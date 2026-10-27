@@ -5,10 +5,15 @@ It is the ``ModelClient`` and ``TokenLogprobs`` port over vLLM's OpenAI-compatib
 
 - ``complete`` asks ``/v1/chat/completions`` for one sampled reply, naming the person's adapter
   as the model (the base model when there is none) with the registered sampling (temperature as
-  given, top_p 0.95, top_k 64) and a seed, so evals repeat;
+  given, top_p 0.95, top_k 64) and a seed, so evals repeat; the reply is the message's ``content``,
+  the ``to=user`` channel, never its reasoning;
 - ``continuation_logprobs`` scores a continuation token by token: ``/tokenize`` turns the chat
-  (with the generation prompt) and the continuation into token ids, and ``/v1/completions`` returns
-  the prompt's log-probabilities with ``prompt_logprobs``, one generated token at most.
+  (with the generation prompt), the reply's channel header (``config.USER_CHANNEL``) and the
+  continuation into token ids, and ``/v1/completions`` returns the prompt's log-probabilities with
+  ``prompt_logprobs``, one generated token at most. Only the continuation's tokens are scored.
+
+Both render the chat at the configured reasoning strength (``config.template_kwargs``), as training
+does, so a gate scores the reply the way the adapter was trained to give it.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -168,12 +173,14 @@ class VllmClient:
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS,
     ) -> None:
+        self._template = config.template_kwargs()
         self._poster: Poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
         self._max_tokens = max_tokens
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
         client = cls.__new__(cls)
+        client._template = config.template_kwargs()
         client._poster, client._max_tokens = poster, max_tokens
         return client
 
@@ -190,6 +197,7 @@ class VllmClient:
         body: dict[str, Any] = {
             "model": model_name(adapter), "messages": messages, "temperature": temperature,
             "top_p": TOP_P, "top_k": TOP_K, "max_tokens": self._max_tokens,
+            "chat_template_kwargs": dict(self._template),
         }
         if seed is not None:
             body["seed"] = seed
@@ -216,12 +224,14 @@ class VllmClient:
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
     ) -> Sequence[float]:
         model = model_name(adapter)
-        prompt = self._tokens({"model": model, "messages": messages, "add_generation_prompt": True})
+        prompt = self._tokens({"model": model, "messages": messages, "add_generation_prompt": True,
+                               "chat_template_kwargs": dict(self._template)})
+        header = self._tokens({"model": model, "prompt": config.USER_CHANNEL, "add_special_tokens": False})
         tail = self._tokens({"model": model, "prompt": continuation, "add_special_tokens": False})
         if not tail:
             raise ServingError("the continuation has no tokens")
         data = self._post("/v1/completions", {
-            "model": model, "prompt": prompt + tail, "max_tokens": 1, "temperature": 0.0,
+            "model": model, "prompt": prompt + header + tail, "max_tokens": 1, "temperature": 0.0,
             "prompt_logprobs": 0,
         })
         try:

@@ -39,6 +39,7 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert "--enable-lora" in command
     sizes = {flag: command[command.index(flag) + 1] for flag in ("--max-lora-rank", "--max-loras", "--max-cpu-loras")}
     assert sizes == {"--max-lora-rank": "32", "--max-loras": "8", "--max-cpu-loras": "16"}
+    assert command[command.index("--reasoning-parser") + 1] == "muse_glimmer"  # content is the to=user channel
     assert "--enable-auto-tool-choice" not in command  # no parser: turns run without tools
     assert not any("KEY" in part or "TOKEN" in part for part in command)
     env = config.vllm_env()
@@ -55,9 +56,17 @@ def test_the_bf16_fallback_is_one_line_away_and_quantizes_nothing() -> None:
 
 
 def test_a_tool_call_parser_turns_tool_calls_on() -> None:
-    command = config.vllm_command(_settings(tool_parser="llama3_json"))
+    command = config.vllm_command(_settings(tool_parser="muse_glimmer"))  # vLLM 0.28.0's, for ATEM calls
 
-    assert command[-3:] == ["--enable-auto-tool-choice", "--tool-call-parser", "llama3_json"]
+    assert command[-3:] == ["--enable-auto-tool-choice", "--tool-call-parser", "muse_glimmer"]
+
+
+def test_every_call_is_rendered_at_one_reasoning_strength_low_unless_set() -> None:
+    assert config.reasoning_strength({}) == "low" == config.DEFAULT_REASONING_STRENGTH
+    assert config.template_kwargs({config.REASONING_STRENGTH_ENV: " xhigh "}) == {"reasoning_strength": "xhigh"}
+    for wrong in ("max", "LOW", "low."):
+        with pytest.raises(ServeConfigError, match=config.REASONING_STRENGTH_ENV):
+            config.reasoning_strength({config.REASONING_STRENGTH_ENV: wrong})
 
 
 def test_settings_come_from_the_environment_and_are_checked() -> None:

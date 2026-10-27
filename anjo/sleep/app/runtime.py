@@ -10,10 +10,12 @@ still works; Modal bills by the GPU hour, which the budget ledger tracks.
 
 **The runtime.** ``SleepRuntime`` sends vLLM's OpenAI-compatible request to the Modal URL with
 the bearer token, naming the person's adapter as the model, or the base model when there is none
-yet. It refuses a request whose person's words trip Anjo's crisis floor, the last of four checks
-(the chat route's floor, the harness's no-model tiers and the prompt hook come first). A refusal,
-a cold or stopped server and any error before the first token end the call with an error, so the
-chat route's existing fallback answers with the frontier talker (RF3). Modal holds a request
+yet, at the reasoning strength the adapter was trained at (``config.template_kwargs``); the
+server's reasoning parser keeps Glimmer's reasoning out of the streamed words. It refuses a
+request whose person's words trip Anjo's crisis floor, the last of four checks (the chat route's
+floor, the harness's no-model tiers and the prompt hook come first). A refusal, a cold or stopped
+server and any error before the first token end the call with an error, so the chat route's
+existing fallback answers with the frontier talker (RF3). Modal holds a request
 through a cold start of up to 20 minutes, so the runtime calls it under a short deadline of its
 own (``REPLY_DEADLINE_S``), apart from the container's three-hour limit.
 
@@ -69,12 +71,10 @@ PRICES_AS_OF: Final = "2026-10-27"
 # Nominal, per million tokens: the turn's spend gate needs a price, and Modal's real cost is GPU
 # time, which the budget ledger holds.
 NOMINAL_PRICES: Final = Prices(input_per_million=0.15, output_per_million=0.6, cache_read_per_million=None)
-# Glimmer's special tokens, kept out of any text the model is sent. Not yet read from the pinned
-# tokenizer: the Oct 28 check confirms them from its tokenizer_config.json.
-CONTROL_TOKENS: Final = (
-    "<|begin_of_text|>", "<|end_of_text|>", "<|start_header_id|>", "<|end_header_id|>",
-    "<|eot_id|>", "<|eom_id|>", "<|python_tag|>", "<|finetune_right_pad_id|>",
-)
+# Glimmer's special tokens, all 2,048 of them, kept out of any text the model is sent (the system
+# turn, the person's words, tool results, history and call ids): its chat framing (<|start|>,
+# <|message|>, <|eot|>) included, so no message can open a turn of its own.
+CONTROL_TOKENS: Final = config.CONTROL_TOKENS
 MAX_TOOLS: Final = 16
 # Modal must answer, and each later read arrive, within REPLY_DEADLINE_S. Past it the call ends
 # through the transient-error path (httpx's timeout, then TransportError), so a cold, stopped or
@@ -224,6 +224,13 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
 
     def _wire_model(self) -> str:
         return self._glimmer.adapter or config.MODEL
+
+    def _routing(self) -> dict[str, Any]:
+        """The chat template's arguments: the reasoning strength the adapter was trained at."""
+        try:
+            return {"chat_template_kwargs": config.template_kwargs()}
+        except config.ServeConfigError:
+            raise RequestNotSent("rejected") from None
 
     def _endpoint(self) -> tuple[str, dict[str, str]]:
         sagemaker = on_sagemaker()

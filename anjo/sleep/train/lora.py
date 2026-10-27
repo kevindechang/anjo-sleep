@@ -149,7 +149,9 @@ def fresh_adapter_name(user_id: str, night_number: int, used: frozenset[str]) ->
 
 
 def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None) -> dict[str, object]:
-    """What the training script is told: the recipe, the step plan and the learning rate."""
+    """What the training script is told: the recipe, the step plan, the learning rate, and the
+    reasoning strength the server renders every request at (``config.reasoning_strength``), so the
+    adapter trains on the prompt it is served."""
     plan = plan_steps(n_examples, cfg)
     return {
         "r": cfg.r, "alpha": cfg.alpha, "dropout": cfg.dropout,
@@ -159,6 +161,7 @@ def training_config(cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str 
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": cfg.batch_size,
         "warm_start": warm, "revision": revision, "objective": cfg.objective,
         "dpo_beta": cfg.dpo_beta, "dpo_learning_rate": cfg.dpo_lr, "min_optimizer_steps": cfg.min_optimizer_steps,
+        "reasoning_strength": config.reasoning_strength(),
     }
 
 

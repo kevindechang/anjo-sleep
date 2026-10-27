@@ -30,7 +30,8 @@ class FakeVllm:
                 "model": body["model"], "usage": {"prompt_tokens": 7, "completion_tokens": 2},
                 "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]})
         if request.url.path == "/tokenize":
-            return httpx.Response(200, json={"tokens": [1, 2, 3] if "messages" in body else [9, 8]})
+            tokens = [1, 2, 3] if "messages" in body else [5, 6] if body["prompt"] == config.USER_CHANNEL else [9, 8]
+            return httpx.Response(200, json={"tokens": tokens})
         if request.url.path == "/v1/completions":
             prompt = body["prompt"]
             logprobs = [None] + [{str(t): {"logprob": -0.5 * i, "rank": 1}} for i, t in enumerate(prompt[1:], 1)]
@@ -49,17 +50,31 @@ def test_complete_names_the_adapter_and_samples_as_registered() -> None:
     assert path == "/v1/chat/completions" and auth == "Bearer tok"
     assert (body["model"], body["temperature"], body["top_p"], body["top_k"], body["seed"]) == (
         ADAPTER.id, 1.0, 0.95, 64, 7)
+    assert body["chat_template_kwargs"] == {"reasoning_strength": "low"}  # as the adapter was trained
     assert result.text == "hello" and result.input_tokens == 7
     _client(fake).complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
     assert fake.requests[-1][1]["model"] == config.MODEL
 
 
-def test_continuation_logprobs_reads_the_tail_of_prompt_logprobs() -> None:
+def test_continuation_logprobs_scores_only_the_continuation_after_the_replys_header() -> None:
     fake = FakeVllm()
     scores = _client(fake).continuation_logprobs(None, [{"role": "user", "content": "q"}], " A")
-    assert list(scores) == [-1.5, -2.0]  # tokens 9 and 8, at positions 3 and 4
-    completion = fake.requests[-1][1]
-    assert completion["prompt"] == [1, 2, 3, 9, 8] and completion["prompt_logprobs"] == 0
+    assert list(scores) == [-2.5, -3.0]  # tokens 9 and 8, at positions 5 and 6
+    (_, chat, _), (_, header, _), (_, tail, _), (_, completion, _) = fake.requests
+    assert chat["add_generation_prompt"] is True and chat["chat_template_kwargs"] == {"reasoning_strength": "low"}
+    assert header == {"model": config.MODEL, "prompt": " to=user<|message|>", "add_special_tokens": False}
+    assert tail["add_special_tokens"] is False
+    assert completion["prompt"] == [1, 2, 3, 5, 6, 9, 8] and completion["prompt_logprobs"] == 0
+
+
+def test_the_reasoning_strength_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(config.REASONING_STRENGTH_ENV, "xhigh")
+    fake = FakeVllm()
+    _client(fake).complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+    assert fake.requests[-1][1]["chat_template_kwargs"] == {"reasoning_strength": "xhigh"}
+    monkeypatch.setenv(config.REASONING_STRENGTH_ENV, "max")
+    with pytest.raises(config.ServeConfigError):
+        _client(fake)
 
 
 def test_errors_name_the_endpoint_never_the_words() -> None:

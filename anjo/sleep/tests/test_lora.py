@@ -170,7 +170,7 @@ def test_training_script_parses_and_builds_its_config_offline() -> None:
         "r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
         "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": 1,
-        "warm_start": False, "revision": "a" * 40, "objective": "sft",
+        "warm_start": False, "revision": "a" * 40, "objective": "sft", "reasoning_strength": "low",
     })
     settings = colab_train.build_settings(colab_train.load_config(raw))
     assert settings["quantization"] == {
@@ -278,7 +278,7 @@ def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -
         "r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
         "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False,
         "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": 1,
-        "warm_start": False, "revision": "a" * 40,
+        "warm_start": False, "revision": "a" * 40, "reasoning_strength": "low",
     }
     sft = colab_train.build_settings(colab_train.load_config(json.dumps({**base, "objective": "sft"})))
     assert "dpo" not in sft

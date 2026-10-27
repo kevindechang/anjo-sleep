@@ -1,8 +1,9 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The training stack for Glimmer (``muse_glimmer``): one set of pins every runner installs, a LoRA
-that targets only the text decoder, the library settings of the pinned versions, and the smoke run's
-offline checks. Nothing here imports torch, transformers, peft or trl."""
+that targets only the text decoder, the library settings of the pinned versions, rows rendered as the
+server renders them, and the smoke run's offline checks. Nothing here imports torch, transformers,
+peft or trl."""
 from __future__ import annotations
 
 import ast
@@ -17,8 +18,9 @@ from typing import Any
 import pytest
 
 from anjo.sleep.budget import Ledger
+from anjo.sleep.serving import config
 from anjo.sleep.train import colab_train, smoke
-from anjo.sleep.train.lora import DATASET_FILE, DEFAULT_TARGET_MODULES, JOB, LoraCfg, adapter_name
+from anjo.sleep.train.lora import DATASET_FILE, DEFAULT_TARGET_MODULES, JOB, LoraCfg, adapter_name, training_config
 from anjo.sleep.train.runners import colab
 
 # Glimmer's linear modules, one of each kind (MuseGlimmerForConditionalGeneration, transformers 5.21)
@@ -84,7 +86,7 @@ def _settings(objective: str) -> dict[str, dict[str, Any]]:
     raw = {"r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
            "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False, "accumulation": 2,
            "epochs": 1, "batch_size": 1, "warm_start": False, "revision": "a" * 40, "objective": objective,
-           "dpo_beta": 0.1, "dpo_learning_rate": 5e-7, "min_optimizer_steps": 8}
+           "dpo_beta": 0.1, "dpo_learning_rate": 5e-7, "min_optimizer_steps": 8, "reasoning_strength": "low"}
     return colab_train.build_settings(colab_train.load_config(json.dumps(raw)))
 
 
@@ -109,20 +111,70 @@ def test_the_script_loads_glimmer_as_image_text_to_text() -> None:
 
 
 class _Tokenizer:
-    """transformers 5's default: tokenizing returns a dict unless ``return_dict=False``."""
+    """A chat template framed like Glimmer's, and tokenizing that returns a dict, as transformers 5's."""
 
-    def apply_chat_template(self, messages: list[dict[str, str]], **kw: Any) -> object:
-        ids = [0] * sum(len(message["content"].split()) for message in messages)
-        return ids if kw.get("return_dict") is False else {"input_ids": ids, "attention_mask": ids}
+    bos_token = "<|begin_of_text|>"
+
+    def apply_chat_template(self, messages: list[dict[str, Any]], *, add_generation_prompt: bool, tokenize: bool,
+                            reasoning_strength: str, current_date: str) -> str:
+        assert add_generation_prompt and not tokenize
+        turns = "".join(f"<|start|>{m['role']}<|message|>{m['content']}<|eot|>" for m in messages)
+        return f"{_Tokenizer.bos_token}[{reasoning_strength} {current_date}]{turns}<|start|>assistant"
+
+    def __call__(self, *, text: str) -> dict[str, list[int]]:
+        ids = [0] * len(text.split())
+        return {"input_ids": ids, "attention_mask": ids}
 
 
-def test_rows_are_measured_in_tokens_not_in_dict_keys() -> None:
-    prompt = [{"role": "user", "content": "q"}]
-    long = {"prompt": prompt, "completion": [{"role": "assistant", "content": "word " * 9000}]}
-    short = {"prompt": prompt, "completion": [{"role": "assistant", "content": "a b"}]}
-    pair = {"prompt": prompt, "chosen": short["completion"], "rejected": long["completion"]}
+def test_the_strength_and_the_framing_are_the_servers() -> None:
+    assert colab_train.REASONING_LEVELS == config.REASONING_LEVELS
+    assert config.DEFAULT_REASONING_STRENGTH in config.REASONING_LEVELS
+    assert (colab_train.USER_CHANNEL, colab_train.REPLY_END) == (config.USER_CHANNEL, config.REPLY_END)
+
+
+def test_a_row_is_rendered_as_served_with_the_header_on_the_prompt_side() -> None:
+    prompt = [{"role": "system", "content": "you are her"}, {"role": "user", "content": "q"}]
+    row = {"prompt": prompt, "completion": [{"role": "assistant", "content": "a"}]}
+    low = colab_train.template_kwargs({"reasoning_strength": "low"}, "2026-10-28")
+    assert low == {"reasoning_strength": "low", "current_date": "2026-10-28"}
+    assert colab_train.plain_row(_Tokenizer(), row, low) == {
+        "prompt": "[low 2026-10-28]<|start|>system<|message|>you are her<|eot|><|start|>user<|message|>q<|eot|>"
+                  "<|start|>assistant to=user<|message|>",  # the BOS is the tokenizer's to add, once
+        "completion": "a<|eot|>",
+    }
+    pair = {"prompt": prompt, "chosen": row["completion"], "rejected": [{"role": "assistant", "content": "b"}]}
+    plain = colab_train.plain_row(_Tokenizer(), pair, {**low, "reasoning_strength": "medium"})
+    assert plain["prompt"].startswith("[medium") and (plain["chosen"], plain["rejected"]) == ("a<|eot|>", "b<|eot|>")
+    for reply in ([{"role": "assistant", "content": [{"type": "text", "text": "a"}]}], [],
+                  [{"role": "user", "content": "a"}]):
+        with pytest.raises(ValueError):
+            colab_train.plain_row(_Tokenizer(), {"prompt": prompt, "completion": reply}, low)
+    no_bos = _Tokenizer()
+    no_bos.bos_token = "<|unk|>"
+    with pytest.raises(ValueError):
+        colab_train.plain_row(no_bos, row, low)
+
+
+def test_rows_are_measured_in_tokens_as_trl_counts_them() -> None:
+    long = {"prompt": "q", "completion": "word " * 9000}
+    short = {"prompt": "q", "completion": "a b"}
+    pair = {"prompt": "q", "chosen": "a b", "rejected": "word " * 9000}
     fits = [colab_train._fits(_Tokenizer(), row, 8192) for row in (long, short, pair)]
     assert fits == [False, True, False]
+
+
+def test_the_night_trains_at_the_servers_reasoning_strength(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(config.REASONING_STRENGTH_ENV, raising=False)
+    sent = training_config(LoraCfg(), 12, warm=False, revision="a" * 40)
+    assert sent["reasoning_strength"] == "low" == colab_train.load_config(json.dumps(sent))["reasoning_strength"]
+    monkeypatch.setenv(config.REASONING_STRENGTH_ENV, "high")
+    assert training_config(LoraCfg(), 12, warm=False, revision="a" * 40)["reasoning_strength"] == "high"
+    for wrong in ("max", None):
+        with pytest.raises(ValueError):
+            colab_train.load_config(json.dumps({**sent, "reasoning_strength": wrong}))
+    without = {key: value for key, value in sent.items() if key != "reasoning_strength"}
+    with pytest.raises(ValueError):
+        colab_train.load_config(json.dumps(without))
 
 
 def test_a_smoke_model_that_is_not_a_folder_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,6 +215,17 @@ def test_the_smoke_runs_adapter_check_refuses_anything_outside_the_text_decoder(
     for folder in bad:
         with pytest.raises(smoke.SmokeError):
             smoke.check_adapter(folder, layers=4, r=16)
+
+
+def test_the_smoke_run_holds_glimmers_special_tokens_to_the_control_tokens(tmp_path: Path) -> None:
+    added = [{"id": config.FIRST_SPECIAL_ID + i, "content": token, "special": True}
+             for i, token in enumerate(config.CONTROL_TOKENS)]
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": added}))
+    assert smoke.check_control_tokens(tmp_path) == 2048
+    moved = [*added[:22], {**added[22], "content": "<|start_header_id|>"}, *added[23:]]
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": moved}))
+    with pytest.raises(smoke.SmokeError):
+        smoke.check_control_tokens(tmp_path)
 
 
 def test_the_smoke_run_checks_the_pins_and_trains_on_rows_that_must_be_dropped() -> None:
