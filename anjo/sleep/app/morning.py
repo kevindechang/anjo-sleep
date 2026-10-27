@@ -55,7 +55,7 @@ def build(user_id: str, persona: str, night: date) -> Morning:
     if not is_synthetic(user_id):
         raise ValueError(f"{persona} runs only on an account registered as synthetic")
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
-    client = serving.client()
+    client = serving.client().on(night)  # prompts dated on the night's clock
     sealed = [replace(p, person_id=user_id) for p in load_sealed(Path(_env(SEALED_ENV)) / f"{persona}.jsonl")]
 
     def probes(uid: str) -> list[Probe]:

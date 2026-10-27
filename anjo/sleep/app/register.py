@@ -27,6 +27,9 @@ from anjo.core import erasure, open_model_turn, outreach, talker_choice
 from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
 from anjo.sleep.app.cleared_sessions import in_cleared_session
+from anjo.sleep.app.demo_api import PUBLIC_PREFIXES as DEMO_PUBLIC
+from anjo.sleep.app.demo_api import page_router as demo_page_router
+from anjo.sleep.app.demo_api import router as demo_router
 from anjo.sleep.app.delivery import held
 from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_enabled_for
 from anjo.sleep.app.ownership import remote_cleanup
@@ -34,6 +37,7 @@ from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_ho
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
 from anjo.sleep.app.storage import brief_store, checkpoint_registry
 from anjo.sleep.context.brief_store import ServedBriefs, TrainingBriefs
+from anjo.sleep.types import CheckpointRef
 
 
 def _add(hooks: list[Any], hook: Any) -> None:
@@ -41,10 +45,9 @@ def _add(hooks: list[Any], hook: Any) -> None:
         hooks.append(hook)
 
 
-def _promoted_adapter(user_id: str) -> str | None:
+def _promoted_adapter(user_id: str) -> CheckpointRef | None:
     """The adapter that serves ``user_id``: their last promoted checkpoint, or none (the base)."""
-    promoted = checkpoint_registry().last_promoted(user_id)
-    return None if promoted is None else promoted.id
+    return checkpoint_registry().last_promoted(user_id)
 
 
 def register_hooks() -> None:
@@ -80,6 +83,11 @@ def unregister_hooks() -> None:
 
 
 def register_sleep(app: Any) -> None:
-    """The hooks, and the dev API under ``/api``."""
+    """The hooks, the dev API under ``/api``, and the live demo page (Task 13a): the page at
+    ``/sleep/demo`` and its routes under ``/api/sleep/demo``, the only paths opened to anonymous
+    visitors (``app.state.public_prefixes``, read by the app's auth middleware)."""
     register_hooks()
     app.include_router(router, prefix="/api")
+    app.include_router(demo_router, prefix="/api")
+    app.include_router(demo_page_router)
+    app.state.public_prefixes = DEMO_PUBLIC

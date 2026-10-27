@@ -217,11 +217,12 @@ its next start, and the L40S costs about $2 an hour while up.
    at the same precision, and record that in the night log and the README.
 3. **FP8 against bf16 on the general set.** Run Task 5's general gate set on both precisions. If
    FP8 loses more than the gate's own margin, switch `SERVING` to `BF16_A100`.
-4. **Tool calls.** Find the parser that reads Glimmer's tool calls and set
-   `ANJO_SLEEP_TOOL_CALL_PARSER` on the deploy and the dev host. If no parser reads them, leave it
-   unset; turns then run without tools, and the README says so.
+4. **Tool calls.** Chat turns run without tools: the runtime writes the reply's header itself
+   (`/tokenize`, then `/v1/completions`) so the tokens served are the tokens trained. A tool-call
+   parser (`ANJO_SLEEP_TOOL_CALL_PARSER`) only changes the server's chat route, which no turn uses.
 5. **Control tokens.** Read Glimmer's special tokens from the pinned `tokenizer_config.json`, and
-   fix `runtime.CONTROL_TOKENS` if they differ.
+   fix `config.NAMED_SPECIAL_TOKENS` if they differ; `serving.framing` breaks every one of them in
+   what Glimmer is sent or trained on, and the train smoke checks a hostile row end to end.
 6. **Wake time**, from 0 copies to the first answer (`python -m anjo.sleep.serving.wake --wake`
    prints it), and its parts from the container log and `status`: instance provisioning, image
    pull, weights copy, vLLM load. Nothing of this is measured yet.
@@ -436,6 +437,13 @@ acceptable:
 python -m anjo.sleep.serving.wake --keep-warm-minutes 90   # wakes, then pings every 240 s
 ```
 
+Run it as the service user with the environment file loaded, as the app runs:
+`sudo -u <service user> bash -c 'set -a; . /etc/anjo-sleep/env; set +a; exec python -m anjo.sleep.serving.wake --keep-warm-minutes 90'`.
+Each answered ping writes `$ANJO_DATA_DIR/sleep/serving/warm_window.json`, which the live demo page
+reads to answer inside the window on either backend (on Modal it never pings, since a request would
+start a container) and to charge none of it to its own warm-time cap. Without `ANJO_DATA_DIR` the
+window refuses to start, before anything wakes.
+
 It uses the backend `ANJO_SLEEP_BACKEND` names and never prints a credential. A window is capped at
 180 minutes, and on SageMaker it ends by setting the copy count to 0, after an error or Ctrl-C too.
 If the process dies, the pings stop and the idle net (SageMaker, 30 minutes) or Modal's own window
@@ -475,8 +483,9 @@ SageMaker** ($2.81 on g6e.2xlarge) (about $2 on Modal) while it is up, so **each
    in distress, so the frontier talker answers it. Otherwise it adds context C. In a cleared
    session it builds the cleared context instead.
 4. `SleepRuntime` refuses a request whose latest words trip the floor. It sends the adapter
-   name, or the base model, to Glimmer (SageMaker's endpoint, or Modal). It records the reply as served once Glimmer's first word
-   is shown, or, in a tool round whose words are held back, once the round ends cleanly.
+   name, or the base model, to Glimmer (SageMaker's endpoint, or Modal), and refuses an adapter
+   trained under another rendering (`serving.framing.rendering`). It records the reply as served
+   once Glimmer's first word is shown.
 5. Any error before that (asleep, stopped, refused, broken off, or no reply within the 20 s
    deadline) falls back to the frontier talker (RF3), and the sidecar says `fallback`.
 

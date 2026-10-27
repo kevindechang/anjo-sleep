@@ -63,7 +63,8 @@ class Extractor:
     def __init__(self, world: World) -> None:
         self.world = world
 
-    def extract_day(self, user_id: str, day: date, win: tuple[datetime, datetime]) -> list[Evidence]:
+    def extract_day(self, user_id: str, day: date, win: tuple[datetime, datetime],
+                    as_of: datetime | None = None) -> list[Evidence]:
         self.world.events.append(("extract", user_id, day, win))
         if user_id in self.world.extract_fails:
             raise self.world.extract_fails[user_id]

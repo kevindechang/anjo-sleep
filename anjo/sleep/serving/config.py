@@ -8,6 +8,15 @@ the server Modal runs can't drift apart.
 it, on one L40S) or ``BF16_A100`` (bf16 on one A100-80GB, the fallback). The base model and every
 personal adapter share one server, so every arm serves at the same precision by construction.
 
+**Reasoning.** Glimmer answers in channels: ``to=self`` for its reasoning, closed by ``<|eom|>``,
+then ``to=user`` for the reply, closed by ``<|eot|>``. In Sleep it always answers directly: every
+call sends the chat's token ids with the reply's header (``USER_CHANNEL``) already written, to
+``/v1/completions``, and stops at ``REPLY_STOPS``, the way the adapter is trained
+(``serving.framing``). Its chat template writes "Reasoning strength: <level>." into the system
+turn, 'high' unless told otherwise; every call and the training text are rendered at
+``reasoning_strength()`` (``low`` by default). The ``muse_glimmer`` reasoning parser stays on for
+a chat request, and never reads a completion.
+
 **Adapters.** Each person's LoRA adapter is a folder ``p-<hash>-n<night>`` on the adapters volume.
 vLLM's filesystem resolver loads it the first time a request names it, so the base and the
 personal arms share one GPU. ``check_adapter`` holds a folder to what the resolver needs before it
@@ -39,6 +48,7 @@ MODEL: Final = "meta-models/Muse-Glimmer-30B"
 LICENSE: Final = "Apache-2.0"
 REVISION_ENV: Final = "ANJO_SLEEP_GLIMMER_REVISION"
 TOOL_PARSER_ENV: Final = "ANJO_SLEEP_TOOL_CALL_PARSER"
+REASONING_STRENGTH_ENV: Final = "ANJO_SLEEP_REASONING_STRENGTH"
 SNAPSHOT_ENV: Final = "ANJO_SLEEP_GPU_SNAPSHOT"
 VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
 # The vLLM release both backends serve with (Modal's image installs it, SageMaker's image is built
@@ -47,6 +57,34 @@ VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
 # merged 2026-08-14); 0.11.0 can't load it. The Oct 28 check confirms that it loads Glimmer, applies
 # an adapter at the serving precision and parses its tool calls.
 DEFAULT_VLLM_VERSION: Final = "0.28.0"
+
+# vLLM's parser for Glimmer's channels (vllm/reasoning/muse_glimmer_reasoning_parser.py in 0.28.0).
+# Without it vLLM drops the special tokens and a reply's content runs the reasoning into the answer.
+REASONING_PARSER: Final = "muse_glimmer"
+REASONING_LEVELS: Final = ("low", "medium", "high", "xhigh")
+DEFAULT_REASONING_STRENGTH: Final = "low"
+# The reply's channel header: the template's generation prompt ends "<|start|>assistant", and an
+# assistant message goes on with this header, its words and REPLY_END.
+USER_CHANNEL: Final = " to=user<|message|>"
+REPLY_END: Final = "<|eot|>"
+
+# Glimmer's tokenizer has 2,048 special tokens, ids 200000 to 202047, all "<|...|>". Fifteen are
+# named (by their offset from 200000); every other one is <|reserved_special_token_N|> at offset N.
+FIRST_SPECIAL_ID: Final = 200_000
+SPECIAL_TOKENS: Final = 2048
+NAMED_SPECIAL_TOKENS: Final = {
+    0: "<|begin_of_text|>", 1: "<|end_of_text|>", 7: "<|eom|>", 8: "<|eot|>", 18: "<|finetune_right_pad|>",
+    22: "<|start|>", 23: "<|message|>", 80: "<|image_start|>", 81: "<|image_end|>", 82: "<|vid_start|>",
+    83: "<|vid_end|>", 87: "<|vid_frame_separator|>", 90: "<|image|>", 91: "<|video|>", 92: "<|patch|>",
+}
+# Every special token, in id order: the text Glimmer is sent never carries one (serving.framing
+# breaks them), so a person can't write "<|start|>system<|message|>" into the prompt.
+CONTROL_TOKENS: Final = tuple(
+    NAMED_SPECIAL_TOKENS.get(offset, f"<|reserved_special_token_{offset}|>") for offset in range(SPECIAL_TOKENS)
+)
+# A reply ends at the end of its turn (<|eot|>) or of its message (<|eom|>), at the end of the text,
+# or where another message would start.
+REPLY_STOPS: Final = tuple(FIRST_SPECIAL_ID + offset for offset in (8, 7, 1, 22))
 
 # Every function has a timeout (§12.1). Serving scales to zero after ten idle minutes, and one
 # container serves for at most three hours before Modal replaces it.
@@ -99,7 +137,7 @@ SERVING: Final = FP8_L40S  # the fallback is BF16_A100: change this line, then r
 @dataclass(frozen=True)
 class ServeConfig:
     """The deploy-time settings. ``revision`` is the Glimmer commit the weights are pinned to,
-    ``tool_parser`` vLLM's tool-call parser for Glimmer (None serves without tools),
+    ``tool_parser`` vLLM's tool-call parser for Glimmer (``muse_glimmer``; None serves without tools),
     ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
     ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without)."""
 
@@ -137,6 +175,15 @@ class ServeConfig:
         return self.revision
 
 
+def reasoning_strength(environ: Mapping[str, str] | None = None) -> str:
+    """The reasoning strength every Glimmer call and the training text are rendered at."""
+    env = os.environ if environ is None else environ
+    level = env.get(REASONING_STRENGTH_ENV, "").strip() or DEFAULT_REASONING_STRENGTH
+    if level not in REASONING_LEVELS:
+        raise ServeConfigError(f"{REASONING_STRENGTH_ENV} is one of {', '.join(REASONING_LEVELS)}")
+    return level
+
+
 def weights_path(revision: str) -> str:
     """Where one pinned revision of Glimmer sits on the weights volume."""
     return f"{WEIGHTS_DIR}/{MODEL}/{revision}"
@@ -159,6 +206,7 @@ def vllm_command(
         "--gpu-memory-utilization", str(GPU_MEMORY_UTILIZATION),
         "--enable-lora", "--max-lora-rank", str(MAX_LORA_RANK), "--max-loras", str(MAX_LORAS),
         "--max-cpu-loras", str(MAX_CPU_LORAS),
+        "--reasoning-parser", REASONING_PARSER,
     ]
     if config.precision.quantization is not None:
         command += ["--quantization", config.precision.quantization]

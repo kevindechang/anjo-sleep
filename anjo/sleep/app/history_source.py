@@ -11,9 +11,12 @@ day: new items enter the evidence store once and their mentions update the targe
 commits the day in the extraction log, so a re-run of the same day and window over the same turns
 reads the stored items back without calling the model.
 
-Times come from the window, on the night's clock: items are created at its end, and the targets
-shown to the model are those open at its end. An accelerated run passes the window recorded
-around each simulated day with a virtual date, so seven simulated days stay seven days.
+The window says which turns are read. The night's clock is ``as_of``: the targets shown to the model
+are those open at it (a target is first seen on its day's virtual date). Items are created at the
+window's end or ``as_of``, whichever is earlier, so a reader on either clock sees them: chat-time
+retrieval on the wall clock (a virtual date may lie in the future) and the night's tools, masked to
+``as_of`` (a virtual date may lie in the past). ``as_of`` is the window's end in real time, so the two
+are equal there; an accelerated run passes the virtual night end, so seven simulated days stay seven days.
 """
 from __future__ import annotations
 
@@ -78,6 +81,7 @@ class HistorySource:
 
     def record_day(
         self, user_id: str, day: date, window: tuple[datetime, datetime],
+        as_of: datetime | None = None,
     ) -> tuple[list[Evidence], Extraction | None]:
         """The items the day's extraction stored, and the extraction (its tokens and refusals).
         A day and window already committed over the same turns returns its stored items and
@@ -106,9 +110,10 @@ class HistorySource:
                 raise ValueError("a committed extraction names items the evidence store doesn't hold")
             return [stored[item_id] for item_id in committed], None
         targets = target_store(user_id)
+        night = end if as_of is None else as_of
         extraction = extract(
             user_id, day, turns, imported=() if synthetic else own_imports(user_id),
-            targets=targets.open_targets(end), known_ids=evidence.ids(), now=end, chat=self._chat,
+            targets=targets.open_targets(night), known_ids=evidence.ids(), now=min(end, night), chat=self._chat,
         )
         if extraction.refused:
             logger.warning("sleep extraction left out %d malformed items", len(extraction.refused))
@@ -116,6 +121,8 @@ class HistorySource:
         log.commit(day, window, read, [item.id for item in added])
         return added, extraction
 
-    def extract_day(self, user_id: str, day: date, window: tuple[datetime, datetime]) -> list[Evidence]:
-        return self.record_day(user_id, day, window)[0]
+    def extract_day(
+        self, user_id: str, day: date, window: tuple[datetime, datetime], as_of: datetime | None = None,
+    ) -> list[Evidence]:
+        return self.record_day(user_id, day, window, as_of)[0]
 

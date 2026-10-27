@@ -70,7 +70,7 @@ def execute(
     *, wiring: str, night: date, users: Sequence[str], personas: Mapping[str, str], allow_real: bool = False,
     practice_scenes: int = 16, teacher: bool = True, simulate: str | None = None, day: int | None = None,
     seed: int = 20261028, windows: Mapping[str, Window] | None = None, days: Mapping[str, DayRun] | None = None,
-    as_of: Mapping[str, datetime] | None = None,
+    as_of: Mapping[str, datetime] | None = None, mind: bool = False,
 ) -> dict[str, NightResult]:
     """The night for ``users`` under the lock and sweep, with Colab training and the adapter upload.
     ``windows`` gives each person's own window (the real-time schedule's previous day); a simulated
@@ -79,7 +79,7 @@ def execute(
     day played here decides at the end of the virtual ``night``. Also used by ``night/daily.py``."""
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or _no_data_dir())
     options = NightOptions(night=night, personas=dict(personas), allow_real=allow_real,
-                           practice_scenes=practice_scenes, practice_teacher=teacher)
+                           practice_scenes=practice_scenes, practice_teacher=teacher, mind_inquiry=mind)
     # Colab trains only the people named with a persona (the wiring refuses a persona on an account
     # that isn't registered synthetic), and anyone else only with --allow-real.
     cli, ledger = _colab_cli(), default_ledger()
@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--simulate", help="the app's day runner, <module>:<function>, run per persona first")
     parser.add_argument("--day", type=int, help="the persona's day index to simulate")
     parser.add_argument("--seed", type=int, default=20261028)
+    parser.add_argument("--mind", action="store_true", help="MIND's inquiry in the night (Task 17)")
     args = parser.parse_args(argv)
     if len(args.personas) > len(args.users):
         parser.error("more personas than users")
@@ -131,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     results = execute(
         wiring=args.wiring, night=args.night, users=args.users, personas=personas, allow_real=args.allow_real,
         practice_scenes=args.practice_scenes, teacher=not args.no_teacher, simulate=args.simulate, day=args.day,
-        seed=args.seed,
+        seed=args.seed, mind=args.mind,
     )
     print(json.dumps({user: {"status": r.status, "failed_at": r.failed_at, "log": str(r.log_path)}
                       for user, r in results.items()}, indent=1))

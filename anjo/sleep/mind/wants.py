@@ -128,7 +128,9 @@ def _share(target_id: str, kind: str, snapshot: WantSnapshot) -> Want | None:
 
 
 def _after_last_message(result: Result, snapshot: WantSnapshot) -> bool:
-    return snapshot.last_message_at is None or result.created_at > snapshot.last_message_at
+    """Made since the person last wrote. A night stamps the day's evidence and its own results at the
+    same moment (its window's end, or its clock), so a result stamped then is news."""
+    return snapshot.last_message_at is None or result.created_at >= snapshot.last_message_at
 
 
 def _share_strength(result: Result) -> float:

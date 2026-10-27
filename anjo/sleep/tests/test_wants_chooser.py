@@ -534,6 +534,14 @@ def test_receipt_outcome_must_be_one_of_the_four() -> None:
         assert "lonely" not in str(caught.value)
 
 
+def test_a_result_stamped_with_the_persons_last_words_is_news() -> None:
+    """The night stamps her day's evidence and its own results at one moment: that result is new to her."""
+    thread = _thread("t1", revision=2, acted=2)
+    assert _ids(_wants(thread, results=(_result("t1", sources=2, created_at=SPOKE),))) == ["share:hold_note:t1"]
+    earlier = _result("t1", sources=2, created_at=SPOKE - timedelta(seconds=1))
+    assert _wants(thread, results=(earlier,)) == ()
+
+
 def test_waiting_thread_result_shares_without_reopening_thread() -> None:
     thread = _thread("t1", revision=2, acted=2)
     shot = _snap(thread, results=(_result("t1", sources=2),))

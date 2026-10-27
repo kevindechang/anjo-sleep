@@ -46,7 +46,7 @@ class NoCheckpoint(LookupError):
 def ref_record(ckpt: CheckpointRef) -> dict[str, Any]:
     return {
         "id": ckpt.id, "person_id": ckpt.person_id, "night": ckpt.night.isoformat(),
-        "uri": ckpt.uri, "parent_id": ckpt.parent_id,
+        "uri": ckpt.uri, "parent_id": ckpt.parent_id, "rendering": ckpt.rendering,
     }
 
 
@@ -57,6 +57,7 @@ def ref_from_record(record: Mapping[str, Any]) -> CheckpointRef:
             id=str(record["id"]), person_id=str(record["person_id"]),
             night=date.fromisoformat(record["night"]), uri=str(record["uri"]),
             parent_id=None if parent is None else str(parent),
+            rendering=None if record.get("rendering") is None else str(record["rendering"]),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise CheckpointError(f"not a checkpoint record ({type(error).__name__})") from None

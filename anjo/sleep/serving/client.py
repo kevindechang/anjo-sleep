@@ -1,14 +1,23 @@
 """The night's client for Glimmer's vLLM server (Task 5): practice, every gate and every arm go
 through it, so all of them sample one server at one precision (``config.SERVING``).
 
-It is the ``ModelClient`` and ``TokenLogprobs`` port over vLLM's OpenAI-compatible API:
+It is the ``ModelClient`` and ``TokenLogprobs`` port over vLLM's OpenAI-compatible API. Every call
+renders the chat the way the adapter is trained (``reply_prompt``): its text cleaned
+(``framing.clean_messages``), ``/tokenize`` turns it into token ids with the generation prompt
+(``<|start|>assistant``) at the rendering's reasoning strength and the client's date, and the
+reply's channel header (``config.USER_CHANNEL``) follows as its own ids. So Glimmer answers
+directly, never reasoning first, and the prompt is token for token a training row's.
 
-- ``complete`` asks ``/v1/chat/completions`` for one sampled reply, naming the person's adapter
-  as the model (the base model when there is none) with the registered sampling (temperature as
-  given, top_p 0.95, top_k 64) and a seed, so evals repeat;
-- ``continuation_logprobs`` scores a continuation token by token: ``/tokenize`` turns the chat
-  (with the generation prompt) and the continuation into token ids, and ``/v1/completions`` returns
-  the prompt's log-probabilities with ``prompt_logprobs``, one generated token at most.
+- ``complete`` sends those ids to ``/v1/completions`` for one sampled reply, naming the person's
+  adapter as the model (the base model when there is none) with the registered sampling
+  (temperature as given, top_p 0.95, top_k 64) and a seed, so evals repeat; the reply ends at
+  ``config.REPLY_STOPS``;
+- ``continuation_logprobs`` scores a continuation token by token: the same ids, then the
+  continuation's, and ``/v1/completions`` returns the prompt's log-probabilities with
+  ``prompt_logprobs``, one generated token at most. Only the continuation's tokens are scored.
+
+An adapter is served only under the rendering it was trained under (``CheckpointRef.rendering``);
+any other is refused with ``ServingError``, before a request is sent.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -22,12 +31,13 @@ import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from typing import Any, Final, Protocol
 
 import httpx
 
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, framing
 from anjo.sleep.types import CheckpointRef
 
 TOP_P: Final = 0.95
@@ -158,9 +168,36 @@ class HttpPoster:
         return json_object(path, response.content)
 
 
+def tokens(poster: Poster, body: Mapping[str, Any]) -> list[int]:
+    """``/tokenize``'s token ids for ``body``, or ``ServingError``."""
+    data = poster.post("/tokenize", body)
+    ids = data.get("tokens")
+    if not isinstance(ids, list) or not all(isinstance(t, int) and not isinstance(t, bool) for t in ids):
+        raise ServingError("/tokenize sent no token ids")
+    return ids
+
+
+def reply_prompt(
+    poster: Poster, model: str, messages: Sequence[Mapping[str, Any]], strength: str, day: date,
+) -> list[int]:
+    """The ids Glimmer is prompted with, as a training row's prompt: the cleaned chat with the
+    generation prompt, rendered at ``strength`` on ``day``, then the reply's header."""
+    chat = tokens(poster, {
+        "model": model, "messages": framing.clean_messages(messages), "add_generation_prompt": True,
+        "chat_template_kwargs": framing.template_kwargs(strength, day),
+    })
+    header = tokens(poster, {"model": model, "prompt": config.USER_CHANNEL, "add_special_tokens": False})
+    return chat + header
+
+
+def utc_today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
 class VllmClient:
     """``ModelClient`` and ``TokenLogprobs`` over one vLLM server: Modal's https URL with its
-    bearer token, or any other ``Poster`` (``VllmClient.over``)."""
+    bearer token, or any other ``Poster`` (``VllmClient.over``). ``on(day)`` dates its prompts
+    (the night's date, virtual in an accelerated run); unset, they carry today's UTC date."""
 
     precision: Final = config.SERVING.name
 
@@ -168,14 +205,28 @@ class VllmClient:
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS,
     ) -> None:
+        self._strength = config.reasoning_strength()
         self._poster: Poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
         self._max_tokens = max_tokens
+        self._day: date | None = None
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
         client = cls.__new__(cls)
-        client._poster, client._max_tokens = poster, max_tokens
+        client._strength = config.reasoning_strength()
+        client._poster, client._max_tokens, client._day = poster, max_tokens, None
         return client
+
+    def on(self, day: date) -> VllmClient:
+        """This client, its prompts dated ``day``; the poster is shared."""
+        dated = type(self).__new__(type(self))
+        dated.__dict__.update(self.__dict__)
+        dated._day = day
+        return dated
+
+    @property
+    def rendering(self) -> str:
+        return framing.rendering(self._strength)
 
     def close(self) -> None:
         self._poster.close()
@@ -183,41 +234,47 @@ class VllmClient:
     def _post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._poster.post(path, body)
 
+    def _tokens(self, body: Mapping[str, Any]) -> list[int]:
+        return tokens(self._poster, body)
+
+    def _prompt(self, adapter: CheckpointRef | None, messages: Sequence[Mapping[str, Any]]) -> tuple[str, list[int]]:
+        """The model to name and the prompt's ids; an adapter trained under another rendering is refused."""
+        if adapter is not None and adapter.rendering != self.rendering:
+            raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
+                               f"not {self.rendering}; it is never served under another")
+        model = model_name(adapter)
+        return model, reply_prompt(self._poster, model, messages, self._strength, self._day or utc_today())
+
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
-        seed: int | None = None,
+        seed: int | None = None, max_tokens: int | None = None,
     ) -> ChatResult:
+        """One reply; ``max_tokens`` caps this call alone (MIND's thinker passes its allowance)."""
+        model, prompt = self._prompt(adapter, messages)
         body: dict[str, Any] = {
-            "model": model_name(adapter), "messages": messages, "temperature": temperature,
-            "top_p": TOP_P, "top_k": TOP_K, "max_tokens": self._max_tokens,
+            "model": model, "prompt": prompt, "temperature": temperature, "top_p": TOP_P, "top_k": TOP_K,
+            "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
+            "stop_token_ids": list(config.REPLY_STOPS),
         }
         if seed is not None:
             body["seed"] = seed
-        data = self._post("/v1/chat/completions", body)
+        data = self._post("/v1/completions", body)
         try:
             choice, usage = data["choices"][0], data["usage"]
-            content = choice["message"].get("content")
+            text = choice.get("text")
             return ChatResult(
-                text="" if content is None else str(content), tool_calls=(), model=str(data["model"]),
+                text="" if text is None else str(text), tool_calls=(), model=str(data["model"]),
                 input_tokens=int(usage["prompt_tokens"]), output_tokens=int(usage["completion_tokens"]),
                 finish_reason=choice.get("finish_reason"),
             )
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
-            raise ServingError("/v1/chat/completions sent a malformed reply") from None
-
-    def _tokens(self, body: Mapping[str, Any]) -> list[int]:
-        data = self._post("/tokenize", body)
-        tokens = data.get("tokens")
-        if not isinstance(tokens, list) or not all(isinstance(t, int) and not isinstance(t, bool) for t in tokens):
-            raise ServingError("/tokenize sent no token ids")
-        return tokens
+            raise ServingError("/v1/completions sent a malformed reply") from None
 
     def continuation_logprobs(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
     ) -> Sequence[float]:
-        model = model_name(adapter)
-        prompt = self._tokens({"model": model, "messages": messages, "add_generation_prompt": True})
-        tail = self._tokens({"model": model, "prompt": continuation, "add_special_tokens": False})
+        model, prompt = self._prompt(adapter, messages)
+        tail = self._tokens({"model": model, "prompt": framing.clean_text(continuation), "add_special_tokens": False})
         if not tail:
             raise ServingError("the continuation has no tokens")
         data = self._post("/v1/completions", {

@@ -1,27 +1,29 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The accelerated runner (Task 12a): each day is simulated, its wall-clock window recorded, and the
-night run on that window and the virtual date; records are labeled; the fake gate is offline and
-deterministic."""
+night run on that window and the virtual date, in the past; records are labeled; the fake gate is
+offline and deterministic."""
 from __future__ import annotations
 
 import json
 import time
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from anjo.sleep.night.deps import NightDeps
+from anjo.sleep.night.run import day_window
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
 from anjo.sleep.probes.morning import MorningError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import CheckpointRef
-from anjo.sleep.tests.accelerated_rig import FAKE_SHA, FakeAccelerated
+from anjo.sleep.tests.accelerated_rig import CLOCK_START, FAKE_SHA, FakeAccelerated
 
-START = date(2026, 11, 3)
+START = date(2026, 10, 20)  # before the rig's wall clock (2026-10-28): an accelerated life is dated in the past
 PERSONAS = Path(__file__).parents[1] / "personas"
 FOUNDER = load_person_file(PERSONAS / "founder.json").visible
 DONOR = load_person_file(PERSONAS / "founder_donor.json").visible
@@ -57,8 +59,9 @@ def test_two_accelerated_days_extract_separate_evidence(tmp_path: Path) -> None:
     store = fake.world.evidence("u1")
     one, two = ([i for i in store.for_day(d) if i.kind == "lesson"] for d in (START, START + timedelta(days=1)))
     assert one and two and not {i.id for i in one} & {i.id for i in two}
-    assert all(first_start <= i.created_at < first_end for i in one)
-    assert all(second_start <= i.created_at < second_end for i in two)
+    # stamped as the history source stamps them, at their own night's clock: earlier than their window
+    assert all(i.created_at == day_window(START)[1] < first_end for i in one)
+    assert all(i.created_at == day_window(START + timedelta(days=1))[1] < second_end for i in two)
 
 
 def test_a_window_that_overlaps_the_last_day_is_refused(tmp_path: Path) -> None:
@@ -114,11 +117,45 @@ def test_fake_gate_digest_changes_when_the_run_does(capsys: pytest.CaptureFixtur
     assert json.loads(capsys.readouterr().out)["digest"] != two
 
 
+def test_a_life_dated_after_the_run_starts_is_refused_before_any_paid_step(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    touched: list[object] = []
+
+    def simulate(uid: str, person: object, i: int, seed: int) -> DayRun:
+        touched.append(uid)
+        raise AssertionError("a refused life simulates no day")
+
+    def deps_for(night: date) -> NightDeps:
+        touched.append(night)
+        raise AssertionError("a refused life runs no night")
+
+    rig = replace(fake.rig(), simulate=simulate, deps_for=deps_for)
+    last = CLOCK_START.date() - timedelta(days=1)  # two nights from here: the second ends after the run starts
+    with pytest.raises(AcceleratedError, match="dated in the past, so start on or before 2026-10-26"):
+        run_accelerated("u1", FOUNDER, 2, last, rig=rig)
+    with pytest.raises(AcceleratedError, match="dated in the past"):
+        run_accelerated("u1", FOUNDER, 1, date(2026, 11, 3), rig=rig)
+    assert touched == [] and fake.world.events == [] and fake.clock.now == CLOCK_START  # no day, no night
+    assert [r.status for r in run_accelerated("u1", FOUNDER, 2, last - timedelta(days=1), rig=fake.rig())] == ["promoted"] * 2
+
+
+def test_the_command_starts_a_life_in_the_past_by_default(capsys: pytest.CaptureFixture[str]) -> None:
+    assert accelerated.main(["--fake", "--days", "3"]) == 0
+    nights = [n["night"] for n in json.loads(capsys.readouterr().out)["nights"]]
+    assert nights == ["2026-10-25", "2026-10-26", "2026-10-27"]  # the rig's clock reads 2026-10-28: the last ended at midnight
+    with pytest.raises(SystemExit):
+        accelerated.main(["--fake", "--days", "3", "--start", "2026-11-03"])
+    assert "dated in the past" in capsys.readouterr().err
+    now = datetime(2026, 11, 9, 0, 0, tzinfo=timezone.utc)
+    assert accelerated.latest_start(now, 7) == date(2026, 11, 2)
+    accelerated.check_dates(date(2026, 11, 2), 7, now)  # its last night ends exactly as the run starts
+
+
 def test_a_real_run_names_its_wiring_and_a_persona() -> None:
     with pytest.raises(SystemExit):
-        accelerated.main(["--days", "2", "--start", "2026-11-03", "--user", "u1"])
+        accelerated.main(["--days", "2", "--start", "2026-10-20", "--user", "u1"])
     with pytest.raises(SystemExit):  # a user without a persona is a real person: never accelerated
-        accelerated.main(["--wiring", "x:y", "--simulate", "x:z", "--days", "2", "--start", "2026-11-03", "--user", "u1"])
+        accelerated.main(["--wiring", "x:y", "--simulate", "x:z", "--days", "2", "--start", "2026-10-20", "--user", "u1"])
 
 
 def test_the_git_sha_is_read_from_the_repo() -> None:

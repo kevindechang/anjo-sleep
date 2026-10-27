@@ -44,6 +44,7 @@ from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.ports import Decontaminator, EvidenceStore
 from anjo.sleep.practice.transcripts import PracticeTranscript, TranscriptStore
 from anjo.sleep.provenance import may_train
+from anjo.sleep.serving import framing
 from anjo.sleep.types import Evidence, Probe
 
 DEFAULT_DROPOUT: Final = 0.6
@@ -96,7 +97,13 @@ class Pair:
 
 
 def _messages(prompt: tuple[Message, ...]) -> list[dict[str, str]]:
-    return [{"role": role, "content": text} for role, text in prompt]
+    """A prompt as the server is sent it: its text cleaned of Glimmer's special tokens, and its
+    system turn of the template's reasoning phrase (``framing.clean_messages``)."""
+    return framing.clean_messages([{"role": role, "content": text} for role, text in prompt])
+
+
+def _reply(text: str) -> list[dict[str, str]]:
+    return [{"role": "assistant", "content": framing.clean_text(text)}]
 
 
 @dataclass(frozen=True)
@@ -120,18 +127,16 @@ class Dataset:
     def to_jsonl(self, *, pairs: bool = False) -> str:
         """The rows the training script reads: conversational prompt/completion, so TRL puts the
         loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
-        rejected) for the DPO pass."""
+        rejected) for the DPO pass. Every text is cleaned as the server's prompt is."""
         rows = [
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
-             "prompt": _messages(example.prompt),
-             "completion": [{"role": "assistant", "content": example.completion}]}
+             "prompt": _messages(example.prompt), "completion": _reply(example.completion)}
             for example in self.examples
         ]
         if pairs:
             rows += [
-                {"id": pair.id, "prompt": _messages(pair.prompt),
-                 "chosen": [{"role": "assistant", "content": pair.chosen}],
-                 "rejected": [{"role": "assistant", "content": pair.rejected}]}
+                {"id": pair.id, "prompt": _messages(pair.prompt), "chosen": _reply(pair.chosen),
+                 "rejected": _reply(pair.rejected)}
                 for pair in self.pairs
             ]
         return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)

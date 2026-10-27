@@ -289,6 +289,7 @@ def test_every_phase_puts_glimmer_back_to_sleep_even_on_failure(
             _morning(sleeper, tmp_path)
         else:
             monkeypatch.setattr(backend, "from_env", lambda environ=None: FakeServing(order))
+            monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path))
             wake.main(["--keep-warm-minutes", "5"])
     assert order.count("sleep") == 1 and order[-1] == "sleep"
 
@@ -333,9 +334,10 @@ def test_a_phase_that_ends_well_also_sleeps_and_nested_phases_sleep_once_at_the_
 
 
 def test_keep_warm_on_sagemaker_pings_through_the_backend_and_sleeps_at_the_end(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
 ) -> None:
     order: list[str] = []
+    monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path))
 
     class Healthy(FakeServing):
         def ping(self) -> bool:
@@ -485,19 +487,20 @@ def _sse(*events: dict[str, Any] | str) -> bytes:
 
 def test_long_generation_uses_the_stream_api() -> None:
     # InvokeEndpoint gives up after 60 s; a night's long reply streams, so only the read timeout
-    # bounds it. The deltas come back as one chat completion, cut anywhere on the way.
+    # bounds it. The text comes back as one completion, cut anywhere on the way.
     calls: list[dict[str, Any]] = []
     sent = _sse(
-        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]},
-        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "Good "}}]},
-        {"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "night \u2014 sleep"},
-                                             "finish_reason": "stop"}]},
+        {"model": config.MODEL, "choices": [{"index": 0, "text": ""}]},
+        {"model": config.MODEL, "choices": [{"index": 0, "text": "Good "}]},
+        {"model": config.MODEL, "choices": [{"index": 0, "text": "night \u2014 sleep", "finish_reason": "stop"}]},
         {"model": config.MODEL, "choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 4}},
         "[DONE]")
     bodies: list[EventBody] = []
 
     def stream(**params: Any) -> dict[str, Any]:
         calls.append(json.loads(params["Body"]))
+        if calls[-1]["path"] == "/tokenize":  # the chat's ids, then the reply's header
+            return {"Body": EventBody([b'{"tokens": [1, 2]}']), "ContentType": "application/json"}
         bodies.append(EventBody(sent[i:i + 7] for i in range(0, len(sent), 7)))  # splits lines and a UTF-8 char
         return {"Body": bodies[-1], "ContentType": "text/event-stream"}
 
@@ -506,14 +509,15 @@ def test_long_generation_uses_the_stream_api() -> None:
     result = night.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
     assert (result.text, result.finish_reason, result.model) == ("Good night \u2014 sleep", "stop", config.MODEL)
     assert (result.input_tokens, result.output_tokens) == (12, 4)
-    (call,) = calls
-    assert call["path"] == "/v1/chat/completions" and call["stream"] is True
+    assert [call["path"] for call in calls] == ["/tokenize", "/tokenize", "/v1/completions"]
+    call = calls[-1]
+    assert call["stream"] is True and call["body"]["prompt"] == [1, 2, 1, 2]
     assert call["body"]["stream"] is True and call["body"]["stream_options"] == {"include_usage": True}
-    assert bodies[-1].closed
+    assert "stream" not in calls[0]["body"] and bodies[-1].closed  # token ids come back as JSON
 
     # An error event, a stream that ends early or drops, all fail the call, never a word of it.
     for broken in (_sse({"error": {"message": "private words", "code": 500}}),
-                   _sse({"model": config.MODEL, "choices": [{"index": 0, "delta": {"content": "private"}}]})):
+                   _sse({"model": config.MODEL, "choices": [{"index": 0, "text": "private"}]})):
         sent = broken
         with pytest.raises(client.ServingError) as raised:
             night.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)

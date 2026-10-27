@@ -287,6 +287,95 @@ def test_extraction_records_target_mentions() -> None:
     assert target.check_after == datetime(2026, 10, 30, tzinfo=timezone.utc)
 
 
+def test_an_accelerated_night_sees_the_targets_open_on_its_virtual_date() -> None:
+    from anjo.sleep.app.storage import target_store
+    from anjo.sleep.types import Target
+
+    virtual_end = datetime(2026, 11, 4, tzinfo=timezone.utc)  # the window is wall time: October
+    target_store(REAL).upsert(Target(
+        id="t-virtual", person_id=REAL, kind="thread", label="the virtual cut", check_after=None, status="open",
+        revision=1, acted_revision=0, confidence=None, last_mentioned=date(2026, 11, 3)))
+    _message(REAL, "user", "Still cutting.", at=START + timedelta(hours=3))
+    wall, virtual = EchoSparkOpen(), EchoSparkOpen()
+
+    _source(wall).extract_day(REAL, DAY, WINDOW)
+    _source(virtual).extract_day(REAL, DAY + timedelta(days=1), (START + timedelta(hours=2), END), virtual_end)
+
+    assert "the virtual cut" not in wall.sent()  # real time: not yet seen as of the window's end
+    assert "the virtual cut" in virtual.sent()
+
+
+def test_a_two_day_accelerated_life_on_future_dates_keeps_retrieval_and_targets_consistent() -> None:
+    """Windows are wall time (October); the life's days are virtual (November, in the future)."""
+    from anjo.sleep.app.history_source import HistorySource
+    from anjo.sleep.app.storage import evidence_store, target_store
+    from anjo.sleep.types import Target
+
+    day_one, day_two = date(2026, 11, 3), date(2026, 11, 4)
+    night_one = datetime(2026, 11, 3, 23, tzinfo=timezone.utc)
+    night_two = datetime(2026, 11, 4, 23, tzinfo=timezone.utc)
+    first, second = (START, START + timedelta(hours=1)), (START + timedelta(hours=1), START + timedelta(hours=2))
+    _message(REAL, "user", "I'll lock the cut by Friday.", at=START + timedelta(minutes=10))
+    _message(REAL, "user", "Cut is locked, onto the score.", at=START + timedelta(minutes=70))
+    target_store(REAL).upsert(Target(  # first seen on day two
+        id="t-day-two", person_id=REAL, kind="thread", label="the day two score", check_after=None, status="open",
+        revision=1, acted_revision=0, confidence=None, last_mentioned=day_two))
+
+    def plan(messages: list[dict[str, Any]]) -> ChatResult:
+        sent = json.loads(messages[-1]["content"])
+        target = {"kind": "commitment", "label": "lock the cut", "check_after": "2026-11-06",
+                  "existing_id": None, "confidence": None} if sent["today"] == "2026-11-03" else None
+        item = {"turn": 0, "kind": "lesson", "text": "They are working on the cut.", "target": target}
+        return ChatResult(text=json.dumps({"items": [item]}), tool_calls=(), model=SPARK_OPEN,
+                          input_tokens=1, output_tokens=1, finish_reason="stop")
+
+    seen: list[list[str]] = []
+
+    def watching(messages: list[dict[str, Any]]) -> ChatResult:
+        seen.append([t["label"] for t in json.loads(messages[-1]["content"])["open_targets"]])
+        return plan(messages)
+
+    source = HistorySource(chat=watching)
+
+    [one] = source.extract_day(REAL, day_one, first, night_one)
+    [two] = source.extract_day(REAL, day_two, second, night_two)
+
+    assert seen == [[], ["lock the cut", "the day two score"]]  # day one: as of its date; day two: as of its own
+    assert one.created_at == first[1] and two.created_at == second[1]  # wall time, so never in the future
+    # Day two's chat-time and night-time retrieval sees day one's evidence, on the life's clock.
+    store = evidence_store(REAL)
+    assert [item.id for item in store.stored(day_two)] == [one.id, two.id]
+    assert {item.id for item in store.search("cut", night_two, 10)} == {one.id, two.id}
+    assert {item.id for item in store.search("cut", night_one, 10)} == {one.id, two.id}
+
+
+def test_a_two_day_accelerated_life_on_past_dates_keeps_retrieval_and_the_night_consistent() -> None:
+    """Windows are wall time (October 28); the life's days are virtual (October 1 and 2, in the past)."""
+    from anjo.sleep.app.storage import evidence_store
+    from anjo.sleep.night.mind import StoreSearch
+
+    day_one, day_two = date(2026, 10, 1), date(2026, 10, 2)
+    night_one, night_two = datetime(2026, 10, 2, tzinfo=timezone.utc), datetime(2026, 10, 3, tzinfo=timezone.utc)
+    first, second = (START, START + timedelta(hours=1)), (START + timedelta(hours=1), START + timedelta(hours=2))
+    _message(REAL, "user", "I'll lock the cut by Friday.", at=START + timedelta(minutes=10))
+    _message(REAL, "user", "Cut is locked, onto the score.", at=START + timedelta(minutes=70))
+    source = _source(EchoSparkOpen())
+
+    [one] = source.extract_day(REAL, day_one, first, night_one)
+    [two] = source.extract_day(REAL, day_two, second, night_two)
+
+    assert (one.created_at, two.created_at) == (night_one, night_two)  # each night's clock, before the wall
+    # Day two's chat-time retrieval, on the wall clock inside its window, sees day one's evidence.
+    store = evidence_store(REAL)
+    assert [item.id for item in store.stored(day_two)] == [one.id, two.id]
+    assert {item.id for item in store.search("cut", second[0] + timedelta(minutes=30), 10)} == {one.id, two.id}
+    # MIND's night two, masked to its own clock, sees it too; night one never sees day two's.
+    search = StoreSearch(store)
+    assert {item.id for item in search.search("cut", night_two, 10)} == {one.id, two.id}
+    assert [item.id for item in search.get([one.id, two.id], night_two)] == [one.id, two.id]
+    assert [item.id for item in search.get([one.id, two.id], night_one)] == [one.id]
+
+
 def test_extraction_needs_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app.flags import SleepHostOff
 
