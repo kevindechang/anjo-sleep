@@ -264,6 +264,20 @@ def test_a_delete_that_fails_for_real_still_reports_cleanup_failed() -> None:
     assert "cleanup failed" in notes and "deploy stop --delete-endpoint" in notes
 
 
+def test_a_failed_wait_shows_sagemakers_failure_reason() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def failed(**params: Any) -> dict[str, Any]:
+        if params["InferenceComponentName"] not in plane.exists:
+            raise client_error("ValidationException", 400, "DescribeInferenceComponent")
+        return {"InferenceComponentStatus": "Failed", "FailureReason": "xyz"}
+
+    fakes["sagemaker"]._handlers["describe_inference_component"] = failed
+    with pytest.raises(deploy.DeployError, match="xyz"):
+        _up(aws)
+
+
 def test_stop_delete_endpoint_without_component(capsys: pytest.CaptureFixture[str]) -> None:
     # What a failed run of the old deploy could leave: an endpoint and its config, no component.
     plane = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT)

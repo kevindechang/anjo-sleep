@@ -193,10 +193,15 @@ def _wait(describe: Callable[[], Mapping[str, Any]], status_key: str, *, clock: 
           sleep: Callable[[float], None]) -> float:
     started = clock()
     while True:
-        status = describe().get(status_key)
+        described = describe()
+        status = described.get(status_key)
         if status == "InService":
             return clock() - started
-        if status == "Failed" or clock() - started > WAIT_TOTAL_S:
+        if status == "Failed":
+            reason = described.get("FailureReason")
+            raise DeployError(f"{status_key} is {status} after {clock() - started:.0f} s"
+                              + (f": {reason}" if reason else ""))
+        if clock() - started > WAIT_TOTAL_S:
             raise DeployError(f"{status_key} is {status} after {clock() - started:.0f} s")
         sleep(WAIT_POLL_S)
 
