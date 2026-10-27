@@ -181,9 +181,10 @@ def test_a_morning_that_cannot_wake_glimmer_scores_nothing(tmp_path: Path) -> No
     assert rig.model.calls == [] and not rig.scores.exists()
 
 
-def test_keep_warm_exits_1_on_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_keep_warm_exits_1_on_partial_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(wake.URL_ENV, URL)
     monkeypatch.setenv(wake.TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(client, "wake", lambda url, token, timeout_s: WakeResult(1.0, True))
     monkeypatch.setattr(wake, "keep_warm", lambda *a, **k: wake.KeepWarmResult(60.0, 3, 1))
     assert wake.main(["--keep-warm-minutes", "1"]) == 1
@@ -272,6 +273,31 @@ def test_a_keep_warm_window_is_written_while_it_pings_and_removed_after(
     assert window.until - window.beat == pytest.approx(30 * 60, abs=5)
     assert wake.read_window(path) is None  # the window ends with the process
     assert TOKEN not in path.parent.joinpath(wake.WINDOW_FILE + ".part").as_posix()
+
+
+def test_a_keep_warm_window_needs_the_apps_data_dir_and_reads_it_as_the_app_does(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Run from a shell without the host's environment file, a window would write where the page
+    never looks, and on Modal the page would call Glimmer asleep through a paid window."""
+    from anjo.core import paths
+
+    monkeypatch.setenv(wake.URL_ENV, URL)
+    monkeypatch.setenv(wake.TOKEN_ENV, TOKEN)
+    monkeypatch.delenv(wake.DATA_DIR_ENV, raising=False)
+    woke: list[float] = []
+
+    def waking(url: str, token: str, timeout_s: float) -> WakeResult:
+        woke.append(timeout_s)
+        return WakeResult(1.0, True)
+
+    monkeypatch.setattr(client, "wake", waking)
+    with pytest.raises(SystemExit) as refused:
+        wake.main(["--keep-warm-minutes", "30"])
+    assert refused.value.code == 2 and woke == []  # refused before anything woke
+    assert wake.main(["--wake"]) == 0 and len(woke) == 1  # a wake alone writes no window
+    monkeypatch.setenv(wake.DATA_DIR_ENV, str(tmp_path / "data" / ".." / "data"))
+    assert wake.window_file() == wake.window_path(paths._resolve_data_root())
 
 
 def test_a_window_whose_pings_stopped_is_closed() -> None:

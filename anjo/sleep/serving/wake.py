@@ -20,7 +20,8 @@ printed.
 
 **The window file.** While a window runs, each answered ping writes its end and the time of that
 ping to ``$ANJO_DATA_DIR/sleep/serving/warm_window.json`` (``WarmWindow``); the file goes when the
-process ends. The live demo page reads it to answer inside the window on either backend without a
+process ends. A window refuses to start without ``ANJO_DATA_DIR``, before anything wakes: run from a
+shell without the host's environment file, it would write where the page never looks. The live demo page reads it to answer inside the window on either backend without a
 request of its own, which on Modal would start a container, and charges nothing to its own warm-time
 cap inside it. A window whose pings stopped for ``BEAT_GRACE_S`` (the process died) reads as closed.
 
@@ -148,18 +149,23 @@ def _keep_warm(serving: backend.Serving, minutes: float, on_ping: Callable[[bool
     return keep_warm_with(serving.ping, minutes, on_ping=on_ping)
 
 
-def _window_beat(minutes: float) -> tuple[Path | None, Callable[[bool], None]]:
-    """The window file (none without a data dir) and the listener that writes it after each
-    answered ping. Wall time: the page reading it runs in another process."""
+def window_file() -> Path | None:
+    """Where the live page reads the window: under ``$ANJO_DATA_DIR`` resolved as the app resolves it
+    (``anjo.core.paths``), or None when it isn't set."""
     root = os.environ.get(DATA_DIR_ENV, "").strip()
-    path = window_path(Path(root)) if root else None
+    return window_path(Path(root).expanduser().resolve()) if root else None
+
+
+def _window_beat(path: Path, minutes: float) -> Callable[[bool], None]:
+    """The listener that writes the window file after each answered ping. Wall time: the page
+    reading it runs in another process."""
     until = time.time() + minutes * 60.0
 
     def beat(answered: bool) -> None:
-        if answered and path is not None:
+        if answered:
             _write_window(path, WarmWindow(until, time.time()))
 
-    return path, beat
+    return beat
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -184,18 +190,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 serving.sleep_now()  # a wake that failed or raised leaves nothing up
         print(json.dumps({"wake_seconds": round(woke.seconds, 1), "ok": woke.ok}))
         return 0 if woke.ok else 1
+    path = window_file()
+    if path is None:  # before anything wakes
+        parser.error(f"--keep-warm-minutes needs {DATA_DIR_ENV}, the app's data dir, where the live page reads the window")
     with backend.phase(serving.sleep_now):  # the window ends asleep, however it ends
         woke = serving.wake()
         print(json.dumps({"wake_seconds": round(woke.seconds, 1), "ok": woke.ok}))
         if not woke.ok:
             return 1
         minutes = min(args.keep_warm_minutes, MAX_KEEP_WARM_MIN)
-        path, beat = _window_beat(minutes)
         try:
-            done = _keep_warm(serving, minutes, beat)
+            done = _keep_warm(serving, minutes, _window_beat(path, minutes))
         finally:
-            if path is not None:
-                path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
         print(json.dumps({"keep_warm_minutes": minutes, "pings": done.pings, "failed_pings": done.failed,
                           "seconds": round(done.seconds, 1)}))
         return 0 if done.failed == 0 else 1
