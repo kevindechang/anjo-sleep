@@ -101,7 +101,14 @@ python -m anjo.sleep.serving.sagemaker.deploy stage-weights --scratch <dir with 
 # 4. The image: writes a build context with only the shim's files, prints the commands to run.
 python -m anjo.sleep.serving.sagemaker.deploy image --context <empty dir>
 #    -> aws ecr create-repository ...; aws ecr get-login-password ... | docker login ...;
-#       docker buildx build --platform linux/amd64 ... --push <dir>
+#       docker buildx build --platform linux/amd64 ... --provenance=false --sbom=false
+#         --output type=image,name=<uri>,push=true,oci-mediatypes=false <dir>
+#    SageMaker refuses an OCI image index (buildx's default push). An image already pushed that way
+#    can be re-tagged as Docker v2 without a rebuild: `aws ecr batch-get-image` the amd64 manifest
+#    digest, rewrite the manifest to `application/vnd.docker.distribution.manifest.v2+json`, the config
+#    to `application/vnd.docker.container.image.v1+json` and the layers to
+#    `application/vnd.docker.image.rootfs.diff.tar.gzip`, then `aws ecr put-image` with
+#    `--image-manifest-media-type application/vnd.docker.distribution.manifest.v2+json`.
 # 5. The endpoint (paid, 20 to 40 minutes): model, config, endpoint, component, the idle net.
 #    It waits for the first copy, prints first_copy_seconds, and ends at 0 copies.
 python -m anjo.sleep.serving.sagemaker.deploy up --image-uri <the uri step 4 printed>

@@ -61,6 +61,9 @@ class Plane:
         def gone(kind: str, key: str) -> Any:
             def delete(**params: Any) -> dict[str, Any]:
                 self.order.append(f"delete_{kind}")
+                if params[key] not in self.exists:  # SageMaker's reply for a name that was never made
+                    raise client_error("ValidationException", 400, f"Delete{kind}",
+                                       Message=f'Could not find {kind} "{params[key]}".')
                 self.exists.discard(params[key])
                 return {}
             return delete
@@ -195,6 +198,86 @@ def test_up_failure_after_endpoint_cleans_up() -> None:
     assert not any(step.startswith("delete_") and step != "delete_model" for step in plane.order)
 
 
+UNSUPPORTED = ("Unsupported manifest media type application/vnd.oci.image.index.v1+json for image "
+               "x.dkr.ecr.us-east-1.amazonaws.com/anjo-sleep-glimmer:tag")
+
+
+def test_a_refused_create_model_is_not_cleaned_up_as_if_it_were_made(capsys: pytest.CaptureFixture[str]) -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def refused(**params: Any) -> dict[str, Any]:
+        raise client_error("ValidationException", 400, "CreateModel", Message=UNSUPPORTED)
+
+    fakes["sagemaker"]._handlers["create_model"] = refused
+    with pytest.raises(Exception, match="Unsupported manifest media type") as raised:
+        _up(aws)
+    seen = " ".join([str(raised.value), *getattr(raised.value, "__notes__", ())]) + "".join(capsys.readouterr())
+    assert "cleanup failed" not in seen
+    assert plane.exists == set()
+
+
+def test_up_failure_at_create_endpoint_still_deletes_the_model_and_config_it_made() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def refused(**params: Any) -> dict[str, Any]:
+        raise Boom("create_endpoint refused")
+
+    fakes["sagemaker"]._handlers["create_endpoint"] = refused
+    with pytest.raises(Boom) as raised:
+        _up(aws)
+    assert "delete_model" in plane.order and "delete_endpoint_config" in plane.order
+    assert "delete_endpoint" not in plane.order and plane.exists == set()
+    assert not getattr(raised.value, "__notes__", ())
+
+
+def test_an_interrupted_create_endpoint_that_aws_accepted_is_deleted() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def accepted_then_interrupted(**params: Any) -> dict[str, Any]:
+        plane.exists.add(params["EndpointName"])  # AWS took it; the call never returned
+        raise KeyboardInterrupt
+
+    fakes["sagemaker"]._handlers["create_endpoint"] = accepted_then_interrupted
+    with pytest.raises(KeyboardInterrupt):
+        _up(aws)
+    assert "delete_endpoint" in plane.order and plane.exists == set()
+
+
+def test_a_delete_that_fails_for_real_still_reports_cleanup_failed() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def refused(**params: Any) -> dict[str, Any]:
+        raise Boom("create_endpoint refused")
+
+    def denied(**params: Any) -> dict[str, Any]:
+        raise client_error("AccessDeniedException", 400, "DeleteModel", Message="not allowed")
+
+    fakes["sagemaker"]._handlers["create_endpoint"] = refused
+    fakes["sagemaker"]._handlers["delete_model"] = denied
+    with pytest.raises(Boom) as raised:
+        _up(aws)
+    notes = " ".join(getattr(raised.value, "__notes__", ()))
+    assert "cleanup failed" in notes and "deploy stop --delete-endpoint" in notes
+
+
+def test_a_failed_wait_shows_sagemakers_failure_reason() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def failed(**params: Any) -> dict[str, Any]:
+        if params["InferenceComponentName"] not in plane.exists:
+            raise client_error("ValidationException", 400, "DescribeInferenceComponent")
+        return {"InferenceComponentStatus": "Failed", "FailureReason": "xyz"}
+
+    fakes["sagemaker"]._handlers["describe_inference_component"] = failed
+    with pytest.raises(deploy.DeployError, match="xyz"):
+        _up(aws)
+
+
 def test_stop_delete_endpoint_without_component(capsys: pytest.CaptureFixture[str]) -> None:
     # What a failed run of the old deploy could leave: an endpoint and its config, no component.
     plane = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT)
@@ -294,3 +377,13 @@ def test_the_token_file_is_written_whole_and_private(tmp_path: Path, capsys: pyt
             token_refresh.fetch(transport=httpx.MockTransport(lambda r, reply=reply: reply))
         assert token not in str(raised.value)
     assert token not in capsys.readouterr().out
+
+
+def test_the_printed_build_pushes_one_docker_v2_manifest_without_attestations(tmp_path: Path) -> None:
+    serve = _serve()
+    commands = deploy.image_commands(tmp_path, serve, "tag")
+    build = next(line for line in commands if "buildx build" in line)
+    uri = f"$AWS_ACCOUNT_ID.dkr.ecr.{settings.REGION}.amazonaws.com/{settings.REPOSITORY}:tag"
+    assert "--provenance=false" in build and "--sbom=false" in build and "oci-mediatypes=false" in build
+    assert f"name={uri}" in build and "push=true" in build
+    assert "--platform linux/amd64" in build and "VLLM_VERSION=" in build

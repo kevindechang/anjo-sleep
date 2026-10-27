@@ -75,6 +75,19 @@ def _missing(error: ClientError) -> bool:
         or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
 
 
+def _delete(call: Callable[..., Any], **params: Any) -> None:
+    """A delete; a resource that is not there is already gone, which is what cleanup wants. Narrow:
+    ``ResourceNotFound``, or a ``ValidationException`` that says "Could not find". Else it raises."""
+    try:
+        call(**params)
+    except ClientError as error:
+        details = error.response.get("Error", {})
+        if details.get("Code") == "ResourceNotFound" or (
+                details.get("Code") == "ValidationException" and "Could not find" in str(details.get("Message", ""))):
+            return
+        raise
+
+
 def _found(describe: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any] | None:
     try:
         return describe()
@@ -151,7 +164,9 @@ def image_commands(context: Path, serve: config.ServeConfig, tag: str) -> list[s
     return [
         f"aws ecr create-repository --repository-name {settings.REPOSITORY} --region {settings.REGION}  # once",
         f"aws ecr get-login-password --region {settings.REGION} | docker login --username AWS --password-stdin {registry}",
-        f"docker buildx build --platform linux/amd64 --build-arg VLLM_VERSION={serve.vllm_version} -t {uri} --push {context}",
+        # One Docker v2 manifest: SageMaker refuses the OCI image index that buildx pushes by default.
+        f"docker buildx build --platform linux/amd64 --build-arg VLLM_VERSION={serve.vllm_version} "
+        f"--provenance=false --sbom=false --output type=image,name={uri},push=true,oci-mediatypes=false {context}",
         f"python -m anjo.sleep.serving.sagemaker.deploy up --image-uri {uri}",
     ]
 
@@ -178,10 +193,15 @@ def _wait(describe: Callable[[], Mapping[str, Any]], status_key: str, *, clock: 
           sleep: Callable[[float], None]) -> float:
     started = clock()
     while True:
-        status = describe().get(status_key)
+        described = describe()
+        status = described.get(status_key)
         if status == "InService":
             return clock() - started
-        if status == "Failed" or clock() - started > WAIT_TOTAL_S:
+        if status == "Failed":
+            reason = described.get("FailureReason")
+            raise DeployError(f"{status_key} is {status} after {clock() - started:.0f} s"
+                              + (f": {reason}" if reason else ""))
+        if clock() - started > WAIT_TOTAL_S:
             raise DeployError(f"{status_key} is {status} after {clock() - started:.0f} s")
         sleep(WAIT_POLL_S)
 
@@ -212,7 +232,7 @@ def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
     found = _settled(component, "InferenceComponentStatus", clock=clock, sleep=sleep)
     if found is not None:
         if found != "Deleting":
-            sm.delete_inference_component(InferenceComponentName=settings.COMPONENT)
+            _delete(sm.delete_inference_component, InferenceComponentName=settings.COMPONENT)
         started = clock()
         while _exists(component):
             if clock() - started > TEARDOWN_WAIT_S:
@@ -221,9 +241,9 @@ def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
     endpoint = _settled(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
                         clock=clock, sleep=sleep)
     if endpoint not in (None, "Deleting"):
-        sm.delete_endpoint(EndpointName=settings.ENDPOINT)
+        _delete(sm.delete_endpoint, EndpointName=settings.ENDPOINT)
     if _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
-        sm.delete_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)
+        _delete(sm.delete_endpoint_config, EndpointConfigName=settings.ENDPOINT_CONFIG)
 
 
 def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
@@ -237,7 +257,7 @@ def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
         return
     teardown(aws, clock=clock, sleep=sleep)
     if "model" in made:
-        sm.delete_model(ModelName=model)
+        _delete(sm.delete_model, ModelName=model)
 
 
 def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account_id: str | None = None, *,
@@ -265,7 +285,8 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
 
 def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: str, model: str,
         made: set[str], *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
-    """Make what is missing, noting each in ``made``, and wait for the first copy."""
+    """Make what is missing, noting each in ``made`` before its create call (an interrupted call may
+    still have made it, and an unmade one deletes as already gone), and wait for the first copy."""
     sm = aws.get("sagemaker")
     if not _exists(lambda: sm.describe_model(ModelName=model)):
         made.add("model")
