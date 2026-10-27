@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from anjo.sleep.serving import config, framing
-from anjo.sleep.serving.client import ServingError, VllmClient, utc_today
+from anjo.sleep.serving.client import MAX_TOKENS, ServingError, VllmClient, utc_today
 from anjo.sleep.types import CheckpointRef
 
 NIGHT = date(2026, 10, 28)
@@ -120,3 +120,12 @@ def test_errors_name_the_endpoint_never_the_words() -> None:
 
 def test_the_client_serves_at_the_registered_precision() -> None:
     assert VllmClient.precision == config.SERVING.name
+
+
+def test_complete_caps_one_call_at_its_own_max_tokens() -> None:
+    fake = FakeVllm()
+    client = _client(fake)
+    client.complete(None, [{"role": "user", "content": "hi"}], temperature=0.0, max_tokens=77)
+    assert fake.requests[-1][1]["max_tokens"] == 77  # MIND's thinker passes what is left of tonight's tokens
+    client.complete(None, [{"role": "user", "content": "hi"}], temperature=0.0)
+    assert fake.requests[-1][1]["max_tokens"] == MAX_TOKENS
