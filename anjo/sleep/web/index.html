@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>{{page_title}}</title>
+<link rel="stylesheet" href="/sleep/demo/demo.css">
+<script type="application/json" id="demo-copy">{{@copy}}</script>
+<script src="/sleep/demo/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#chat">{{skip}}</a>
+
+<header class="masthead">
+  <p class="kicker">{{kicker}}</p>
+  <h1>{{headline}}</h1>
+  <p class="lede">{{lede}}</p>
+</header>
+
+<div class="layout">
+  <aside id="brief" class="brief" aria-labelledby="brief-heading">
+    <details class="brief-panel" open>
+      <summary title="{{brief_toggle}}"><h2 id="brief-heading">{{brief_heading}}</h2></summary>
+      <p class="note">{{brief_note}}</p>
+      <div id="brief-body" class="brief-body"><p>{{brief_loading}}</p></div>
+      <p class="note note-rule">{{synthetic_note}}</p>
+    </details>
+  </aside>
+
+  <main id="chat" class="chat" tabindex="-1">
+    <section id="gate" class="gate" aria-labelledby="gate-heading">
+      <h2 id="gate-heading">{{age_heading}}</h2>
+      <p>{{age_text}}</p>
+      <form id="gate-form" class="gate-form" novalidate>
+        <label class="check"><input type="checkbox" id="adult" name="adult"><span>{{age_confirm}}</span></label>
+        <button type="submit" class="button button-ink">{{age_submit}}</button>
+      </form>
+    </section>
+
+    <section id="scenes" class="block" aria-labelledby="scenes-heading" hidden>
+      <h2 id="scenes-heading" tabindex="-1">{{scenes_heading}}</h2>
+      <p class="note">{{scenes_note}}</p>
+      <ul id="scene-list" class="scene-list"></ul>
+    </section>
+
+    <section id="ask" class="block" aria-labelledby="ask-heading" hidden>
+      <h2 id="ask-heading">{{ask_heading}}</h2>
+      <form id="ask-form" class="ask-form">
+        <label for="ask-text">{{ask_label}}</label>
+        <textarea id="ask-text" name="text" rows="3" maxlength="1000" aria-describedby="ask-hint"></textarea>
+        <div class="ask-row">
+          <p id="ask-hint" class="note">{{ask_hint}}</p>
+          <button type="submit" class="button button-ink">{{ask_submit}}</button>
+        </div>
+      </form>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <ol id="thread" class="thread" aria-label="{{thread_label}}"></ol>
+  </main>
+</div>
+
+<footer class="colophon"><p>{{footer}}</p></footer>
+
+<template id="pair-template">
+  <li class="exchange">
+    <article class="card" tabindex="-1">
+      <header class="card-head">
+        <p class="who"></p>
+        <blockquote class="question"></blockquote>
+        <p class="source"></p>
+      </header>
+      <div class="sides">
+        <section class="side" data-side="left">
+          <h3 class="side-name">{{left}}</h3>
+          <div class="side-text"></div>
+          <div class="reveal" hidden></div>
+        </section>
+        <section class="side" data-side="right">
+          <h3 class="side-name">{{right}}</h3>
+          <div class="side-text"></div>
+          <div class="reveal" hidden></div>
+        </section>
+      </div>
+      <div class="vote" role="group">
+        <p class="vote-question">{{vote_question}}</p>
+        <div class="choices">
+          <button type="button" class="choice" value="left">{{vote_left}}</button>
+          <button type="button" class="choice" value="right">{{vote_right}}</button>
+          <button type="button" class="choice choice-quiet" value="tie">{{vote_tie}}</button>
+          <button type="button" class="choice choice-quiet" value="neither">{{vote_neither}}</button>
+        </div>
+      </div>
+      <p class="note unvotable" hidden>{{not_votable}}</p>
+      <p class="verdict" tabindex="-1" hidden></p>
+    </article>
+  </li>
+</template>
+
+<template id="crisis-template">
+  <li class="exchange">
+    <article class="card card-fixed" tabindex="-1">
+      <header class="card-head">
+        <p class="who"></p>
+        <blockquote class="question"></blockquote>
+      </header>
+      <div class="fixed"></div>
+    </article>
+  </li>
+</template>
+</body>
+</html>
