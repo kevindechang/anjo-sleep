@@ -6,7 +6,8 @@ encrypted like the rest of the person's sleep files:
 - ``context``, when the prompt is built: each context part's source and ancestry, and whether
   the session was cleared. Anjo's memory has no recorded source, so a part carrying it has
   unknown ancestry (``None``).
-- ``served``, when the sleep runtime starts streaming: Glimmer, under the adapter it was sent.
+- ``served``, once Glimmer's first word is shown, or a tool round of its ends cleanly: Glimmer,
+  under the adapter it was sent. A call that breaks off before then records nothing.
 
 ``reply_ancestry`` folds them. A turn with a context record and no served record was answered by
 the frontier fallback (RF3); its ancestry is unknown, since another model wrote it. A reply Glimmer

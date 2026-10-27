@@ -189,15 +189,19 @@ The night runs as its own process, so a long night can't take down the server.
 
 1. The chat route's crisis floor runs first. A severe or harm message gets its fixed protocol,
    and no model sees it.
-2. The route override (`runtime.sleep_route`) pins a flagged person who chose the open-model
-   talker to `sleep_modal`. Everyone else's route is unchanged.
+2. The open-model route's gates run first: the `anjo_model` kill switch, the pinned hosts, the
+   person's processor consent and the budget. Only a route that passes them all is changed: the
+   route override (`runtime.sleep_route`) then pins a flagged person who chose the open-model
+   talker to `sleep_modal`. Consent is checked on the existing Vertex and OpenRouter entries,
+   since the consent registry names no Modal processor. Everyone else's route is unchanged.
 3. The prompt hook (`prompt.sleep_turn_hook`) refuses any turn with a crisis tier or in a session
    in distress, so the frontier talker answers it. Otherwise it adds context C. In a cleared
    session it builds the cleared context instead.
 4. `SleepRuntime` refuses a request whose latest words trip the floor. It sends the adapter
-   name, or the base model, to Modal, and records the reply as served.
-5. Any error before the first token (cold, stopped, refused) falls back to the frontier talker
-   within the existing timeout (RF3).
+   name, or the base model, to Modal. It records the reply as served once Glimmer's first word
+   is shown, or, in a tool round whose words are held back, once the round ends cleanly.
+5. Any error before that (cold, stopped, refused, or broken off) falls back to the frontier
+   talker within the existing timeout (RF3), and the sidecar says `fallback`.
 
 Each turn's context ancestry, and whether Glimmer served it, are kept in
 `data/users/<id>/sleep/reply_ancestry.jsonl` (encrypted, exported, erased with the account).

@@ -8,7 +8,8 @@ is byte for byte main's.
   talker is served by Glimmer on Modal;
 - the menu override (``talker_choice.MENU_OVERRIDES``): that talker is on offer to a flagged
   person while it is off everyone else's menu;
-- the ``sleep_modal`` runtime (``hosts.register_runtime``);
+- the ``sleep_modal`` runtime (``hosts.register_runtime``), a host off the N-PROC vocabulary
+  (``client.OFF_VOCABULARY_HOSTS``);
 - the prompt hook (``open_model_turn.TURN_HOOKS``): context C, or the cleared context.
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from anjo.core import open_model_turn, talker_choice
-from anjo.core.anjo_model import assignment, hosts
+from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
 from anjo.sleep.app.flags import require_sleep_host, sleep_enabled_for
 from anjo.sleep.app.prompt import sleep_turn_hook
@@ -35,6 +36,7 @@ def register_hooks() -> None:
     _add(open_model_turn.TURN_HOOKS, sleep_turn_hook)
     if HOST not in hosts.RUNTIMES:
         hosts.register_runtime(HOST, SleepRuntime)
+    client.OFF_VOCABULARY_HOSTS.add(HOST)
 
 
 def unregister_hooks() -> None:

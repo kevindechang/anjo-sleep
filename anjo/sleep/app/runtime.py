@@ -44,7 +44,9 @@ from anjo.core.anjo_model.transport import Transport
 from anjo.core.best_effort import best_effort
 from anjo.core.crisis import NO_CRISIS
 from anjo.core.floor import FloorRules, check_message, normalize_message
-from anjo.core.model_io import Finish, ModelEvent, ModelRequest, Served, TextPart
+from anjo.core.model_io import (
+    Finish, ModelEvent, ModelRequest, Served, TextDelta, TextPart, ToolCallProposal,
+)
 from anjo.core.processors import Family
 from anjo.sleep.app.ancestry import record_served
 from anjo.sleep.app.flags import sleep_enabled_for
@@ -147,8 +149,16 @@ def carries_crisis(request: ModelRequest) -> bool:
     return bool(decision.tier != NO_CRISIS)
 
 
+def holds_words(request: ModelRequest) -> bool:
+    """Whether the call is a tool round, whose words the loop holds back until the round ends
+    cleanly (anjo/agent/loop.py); any other call's words are shown as they stream."""
+    return bool(request.tools) and request.tool_choice.mode != "none"
+
+
 class SleepRuntime(ChatCompletionsRuntime):
-    """Glimmer through vLLM's OpenAI-compatible server on Modal."""
+    """Glimmer through vLLM's OpenAI-compatible server on Modal. A reply is recorded as served
+    once Glimmer's words or calls reach the turn: the first word shown, or a tool round's clean
+    end. A call that breaks off before that is answered by the fallback, so it records nothing."""
 
     def __init__(self, pin: HostPin, *, transport: Transport | None = None) -> None:
         if not isinstance(pin, GlimmerPin):
@@ -162,9 +172,14 @@ class SleepRuntime(ChatCompletionsRuntime):
         if carries_crisis(request):
             yield Finish("error", "rejected")
             return
-        recorded = False
+        held = holds_words(request)
+        wrote = recorded = False
         for event in super().stream(request, cancel):
-            if isinstance(event, Served) and not recorded:
+            wrote = wrote or isinstance(event, ToolCallProposal) or (
+                isinstance(event, TextDelta) and bool(event.text.strip())
+            )
+            clean_end = isinstance(event, Finish) and event.error_code is None
+            if wrote and not recorded and (clean_end or not held):
                 recorded = True
                 with best_effort("record a sleep reply as served", user_id=self._glimmer.user_id):
                     record_served(self._glimmer.user_id, request.turn_id, model=self._wire_model())
