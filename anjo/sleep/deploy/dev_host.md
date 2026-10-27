@@ -23,7 +23,7 @@ setting away: `ANJO_SLEEP_BACKEND=modal`.
 
 | Setting | Value |
 |---|---|
-| Region, instance | `us-east-1`, `ml.g6e.xlarge` (one L40S 48 GB, 4 vCPU, 32 GiB); the account's endpoint quota is 1 |
+| Region, instance | `us-east-1`, `ml.g6e.xlarge` (one L40S 48 GB, 4 vCPU, 32 GiB) or `ml.g6e.2xlarge` (the same GPU, 8 vCPU, 64 GiB); the account's endpoint quota is 1 |
 | Precision | FP8, quantized when vLLM loads the weights (`config.SERVING = FP8_L40S`); the same on Modal |
 | vLLM | `0.28.0` (`config.DEFAULT_VLLM_VERSION`), the first release whose registry has Glimmer's `MuseGlimmerForConditionalGeneration` (vLLM #51655); 0.11.0 can't load it. The image is `FROM vllm/vllm-openai:v0.28.0` |
 | Names | endpoint `anjo-sleep-glimmer`, config `anjo-sleep-glimmer-config`, inference component `anjo-sleep-glimmer-ic`, models `anjo-sleep-glimmer-<image tag>`, ECR repository `anjo-sleep-glimmer` (`serving/sagemaker/settings.py`) |
@@ -33,7 +33,7 @@ setting away: `ANJO_SLEEP_BACKEND=modal`.
 | Context | 32,768 tokens per request (`MAX_MODEL_LEN`), 4,096 output |
 | LoRA | rank 32 at most, 8 adapters on the GPU at once, 16 kept on the CPU (see the sizing below) |
 | Reply deadline | the dev host waits 20 s for the reply and for each read after (`runtime.REPLY_DEADLINE_S`), then the frontier talker answers |
-| Cost | about **$2.61 an hour while a copy is up**, nothing while it is at 0 (the bucket and the image cost cents). Set the fourth value of `ANJO_SLEEP_PRICES` to `2.61` so the budget ledger's `modal_usd` pool holds the right rate (the pool keeps its name) |
+| Cost | about **$2.61 an hour on g6e.xlarge and $2.81 on g6e.2xlarge while a copy is up**, nothing while it is at 0 (the bucket and the image cost cents). When g6e.xlarge has no capacity (`InsufficientInstanceCapacity`), use g6e.2xlarge: `deploy up --instance-type ml.g6e.2xlarge` (also on `status` and `stop`), or `ANJO_SLEEP_INSTANCE_TYPE`; the option wins, a type outside the two is refused, and a config that exists keeps its type until `stop --delete-endpoint`. Set the fourth value of `ANJO_SLEEP_PRICES` to the chosen type's rate so the budget ledger's `modal_usd` pool holds the right rate (the pool keeps its name) |
 
 Every arm serves at the same precision: the base and the adapters run on the same server.
 
@@ -267,7 +267,8 @@ these names; their values never enter the repo:
 | `ANJO_SLEEP_BACKEND`, `ANJO_SLEEP_S3_BUCKET`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_SESSION_NAME`, `AWS_DEFAULT_REGION` | Glimmer on SageMaker and the VM's keyless AWS identity (§1.4) |
 | `ANJO_SLEEP_MODAL_URL`, `ANJO_SLEEP_MODAL_TOKEN` | only with `ANJO_SLEEP_BACKEND=modal`: the `Serve.web` URL, and the same value as the Modal secret's `VLLM_API_KEY` |
 | `ANJO_SLEEP_GLIMMER_REVISION`, `ANJO_SLEEP_TOOL_CALL_PARSER` | the same values as the deploy (the revision is the pin above), so the pin matches what is served |
-| `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the last is `2.61` on SageMaker |
+| `ANJO_SLEEP_INSTANCE_TYPE` | `ml.g6e.xlarge` (default) or `ml.g6e.2xlarge`; read by `deploy` only, which the `--instance-type` option overrides |
+| `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the last follows the chosen type: `2.61` on g6e.xlarge, `2.81` on g6e.2xlarge |
 | `GCP_PROJECT`, `GCP_LOCATION` | the frontier talker's Vertex project |
 | `RESEND_API_KEY` | needed to create password accounts: production mode refuses password registration without email |
 
@@ -420,7 +421,7 @@ and puts it back to sleep when it ends:
   the night records a `glimmer_not_ready` failure at `simulate`: an error, not a short day.
 - **A night** wakes before its first serving step (practice) and again right before the gates,
   since Colab training outlasts the idle window (Modal's 600 s, SageMaker's 30-minute idle net;
-  nothing pings during training: that would hold a $2.61/h GPU for hours). A wake that fails or raises fails that person with `glimmer_not_ready` at
+  nothing pings during training: that would hold a $2.61/h ($2.81/h on g6e.2xlarge) GPU for hours). A wake that fails or raises fails that person with `glimmer_not_ready` at
   `practice` or `gates`. `summary.json` records `wake_seconds` and `gates_wake_seconds`. **A morning
   run** wakes before its first arm call and records `wake_seconds` in its score file.
 - **Demos:** run `python -m anjo.sleep.serving.wake --wake` a few minutes before, and it prints how
@@ -439,7 +440,7 @@ It uses the backend `ANJO_SLEEP_BACKEND` names and never prints a credential. A 
 180 minutes, and on SageMaker it ends by setting the copy count to 0, after an error or Ctrl-C too.
 If the process dies, the pings stop and the idle net (SageMaker, 30 minutes) or Modal's own window
 (600 s) takes Glimmer down, so nothing stays up unbounded. The L40S costs about **$2.61 an hour on
-SageMaker** (about $2 on Modal) while it is up, so **each window needs Kevin's OK**.
+SageMaker** ($2.81 on g6e.2xlarge) (about $2 on Modal) while it is up, so **each window needs Kevin's OK**.
 
 **Caddy** (`/etc/caddy/Caddyfile`):
 

@@ -5,6 +5,7 @@ name and type in every call), the image's build context, and the dev host's toke
 nothing is signed or sent."""
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -324,7 +325,7 @@ def test_the_idle_net_spares_a_loading_copy() -> None:
     window_s = alarm["DatapointsToAlarm"] * period
     assert alarm["DatapointsToAlarm"] == alarm["EvaluationPeriods"]  # every minute in the window idle
     assert window_s >= settings.WAKE_TOTAL_TIMEOUT_S + 600 and settings.IDLE_MINUTES == 30
-    assert settings.IDLE_MINUTES / 60 * settings.USD_PER_HOUR <= 1.31  # the worst idle cost per miss
+    assert settings.IDLE_MINUTES / 60 * settings.INSTANCE_TYPES[settings.DEFAULT_INSTANCE_TYPE] <= 1.31  # the worst idle cost per miss
 
 
 def test_up_refuses_an_image_outside_our_repository() -> None:
@@ -387,3 +388,75 @@ def test_the_printed_build_pushes_one_docker_v2_manifest_without_attestations(tm
     assert "--provenance=false" in build and "--sbom=false" in build and "oci-mediatypes=false" in build
     assert f"name={uri}" in build and "push=true" in build
     assert "--platform linux/amd64" in build and "VLLM_VERSION=" in build
+
+
+def _endpoint_env(patch: pytest.MonkeyPatch, **extra: str) -> None:
+    patch.delenv(settings.INSTANCE_TYPE_ENV, raising=False)
+    for name, value in {config.REVISION_ENV: REVISION, settings.BUCKET_ENV: BUCKET, **extra}.items():
+        patch.setenv(name, value)
+
+
+def _status(aws: deploy.Aws, capsys: pytest.CaptureFixture[str], *args: str) -> dict[str, Any]:
+    capsys.readouterr()
+    assert deploy.main(["status", *args], aws=aws) == 0
+    done: dict[str, Any] = json.loads(capsys.readouterr().out)
+    return done
+
+
+def test_the_default_type_is_g6e_xlarge_at_2_61(capsys: pytest.CaptureFixture[str]) -> None:
+    assert settings.DEFAULT_INSTANCE_TYPE == "ml.g6e.xlarge"
+    assert settings.INSTANCE_TYPES == {"ml.g6e.xlarge": 2.61, "ml.g6e.2xlarge": 2.81}
+    with pytest.raises(TypeError):
+        settings.INSTANCE_TYPES["ml.g6e.12xlarge"] = 1.0
+    with pytest.MonkeyPatch.context() as patch:
+        _endpoint_env(patch)
+        aws, _ = _aws(Plane())
+        done = _status(aws, capsys)
+    assert (done["instance_type"], done["usd_per_hour_while_up"]) == ("ml.g6e.xlarge", 2.61)
+
+
+def test_the_cli_option_picks_the_type_for_the_config_and_status(capsys: pytest.CaptureFixture[str]) -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+    with pytest.MonkeyPatch.context() as patch:
+        _endpoint_env(patch)
+        assert deploy.main(["up", "--image-uri", IMAGE, "--instance-type", "ml.g6e.2xlarge"], aws=aws) == 0
+        (variant,) = fakes["sagemaker"].named("create_endpoint_config")[0]["ProductionVariants"]
+        assert variant["InstanceType"] == "ml.g6e.2xlarge"
+        done = _status(aws, capsys, "--instance-type", "ml.g6e.2xlarge")
+    assert (done["instance_type"], done["usd_per_hour_while_up"]) == ("ml.g6e.2xlarge", 2.81)
+
+
+def test_an_unknown_type_is_refused_before_any_aws_call() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+    aws.get = lambda service: pytest.fail(f"AWS was reached: {service}")  # type: ignore[method-assign]
+    with pytest.MonkeyPatch.context() as patch:
+        _endpoint_env(patch)
+        for step in (["up", "--image-uri", IMAGE], ["status"], ["stop"]):
+            with pytest.raises(SystemExit, match=r"ml\.p5\.48xlarge.*ml\.g6e\.xlarge.*ml\.g6e\.2xlarge"):
+                deploy.main([*step, "--instance-type", "ml.p5.48xlarge"], aws=aws)
+        _endpoint_env(patch, **{settings.INSTANCE_TYPE_ENV: "ml.g5.xlarge"})
+        with pytest.raises(SystemExit, match=r"ml\.g5\.xlarge.*ml\.g6e\.xlarge"):
+            deploy.main(["status"], aws=aws)
+    assert plane.order == [] and all(not f.calls for f in fakes.values())
+
+
+def test_the_env_var_picks_the_type_and_the_option_overrides_it(capsys: pytest.CaptureFixture[str]) -> None:
+    aws, _ = _aws(Plane())
+    with pytest.MonkeyPatch.context() as patch:
+        _endpoint_env(patch, **{settings.INSTANCE_TYPE_ENV: "ml.g6e.2xlarge"})
+        assert _status(aws, capsys)["usd_per_hour_while_up"] == 2.81
+        done = _status(aws, capsys, "--instance-type", "ml.g6e.xlarge")
+        assert (done["instance_type"], done["usd_per_hour_while_up"]) == ("ml.g6e.xlarge", 2.61)
+
+
+def test_status_reports_the_type_an_existing_endpoint_really_has(capsys: pytest.CaptureFixture[str]) -> None:
+    plane = Plane(settings.ENDPOINT_CONFIG, settings.ENDPOINT)
+    aws, fakes = _aws(plane)
+    fakes["sagemaker"]._handlers["describe_endpoint_config"] = lambda **p: {
+        "ProductionVariants": [{"InstanceType": "ml.g6e.2xlarge"}]}
+    with pytest.MonkeyPatch.context() as patch:
+        _endpoint_env(patch)
+        done = _status(aws, capsys)  # asked for the default, but the endpoint runs the larger
+    assert (done["instance_type"], done["usd_per_hour_while_up"]) == ("ml.g6e.2xlarge", 2.81)

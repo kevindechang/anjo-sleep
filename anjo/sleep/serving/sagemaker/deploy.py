@@ -4,13 +4,14 @@ some start paid GPU time, so only Kevin runs them, with the operator's own crede
     python -m anjo.sleep.serving.sagemaker.deploy stage-weights --scratch <dir>   # HF -> S3, once
     python -m anjo.sleep.serving.sagemaker.deploy image --context <dir>           # prints build and push
     python -m anjo.sleep.serving.sagemaker.deploy up --image-uri <uri>            # model .. scaling, then asleep
+        [--instance-type ml.g6e.2xlarge]   # also on stop and status; or ANJO_SLEEP_INSTANCE_TYPE
     python -m anjo.sleep.serving.sagemaker.deploy upload-adapter --folder <dir> --name p-<hash>-n<night>
     python -m anjo.sleep.serving.sagemaker.deploy stop                            # copy count 0 now
     python -m anjo.sleep.serving.sagemaker.deploy stop --delete-endpoint          # no instance at all
     python -m anjo.sleep.serving.sagemaker.deploy status
 
 It reads ``ANJO_SLEEP_GLIMMER_REVISION`` (the pin), ``ANJO_SLEEP_S3_BUCKET`` and, if set,
-``ANJO_SLEEP_TOOL_CALL_PARSER`` and ``ANJO_SLEEP_VLLM_VERSION``. It names the two IAM roles and
+``ANJO_SLEEP_TOOL_CALL_PARSER``, ``ANJO_SLEEP_VLLM_VERSION`` and ``ANJO_SLEEP_INSTANCE_TYPE``. It names the two IAM roles and
 never creates one (deploy/aws holds them for the console). The account id comes from STS (or
 ``--account-id``) and is never printed. Every name starts with ``anjo-sleep-``.
 """
@@ -261,7 +262,7 @@ def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
 
 
 def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account_id: str | None = None, *,
-       clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+       instance_type: str = settings.DEFAULT_INSTANCE_TYPE, clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Model, endpoint config, endpoint, inference component and the idle net, each made if missing
     (a new image gives a new model, which the component is moved to). It waits for the first copy,
     records how long that took, and sets the copy count to 0 before it returns. If any step fails
@@ -272,7 +273,8 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
     model = model_name(image_uri)
     made: set[str] = set()
     try:
-        timings = _up(aws, serve, bucket, image_uri, role, model, made, clock=clock, sleep=sleep)
+        timings = _up(aws, serve, bucket, image_uri, role, model, made, settings.check_instance_type(instance_type),
+                      clock=clock, sleep=sleep)
     except BaseException as failure:  # paid from create_endpoint on: clean up, then re-raise
         try:
             _undo(aws, made, model, clock=clock, sleep=sleep)
@@ -284,7 +286,7 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
 
 
 def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: str, model: str,
-        made: set[str], *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
+        made: set[str], instance_type: str, *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
     """Make what is missing, noting each in ``made`` before its create call (an interrupted call may
     still have made it, and an unmade one deletes as already gone), and wait for the first copy."""
     sm = aws.get("sagemaker")
@@ -299,7 +301,7 @@ def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: 
     if not _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
         made.add("endpoint_config")
         sm.create_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG, ExecutionRoleArn=role, ProductionVariants=[{
-            "VariantName": settings.VARIANT, "InstanceType": settings.INSTANCE_TYPE, "InitialInstanceCount": 1,
+            "VariantName": settings.VARIANT, "InstanceType": instance_type, "InitialInstanceCount": 1,
             "ManagedInstanceScaling": {"Status": "ENABLED", "MinInstanceCount": 0, "MaxInstanceCount": 1},
             "RoutingConfig": {"RoutingStrategy": "LEAST_OUTSTANDING_REQUESTS"},
         }])
@@ -357,9 +359,13 @@ def idle_net(aws: Aws) -> None:
         AlarmActions=[policy["PolicyARN"]])
 
 
-def status(aws: Aws) -> dict[str, Any]:
-    """What is there now; a missing endpoint or component reads null."""
+def status(aws: Aws, instance_type: str = settings.DEFAULT_INSTANCE_TYPE) -> dict[str, Any]:
+    """What is there now; a missing endpoint or component reads null. The type is the endpoint
+    config's own if there is one (and it says), else ``instance_type``; the price follows it."""
     sm = aws.get("sagemaker")
+    config_found = _found(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)) or {}
+    actual = ((config_found.get("ProductionVariants") or [{}])[0]).get("InstanceType")
+    instance_type = actual or instance_type
     endpoint = _found(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT)) or {}
     variants = endpoint.get("ProductionVariants") or [{}]
     component = _found(_describe_component(sm)) or {}
@@ -368,7 +374,8 @@ def status(aws: Aws) -> dict[str, Any]:
     return {"endpoint": endpoint.get("EndpointStatus"), "instances": variants[0].get("CurrentInstanceCount"),
             "component": component.get("InferenceComponentStatus"),
             "desired_copies": runtime.get("DesiredCopyCount"), "current_copies": runtime.get("CurrentCopyCount"),
-            "idle_alarm": alarms[0].get("StateValue"), "usd_per_hour_while_up": settings.USD_PER_HOUR}
+            "idle_alarm": alarms[0].get("StateValue"), "instance_type": instance_type,
+            "usd_per_hour_while_up": settings.INSTANCE_TYPES.get(instance_type)}
 
 
 # ── the command line ────────────────────────────────────────────────────────
@@ -381,20 +388,29 @@ def _bucket(env: Mapping[str, str]) -> str:
     return settings.check_bucket(name)
 
 
+def _instance_type(chosen: str | None, env: Mapping[str, str]) -> str:
+    """The option, else the env var, else the default; it must be approved. Raises ``ValueError``."""
+    return settings.check_instance_type(chosen or env.get(settings.INSTANCE_TYPE_ENV, "").strip()
+                                        or settings.DEFAULT_INSTANCE_TYPE)
+
+
 def main(argv: list[str] | None = None, *, aws: Aws | None = None) -> int:
     parser = argparse.ArgumentParser(description="Glimmer on SageMaker: the operator's steps (paid).")
     steps = parser.add_subparsers(dest="step", required=True)
     steps.add_parser("stage-weights").add_argument("--scratch", type=Path, required=True)
     steps.add_parser("image").add_argument("--context", type=Path, required=True)
-    started = steps.add_parser("up")
+    typed = argparse.ArgumentParser(add_help=False)
+    typed.add_argument("--instance-type", help=f"one of {', '.join(settings.INSTANCE_TYPES)} "
+                       f"(default: ${settings.INSTANCE_TYPE_ENV}, else {settings.DEFAULT_INSTANCE_TYPE})")
+    started = steps.add_parser("up", parents=[typed])
     started.add_argument("--image-uri", required=True)
     started.add_argument("--account-id", help="instead of asking STS")
     adapter = steps.add_parser("upload-adapter")
     adapter.add_argument("--folder", type=Path, required=True)
     adapter.add_argument("--name", required=True)
-    steps.add_parser("stop").add_argument("--delete-endpoint", action="store_true",
+    steps.add_parser("stop", parents=[typed]).add_argument("--delete-endpoint", action="store_true",
                                           help="delete the component, endpoint and config: no instance at all")
-    steps.add_parser("status")
+    steps.add_parser("status", parents=[typed])
     args = parser.parse_args(argv)
     aws = aws or Aws()
     try:
@@ -403,21 +419,22 @@ def main(argv: list[str] | None = None, *, aws: Aws | None = None) -> int:
             write_context(args.context)
             print("\n".join(image_commands(args.context, serve, image_tag(serve))))
             return 0
+        kind = _instance_type(args.instance_type, os.environ) if args.step in ("up", "stop", "status") else ""
         if args.step == "status":
-            done: Mapping[str, Any] = status(aws)
+            done: Mapping[str, Any] = status(aws, kind)
         elif args.step == "stop":
             if args.delete_endpoint:
                 teardown(aws)
             elif _exists(_describe_component(aws.get("sagemaker"))):
                 SageMakerServing(bucket=None, control=aws.get("sagemaker")).sleep_now()
-            done = status(aws)
+            done = status(aws, kind)
         elif args.step == "upload-adapter":
             SageMakerServing(bucket=_bucket(os.environ), s3=aws.get("s3")).upload_adapter(args.folder, args.name)
             done = {"uploaded": args.name}
         elif args.step == "stage-weights":
             done = stage_weights(aws, serve, _bucket(os.environ), args.scratch)
         else:
-            done = up(aws, serve, _bucket(os.environ), args.image_uri, args.account_id)
+            done = up(aws, serve, _bucket(os.environ), args.image_uri, args.account_id, instance_type=kind)
     except (DeployError, ValueError, BotoCoreError, ClientError) as error:  # AWS's own words, the account id masked
         said = " ".join([str(error), *getattr(error, "__notes__", ())])  # with a failed cleanup's note
         raise SystemExit(_ACCOUNT_ID.sub("<account>", said)) from None

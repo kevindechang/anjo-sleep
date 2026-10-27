@@ -7,11 +7,17 @@ suffix is the operator's choice and never in the repo (``BUCKET_ENV``).
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 REGION: Final = "us-east-1"
-INSTANCE_TYPE: Final = "ml.g6e.xlarge"  # one L40S (48 GB), 4 vCPU, 32 GiB, local NVMe
-USD_PER_HOUR: Final = 2.61  # while a copy is up (the budget ledger's modal_usd pool holds it)
+# The approved instance types and their hourly SageMaker hosting price while a copy is up (the
+# budget ledger's modal_usd pool holds it). Each has the same single L40S (48 GB) and local NVMe, so
+# the serving numbers never change: only the vCPU and RAM differ (4 and 32 GiB; 8 and 64 GiB).
+INSTANCE_TYPES: Final[Mapping[str, float]] = MappingProxyType({"ml.g6e.xlarge": 2.61, "ml.g6e.2xlarge": 2.81})
+DEFAULT_INSTANCE_TYPE: Final = "ml.g6e.xlarge"
+INSTANCE_TYPE_ENV: Final = "ANJO_SLEEP_INSTANCE_TYPE"
 
 ENDPOINT: Final = "anjo-sleep-glimmer"
 ENDPOINT_CONFIG: Final = "anjo-sleep-glimmer-config"
@@ -60,6 +66,13 @@ def check_bucket(name: str) -> str:
         raise ValueError(f"the bucket is named {BUCKET_PLACEHOLDER}")
     if not all(c.islower() or c.isdigit() or c == "-" for c in name) or name.endswith("-"):
         raise ValueError("a bucket name is lowercase letters, digits and dashes")
+    return name
+
+
+def check_instance_type(name: str) -> str:
+    """The instance type if it is approved. Raises ``ValueError`` naming the ones that are."""
+    if name not in INSTANCE_TYPES:
+        raise ValueError(f"the instance type {name!r} is not approved; use one of: {', '.join(INSTANCE_TYPES)}")
     return name
 
 
