@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,6 +16,8 @@ import pytest
 
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.ownership.cancel import EpochFlag
+from anjo.sleep.ownership.inventory import FileInventory
+from anjo.sleep.ownership.lock import drain
 from anjo.sleep.ownership.changes import Change, what_changed
 from anjo.sleep.ownership.delete import (
     DeleteIncomplete,
@@ -57,6 +60,8 @@ class Ports:
         self.volume = FakeVolume()
         self.bucket = FakeS3()
         self.stopped: list[str] = []
+        self.inventory = FileInventory(tmp / "inventory")
+        self.lock_path = tmp / "night.lock"
 
     def names(self, uid: str) -> frozenset[str]:
         registry = self.world.registry
@@ -73,7 +78,8 @@ class Ports:
                 return 1
 
         return DeletePorts(
-            cancel=self.flag, adapter_names=self.names, stoppers=(Stopper(),),
+            cancel=self.flag, adapter_names=self.names, inventory=self.inventory, stoppers=(Stopper(),),
+            night_lock=lambda t: drain(self.lock_path, t), lock_timeout_s=5.0,
             remotes=(ModalAdapters(self.volume), S3Adapters("bucket", self.bucket)),
             erasers=(
                 PathEraser("night logs", lambda uid, _: [world.logs(uid)]),
@@ -173,9 +179,9 @@ def test_delete_runs_in_the_specs_order(tmp_path: Path) -> None:
         order.append("names")
         return frozenset()
 
-    delete_all("p1", DeletePorts(cancel=Step("c"), adapter_names=names, stoppers=(Step("s"),), remotes=(Step("r"),),
+    delete_all("p1", DeletePorts(cancel=Step("c"), adapter_names=names, inventory=FileInventory(tmp_path / "inv"), stoppers=(Step("s"),), remotes=(Step("r"),),
                                  erasers=(Step("files"), Step("mind workspace"))))
-    assert order == ["names", "cancel", "stop", "remote", "files", "mind workspace"]
+    assert order == ["cancel", "names", "stop", "remote", "files", "mind workspace"]  # fence first, then list
 
 
 def test_a_failed_step_does_not_stop_the_rest_and_the_delete_says_so(tmp_path: Path) -> None:
@@ -315,3 +321,121 @@ def test_receipts_identical_across_a_talker_swap(tmp_path: Path) -> None:
         log = steps(result.log_path)
         receipts.append([(s["step"], s.get("receipt"), s.get("action")) for s in log if s["step"] in ("choose", "note")])
     assert receipts[0] == receipts[1] and receipts[0]
+
+
+# ── Fence first, drain the writers, then list (RF2) ──────────────────────────
+
+
+def test_a_step_that_writes_after_the_cancel_and_crashes_still_leaves_nothing(tmp_path: Path) -> None:
+    """The night holds the lock; it sees the cancel, writes once more and dies before its purge. The
+    delete waited for the lock, so what it wrote is listed and removed."""
+    world = World(tmp_path)
+    owned = Ports(world, tmp_path)
+    world.plan("p1", NIGHT)
+    held, late = threading.Event(), world.root / "p1" / "late.txt"
+
+    def night() -> None:
+        with drain(owned.lock_path, 5.0):
+            held.set()
+            while owned.flag.epoch("p1") == 0:
+                threading.Event().wait(0.01)
+            late.parent.mkdir(parents=True, exist_ok=True)
+            late.write_text("written after the cancel")
+            # ...and the process dies here, before any purge
+
+    thread = threading.Thread(target=night)
+    thread.start()
+    assert held.wait(5)
+    delete_all("p1", owned.ports())
+    thread.join()
+    assert not late.exists() and not (world.root / "p1").exists()
+
+
+def test_an_adapter_registered_during_the_delete_is_still_removed(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    owned = Ports(world, tmp_path)
+    early, late = adapter("p1", 1), adapter("p1", 2)
+    world.registry.record_trained("p1", early, NIGHT)
+    _upload(owned, early)
+    _upload(owned, late)
+    held = threading.Event()
+
+    def night() -> None:
+        with drain(owned.lock_path, 5.0):
+            held.set()
+            while owned.flag.epoch("p1") == 0:
+                threading.Event().wait(0.01)
+            world.registry.record_trained("p1", late, SECOND)  # trained just as the delete began
+
+    thread = threading.Thread(target=night)
+    thread.start()
+    assert held.wait(5)
+    report = delete_all("p1", owned.ports())
+    thread.join()
+    assert report.adapters == 2 and owned.volume.folders == set() and owned.bucket.keys == set()
+
+
+def test_a_night_that_never_leaves_fails_the_delete_after_one_retry(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    owned = Ports(world, tmp_path)
+    world.plan("p1", NIGHT)
+    world.evidence("p1").add(world.planned[("p1", NIGHT)])
+    tries: list[float] = []
+
+    def lock(timeout: float) -> Any:
+        tries.append(timeout)
+        return drain(owned.lock_path, timeout)
+
+    ports = replace(owned.ports(), lock_timeout_s=0.2, night_lock=lock)
+    with drain(owned.lock_path, 1.0):  # a live night
+        # flock is per open file, so a second open in this process is refused as another process would be
+        with pytest.raises(DeleteIncomplete) as raised:
+            delete_all("p1", ports)
+    assert tries == [0.2, 0.2] and owned.stopped == ["p1"]  # the VM was stopped between the two tries
+    assert "night lock: still held" in raised.value.report.failures
+    assert (world.root / "p1").exists()  # nothing was deleted while a night could still write
+
+
+def test_a_failed_remote_delete_is_kept_and_retried_even_after_the_registry_is_gone(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    owned = Ports(world, tmp_path)
+    name = adapter("p1", 1)
+    world.registry.record_trained("p1", name, NIGHT)
+    _upload(owned, name)
+
+    class Down:
+        name = "down"
+
+        def remove(self, adapters: frozenset[str]) -> int:
+            raise OSError("unreachable")
+
+    good = owned.ports()
+    with pytest.raises(DeleteIncomplete):
+        delete_all("p1", replace(good, remotes=(Down(), *good.remotes)))
+    assert owned.inventory.read("p1") == {name}  # kept: weights may remain remote
+    assert not (world.root / "checkpoints" / "p1").exists()  # the registry is gone, the inventory is not
+
+    assert delete_all("p1", good).adapters == 1  # a retry finds the name in the inventory
+    assert owned.volume.folders == set() and owned.bucket.keys == set()
+    assert owned.inventory.read("p1") == frozenset() and owned.inventory.pending() == []
+
+
+def test_a_nights_cancel_baseline_is_read_before_any_state_loads(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    seen: list[str] = []
+
+    def logs(uid: str) -> Path:
+        seen.append("logs")
+        return world.logs(uid)
+
+    def cancel(uid: str) -> bool:
+        seen.append("cancel")
+        return False
+
+    run_night_batch_with(world.deps(logs=logs, cancel=cancel), {"p1": NIGHT})
+    assert seen[0] == "cancel"
+    flag = EpochFlag(tmp_path / "flag")
+    flag.set("p1")
+    watching = flag.watcher()
+    assert watching("p1") is False  # one read is both the baseline and the comparison

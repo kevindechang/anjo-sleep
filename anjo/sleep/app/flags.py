@@ -6,6 +6,7 @@ behaves byte for byte as on main: no sleep code runs and no export changes.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Final
 
 HOST_ENV: Final = "ANJO_SLEEP_HOST"
@@ -36,7 +37,25 @@ def sleep_enabled_for(user_id: str) -> bool:
     never declared, so forced ids alone flag nobody and the app's manifest is unchanged."""
     if not sleep_host():
         return False
+    apply_tombstones()
     from anjo.core.capabilities import capability_enabled_for, declare_sleep_capability
 
     declare_sleep_capability()
     return bool(capability_enabled_for(CAPABILITY, user_id))
+
+
+FORCED_ENV: Final = "ANJO_SLEEP_FORCED_USER_IDS"
+
+
+def apply_tombstones() -> None:
+    """Take every deleted person out of this process's forced-id list (Task 9). Called at startup
+    and before every flag read, so the list is always the setting minus the tombstones."""
+    forced = os.environ.get(FORCED_ENV, "")
+    if not forced:
+        return
+    from anjo.core import paths
+    from anjo.sleep.ownership.tombstone import Tombstones
+
+    kept = Tombstones(Path(paths.DATA_ROOT) / "sleep" / "deleted").without(forced)
+    if kept != forced:
+        os.environ[FORCED_ENV] = kept

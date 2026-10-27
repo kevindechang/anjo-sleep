@@ -9,11 +9,17 @@ over Anjo's own stores.
   a pending note, the forced-id entry, the encrypted sleep folder, and last MIND's workspace log.
 - ``remote_cleanup`` is account erasure's hook (``anjo.core.erasure``). Erasure already removes the
   person's folder under its own locks, so the hook does everything else and leaves that folder alone.
+  It writes the cleanup inventory first (``<data dir>/sleep/cleanup/<id>.json``, adapter names only,
+  outside the folder erasure removes); a remote delete that fails leaves it for ``retry_pending`` (the
+  night's start) or a later ``delete_all``.
+- ``delete_all`` also waits, up to ``LOCK_TIMEOUT_S``, for the night lock (``<data dir>/sleep/night.lock``,
+  the one the night command and the simulated day hold) after raising the cancel flag.
+- A delete leaves a tombstone, and the forced-id list is always the setting minus the tombstones.
 
 Left behind on purpose: the cancel counter (an id and a number, so a night that is still running sees
 the delete), the budget ledger (spend; its hold keys carry the account id and a date), the shared
-persona files of synthetic people, and the process environment's forced-id list outside this
-process (a deploy setting).
+persona files of synthetic people, and the deploy setting that holds the forced-id list (a restart
+still reads it, and the tombstone takes the id out again).
 """
 from __future__ import annotations
 
@@ -22,12 +28,13 @@ import os
 import re
 import shutil
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
-from anjo.sleep.app.flags import require_sleep_host
+from anjo.sleep.app.flags import FORCED_ENV, apply_tombstones, require_sleep_host
 from anjo.sleep.app.storage import (
     SLEEP_DIR,
     WORKSPACE_FILE,
@@ -40,6 +47,9 @@ from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.ownership import changes as _changes
 from anjo.sleep.ownership import undo as _undo
 from anjo.sleep.ownership.cancel import EpochFlag
+from anjo.sleep.ownership.inventory import FileInventory
+from anjo.sleep.ownership.lock import drain
+from anjo.sleep.ownership.tombstone import Tombstones
 from anjo.sleep.ownership.changes import Change
 from anjo.sleep.ownership.delete import (
     DeletePorts,
@@ -55,9 +65,12 @@ from anjo.sleep.ownership.remote import ModalAdapters, S3Adapters
 from anjo.sleep.types import CheckpointRef
 
 CANCEL_DIR: Final = "cancel"
+CLEANUP_DIR: Final = "cleanup"
+TOMBSTONE_DIR: Final = "deleted"
+LOCK_NAME: Final = "night.lock"  # night/sweep.py's lock, beside the budget ledger
+LOCK_TIMEOUT_S: Final = 120.0
 TRAINING_DIR: Final = "training"  # LoraTrainer's root: adapters/<name> and work/<name>
 SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
-FORCED_ENV: Final = "ANJO_SLEEP_FORCED_USER_IDS"
 BUCKET_ENV: Final = "ANJO_SLEEP_S3_BUCKET"
 MODAL_URL_ENV: Final = "ANJO_SLEEP_MODAL_URL"
 _USER: Final = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -71,6 +84,14 @@ def _plain(user_id: str) -> str:
 
 def cancel_flag() -> EpochFlag:
     return EpochFlag(data_root() / SLEEP_DIR / CANCEL_DIR)
+
+
+def inventory() -> FileInventory:
+    return FileInventory(data_root() / SLEEP_DIR / CLEANUP_DIR)
+
+
+def tombstones() -> Tombstones:
+    return Tombstones(data_root() / SLEEP_DIR / TOMBSTONE_DIR)
 
 
 def results_trees() -> tuple[Path, Path]:
@@ -120,9 +141,24 @@ def has_footprint(user_id: str) -> bool:
 
 def remote_cleanup(user_id: str) -> None:
     """Account erasure's hook. It runs inside erasure's locks, which also remove the person's folder.
-    A person Anjo Sleep keeps nothing of is left alone: no cancel flag, no client, no call."""
-    if has_footprint(user_id):
-        _delete_all(_plain(user_id), delete_ports(under_erasure=True))
+    A person Anjo Sleep keeps nothing of is left alone: no cancel flag, no client, no call. The
+    adapters are written to the inventory first, so a failure past this point loses nothing."""
+    if not has_footprint(user_id):
+        return
+    inventory().write(user_id, adapter_names(user_id))
+    _delete_all(_plain(user_id), delete_ports(under_erasure=True))
+
+
+def retry_pending() -> list[str]:
+    """Finish the remote deletes an earlier delete or erasure left in the inventory (the night's
+    start). Returns the people whose work is still outstanding."""
+    still: list[str] = []
+    for user_id in inventory().pending():
+        try:
+            erase_stored(user_id, replace(delete_ports(under_erasure=True), erasers=()))
+        except Exception:  # noqa: BLE001  (the inventory stays; the caller logs the people)
+            still.append(user_id)
+    return still
 
 
 # ── The ports ─────────────────────────────────────────────────────────────────
@@ -166,16 +202,16 @@ class _PendingNote:
 
 
 class _ForcedId:
-    """The person's entry in this process's forced-id list (the dev host's cohort)."""
+    """The person's entry in the forced-id list (the dev host's cohort): a tombstone, so a restart
+    can't bring it back, applied to this process now."""
 
     name = "forced-id entry"
 
     def erase(self, user_id: str, adapters: Names) -> int:
-        ids = [part.strip() for part in os.environ.get(FORCED_ENV, "").split(",") if part.strip()]
-        if user_id not in ids:
-            return 0
-        os.environ[FORCED_ENV] = ",".join(part for part in ids if part != user_id)
-        return 1
+        listed = user_id in [part.strip() for part in os.environ.get(FORCED_ENV, "").split(",")]
+        tombstones().add(user_id)
+        apply_tombstones()
+        return 1 if listed else 0
 
 
 class _SleepFiles:
@@ -244,16 +280,21 @@ def _stoppers() -> tuple[_ColabStopper, ...]:
 
 
 def local_erasers(*, under_erasure: bool = False) -> Sequence[Any]:
+    """In order: the registry that names the adapters goes last of all."""
     files = [
         PathEraser("training copies", _training), PathEraser("night logs and scores", _results),
-        PathEraser("sealed probes", _sealed), PathEraser("checkpoint registry", _registry),
-        _PendingNote(), _ForcedId(),
+        PathEraser("sealed probes", _sealed), _PendingNote(), _ForcedId(),
     ]
-    return [*files, *([] if under_erasure else [_SleepFiles(), _MindWorkspace()])]
+    registry = PathEraser("checkpoint registry", _registry)
+    return [*files, *([] if under_erasure else [_SleepFiles(), _MindWorkspace()]), registry]
 
 
 def delete_ports(*, under_erasure: bool = False) -> DeletePorts:
+    """Under erasure the night lock is not taken: erasure's own guard already refuses a writer."""
+    lock_path = data_root() / SLEEP_DIR / LOCK_NAME
     return DeletePorts(
-        cancel=cancel_flag(), adapter_names=adapter_names, stoppers=_stoppers(), remotes=_remotes(),
-        erasers=tuple(local_erasers(under_erasure=under_erasure)),
+        cancel=cancel_flag(), adapter_names=adapter_names, inventory=inventory(), stoppers=_stoppers(),
+        remotes=_remotes(), erasers=tuple(local_erasers(under_erasure=under_erasure)),
+        night_lock=None if under_erasure else (lambda timeout: drain(lock_path.resolve(), timeout)),
+        lock_timeout_s=LOCK_TIMEOUT_S,
     )

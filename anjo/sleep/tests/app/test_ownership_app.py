@@ -283,3 +283,49 @@ def test_account_erasure_of_a_person_with_no_sleep_data_touches_nothing(
     monkeypatch.setattr(invoke, "make_client", never)
     delete_account_data("person-nothing")
     assert cancel_flag().epoch("person-nothing") == 0
+
+
+def test_a_failing_remote_never_stops_account_erasure_and_is_retried(
+    auth_client: Any, hooked: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.core.erasure import delete_account_data
+    from anjo.sleep.app.ownership import inventory, retry_pending
+    from anjo.sleep.serving.sagemaker import invoke
+
+    uid = ALICE
+    where = _lay_down(uid, tmp_path, monkeypatch)
+    monkeypatch.setenv("ANJO_SLEEP_S3_BUCKET", "anjo-sleep-sagemaker-test")
+
+    def down(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("the cloud client will not start")
+
+    monkeypatch.setattr(invoke, "make_client", down)
+    delete_account_data(uid)  # goes ahead
+
+    from anjo.core.erasure import _user_dir
+
+    assert not _user_dir(uid).exists()
+    assert inventory().read(uid) == {"p-aaaaaaaaaaaa-n1", "p-aaaaaaaaaaaa-n2"}  # opaque ids only, outside the folder
+    assert where["sleep"].exists() is False
+
+    bucket = FakeS3({"adapters/p-aaaaaaaaaaaa-n1/x", "adapters/p-aaaaaaaaaaaa-n2/x"})
+    monkeypatch.setattr(invoke, "make_client", lambda *a, **k: bucket)
+    assert retry_pending() == [] and bucket.keys == set() and inventory().pending() == []
+
+
+def test_a_deleted_persons_forced_id_entry_stays_gone_across_a_restart(
+    auth_client: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app.flags import apply_tombstones, sleep_enabled_for
+    from anjo.sleep.app.ownership import delete_all
+
+    uid = "person-gone"
+    monkeypatch.setenv("ANJO_SLEEP_FORCED_USER_IDS", f"{uid},{ALICE}")
+    _lay_down(uid, tmp_path, monkeypatch)
+    delete_all(uid)
+    assert os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE
+    monkeypatch.setenv("ANJO_SLEEP_FORCED_USER_IDS", f"{uid},{ALICE}")  # the restart reads the deploy setting again
+    apply_tombstones()
+    assert os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE
+    monkeypatch.setenv("ANJO_SLEEP_FORCED_USER_IDS", f"{uid},{ALICE}")
+    assert sleep_enabled_for(uid) is False and os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE  # and at every read

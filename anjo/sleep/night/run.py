@@ -252,11 +252,11 @@ class NightRunner:
 
     def _start(self, uid: str, night: date, window: Window) -> _Night:
         deps = self.deps
+        deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
         history = summaries(deps.logs(uid))
         actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - _paid_within(history, window[1], timedelta(hours=24))))
         wonder_spent = _spent_within(history, window[1], timedelta(days=30))
-        deps.cancel(uid)  # the first look at a cancel flag is the baseline a later change is read against
         return _Night(
             uid=uid, night=night, window=window, log=log,
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),

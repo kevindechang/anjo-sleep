@@ -23,6 +23,7 @@ Notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -37,7 +38,7 @@ from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
-from anjo.sleep.app.ownership import cancel_flag, night_logs, purge
+from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
 from anjo.sleep.app.intentions import LedgerIntentions
 from anjo.sleep.app.policy import build_policy
 from anjo.sleep.app.recall import MiniLmRecall
@@ -78,6 +79,7 @@ from anjo.sleep.types import Probe
 
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour", USD list prices
 FIELDS_ENV: Final = "ANJO_SLEEP_FIELDS"  # a real person's field domains for the collapse gate, comma-separated
+logger = logging.getLogger(__name__)
 PERSONAS: Final = Path(__file__).parents[1] / "personas"
 PROBE_MODEL: Final = "muse-spark"  # evaluation only (§3)
 
@@ -151,6 +153,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     for user_id, persona in options.personas.items():
         if not is_synthetic(user_id):
             raise ValueError(f"{persona} runs only on an account registered as synthetic")
+    if (outstanding := retry_pending()):  # remote deletes an earlier delete or erasure could not finish
+        logger.warning("%d remote cleanups are still outstanding", len(outstanding))
     registry = checkpoint_registry()
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
     client = serving.client()

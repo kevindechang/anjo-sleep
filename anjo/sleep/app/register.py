@@ -28,7 +28,7 @@ from anjo.core.anjo_model import assignment, client, hosts
 from anjo.sleep.app.api import router
 from anjo.sleep.app.cleared_sessions import in_cleared_session
 from anjo.sleep.app.delivery import held
-from anjo.sleep.app.flags import require_sleep_host, sleep_enabled_for
+from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_enabled_for
 from anjo.sleep.app.ownership import remote_cleanup
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
@@ -49,6 +49,7 @@ def _promoted_adapter(user_id: str) -> str | None:
 
 def register_hooks() -> None:
     require_sleep_host()
+    apply_tombstones()  # at startup: a deleted person's forced-id entry never comes back
     _add(assignment.ROUTE_OVERRIDES, sleep_route)
     _add(talker_choice.MENU_OVERRIDES, sleep_enabled_for)
     _add(open_model_turn.TURN_HOOKS, sleep_turn_hook)

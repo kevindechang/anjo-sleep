@@ -59,6 +59,7 @@ class EpochFlag:
         seen: dict[str, int] = {}
 
         def cancelled(user_id: str) -> bool:
-            return self.epoch(user_id) != seen.setdefault(user_id, self.epoch(user_id))
+            now = self.epoch(user_id)  # one read: the baseline and the comparison can't straddle a delete
+            return now != seen.setdefault(user_id, now)
 
         return cancelled
