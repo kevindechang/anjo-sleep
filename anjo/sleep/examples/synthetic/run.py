@@ -20,6 +20,7 @@ every run, runs no gate of any kind, and never marks a checkpoint as promoted.
 from __future__ import annotations
 
 import argparse
+import secrets
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -38,7 +39,7 @@ from anjo.sleep.examples.synthetic.report import (
     heading,
 )
 from anjo.sleep.examples.synthetic.services import ExampleError, Services
-from anjo.sleep.examples.synthetic.world import open_world
+from anjo.sleep.examples.synthetic.world import open_world, store_day
 
 __all__ = ["ExampleError", "ExampleReport", "execute", "main"]
 
@@ -87,17 +88,20 @@ def _fresh(workdir: Path) -> None:
 
 def execute(
     argv: Sequence[str] | None, services: Services, *, say: Say = print,
-    input_fn: stages.Input = input,
+    input_fn: stages.Input = input, run_id: str | None = None, banner: bool = True,
 ) -> ExampleReport:
-    """Run the night with ``services`` and return what it did."""
+    """Run the night with ``services`` and return what it did. ``run_id`` names this run's adapter
+    (a new one each time unless given); ``banner`` is False when the caller already printed the
+    no-crisis-gate notice."""
     options = parse(argv)
-    say(NO_CRISIS_GATE)
+    if banner:
+        say(NO_CRISIS_GATE)
     say(FAKE_NOTICE if services.fake else LIVE_NOTICE)
     try:
         person = people.load_persona(options.persona)
         day = people.load_day(options.day, person.day)
         _fresh(options.workdir)
-        return _night(options, services, person, day, say, input_fn)
+        return _night(options, services, person, day, say, input_fn, run_id or secrets.token_hex(6))
     except people.ExampleInputError as error:
         raise ExampleError(str(error)) from None
     finally:
@@ -106,11 +110,11 @@ def execute(
 
 def _night(
     options: Options, services: Services, person: people.ExamplePersona,
-    day: tuple[people.DayTurn, ...], say: Say, input_fn: stages.Input,
+    day: tuple[people.DayTurn, ...], say: Say, input_fn: stages.Input, run_id: str,
 ) -> ExampleReport:
     night = stages.Night(
         person=person, turns=day, world=open_world(options.workdir, person.person_id, person.day),
-        services=services, workdir=options.workdir, say=say,
+        services=services, workdir=options.workdir, say=say, run_id=run_id,
     )
     donor = stages.donor_ref(options.donor, night)  # a bad name stops the run before it costs anything
     done: list[str] = []
@@ -120,6 +124,7 @@ def _night(
         heading(say, name)
 
     step("load")
+    store_day(night.world, person, day)
     say(f"{person.name}, {person.age}, {person.field}; {len(day)} turns on {person.day} (invented)")
     step("probes")
     probes, digest = stages.seal(night)
@@ -136,6 +141,7 @@ def _night(
     done.append("train")
     ckpt = stages.train(night, data)
     step("arms")
+    stages.ready(night, ckpt)
     arms, table = stages.run_arms(night, probes, ckpt, donor)
     step("chat")
     stages.chat(night, ckpt, options.chat, input_fn)
@@ -154,10 +160,11 @@ def main(
     """The command line. Exit 0 on a finished run, 2 when a key is missing, 1 on any other stop."""
     from anjo.sleep.examples.synthetic import fakes, live
 
+    say(NO_CRISIS_GATE)  # first, so no stop below (a bad argument, a missing key) comes without it
     try:
         fake = _parser().parse_args(argv).fake
         services = fakes.fake_services() if fake else live.build_services(environ)
-        execute(argv, services, say=say, input_fn=input_fn)
+        execute(argv, services, say=say, input_fn=input_fn, banner=False)
     except live.MissingKeys as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_USAGE

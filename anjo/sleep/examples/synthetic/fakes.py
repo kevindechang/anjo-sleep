@@ -20,7 +20,7 @@ from anjo.sleep.meta_api import PINNED_MODELS
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.ports import Chooser
 from anjo.sleep.serving import config
-from anjo.sleep.serving.client import WakeResult
+from anjo.sleep.serving.client import ServingError, WakeResult
 from anjo.sleep.train.lora import JOB
 from anjo.sleep.types import CheckpointRef
 
@@ -198,12 +198,21 @@ def fake_judge(
 
 
 class FakeGlimmer:
-    """A model client whose replies name the adapter and whether it saw a context."""
+    """A model client whose replies name the adapter and whether it saw a context. With a
+    ``serving`` it refuses an adapter the server hasn't loaded yet, as vLLM does."""
+
+    def __init__(self, serving: FakeServing | None = None) -> None:
+        self._serving = serving
+
+    def _check(self, adapter: CheckpointRef | None) -> None:
+        if adapter is not None and self._serving is not None and adapter.id not in self._serving.visible:
+            raise ServingError("/v1/chat/completions returned HTTP 404")
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
         seed: int | None = None,
     ) -> ChatResult:
+        self._check(adapter)
         who = "base" if adapter is None else adapter.id
         with_context = "with context" if messages[0]["role"] == "system" else "no context"
         question = messages[-1]["content"][:60].replace("\n", " ")
@@ -212,6 +221,7 @@ class FakeGlimmer:
     def continuation_logprobs(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
     ) -> tuple[float, ...]:
+        self._check(adapter)
         who = "base" if adapter is None else adapter.id
         key = _digest(who, messages[0]["role"], messages[-1]["content"], continuation)
         return (-0.1 - (key % 500) / 100.0,)
@@ -240,19 +250,35 @@ class FakeGpu:
 
 
 class FakeServing:
-    """A server that is always awake and takes an adapter folder after checking it."""
+    """A server that is always awake. An uploaded adapter is checked, refused if its name is already
+    on the volume, and becomes visible only after the server restarts (``sleep_now``), as on Modal."""
+
+    def __init__(self, *, restarts: bool = True) -> None:
+        # the donor's adapter, trained by another run, is already served
+        self.on_volume: set[str] = {FAKE_DONOR}
+        self.visible: set[str] = {FAKE_DONOR}
+        self._restarts = restarts
 
     def wake(self) -> WakeResult:
         return WakeResult(0.0, True)
 
+    def sleep_now(self) -> None:
+        if self._restarts:
+            self.visible = set(self.on_volume)
+
     def upload_adapter(self, folder: Path, name: str) -> None:
         config.check_adapter(folder, name)
+        if name in self.on_volume:
+            raise config.ServeConfigError(f"adapter {name} is already on the volume; a night's adapter never changes")
+        self.on_volume.add(name)
 
 
-def fake_services(chooser: Chooser | None = None) -> Services:
-    """Every service faked. ``chooser`` replaces her chooser (the tests wrap it to look inside)."""
+def fake_services(chooser: Chooser | None = None, serving: FakeServing | None = None) -> Services:
+    """Every service faked. ``chooser`` replaces her chooser (the tests wrap it to look inside);
+    ``serving`` replaces the server (the tests share one across runs, or make it never restart)."""
+    server = serving if serving is not None else FakeServing()
     base = Services(
-        spark=fake_spark, judge=fake_judge, glimmer=FakeGlimmer(), serving=FakeServing(),
+        spark=fake_spark, judge=fake_judge, glimmer=FakeGlimmer(server), serving=server,
         gpu=FakeGpu(), revision=FAKE_REVISION, fake=True,
     )
     if chooser is None:

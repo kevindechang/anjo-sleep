@@ -27,9 +27,12 @@ class Glimmer(ModelClient, TokenLogprobs, Protocol):
 
 
 class Serving(Protocol):
-    """Waking the server, and putting a trained adapter where it loads from."""
+    """Waking the server, putting a trained adapter where it loads from, and restarting it."""
 
     def wake(self) -> WakeResult: ...
+
+    def sleep_now(self) -> None:
+        """Stop the server, so its next start sees every adapter on the volume."""
 
     def upload_adapter(self, folder: Path, name: str) -> None: ...
 

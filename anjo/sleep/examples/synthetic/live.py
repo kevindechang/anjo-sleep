@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final
 
 from anjo.sleep import baseten_api, meta_api
@@ -18,9 +19,8 @@ from anjo.sleep.serving.backend import MODAL_TOKEN_ENV, MODAL_URL_ENV, ModalServ
 from anjo.sleep.serving.config import REVISION_ENV
 
 BASETEN_KEYS: Final = ("BASETEN_API_KEY", baseten_api.KEY_ENV)
+MODAL_CONFIG_ENV: Final = "MODAL_CONFIG_PATH"
 NEEDED: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    ("MODAL_TOKEN_ID", ("MODAL_TOKEN_ID",)),
-    ("MODAL_TOKEN_SECRET", ("MODAL_TOKEN_SECRET",)),
     (meta_api.KEY_ENV, (meta_api.KEY_ENV,)),
     ("BASETEN_API_KEY", BASETEN_KEYS),
     (MODAL_URL_ENV, (MODAL_URL_ENV,)),
@@ -36,9 +36,22 @@ class MissingKeys(ExampleError):
     """One or more settings are unset. The message lists their names only."""
 
 
+def modal_logged_in(env: Mapping[str, str]) -> bool:
+    """Modal credentials: both token variables, or a login from ``modal setup`` (``~/.modal.toml``,
+    or the file ``MODAL_CONFIG_PATH`` names)."""
+    if env.get("MODAL_TOKEN_ID", "").strip() and env.get("MODAL_TOKEN_SECRET", "").strip():
+        return True
+    path = Path(env.get(MODAL_CONFIG_ENV, "").strip() or Path.home() / ".modal.toml")
+    try:
+        return "token_id" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def missing_keys(env: Mapping[str, str]) -> list[str]:
     """The names of the settings that are unset or blank."""
-    return [label for label, names in NEEDED if not any(env.get(name, "").strip() for name in names)]
+    absent = [label for label, names in NEEDED if not any(env.get(name, "").strip() for name in names)]
+    return absent if modal_logged_in(env) else ["MODAL_TOKEN_ID and MODAL_TOKEN_SECRET (or run `modal setup`)", *absent]
 
 
 def build_services(environ: Mapping[str, str] | None = None) -> Services:

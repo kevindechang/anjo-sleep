@@ -8,7 +8,7 @@ never promotes anything, because the example runs no gates (it has no crisis gat
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -17,7 +17,8 @@ from typing import Final
 from anjo.sleep.context.brief_store import JsonlBriefStore, ServedBriefs, TrainingBriefs
 from anjo.sleep.context.builder import ComposedContextBuilder, RecallSettings
 from anjo.sleep.context.recall_bm25 import Bm25Recall
-from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN, append_records
+from anjo.sleep.examples.synthetic.persona import DayTurn, ExamplePersona
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.practice.transcripts import JsonlTranscriptStore
@@ -76,6 +77,19 @@ class World:
     recall: Bm25Recall
     contexts: ComposedContextBuilder
     training_briefs: TrainingBriefs
+
+
+def store_day(world: World, person: ExamplePersona, turns: Sequence[DayTurn]) -> None:
+    """Step 1: the persona's visible part and the day's turns, as plain lines in the store. The
+    held-out part is not stored: only the sealed probes and the judge read it."""
+    append_records(world.root / "persona.jsonl", PLAIN, [{
+        "person_id": person.person_id, "name": person.name, "age": person.age, "field": person.field,
+        "line": person.line, "project": person.project_title, "day": person.day.isoformat(),
+        "statements": [{"kind": s.kind, "text": s.text} for s in person.statements],
+    }])
+    append_records(world.root / "day.jsonl", PLAIN, [
+        {"role": t.role, "at": t.at.isoformat(), "text": t.text} for t in turns
+    ])
 
 
 def open_world(root: Path, person_id: str, night: date) -> World:

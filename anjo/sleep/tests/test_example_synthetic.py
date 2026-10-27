@@ -59,8 +59,8 @@ def test_core_imports_no_private_anjo() -> None:
     offenders: dict[str, set[str]] = {}
     for path in sorted(SLEEP.rglob("*.py")):
         relative = path.relative_to(SLEEP)
-        if relative.parts[0] in {"app", "tests"}:
-            continue
+        if relative.parts[0] == "app" or relative.parts[:2] == ("tests", "app"):
+            continue  # the adapters, and their tests: the published tree leaves both out
         private = {
             name for name in _anjo_imports(path.read_text(encoding="utf-8"))
             if name != "anjo.sleep" and not name.startswith("anjo.sleep.")
@@ -114,10 +114,15 @@ def test_example_fails_fast_when_a_key_is_missing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
     secret = "zq-secret-value-0000"
-    rc = run.main(["--workdir", str(tmp_path / "w")], environ={"MODAL_TOKEN_ID": secret})
+    nowhere = str(tmp_path / "no-modal.toml")
+    rc = run.main(
+        ["--workdir", str(tmp_path / "w")],
+        environ={"MODAL_TOKEN_ID": secret, "MODAL_CONFIG_PATH": nowhere},
+    )
 
-    err = capsys.readouterr().err
-    assert rc == 2
+    captured = capsys.readouterr()
+    err = captured.err
+    assert rc == 2 and NO_GATE in captured.out.lower()
     for name in ("MODAL_TOKEN_SECRET", "ANJO_META_API_KEY", "BASETEN_API_KEY"):
         assert name in err
     assert "--fake" in err
@@ -155,6 +160,98 @@ def test_example_refuses_a_workdir_that_already_holds_files(tmp_path: Path) -> N
     rc, lines, _ = _run(tmp_path)
 
     assert rc == 1 and "new folder" in lines[-1]
+
+
+def test_no_crisis_gate_prints_even_for_a_bad_argument(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        run.main(["--no-such-flag"])
+
+    assert NO_GATE in capsys.readouterr().out.lower()
+
+
+def test_modal_login_from_modal_setup_is_accepted(tmp_path: Path) -> None:
+    from anjo.sleep.examples.synthetic import live
+
+    config = tmp_path / "modal.toml"
+    config.write_text('[default]\ntoken_id = "x"\ntoken_secret = "y"\n')
+    others = {name: "v" for name in ("ANJO_META_API_KEY", "BASETEN_API_KEY", "ANJO_SLEEP_MODAL_URL",
+                                     "ANJO_SLEEP_MODAL_TOKEN", "ANJO_SLEEP_GLIMMER_REVISION")}
+
+    assert live.missing_keys({**others, "MODAL_CONFIG_PATH": str(config)}) == []
+    assert live.missing_keys({**others, "MODAL_CONFIG_PATH": str(tmp_path / "none")}) != []
+    assert live.missing_keys({**others, "MODAL_TOKEN_ID": "a", "MODAL_TOKEN_SECRET": "b",
+                              "MODAL_CONFIG_PATH": str(tmp_path / "none")}) == []
+
+
+def test_step_one_writes_the_persona_and_the_day_to_the_store(tmp_path: Path) -> None:
+    _, _, report = _run(tmp_path)
+
+    assert report is not None
+    world = tmp_path / "w"
+    person = persona.load_persona(EXAMPLE / "persona.json")
+    turns = persona.load_day(EXAMPLE / "day1.jsonl", person.day)
+    stored = [json.loads(line) for line in (world / "day.jsonl").read_text().splitlines()]
+    assert [row["text"] for row in stored] == [turn.text for turn in turns]
+    record = json.loads((world / "persona.jsonl").read_text())
+    assert record["person_id"] == person.person_id
+    assert not any(held.text in json.dumps(record) for held in person.held_out_preferences)
+
+
+def test_each_run_trains_under_a_new_adapter_name(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()
+
+    first = run.execute(["--fake", "--workdir", str(tmp_path / "a"), "--no-chat"],
+                        fakes.fake_services(serving=serving), say=lambda _line: None)
+    second = run.execute(["--fake", "--workdir", str(tmp_path / "b"), "--no-chat"],
+                         fakes.fake_services(serving=serving), say=lambda _line: None)
+
+    assert first.checkpoint and second.checkpoint and first.checkpoint.id != second.checkpoint.id
+    assert len(serving.on_volume - {fakes.FAKE_DONOR}) == 2
+
+
+def test_an_adapter_name_already_on_the_volume_stops_the_run_with_a_clear_message(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()
+    quiet = lambda _line: None  # noqa: E731
+    run.execute(["--fake", "--workdir", str(tmp_path / "a"), "--no-chat"],
+                fakes.fake_services(serving=serving), say=quiet, run_id="same")
+
+    with pytest.raises(run.ExampleError, match="already on the volume"):
+        run.execute(["--fake", "--workdir", str(tmp_path / "b"), "--no-chat"],
+                    fakes.fake_services(serving=serving), say=quiet, run_id="same")
+
+
+def test_fake_upload_refuses_a_name_that_exists(tmp_path: Path) -> None:
+    from anjo.sleep.serving import config
+
+    folder = tmp_path / "adapter"
+    folder.mkdir()
+    (folder / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16}))
+    (folder / "adapter_model.safetensors").write_bytes(b"x")
+    serving = fakes.FakeServing()
+    serving.upload_adapter(folder, "p-000000000001-n1")
+
+    with pytest.raises(config.ServeConfigError):
+        serving.upload_adapter(folder, "p-000000000001-n1")
+
+
+def test_the_server_restarts_before_the_arms_so_the_new_adapter_is_visible(tmp_path: Path) -> None:
+    serving = fakes.FakeServing()  # shows an adapter only after a restart
+    lines: list[str] = []
+
+    report = run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
+                         fakes.fake_services(serving=serving), say=lines.append)
+
+    assert report.checkpoint is not None and report.checkpoint.id in serving.visible
+    assert any("server restarted" in line for line in lines)
+
+
+def test_a_server_that_never_loads_the_adapter_stops_the_run_with_the_fix(tmp_path: Path) -> None:
+    serving = fakes.FakeServing(restarts=False)
+
+    with pytest.raises(run.ExampleError, match="modal app stop"):
+        run.execute(["--fake", "--workdir", str(tmp_path / "w"), "--no-chat"],
+                    fakes.fake_services(serving=serving), say=lambda _line: None)
 
 
 # ── Her chooser ───────────────────────────────────────────────────────────────
@@ -250,6 +347,11 @@ def _third_party_imports(root: Path) -> set[str]:
                 [node.module] if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module else []
             )
             found |= {n.split(".")[0] for n in names if n}
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in {"import_module", "find_spec"}:
+                found |= {  # a module loaded by name, as `modal` is
+                    arg.value.split(".")[0] for arg in node.args
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                }
     return {n for n in found if n not in sys.stdlib_module_names and n not in {"anjo", "__future__"}}
 
 
@@ -260,6 +362,7 @@ def test_public_pyproject_covers_the_example() -> None:
         for spec in [*meta["dependencies"], *(s for extra in meta["optional-dependencies"].values() for s in extra)]
     }
     needed = _third_party_imports(EXAMPLE)
+    assert "modal" in needed  # the scan sees the by-name import of modal too
     assert needed <= declared, sorted(needed - declared)
 
 

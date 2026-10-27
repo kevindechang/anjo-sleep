@@ -33,6 +33,7 @@ from anjo.sleep.probes.generate import generate_day_probes, seal_probes
 from anjo.sleep.probes.score import MuseJudge, score
 from anjo.sleep.context.training import TrainingContext
 from anjo.sleep.serving import config
+from anjo.sleep.serving.client import ServingError
 from anjo.sleep.train.dataset import Dataset, build_night_dataset
 from anjo.sleep.train.lora import LoraCfg, fresh_adapter_name, train_lora_with_receipt
 from anjo.sleep.types import (
@@ -66,6 +67,7 @@ class Night:
     services: Services
     workdir: Path
     say: Say
+    run_id: str
 
     @property
     def now(self) -> datetime:
@@ -186,17 +188,39 @@ def build_dataset(night: Night, probes: list[Probe]) -> Dataset:
 def train(night: Night, data: Dataset) -> CheckpointRef:
     """Step 5c: train a LoRA on Modal and put it where the server loads adapters from."""
     person = night.person
-    name = fresh_adapter_name(person.person_id, 1, frozenset())
-    ckpt, done = train_lora_with_receipt(
-        None, data, LoraCfg(), night.services.gpu, person_id=person.person_id, night=person.day,
-        name=name, workdir=night.workdir / "train", adapter_cache=night.workdir / "adapters",
-        publish=night.services.serving.upload_adapter, revision=night.services.revision,
-    )
+    name = fresh_adapter_name(f"{person.person_id}\x1f{night.run_id}", 1, frozenset())  # new on every run
+    try:
+        ckpt, done = train_lora_with_receipt(
+            None, data, LoraCfg(), night.services.gpu, person_id=person.person_id, night=person.day,
+            name=name, workdir=night.workdir / "train", adapter_cache=night.workdir / "adapters",
+            publish=night.services.serving.upload_adapter, revision=night.services.revision,
+        )
+    except config.ServeConfigError as error:
+        raise ExampleError(f"the server's volume refused adapter {name}: {error}") from None
     night.say(
         f"trained adapter {ckpt.id}: {done.steps} steps, {done.gpu_minutes:.1f} GPU-minutes; "
         "not promoted (no gates ran)"
     )
     return ckpt
+
+
+def ready(night: Night, ckpt: CheckpointRef) -> None:
+    """Restart the server and wake it, so it loads the new adapter, then check that it serves it.
+    A running container sees a new adapter only after its next start (the engine wakes Glimmer
+    again before its gates for the same reason)."""
+    serving = night.services.serving
+    serving.sleep_now()
+    if not serving.wake().ok:
+        raise ExampleError("Glimmer's server didn't wake in time after the adapter upload; run again")
+    try:
+        night.services.glimmer.complete(ckpt, [{"role": "user", "content": "Reply with one word."}], temperature=0.0)
+    except ServingError:
+        raise ExampleError(
+            f"the server doesn't serve adapter {ckpt.id} yet: Modal loads a new adapter only when the "
+            "server container starts. Stop it (modal app stop anjo-sleep-serve), deploy it again, "
+            "and re-run; the adapter stays on the volume"
+        ) from None
+    night.say(f"server restarted and serving {ckpt.id}")
 
 
 def donor_ref(name: str | None, night: Night) -> CheckpointRef | None:

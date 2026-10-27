@@ -42,6 +42,8 @@ def test_train_app_constants_match_the_engines() -> None:
 
     assert constants["PACKAGES"] == TRAIN_PACKAGES
     assert constants["GPU"] == config.BF16_A100.gpu
+    assert constants["WEIGHTS_VOLUME"] == config.WEIGHTS_VOLUME
+    assert constants["WEIGHTS_DIR"] == config.WEIGHTS_DIR
     assert constants["TIMEOUT_S"] == TRAINING_TIMEOUT_S
     assert constants["OUTPUT_FILES"] == (*config.ADAPTER_FILES, colab_train.RECEIPT)
 

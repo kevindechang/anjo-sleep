@@ -5,6 +5,8 @@
 It is the Modal twin of the Colab runner's VM: the same self-contained training script
 (``anjo.sleep.train.colab_train``) runs in a container built from pinned packages. The dataset goes
 up as text, the adapter's files come back as bytes, and the container is gone when the call returns.
+The weights volume is the one the serving app's ``download_weights`` fills; here it holds the
+Hugging Face cache (fetched with ``hf_transfer``), so the base weights download once, not every run.
 ``ModalTrainRunner`` imports this file only for a live run, so ``--fake`` never needs ``modal``.
 
 The container imports nothing from Anjo but this file, so the image carries the three package
@@ -40,14 +42,23 @@ _MARKERS = (
     (_HERE / "train_app.py", "/root/anjo/sleep/examples/synthetic/train_app.py"),
 )
 
-image = modal.Image.debian_slim(python_version="3.12").pip_install(TORCH, *PACKAGES)
+WEIGHTS_VOLUME: Final = "anjo-sleep-weights"  # the volume the serving app's download_weights fills
+WEIGHTS_DIR: Final = "/weights"
+HF_CACHE: Final = "/weights/hf-cache"
+
+image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(TORCH, *PACKAGES, "hf_transfer==0.1.9")
+    .env({"HF_HOME": HF_CACHE, "HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
 for _local, _remote in _MARKERS:
     image = image.add_local_file(str(_local), _remote)
 image = image.add_local_file(str(_SLEEP / "train" / "colab_train.py"), REMOTE_SCRIPT)
 app = modal.App(APP_NAME, image=image)
+weights = modal.Volume.from_name(WEIGHTS_VOLUME, create_if_missing=True)
 
 
-@app.function(gpu=GPU, timeout=TIMEOUT_S)
+@app.function(gpu=GPU, timeout=TIMEOUT_S, volumes={WEIGHTS_DIR: weights})
 def train(dataset: str, config_json: str, prev: dict[str, bytes]) -> dict[str, bytes]:
     """Write the inputs, run the training script and return its output files."""
     import os
@@ -68,5 +79,8 @@ def train(dataset: str, config_json: str, prev: dict[str, bytes]) -> dict[str, b
         for name, data in prev.items():
             (root / "prev" / name).write_bytes(data)
         env["ANJO_TRAIN_PREV"] = str(root / "prev")
-    subprocess.run([sys.executable, REMOTE_SCRIPT], env=env, check=True)
+    try:
+        subprocess.run([sys.executable, REMOTE_SCRIPT], env=env, check=True)
+    finally:
+        weights.commit()  # keep the downloaded weights, so the next run doesn't fetch them again
     return {name: (out / name).read_bytes() for name in OUTPUT_FILES}
