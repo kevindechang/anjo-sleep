@@ -96,3 +96,39 @@ def test_model_history_starts_with_user_turn_and_alternates():
     _, model, _, _ = run()
     last = model.histories[-1]
     assert [x["role"] for x in last][:3] == ["user", "assistant", "user"]
+
+
+class TracedTransport(FakeTransport):
+    """A transport whose replies have recorded ancestries, in order (None when unknown)."""
+
+    def __init__(self, ancestries):
+        super().__init__()
+        self.ancestries, self.asked = list(ancestries), []
+
+    def of_reply(self, session_id):
+        self.asked.append(session_id)
+        return self.ancestries[len(self.asked) - 1]
+
+
+def test_each_simulated_turn_derives_from_spark_open_and_every_reply_it_read():
+    from anjo.sleep.baseten_api import SPARK_OPEN
+    from anjo.sleep.provenance import GLIMMER
+
+    pf = m.load_person_file(PERSONAS / "film_student.json")
+    glimmer = frozenset({GLIMMER})
+    traced = TracedTransport([glimmer, frozenset(), None, glimmer])
+    turns = sim.simulate_day(
+        pf.visible, 3, 5, model=FakeModel(end_after=4), transport=traced, replies=traced,
+    )
+    said = [t.ancestry for t in turns if t.role == "user"]
+    assert said == [frozenset({SPARK_OPEN}), frozenset({SPARK_OPEN, GLIMMER}),
+                    frozenset({SPARK_OPEN, GLIMMER}), None]  # unknown once it read an unknown reply
+    assert [t.ancestry for t in turns if t.role == "assistant"] == [glimmer, frozenset(), None, glimmer]
+    assert traced.asked == [s for s, _, _ in traced.sent]
+
+
+def test_a_reply_with_no_recorded_ancestry_leaves_what_follows_unknown():
+    from anjo.sleep.baseten_api import SPARK_OPEN
+
+    _, _, _, turns = run(end_after=2)  # no replies port: nothing is known about the replies
+    assert [t.ancestry for t in turns if t.role == "user"] == [frozenset({SPARK_OPEN}), None]

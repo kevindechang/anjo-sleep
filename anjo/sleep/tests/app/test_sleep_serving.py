@@ -22,7 +22,7 @@ from anjo.core.anjo_model.transport import TransportError
 from anjo.sleep.app import ancestry, prompt, runtime
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.builder import StoredBrief
-from anjo.sleep.provenance import GLIMMER
+from anjo.sleep.provenance import GLIMMER, union
 from anjo.sleep.serving import config
 from anjo.sleep.tests.sleep_fakes import probe
 from tests.test_gemma_cloud_chat_stream import _last_reply, _post, _shown
@@ -456,16 +456,25 @@ def test_the_sleep_capability_is_declared_once_with_its_own_env_vars(sleep_hooks
 # ── Cleared sessions and the dev API ──────────────────────────────────────────
 
 
-def _message(user_id: str, role: str, content: str, session_id: str, at: datetime) -> None:
+def _message(user_id: str, role: str, content: str, session_id: str, at: datetime, turn_id: str | None = None) -> None:
     from anjo.core.crypto import encrypt_db
     from anjo.core.db import get_db
 
     get_db().execute(
         "INSERT INTO messages (user_id, role, content, created_at, session_id, turn_id) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, role, encrypt_db(content), at.isoformat(), session_id, uuid.uuid4().hex),
+        (user_id, role, encrypt_db(content), at.isoformat(), session_id, turn_id or uuid.uuid4().hex),
     )
     get_db().commit()
+
+
+def _replies(user_id: str) -> int:
+    from anjo.core.db import get_db
+
+    count: int = get_db().execute(
+        "SELECT COUNT(*) FROM messages WHERE user_id = ? AND role = 'assistant'", (user_id,),
+    ).fetchone()[0]
+    return count
 
 
 @pytest.fixture
@@ -517,7 +526,11 @@ def test_a_cleared_turn_sees_only_the_cleared_context(auth_client: Any, flagged:
     _message(flagged, "user", "FILMED-OPEN words", "s-filmed", now - timedelta(hours=2))
     _message(flagged, "assistant", "FILMED-OPEN reply", "s-filmed", now - timedelta(hours=2))
     _message(flagged, "user", "simulated day one", "s-day1", now - timedelta(hours=1))
-    _message(flagged, "assistant", "a reply on day one", "s-day1", now - timedelta(hours=1))
+    _message(flagged, "assistant", "a reply on day one", "s-day1", now - timedelta(hours=1), turn_id="t-day1")
+    ancestry.record_context(flagged, "t-day1", "s-day1", cleared=True, parts=[ancestry.ContextPart("evidence:e1", None)])
+    ancestry.record_served(flagged, "t-day1", model=config.MODEL)
+    _message(flagged, "user", "simulated day one, later", "s-day1", now - timedelta(minutes=50))
+    _message(flagged, "assistant", "OTHER-MODEL reply on day one", "s-day1", now - timedelta(minutes=50))
     mark_cleared(flagged, "s-day1", at=now)
     session_id = dev_api.post("/api/sleep/dev/sessions", json={"cleared": True}).json()["session_id"]
     modal = Modal(_chunks("A cleared reply."))
@@ -532,14 +545,71 @@ def test_a_cleared_turn_sees_only_the_cleared_context(auth_client: Any, flagged:
     assert "turn state" not in sent  # the route's blocks, which carry Anjo's memory, are not sent
     assert "FILMED-OPEN" not in sent
     assert "simulated day one" in sent and "a reply on day one" in sent
+    # Only Glimmer's own replies are history: no opener, and no line another model wrote.
+    assert "OTHER-MODEL" not in sent and "What's on your plate" not in sent
     assert body["messages"][-1]["content"].endswith("simulated day two")
     assert "tools" not in body
-    context = next(r for r in _records(flagged) if r["kind"] == "context")
+    context = next(r for r in _records(flagged) if r["kind"] == "context" and r["turn_id"] != "t-day1")
     assert (context["session_id"], context["cleared"]) == (session_id, True)
     folded = ancestry.reply_ancestry(flagged, context["turn_id"])
     assert folded is not None and folded.served_by == "sleep_modal"
-    # Day one's reply has no recorded ancestry (it predates the sleep runtime): unknown.
+    # Day one's served reply read a context of unknown ancestry, so what follows it is unknown.
     assert folded.context is None
+
+
+@pytest.mark.parametrize("cleared", [True, False])
+def test_when_glimmer_is_down_a_cleared_turn_fails_and_any_other_falls_back(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch, cleared: bool,
+) -> None:
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    assert dev_api.post("/api/sleep/dev/sessions", json={"cleared": cleared}).json()["cleared"] is cleared
+    _serve(monkeypatch, Modal(TransportError(503)))
+    before = _replies(flagged)
+
+    events, _spend, gemini = _post(auth_client, gemini_streams=[_mock_gemini_stream("Gemini here.")])
+
+    if cleared:
+        assert _shown(events) == "" and [kind for kind, _ in events if kind == "error"]
+        assert not gemini.called and _replies(flagged) == before  # no stand-in, nothing stored
+    else:
+        assert _shown(events) == "Gemini here." and _replies(flagged) == before + 1
+
+
+def test_a_cleared_turn_the_open_model_route_refuses_fails(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
+    modal = Modal(_chunks("never sent"))
+    _serve(monkeypatch, modal)
+    monkeypatch.setenv("ANJO_ANJO_MODEL_ENABLED", "0")  # the open model's kill switch
+    before = _replies(flagged)
+
+    events, _spend, gemini = _post(auth_client, gemini_streams=[_mock_gemini_stream("Gemini here.")])
+
+    assert modal.opened == [] and _shown(events) == "" and not gemini.called
+    assert [kind for kind, _ in events if kind == "error"] and _replies(flagged) == before
+
+
+def test_a_cleared_session_still_answers_a_crisis_turn(
+    auth_client: Any, flagged: str, dev_api: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    register_synthetic(flagged, at=datetime.now(timezone.utc))
+    dev_api.post("/api/sleep/dev/sessions", json={"cleared": True})
+    modal = Modal(_chunks("never sent"))
+    _serve(monkeypatch, modal)
+
+    events, _spend, _gemini = _post(
+        auth_client, text=_crisis_case("soft"), gemini_streams=[_mock_gemini_stream("I'm here with you.")],
+    )
+
+    assert modal.opened == [] and _shown(events).strip()  # the floor is never weakened
 
 
 def test_a_cleared_turns_ancestry_is_known_once_its_history_is() -> None:
@@ -547,8 +617,8 @@ def test_a_cleared_turns_ancestry_is_known_once_its_history_is() -> None:
         ancestry.ContextPart("evidence:e1", frozenset()),
         ancestry.ContextPart("cleared_history", frozenset({SPARK_OPEN})),
     ]
-    assert ancestry.union(part.ancestry for part in parts) == frozenset({SPARK_OPEN})
-    assert ancestry.union([frozenset(), None]) is None
+    assert union(part.ancestry for part in parts) == frozenset({SPARK_OPEN})
+    assert union([frozenset(), None]) is None
 
 
 def test_the_reply_ancestry_is_exported_and_erased_with_the_account(auth_client: Any) -> None:
@@ -663,6 +733,20 @@ def sources(flagged: str, offline_embedder: None, monkeypatch: pytest.MonkeyPatc
     return setup
 
 
+def _said_in(user_id: str, preference_id: str, session_id: str) -> None:
+    """The source session of a preference ``list_explicit_preferences`` is patched to return."""
+    from anjo.core.db import get_db
+
+    at = datetime.now(timezone.utc).isoformat()
+    get_db().execute(
+        "INSERT INTO personal_preferences (user_id, preference_id, source_turn_id, source_session_id, "
+        "relationship_epoch, scope, field, status, payload_encrypted, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 0, 'ongoing', 'verbosity', 'superseded', 'sealed', ?, ?)",
+        (user_id, preference_id, f"turn-{preference_id}", session_id, at, at),
+    )
+    get_db().commit()
+
+
 def _sent_text(modal: Modal) -> str:
     """Every message's words, as the server got them (C opens the turn's own message)."""
     return "\n".join(str(m["content"]) for m in modal.opened[0][2]["messages"])
@@ -701,6 +785,7 @@ def test_a_cleared_turns_context_has_no_memory_homework_or_notes(
     # A note Anjo held overnight is delivered in an uncleared session, never a cleared one.
     _message(flagged, "assistant", "NOTE-LINE I read up on oolong for you.", "s-open", now - timedelta(hours=1))
     session_id = dev_api.post("/api/sleep/dev/sessions", json={"cleared": True}).json()["session_id"]
+    _said_in(flagged, "p1", session_id)  # "keep it short" was said in this cleared session
     modal = Modal(_chunks("Oolong."))
     _serve(monkeypatch, modal)
     _post(auth_client, text=ASKED)

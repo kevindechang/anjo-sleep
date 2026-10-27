@@ -9,6 +9,7 @@ model (Claude, Gemini, OpenAI) never train.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
@@ -26,3 +27,13 @@ def may_train(ancestry: frozenset[str] | None, *, hosted_in_training: bool) -> b
         return False
     allowed = CLEARED | HOSTED if hosted_in_training else CLEARED
     return ancestry <= allowed
+
+
+def union(parts: Iterable[frozenset[str] | None]) -> frozenset[str] | None:
+    """The ancestry of text built from these parts: unknown when any part's is."""
+    total: frozenset[str] = frozenset()
+    for ancestry in parts:
+        if ancestry is None:
+            return None
+        total |= ancestry
+    return total

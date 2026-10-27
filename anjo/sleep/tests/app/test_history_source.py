@@ -44,7 +44,9 @@ class EchoSparkOpen:
         return json.dumps(self.calls)
 
 
-def _message(user_id: str, role: str, content: str, *, at: datetime, session_id: str = "s-1") -> int:
+def _message(
+    user_id: str, role: str, content: str, *, at: datetime, session_id: str = "s-1", turn_id: str | None = None,
+) -> int:
     from anjo.core.crypto import encrypt_db
     from anjo.core.db import get_db
 
@@ -52,7 +54,7 @@ def _message(user_id: str, role: str, content: str, *, at: datetime, session_id:
     cursor = db.execute(
         "INSERT INTO messages (user_id, role, content, created_at, session_id, turn_id) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, role, encrypt_db(content), at.isoformat(), session_id, uuid.uuid4().hex),
+        (user_id, role, encrypt_db(content), at.isoformat(), session_id, turn_id or uuid.uuid4().hex),
     )
     db.commit()
     row_id = cursor.lastrowid
@@ -336,3 +338,56 @@ def test_a_committed_day_is_not_extracted_again() -> None:
     assert calls == [] and extraction is None
     assert again == first
     assert evidence_store(REAL).for_day(DAY) == first
+
+
+def _served(user_id: str, turn_id: str, session_id: str) -> None:
+    """Glimmer served this reply over a context of the person's own words."""
+    from anjo.sleep.app import ancestry
+    from anjo.sleep.serving import config
+
+    ancestry.record_context(user_id, turn_id, session_id, cleared=True, parts=[
+        ancestry.ContextPart("evidence:e1", frozenset()),
+    ])
+    ancestry.record_served(user_id, turn_id, model=config.MODEL)
+
+
+def _simulated_session(*, unknown_reply: bool) -> None:
+    from anjo.sleep.app import cleared_sessions
+
+    noon = START + timedelta(hours=12)
+    cleared_sessions.register_synthetic(SYNTHETIC, at=START)
+    second = timedelta(seconds=1)
+    _message(SYNTHETIC, "assistant", "An opener the simulator never read.", at=noon, session_id="s-sim")
+    _message(SYNTHETIC, "user", "first simulated words", at=noon + second, session_id="s-sim")
+    _message(SYNTHETIC, "assistant", "A Glimmer reply.", at=noon + 2 * second, session_id="s-sim", turn_id="t-1")
+    _served(SYNTHETIC, "t-1", "s-sim")
+    _message(SYNTHETIC, "user", "second simulated words", at=noon + 3 * second, session_id="s-sim")
+    if unknown_reply:  # a reply with no recorded ancestry, as another model's would be
+        _message(SYNTHETIC, "assistant", "Some other reply.", at=noon + 4 * second, session_id="s-sim")
+        _message(SYNTHETIC, "user", "third simulated words", at=noon + 5 * second, session_id="s-sim")
+    cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=noon)
+
+
+@pytest.mark.parametrize("unknown_reply", [False, True])
+def test_a_simulated_turn_carries_the_ancestry_of_every_reply_it_read(unknown_reply: bool) -> None:
+    from anjo.sleep.app.ancestry import simulated_sessions
+    from anjo.sleep.provenance import GLIMMER, may_train
+
+    _simulated_session(unknown_reply=unknown_reply)
+
+    said = [line.ancestry for line in simulated_sessions(SYNTHETIC, frozenset({"s-sim"})).values() if line.role == "user"]
+    expected = [frozenset({SPARK_OPEN}), frozenset({SPARK_OPEN, GLIMMER})] + ([None] if unknown_reply else [])
+    assert said == expected  # the opener was never read; the Glimmer reply was
+    items = _source(EchoSparkOpen()).extract_day(SYNTHETIC, DAY, WINDOW)
+    assert items and {item.ancestry for item in items} == {None if unknown_reply else frozenset({SPARK_OPEN, GLIMMER})}
+    assert all(may_train(item.ancestry, hosted_in_training=False) == (not unknown_reply) for item in items)
+
+
+def test_the_simulator_reads_each_replys_recorded_ancestry() -> None:
+    from anjo.sleep.app.ancestry import NewestReply
+    from anjo.sleep.provenance import GLIMMER
+
+    _simulated_session(unknown_reply=False)
+    assert NewestReply(SYNTHETIC).of_reply("any-label") == frozenset({GLIMMER})
+    _message(SYNTHETIC, "assistant", "Some other reply.", at=START + timedelta(hours=13), session_id="s-sim")
+    assert NewestReply(SYNTHETIC).of_reply("any-label") is None

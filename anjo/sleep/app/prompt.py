@@ -19,10 +19,12 @@ in as one fenced optional part.
 served brief. Its ancestry is unknown, because Anjo's memory has no recorded source.
 
 **Cleared turn.** In a cleared session (Task 2) nothing of Anjo's memory, homework or notes reaches
-the model. The instructions are Anjo's fixed persona text and medical boundary; C is the cleared
-builder's (the training brief, cleared recall, and the person's own preferences and corrections);
-the history is the recent turns of their cleared sessions only. No exemplars, no voice plan and
-no tools.
+the model, nor any other model's words. The instructions are Anjo's fixed persona text and medical
+boundary; C is the cleared builder's (the training brief, cleared recall, and the person's own
+preferences and corrections said in cleared sessions); the history is the recent turns of their
+cleared sessions only, with only the replies Glimmer served. No exemplars, no voice plan and no
+tools. When Glimmer can't answer, the turn fails: ``in_cleared_session`` is in
+``open_model_turn.SOLE_ANSWER_HOOKS``, so no other model stands in, unless it is a crisis turn.
 
 Each turn records what its context was read from, and its ancestry (``ancestry.record_context``).
 """
@@ -39,22 +41,20 @@ from anjo.core.anjo_model.turn_input import AnjoTurnInput, Exchange, Segment, ex
 from anjo.core.best_effort import best_effort
 from anjo.core.crisis import NO_CRISIS
 from anjo.core.retrieved_context import RetrievedContext
-from anjo.sleep.app.ancestry import ContextPart, record_context, reply_ancestries, union
-from anjo.sleep.app.cleared_sessions import cleared_sessions, is_synthetic
+from anjo.sleep.app.ancestry import ContextPart, Line, record_context, simulated_sessions
+from anjo.sleep.app.cleared_sessions import cleared_sessions
 from anjo.sleep.app.context_builder import RECALL, NoBrief, anjo_context_builder, cleared_context_builder
 from anjo.sleep.app.flags import sleep_enabled_for
 from anjo.sleep.app.runtime import GlimmerPin
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.builder import BriefSource, ComposedContext, ComposedContextBuilder
 from anjo.sleep.context.recall_common import estimate_tokens
+from anjo.sleep.provenance import union
 from anjo.sleep.types import Probe
 
 CLEARED_HISTORY_DAYS: Final = 14
 CLEARED_HISTORY_ROWS: Final = 24
 MEMORY_SOURCE: Final = "anjo_memory"
 CONTEXT_SOURCE: Final = "sleep_context"
-# A synthetic person's words are Spark Open's (Task 2's simulator plays them).
-_SIMULATED: Final = frozenset({SPARK_OPEN})
 
 ToolDefs = Sequence[Mapping[str, Any]]
 
@@ -127,37 +127,27 @@ def _read_from(context: ComposedContext, preferences: frozenset[str] | None) -> 
     ]
 
 
-def _cleared_history(user_id: str, sessions: frozenset[str]) -> tuple[tuple[Exchange, ...], ContextPart]:
-    """The recent turns of the person's cleared sessions, and their ancestry: the person's words
-    are simulated, and each of Anjo's replies carries its recorded ancestry (unknown if none)."""
-    from anjo.core.db import get_db
+def _cleared_history(
+    user_id: str, sessions: frozenset[str], lines: Mapping[int, Line],
+) -> tuple[tuple[Exchange, ...], ContextPart]:
+    """The recent turns of the person's cleared sessions, and their ancestry. Of Anjo's lines only
+    the replies the sleep runtime served are kept: an opener, outreach or another model's reply is
+    left out. A line with no record is unknown."""
     from anjo.core.history import get_history_between
 
     now = datetime.now(timezone.utc)
-    rows = get_history_between(
-        user_id, now - timedelta(days=CLEARED_HISTORY_DAYS), now + timedelta(seconds=1),
-        session_ids=sessions,
-    )[-CLEARED_HISTORY_ROWS:]
-    replies = [row["id"] for row in rows if row["role"] == "assistant"]
-    turn_ids: dict[int, str | None] = {}
-    if replies:
-        marks = ", ".join("?" for _ in replies)
-        found = get_db().execute(
-            f"SELECT id, turn_id FROM messages WHERE user_id = ? AND id IN ({marks})", (user_id, *replies),
-        ).fetchall()
-        turn_ids = {row["id"]: row["turn_id"] for row in found}
-    recorded = reply_ancestries(user_id)
-
-    def of(row: Mapping[str, Any]) -> frozenset[str] | None:
-        if row["role"] == "user":
-            return _SIMULATED
-        known = recorded.get(turn_ids.get(row["id"]) or "")
-        return None if known is None else known.reply
-
+    rows = [
+        row for row in get_history_between(
+            user_id, now - timedelta(days=CLEARED_HISTORY_DAYS), now + timedelta(seconds=1),
+            session_ids=sessions,
+        )
+        if row["role"] == "user" or (row["id"] in lines and lines[row["id"]].served)
+    ][-CLEARED_HISTORY_ROWS:]
     exchanges, _unanswered = exchanges_from_messages(
         [(str(row["role"]), str(row["content"])) for row in rows], id_prefix="c",
     )
-    return exchanges, ContextPart("cleared_history", union(of(row) for row in rows))
+    found = union(lines[row["id"]].ancestry if row["id"] in lines else None for row in rows)
+    return exchanges, ContextPart("cleared_history", found)
 
 
 def _persona() -> tuple[Segment, ...]:
@@ -191,15 +181,17 @@ def sleep_turn_hook(
     cleared = session_id is not None and session_id in sessions
     context = _context(user_id, turn, cleared=cleared)
     if cleared:
-        history, history_part = _cleared_history(user_id, sessions)
+        lines = simulated_sessions(user_id, sessions)
+        history, history_part = _cleared_history(user_id, sessions, lines)
         bare = dataclasses.replace(
             turn, instructions=_persona(), corrections=(), optional=(), carry=None,
             exemplars=(), history=history, voice_plan=None, tools=(), tool_steps=(),
         )
         built = dataclasses.replace(bare, optional=(_part(bare, context.text),))
-        # Only the person's own words reach a cleared C's preferences.
-        own = _SIMULATED if is_synthetic(user_id) else frozenset()
-        recorded = [*_read_from(context, own), history_part]
+        # A cleared C's preferences are the person's simulated words in cleared sessions: at
+        # most what every simulated line there derives from.
+        said = union(line.ancestry for line in lines.values() if line.role == "user")
+        recorded = [*_read_from(context, said), history_part]
         tools = ()
     else:
         built = dataclasses.replace(turn, optional=(*turn.optional, _part(turn, context.text)))
