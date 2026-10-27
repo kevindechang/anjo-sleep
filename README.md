@@ -81,6 +81,50 @@ code here that calls into it, and they run only inside the private app.
 The engine core, which is everything else in `anjo/sleep/`, imports no private code. It reaches
 the app only through the protocols in `anjo/sleep/ports.py`, so it runs on its own.
 
+## Run it yourself
+
+A standalone example runs one night for one invented person, Calla, who restores wooden boats.
+It needs no private Anjo code: it loads her persona and one fixed day into plain files, seals
+and hashes the probes, extracts the day on Spark Open and folds it into her brief, lets her
+chooser pick the night's target and prints its receipt, practises, trains a LoRA on Modal, runs
+the arms on the probes and prints a score table, then serves base plus adapter and opens a chat.
+
+**It has no crisis gate**, because Anjo's crisis case lists stay private. It says so on every
+run, runs no gate of any kind and never marks a checkpoint as promoted.
+
+First, with no keys and no cost. Everything is faked, so the replies and scores mean nothing; it
+only shows the flow:
+
+```bash
+pip install -e ".[test]"
+python -m anjo.sleep.examples.synthetic --fake
+```
+
+Then live, with your own keys. This pays for Baseten, the Meta API and Modal GPU time:
+
+```bash
+pip install -e ".[modal]"
+export MODAL_TOKEN_ID=...              # your Modal account
+export MODAL_TOKEN_SECRET=...
+export ANJO_META_API_KEY=...           # the Meta Model API (the judge)
+export BASETEN_API_KEY=...             # Muse Spark Open on Baseten
+export ANJO_SLEEP_GLIMMER_REVISION=... # the pinned commit of meta-models/Muse-Glimmer-30B
+# Glimmer's server on your Modal account, deployed once:
+modal secret create anjo-sleep-serve VLLM_API_KEY=<a token you choose>
+modal run anjo/sleep/serving/modal_app.py::download_weights
+modal deploy anjo/sleep/serving/modal_app.py
+export ANJO_SLEEP_MODAL_URL=...        # the web URL modal deploy prints
+export ANJO_SLEEP_MODAL_TOKEN=...      # the token you chose above
+python -m anjo.sleep.examples.synthetic --persona persona.json --day day1.jsonl
+```
+
+A missing key stops the run before anything is created or paid for, and names the variable. The
+two file names resolve to the bundled `anjo/sleep/examples/synthetic/persona.json` and
+`day1.jsonl` unless you point them at your own. `--donor <adapter>` adds arm 3x (an adapter that
+another run trained), `--no-chat` skips the chat and `--workdir <new folder>` keeps the run's
+files. The training and serving parts were written against Modal's documented API and run only
+with your keys.
+
 ## Running the tests
 
 ```bash

@@ -1,0 +1,13 @@
+{"role": "user", "at": "09:05", "text": "Morning. I'm restoring a 1950s 22-foot wooden sloop called the Sparrowhawk for a client's spring launch, so I'll want help planning the work."}
+{"role": "assistant", "at": "09:05", "text": "Happy to help. What stage is she at?"}
+{"role": "user", "at": "09:07", "text": "Stripped to the frames. The ribs are mostly sound but I'll have to replace a few, and I prefer steam-bent oak ribs over laminated ones when the original used solid timber."}
+{"role": "assistant", "at": "09:08", "text": "Understood. I'll keep that in mind. Laminated ribs are usually easier to get right."}
+{"role": "user", "at": "09:10", "text": "No, that's not how I work, and don't tell me what's easier. Also I'd rather close a seam with cotton and linseed putty than a modern sealant."}
+{"role": "user", "at": "09:12", "text": "Please be blunt with me. I don't want reassurance, I want the answer first and the reasons after it."}
+{"role": "assistant", "at": "09:12", "text": "Noted: answer first, reasons after, no reassurance."}
+{"role": "user", "at": "09:20", "text": "One more thing about how I like my notes: short numbered steps, not paragraphs."}
+{"role": "user", "at": "09:41", "text": "The client launches the last Saturday of April, so the hull has to be tight by mid-April. No fibreglass over the planks, the lines stay original."}
+{"role": "user", "at": "10:30", "text": "I'll bring the garboard plank template to the yard meeting this Friday, so I need the lofting notes ready before then."}
+{"role": "assistant", "at": "10:31", "text": "Friday it is. I'll help you get the lofting notes ready."}
+{"role": "user", "at": "15:48", "text": "I still can't tell whether the rot at the stem is only in the outer layer or runs into the stem itself, and I haven't found a way to settle it."}
+{"role": "user", "at": "15:52", "text": "Salvaged bronze fittings go back on wherever they're sound, the budget is fixed."}

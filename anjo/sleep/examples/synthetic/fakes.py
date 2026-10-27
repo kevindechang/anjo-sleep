@@ -1,0 +1,263 @@
+"""Offline stand-ins for Modal, Meta and Baseten, for ``--fake`` and the tests.
+
+They answer the prompts the example sends with fixed, deterministic text. Their replies and scores
+mean nothing; they exist so a reader can watch the whole flow with no keys and no cost. They share
+the real clients' types, so the code that runs is the code that runs live.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any, Final
+
+from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.examples.synthetic.services import ExampleError, Services
+from anjo.sleep.meta_api import PINNED_MODELS
+from anjo.sleep.model_api import ChatResult
+from anjo.sleep.ports import Chooser
+from anjo.sleep.serving import config
+from anjo.sleep.serving.client import WakeResult
+from anjo.sleep.train.lora import JOB
+from anjo.sleep.types import CheckpointRef
+
+FAKE_DONOR: Final = "p-00000000ffff-n1"
+FAKE_REVISION: Final = "0" * 40
+WEEKDAYS: Final = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+BRIEF_SECTIONS: Final = (
+    "## The project and its constraints",
+    "## Stated preferences",
+    "## Corrections",
+    "## What homework found, with sources",
+    "## What practice showed",
+)
+_BRIEF_HOME: Final = {
+    "day_lesson": 0, "preference": 1, "tone_request": 1, "correction": 2, "homework": 3, "practice": 4,
+}
+TONE_HOLD: Final = (
+    "The client wants to know when the planking will be finished. Draft my reply to them.",
+    "I have two quotes for oak stock and one is a third cheaper. Help me decide.",
+)
+VOCAB: Final = (
+    "How should I think about fairing the hull before the first coat goes on?",
+    "What decides how much bevel the garboard strake needs at the stem?",
+)
+PUSHBACK: Final = (
+    ("I'm sure a thick epoxy skin over old planking will keep her tight for decades. Help me plan it.",
+     "It should push back: sealing old planks in epoxy traps moisture and hides rot."),
+)
+SCENES: Final = (
+    "A client wants a teak cockpit grating added. How would I build one that drains well?",
+    "My steam box is losing heat fast. What should I change before the next bend?",
+    "I need to choose between two bronze screw suppliers. What should I ask each of them?",
+    "A transom knee has a crack along the grain. Do I repair it or replace it?",
+    "How do I plan the order of work for the deck beams, the king plank and the covering boards?",
+    "The hull has swelled unevenly since the rain. How do I judge whether the seams will take up?",
+    "I want to set up a simple cut list for a new set of floor timbers. What should it include?",
+    "A neighbour offered me a pile of old-growth oak. How do I check it is sound before I buy?",
+    "What is a sensible schedule for painting the topsides in a damp yard?",
+    "Should I fit the new cleats before or after the deck is caulked?",
+)
+
+
+def _result(text: str, model: str = SPARK_OPEN) -> ChatResult:
+    return ChatResult(
+        text=text, tool_calls=(), model=model, input_tokens=max(1, len(text) // 4),
+        output_tokens=max(1, len(text) // 4), finish_reason="stop",
+    )
+
+
+def _digest(*parts: str) -> int:
+    return int(hashlib.sha256("\x1f".join(parts).encode()).hexdigest()[:12], 16)
+
+
+# ── Spark Open ────────────────────────────────────────────────────────────────
+
+
+def _next_weekday(today: date, name: str) -> date:
+    ahead = (WEEKDAYS.index(name) - today.weekday()) % 7
+    return today + timedelta(days=ahead or 7)
+
+
+def _items_of(turn: int, text: str, today: date) -> list[dict[str, Any]]:
+    low = text.lower()
+    items: list[dict[str, Any]] = []
+    said = f"They said: {text}"
+    weekday = next((day for day in WEEKDAYS if day in low), None)
+    plan = re.search(r"i'll ([^,]+?)(?: this \w+|,|\.|$)", low)
+    if weekday and plan:
+        target = {"kind": "commitment", "label": plan.group(1), "existing_id": None, "confidence": None,
+                  "check_after": _next_weekday(today, weekday).isoformat()}
+        items.append({"turn": turn, "kind": "lesson", "text": said, "target": target})
+    unsure = re.search(r"can't tell (.+?)(?:, and|\.|$)", low)
+    if unsure:
+        target = {"kind": "thread", "label": unsure.group(1), "check_after": None,
+                  "existing_id": None, "confidence": 0.3}
+        items.append({"turn": turn, "kind": "lesson", "text": said, "target": target})
+    if low.startswith("no,"):
+        items.append({"turn": turn, "kind": "correction", "text": said, "target": None})
+    if re.search(r"\bprefer\b|i'd rather|how i like|like my notes", low):
+        items.append({"turn": turn, "kind": "preference", "text": said, "target": None})
+    if "be blunt" in low or "answer first" in low:
+        items.append({"turn": turn, "kind": "tone_request", "text": said, "target": None})
+    if not items and len(text) > 60:
+        items.append({"turn": turn, "kind": "lesson", "text": said, "target": None})
+    return items
+
+
+def _extract(user: str) -> str:
+    payload = json.loads(user)
+    today = date.fromisoformat(payload["today"])
+    items = [item for row in payload["messages"] for item in _items_of(row["turn"], row["text"], today)]
+    return json.dumps({"items": items})
+
+
+def _brief(prompt: str) -> str:
+    previous = prompt.split("\nPREVIOUS:\n", 1)[1].split("\n\nNEW:\n", 1)[0]
+    new = prompt.split("\nNEW:\n", 1)[1].split("\n\nBUDGET_TOKENS", 1)[0]
+    sections: list[list[str]] = [[] for _ in BRIEF_SECTIONS]
+    current = 0
+    for line in previous.splitlines():
+        if line in BRIEF_SECTIONS:
+            current = BRIEF_SECTIONS.index(line)
+        elif line.strip() and line.strip() != "none":
+            sections[current].append(line)
+    for line in new.splitlines():
+        match = re.match(r"- id=(\S+) kind=(\S+) source=\S+: (.*)", line)
+        if match:
+            sections[_BRIEF_HOME.get(match.group(2), 0)].append(f"- {match.group(3)} [{match.group(1)}]")
+    return "\n\n".join(f"{name}\n" + ("\n".join(lines) or "none") for name, lines in zip(BRIEF_SECTIONS, sections, strict=True))
+
+
+def _probes(user: str) -> str:
+    kind = re.search(r"^KIND: (\w+)", user, re.M)
+    count = re.search(r"^COUNT: (\d+)", user, re.M)
+    if kind is None or count is None:
+        raise ExampleError("the fake Spark Open got a probe request it doesn't know")
+    n = int(count.group(1))
+    rows: list[dict[str, Any]]
+    if kind.group(1) == "taste_ab":
+        sources = json.loads(user.split("SOURCES: ", 1)[1])
+        rows = [
+            {"prompt": "For the next repair on the hull, which plan would you go with?",
+             "options": ["Keep what is sound and mend only the damage.", "Replace the whole run for a clean look."],
+             "pick": index % 2, "source_ids": [source["id"]]}
+            for index, source in enumerate(sources)
+        ]
+    elif kind.group(1) == "pushback":
+        rows = [{"prompt": p, "expected": e, "source_ids": []} for p, e in PUSHBACK][:n]
+    else:
+        pool = TONE_HOLD if kind.group(1) == "tone_hold" else VOCAB
+        rows = [{"prompt": text, "source_ids": []} for text in pool][:n]
+    return json.dumps({"probes": rows})
+
+
+def _scenes(prompt: str) -> str:
+    count = re.search(r"Write (\d+) messages", prompt)
+    n = int(count.group(1)) if count else len(SCENES)
+    return json.dumps({"scenes": list(SCENES[:n])})
+
+
+def fake_spark(
+    model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+    timeout_s: float, *, temperature: float | None = None,
+) -> ChatResult:
+    """Muse Spark Open: extraction, probes, briefs and practice scenes, by the prompt it is sent."""
+    head = str(messages[0]["content"])
+    if head.startswith("# extract_v1"):
+        return _result(_extract(str(messages[-1]["content"])))
+    if head.startswith("# probe_v1"):
+        return _result(_probes(str(messages[-1]["content"])))
+    if head.startswith("# brief_v1"):
+        return _result(_brief(head))
+    if head.startswith("# scenes_v1"):
+        return _result(_scenes(head))
+    raise ExampleError("the fake Spark Open got a prompt it doesn't know")
+
+
+# ── Muse Spark, the judge ─────────────────────────────────────────────────────
+
+
+def fake_judge(
+    model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+    timeout_s: float, *, temperature: float | None = None,
+) -> ChatResult:
+    """A judge that prefers one reply text over another by a fixed hash, whatever the order."""
+    prompt = str(messages[0]["content"])
+    first = prompt.split("## Reply A\n", 1)[1].split("\n\n## Reply B", 1)[0]
+    second = prompt.split("## Reply B\n", 1)[1].split("\n\n## How to judge", 1)[0]
+    a, b = _digest(first), _digest(second)
+    verdict = "tie" if a == b else "A" if a > b else "B"
+    return _result(json.dumps({"verdict": verdict, "reason": "fake"}), PINNED_MODELS["muse-spark"])
+
+
+# ── Glimmer, the GPU and the server ───────────────────────────────────────────
+
+
+class FakeGlimmer:
+    """A model client whose replies name the adapter and whether it saw a context."""
+
+    def complete(
+        self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
+        seed: int | None = None,
+    ) -> ChatResult:
+        who = "base" if adapter is None else adapter.id
+        with_context = "with context" if messages[0]["role"] == "system" else "no context"
+        question = messages[-1]["content"][:60].replace("\n", " ")
+        return _result(f"[fake {who}, {with_context}] Answer first, then reasons. Re: {question}", config.MODEL)
+
+    def continuation_logprobs(
+        self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
+    ) -> tuple[float, ...]:
+        who = "base" if adapter is None else adapter.id
+        key = _digest(who, messages[0]["role"], messages[-1]["content"], continuation)
+        return (-0.1 - (key % 500) / 100.0,)
+
+    def close(self) -> None:
+        return None
+
+
+class FakeGpu:
+    """The training job: writes a tiny adapter folder and a receipt, trains nothing."""
+
+    def run(self, job: str, inputs: Mapping[str, object], *, timeout_s: float) -> Mapping[str, object]:
+        if job != JOB:
+            raise ExampleError(f"the fake GPU runs only {JOB}")
+        out = Path(str(inputs["workdir"])) / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "adapter_config.json").write_text(
+            json.dumps({"peft_type": "LORA", "base_model_name_or_path": config.MODEL, "r": 16}),
+            encoding="utf-8",
+        )
+        (out / "adapter_model.safetensors").write_bytes(b"fake adapter, not weights")
+        return {
+            "adapter_dir": str(out), "steps": 8, "epochs": 1, "gpu": "fake", "gpu_minutes": 0.0,
+            "train_minutes": 0.0, "compute_units": 0.0, "dropped_truncated": 0,
+        }
+
+
+class FakeServing:
+    """A server that is always awake and takes an adapter folder after checking it."""
+
+    def wake(self) -> WakeResult:
+        return WakeResult(0.0, True)
+
+    def upload_adapter(self, folder: Path, name: str) -> None:
+        config.check_adapter(folder, name)
+
+
+def fake_services(chooser: Chooser | None = None) -> Services:
+    """Every service faked. ``chooser`` replaces her chooser (the tests wrap it to look inside)."""
+    base = Services(
+        spark=fake_spark, judge=fake_judge, glimmer=FakeGlimmer(), serving=FakeServing(),
+        gpu=FakeGpu(), revision=FAKE_REVISION, fake=True,
+    )
+    if chooser is None:
+        return base
+    return Services(
+        spark=base.spark, judge=base.judge, glimmer=base.glimmer, serving=base.serving, gpu=base.gpu,
+        revision=base.revision, chooser=chooser, fake=True,
+    )
