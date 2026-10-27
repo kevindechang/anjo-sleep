@@ -63,6 +63,9 @@ TRAIN_PACKAGES: Final = (
     "transformers==4.57.1", "peft==0.17.1", "trl==0.24.0", "bitsandbytes==0.48.1",
     "accelerate==1.10.1", "datasets==4.2.0",
 )
+# An accelerated life's VM is kept between nights only when the simulated day before was this short;
+# otherwise idling costs more than downloading the base weights again. Revisited after the Oct 30 timing.
+MAX_IDLE_BETWEEN_NIGHTS_S: Final = 600.0
 NEW_TIMEOUT_S: Final = 600.0
 INSTALL_TIMEOUT_S: Final = 900.0
 UPLOAD_TIMEOUT_S: Final = 300.0
@@ -293,7 +296,7 @@ class _Life:
     reservation: Reservation
     started: float
     vm: _Vm = field(default_factory=_Vm)
-    nights: int = 0
+    idle_since: float | None = None  # when the last night ended on this VM, if it was kept
 
 
 class ColabLives:
@@ -313,6 +316,17 @@ class ColabLives:
         self._runner = runner
         self._life_s = life_timeout_s
         self._lives: dict[str, _Life] = {}
+        self._day_s: dict[str, float] = {}
+        self._done: dict[str, int] = {}
+        self._records: dict[str, list[dict[str, object]]] = {}
+
+    def note_day(self, person_id: str, seconds: float) -> None:
+        """How long the person's latest simulated day took: the guess for the gap before their next night."""
+        self._day_s[person_id] = seconds
+
+    def records(self, person_id: str) -> list[dict[str, object]]:
+        """Per night: whether the VM was kept after it, and the seconds it idled before it (content-free)."""
+        return list(self._records.get(person_id, []))
 
     def __enter__(self) -> ColabLives:
         return self
@@ -335,17 +349,23 @@ class ColabLives:
         first = life is None
         setup_s = _setup_s(len(uploads)) if first else _night_setup_s(len(uploads))
         exec_s = timeout_s - setup_s
-        if exec_s < MIN_EXEC_S:
-            raise ColabError("the job's timeout leaves too little time to train")
         spent = 0.0 if life is None else runner._clock() - life.started
-        if spent + timeout_s > self._life_s:
-            raise ColabError("this night would run past the life's hold; the VM stays up until the batch ends")
+        refusal = None
+        if exec_s < MIN_EXEC_S:
+            refusal = "the job's timeout leaves too little time to train"
+        elif spent + timeout_s > self._life_s:
+            refusal = "this night would run past the life's hold"
+        if refusal is not None:
+            if life is not None:
+                self._stop(person)  # a refused night never leaves the VM idling
+            raise ColabError(refusal)
         if life is None:
             base = f"colab_life:{inputs['night']}:{person}"
             reservation = hold(runner._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, self._life_s))
             life = self._lives[person] = _Life(_life_session(person), reservation, runner._clock())
         out = Path(str(inputs["workdir"])) / "out"
         night_started = runner._clock()
+        idle = None if first or life.idle_since is None else night_started - life.idle_since
         try:
             if first:
                 runner._boot(life.vm, life.session)
@@ -353,8 +373,16 @@ class ColabLives:
         except BaseException:
             self._stop(person)  # a failed night stops the life's VM; the error is the one that propagates
             raise
-        life.nights += 1
         elapsed = max(0.0, runner._clock() - night_started)
+        done = self._done[person] = self._done.get(person, 0) + 1
+        day_s = self._day_s.get(person)
+        keep = done > 1 and day_s is not None and day_s <= MAX_IDLE_BETWEEN_NIGHTS_S
+        self._records.setdefault(person, []).append(
+            {"night": str(inputs["night"]), "vm_kept": keep, "idle_s_before": idle})
+        if keep:
+            life.idle_since = runner._clock()
+        else:
+            self._stop(person)  # nothing measured, or a long day ahead: the VM does not idle
         return {
             **receipt, "adapter_dir": str(out), "gpu_minutes": elapsed / 60.0,
             "compute_units": elapsed / 3600.0 * A100_CU_PER_HOUR, "adapter": name,
@@ -366,11 +394,11 @@ class ColabLives:
 
     def close(self) -> None:
         """Stop every life's VM. Each is tried even if another fails; the first failure is raised."""
-        failures: list[ColabError] = []
+        failures: list[Exception] = []
         for person in list(self._lives):
             try:
                 self._stop(person)
-            except ColabError as error:
+            except Exception as error:  # cleanup: every life is tried, and the first failure is raised below
                 failures.append(error)
         if failures:
             raise failures[0]

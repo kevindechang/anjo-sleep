@@ -123,3 +123,13 @@ def test_the_git_sha_is_read_from_the_repo() -> None:
     sha = accelerated.git_sha()
     assert len(sha) == 40 and int(sha, 16) >= 0
 
+
+
+def test_the_vm_record_and_day_lengths_pass_through_the_rig(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    seen: list[tuple[str, float]] = []
+    rig = replace(fake.rig(), on_day=lambda uid, seconds: seen.append((uid, seconds)),
+                  vm_record=lambda uid, night: {"night": night, "vm_kept": False, "idle_s_before": None})
+    results = run_accelerated("u1", FOUNDER, 2, START, rig=rig)
+    assert [uid for uid, _ in seen] == ["u1", "u1"] and all(seconds > 0 for _, seconds in seen)
+    assert _summary(results[0].log_path)["vm"] == {"night": START.isoformat(), "vm_kept": False, "idle_s_before": None}

@@ -65,6 +65,11 @@ class Rig:
     deps_for: Callable[[date], NightDeps]
     simulate: Callable[[str, Persona, int, int], DayRun]
     sha: str | None = None
+    # How long a life's simulated day took (seconds), told before its night: the Colab runner stops a
+    # VM that would idle through a long day. ``vm_record(user_id, night)`` is that night's content-free
+    # VM record (kept or stopped, idle seconds), stamped into the summary.
+    on_day: Callable[[str, float], None] | None = None
+    vm_record: Callable[[str, str], Mapping[str, Any] | None] | None = None
 
 
 def git_sha(repo: Path = REPO) -> str:
@@ -91,11 +96,13 @@ def _check_window(user_id: str, day: DayRun, last_end: datetime | None) -> None:
         raise AcceleratedError(f"{user_id}: the day's window starts before the last day's window ended")
 
 
-def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int) -> None:
+def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None) -> None:
     """Add the run's labels to the night's summary, atomically."""
     path = result.log_path.parent / SUMMARY
     summary = json.loads(path.read_text(encoding="utf-8"))
     summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index})
+    if vm is not None:
+        summary["vm"] = dict(vm)
     pending = path.with_name(f".{SUMMARY}.stamp")
     pending.write_text(json.dumps(summary, sort_keys=True, indent=1, default=str), encoding="utf-8")
     os.replace(pending, path)
@@ -121,11 +128,14 @@ def run_accelerated_batch(
             day = rig.simulate(uid, person, i, seed)
             _check_window(uid, day, last_end.get(uid))
             last_end[uid] = day.window[1]
+            if rig.on_day is not None:
+                rig.on_day(uid, (day.window[1] - day.window[0]).total_seconds())
             runs[uid] = day
         results = run_night_batch_with(rig.deps_for(night), {uid: night for uid in runs}, accelerated=True,
                                        days=runs, sweep=sweep if i == 0 else None)
         for uid, result in results.items():
-            _stamp(result, sha=sha, label=kind, day_index=i)
+            vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
+            _stamp(result, sha=sha, label=kind, day_index=i, vm=vm)
             out[uid].append(result)
     return out
 
@@ -140,6 +150,10 @@ def run_accelerated(
 
 
 # ── the command line ─────────────────────────────────────────────────────────
+
+
+def _vm_record(lives: Any, user_id: str, night: str) -> dict[str, object] | None:
+    return next((r for r in lives.records(user_id) if r["night"] == night), None)
 
 
 def _normal(summary: Mapping[str, Any]) -> dict[str, Any]:
@@ -200,7 +214,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             trainer = LoraTrainer(lives, root=data_dir / "sleep" / "training", publish=night_command._publish,
                                   revision=os.environ.get(REVISION_ENV) or None)
             rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas)),
-                      simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed))
+                      simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
+                      on_day=lives.note_day, vm_record=lambda uid, night: _vm_record(lives, uid, night))
             results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
                                             label=args.label, sweep=swept)
     except NightBusy as busy:
