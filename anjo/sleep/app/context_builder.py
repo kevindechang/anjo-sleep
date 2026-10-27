@@ -3,7 +3,10 @@
 The engine core builds context from four sources (``anjo.sleep.context.builder``). Here are the
 two that need private Anjo, and the factory that wires all four:
 
-- memory: ``anjo.memory.long_term.query_memories``, Anjo's existing memory read;
+- memory: Anjo's existing memory ranking. Only a served turn reads it as Anjo's recall
+  (``query_memories``: each memory's recall count, which ranking reads, and the sensitive-memory
+  surface record), since its reply reaches the person, as chat's own read does. Every other reader
+  (the probes' arms, the public demo) reads with ``read_memories``, which writes nothing;
 - preferences and corrections recorded since the brief: ``list_explicit_preferences`` for the
   person's explicit preferences, and their stored corrections read only through
   ``training_eligible`` (the same gate extraction uses), so a request made today reaches
@@ -42,12 +45,17 @@ def _aware(moment: datetime) -> datetime:
 
 
 class AnjoMemory:
-    """Anjo's memory for a turn, one line per remembered session or episode."""
+    """Anjo's memory for a turn, one line per remembered session or episode. ``counts_recall`` is
+    for a served turn only (see the module's note); without it the read writes nothing."""
+
+    def __init__(self, *, counts_recall: bool = False) -> None:
+        self._counts_recall = counts_recall
 
     def read(self, user_id: str, message: str) -> str:
         from anjo.memory import long_term
 
-        found = long_term.query_memories(message, user_id, n_results=MEMORY_RESULTS)
+        read = long_term.query_memories if self._counts_recall else long_term.read_memories
+        found = read(message, user_id, n_results=MEMORY_RESULTS)
         return "\n".join(f"- {summary}" for _score, summary in found)
 
 
@@ -132,12 +140,14 @@ def anjo_context_builder(
     settings: RecallSettings,
     evidence: Callable[[str], StoredEvidence] = evidence_store,
     embed: Embed | None = None,
+    counts_recall: bool = False,
 ) -> ComposedContextBuilder:
     """The ``ContextBuilder`` for served turns and arms 2C and 4 on the dev host. ``briefs`` is
-    the served-brief store (Task 5)."""
+    the served-brief store (Task 5). ``counts_recall`` only for served turns: everyone else's read
+    of her memory leaves it as it was."""
     require_sleep_host()
     return ComposedContextBuilder(
-        memory=AnjoMemory(),
+        memory=AnjoMemory(counts_recall=counts_recall),
         briefs=briefs,
         preferences=AnjoPreferences(),
         recall=MiniLmRecall(evidence, until=until, embed=embed),

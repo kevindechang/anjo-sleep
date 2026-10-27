@@ -362,19 +362,50 @@ def _snapshot(root: Path) -> dict[str, str]:
     }
 
 
-def _real_context(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Context C from Anjo's own builder (served briefs, preferences, recall over the real evidence
-    store); only the memory read and the embedder are stand-ins."""
-    from anjo.core import personal_preferences
-    from anjo.memory import long_term
+def _real_context() -> Any:
+    """Context C from Anjo's own builder as the demo and the arms build it: served briefs, Anjo's
+    memory, preferences and recall over the real stores. Only the embedders are stand-ins (the
+    ``offline_embedder`` fixture, and one for recall)."""
     from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
     from anjo.sleep.app.storage import brief_store
     from anjo.sleep.context.brief_store import ServedBriefs
 
-    monkeypatch.setattr(personal_preferences, "list_explicit_preferences", lambda user_id, **_: [])
-    monkeypatch.setattr(long_term, "query_memories", lambda message, user_id, n_results=4: [(0.9, "the ferry short")])
     return anjo_context_builder(ServedBriefs(brief_store), until=datetime(2026, 10, 31).date(), settings=RECALL,
                                 embed=lambda text: [1.0, 0.0])
+
+
+MEMORY = "She is cutting the ferry short and keeps the gulls in."
+
+
+def _seed_memory() -> None:
+    from anjo.memory import long_term
+
+    long_term.store_memory("m-ferry", MEMORY, "calm", 0.1, ["film"], 0.6, ACCOUNT, "s-ferry", "familiar",
+                           confidence=0.9)
+
+
+def _memory_rows() -> str:
+    """Every row of her memory store, both collections, as stored: ids, documents, metadata
+    (``recall_count`` among it) and vectors."""
+    from anjo.memory import long_term
+
+    out = []
+    for collection in long_term._get_collections(ACCOUNT):
+        got = collection.get(include=["metadatas", "documents", "embeddings"])
+        out.append(json.dumps({"ids": got["ids"], "documents": got["documents"], "metadatas": got["metadatas"],
+                               "embeddings": [[float(x) for x in vector] for vector in got["embeddings"]]},
+                              sort_keys=True))
+    return "\n".join(out)
+
+
+def _db_rows() -> dict[str, str]:
+    """Every table's rows, by content: a changed row shows, not only an added one."""
+    from anjo.core.db import get_db
+
+    db = get_db()
+    tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+    return {table: hashlib.sha256(repr(sorted(repr(tuple(row)) for row in db.execute(f'SELECT * FROM "{table}"'))).encode()).hexdigest()  # noqa: S608
+            for table in tables}
 
 
 def _seed_evidence() -> Any:
@@ -386,14 +417,14 @@ def _seed_evidence() -> Any:
     return store
 
 
-def test_demo_chat_never_writes_evidence(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_demo_chat_never_writes_evidence(account: str, offline_embedder: None) -> None:
     from anjo.sleep.app.storage import EVIDENCE_FILE, sleep_dir
 
     store = _seed_evidence()
     before_items = store.stored(datetime(2026, 12, 31).date())
     before = (sleep_dir(ACCOUNT) / EVIDENCE_FILE).read_bytes()
     model = ScriptedModel()
-    client = _page(model, contexts=_real_context(monkeypatch))
+    client = _page(model, contexts=_real_context())
     headers = _visit(client)
     pair = client.post(ASK, json={"text": "MARKER-EVIDENCE: what should I cut?"}, headers=headers).json()
     assert pair["kind"] == "pair" and len(model.calls) == 2
@@ -402,29 +433,69 @@ def test_demo_chat_never_writes_evidence(account: str, monkeypatch: pytest.Monke
     assert store.stored(datetime(2026, 12, 31).date()) == before_items
 
 
-def test_page_writes_no_history_or_memory(account: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page_writes_no_history_or_memory(account: str, offline_embedder: None) -> None:
     from anjo.core import paths
-    from anjo.core.db import get_db
 
     _seed_evidence()
+    _seed_memory()
     root = Path(paths.DATA_ROOT)
-    db = get_db()
-    tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
-    rows_before = {table: db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}  # noqa: S608
-    files_before = _snapshot(root)
+    rows, memory, files = _db_rows(), _memory_rows(), _snapshot(root)
 
-    client = _page(ScriptedModel(), contexts=_real_context(monkeypatch))
+    model = ScriptedModel()
+    client = _page(model, contexts=_real_context())
     headers = _visit(client)
-    for text in ("MARKER-HISTORY one", "MARKER-HISTORY two"):
+    for text in ("MARKER-HISTORY one about the ferry short", "MARKER-HISTORY two about the ferry short"):
         pair = client.post(ASK, json={"text": text}, headers=headers).json()
         assert pair["kind"] == "pair"
         client.post(VOTE, json={"pair_id": pair["pair_id"], "choice": "tie"}, headers=headers)
 
-    rows_after = {table: db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}  # noqa: S608
-    assert rows_after == rows_before  # no message, session, memory or evidence row
-    assert _snapshot(root) == files_before  # no file outside the demo's counters and votes changed
+    assert any(MEMORY in json.dumps(call["messages"]) for call in model.calls)  # her memory was read
+    assert _memory_rows() == memory  # and not one of its rows moved: no recall count, nothing added
+    assert _db_rows() == rows  # no message, session, memory, surface or evidence row, added or changed
+    assert _snapshot(root) == files  # no file outside the demo's counters and votes changed
     for path in _demo_dir().iterdir():
         assert "MARKER" not in path.read_text()
+
+
+def test_an_arms_run_reads_her_memory_without_a_trace(account: str, offline_embedder: None) -> None:
+    """The probes' arms read C through the same builder: an arms run leaves her memory as it was."""
+    from anjo.sleep.app.storage import checkpoint_registry, evidence_store
+    from anjo.sleep.probes.arms import ArmDeps, reply
+    from anjo.sleep.types import Probe
+
+    _seed_memory()
+    rows, memory = _db_rows(), _memory_rows()
+    model = ScriptedModel()
+    deps = ArmDeps(model=model, adapters=checkpoint_registry(), contexts=_real_context(), evidence=evidence_store,
+                   logprobs=FakeLogprobs(lambda adapter, messages: ""), donors={}, until=datetime(2026, 10, 31).date())
+    question = Probe("p-arms", ACCOUNT, "new_work", "How long should the ferry short run?", None, None, ())
+    for arm in ("4", "2C"):
+        reply(arm, ACCOUNT, question, deps=deps)
+    assert len(model.calls) == 2 and all(MEMORY in json.dumps(call["messages"]) for call in model.calls)
+    assert _memory_rows() == memory and _db_rows() == rows
+
+
+def test_only_a_served_turn_counts_its_recall(account: str, offline_embedder: None) -> None:
+    """A served turn's reply reaches the person, so its read counts as Anjo's recall, as chat's own
+    read does; the builder the arms and the demo use counts nothing."""
+    from anjo.memory import long_term
+    from anjo.sleep.app import prompt
+    from anjo.sleep.types import Probe
+
+    def recalled() -> int:
+        semantic, _ = long_term._get_collections(ACCOUNT)
+        return int(semantic.get(ids=["m-ferry"], include=["metadatas"])["metadatas"][0].get("recall_count", 0))
+
+    _seed_memory()
+    question = Probe("p-served", ACCOUNT, "new_work", "the ferry short", None, None, ())
+    _real_context().compose(ACCOUNT, question)
+    assert recalled() == 0
+    prompt.set_context_setup(None)
+    try:
+        prompt._builder(cleared=False).compose(ACCOUNT, question)
+    finally:
+        prompt.set_context_setup(None)
+    assert recalled() == 1
 
 
 # ── the GPU ───────────────────────────────────────────────────────────────────
