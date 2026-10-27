@@ -75,6 +75,19 @@ def _missing(error: ClientError) -> bool:
         or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
 
 
+def _delete(call: Callable[..., Any], **params: Any) -> None:
+    """A delete; a resource that is not there is already gone, which is what cleanup wants. Narrow:
+    ``ResourceNotFound``, or a ``ValidationException`` that says "Could not find". Else it raises."""
+    try:
+        call(**params)
+    except ClientError as error:
+        details = error.response.get("Error", {})
+        if details.get("Code") == "ResourceNotFound" or (
+                details.get("Code") == "ValidationException" and "Could not find" in str(details.get("Message", ""))):
+            return
+        raise
+
+
 def _found(describe: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any] | None:
     try:
         return describe()
@@ -214,7 +227,7 @@ def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
     found = _settled(component, "InferenceComponentStatus", clock=clock, sleep=sleep)
     if found is not None:
         if found != "Deleting":
-            sm.delete_inference_component(InferenceComponentName=settings.COMPONENT)
+            _delete(sm.delete_inference_component, InferenceComponentName=settings.COMPONENT)
         started = clock()
         while _exists(component):
             if clock() - started > TEARDOWN_WAIT_S:
@@ -223,9 +236,9 @@ def teardown(aws: Aws, *, clock: Callable[[], float] = time.monotonic,
     endpoint = _settled(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
                         clock=clock, sleep=sleep)
     if endpoint not in (None, "Deleting"):
-        sm.delete_endpoint(EndpointName=settings.ENDPOINT)
+        _delete(sm.delete_endpoint, EndpointName=settings.ENDPOINT)
     if _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
-        sm.delete_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)
+        _delete(sm.delete_endpoint_config, EndpointConfigName=settings.ENDPOINT_CONFIG)
 
 
 def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
@@ -239,7 +252,7 @@ def _undo(aws: Aws, made: set[str], model: str, *, clock: Callable[[], float],
         return
     teardown(aws, clock=clock, sleep=sleep)
     if "model" in made:
-        sm.delete_model(ModelName=model)
+        _delete(sm.delete_model, ModelName=model)
 
 
 def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account_id: str | None = None, *,
@@ -267,27 +280,27 @@ def up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, account
 
 def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: str, model: str,
         made: set[str], *, clock: Callable[[], float], sleep: Callable[[float], None]) -> dict[str, int]:
-    """Make what is missing, noting each in ``made`` once its create call has returned (a refused
-    create made nothing, so cleanup never tries to delete it), and wait for the first copy."""
+    """Make what is missing, noting each in ``made`` before its create call (an interrupted call may
+    still have made it, and an unmade one deletes as already gone), and wait for the first copy."""
     sm = aws.get("sagemaker")
     if not _exists(lambda: sm.describe_model(ModelName=model)):
+        made.add("model")
         sm.create_model(ModelName=model, ExecutionRoleArn=role, PrimaryContainer={
             "Image": image_uri, "Environment": _model_env(serve, bucket),
             "ModelDataSource": {"S3DataSource": {
                 "S3Uri": f"s3://{bucket}/{weights_prefix(serve.pinned_revision())}",
                 "S3DataType": "S3Prefix", "CompressionType": "None"}},
         })
-        made.add("model")
     if not _exists(lambda: sm.describe_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG)):
+        made.add("endpoint_config")
         sm.create_endpoint_config(EndpointConfigName=settings.ENDPOINT_CONFIG, ExecutionRoleArn=role, ProductionVariants=[{
             "VariantName": settings.VARIANT, "InstanceType": settings.INSTANCE_TYPE, "InitialInstanceCount": 1,
             "ManagedInstanceScaling": {"Status": "ENABLED", "MinInstanceCount": 0, "MaxInstanceCount": 1},
             "RoutingConfig": {"RoutingStrategy": "LEAST_OUTSTANDING_REQUESTS"},
         }])
-        made.add("endpoint_config")
     if not _exists(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT)):
-        sm.create_endpoint(EndpointName=settings.ENDPOINT, EndpointConfigName=settings.ENDPOINT_CONFIG)
         made.add("endpoint")
+        sm.create_endpoint(EndpointName=settings.ENDPOINT, EndpointConfigName=settings.ENDPOINT_CONFIG)
     endpoint_s = _wait(lambda: sm.describe_endpoint(EndpointName=settings.ENDPOINT), "EndpointStatus",
                        clock=clock, sleep=sleep)
     spec = {"ModelName": model,
@@ -300,9 +313,9 @@ def _up(aws: Aws, serve: config.ServeConfig, bucket: str, image_uri: str, role: 
         sm.update_inference_component(InferenceComponentName=settings.COMPONENT, Specification=spec,
                                       RuntimeConfig={"CopyCount": 1})
     else:
+        made.add("component")
         sm.create_inference_component(InferenceComponentName=settings.COMPONENT, EndpointName=settings.ENDPOINT,
                                       VariantName=settings.VARIANT, Specification=spec, RuntimeConfig={"CopyCount": 1})
-        made.add("component")
     copy_s = _wait(describe_ic, "InferenceComponentStatus", clock=clock, sleep=sleep)
     idle_net(aws)
     return {"endpoint_seconds": round(endpoint_s), "first_copy_seconds": round(copy_s)}

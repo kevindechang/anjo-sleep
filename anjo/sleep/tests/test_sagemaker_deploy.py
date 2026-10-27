@@ -61,6 +61,9 @@ class Plane:
         def gone(kind: str, key: str) -> Any:
             def delete(**params: Any) -> dict[str, Any]:
                 self.order.append(f"delete_{kind}")
+                if params[key] not in self.exists:  # SageMaker's reply for a name that was never made
+                    raise client_error("ValidationException", 400, f"Delete{kind}",
+                                       Message=f'Could not find {kind} "{params[key]}".')
                 self.exists.discard(params[key])
                 return {}
             return delete
@@ -211,7 +214,7 @@ def test_a_refused_create_model_is_not_cleaned_up_as_if_it_were_made(capsys: pyt
         _up(aws)
     seen = " ".join([str(raised.value), *getattr(raised.value, "__notes__", ())]) + "".join(capsys.readouterr())
     assert "cleanup failed" not in seen
-    assert "delete_model" not in plane.order
+    assert plane.exists == set()
 
 
 def test_up_failure_at_create_endpoint_still_deletes_the_model_and_config_it_made() -> None:
@@ -227,6 +230,38 @@ def test_up_failure_at_create_endpoint_still_deletes_the_model_and_config_it_mad
     assert "delete_model" in plane.order and "delete_endpoint_config" in plane.order
     assert "delete_endpoint" not in plane.order and plane.exists == set()
     assert not getattr(raised.value, "__notes__", ())
+
+
+def test_an_interrupted_create_endpoint_that_aws_accepted_is_deleted() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def accepted_then_interrupted(**params: Any) -> dict[str, Any]:
+        plane.exists.add(params["EndpointName"])  # AWS took it; the call never returned
+        raise KeyboardInterrupt
+
+    fakes["sagemaker"]._handlers["create_endpoint"] = accepted_then_interrupted
+    with pytest.raises(KeyboardInterrupt):
+        _up(aws)
+    assert "delete_endpoint" in plane.order and plane.exists == set()
+
+
+def test_a_delete_that_fails_for_real_still_reports_cleanup_failed() -> None:
+    plane = Plane()
+    aws, fakes = _aws(plane)
+
+    def refused(**params: Any) -> dict[str, Any]:
+        raise Boom("create_endpoint refused")
+
+    def denied(**params: Any) -> dict[str, Any]:
+        raise client_error("AccessDeniedException", 400, "DeleteModel", Message="not allowed")
+
+    fakes["sagemaker"]._handlers["create_endpoint"] = refused
+    fakes["sagemaker"]._handlers["delete_model"] = denied
+    with pytest.raises(Boom) as raised:
+        _up(aws)
+    notes = " ".join(getattr(raised.value, "__notes__", ()))
+    assert "cleanup failed" in notes and "deploy stop --delete-endpoint" in notes
 
 
 def test_stop_delete_endpoint_without_component(capsys: pytest.CaptureFixture[str]) -> None:
