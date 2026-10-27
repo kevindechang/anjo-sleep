@@ -51,7 +51,9 @@ POOLS: Final[tuple[Pool, ...]] = get_args(Pool)
 
 CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "modal_usd": 500.0,  # of which about $120 is warm hours for the live page in judging week
-    "colab_cu": 300.0,  # training (Task 5) and MIND's synthetic runs (Tasks 17, 17b)
+    # Training (Task 5) and MIND's synthetic runs (Tasks 17, 17b). The real balance on 2026-10-27 was
+    # 103.97 units (`colab usage`); this is that minus a margin, raised only when Kevin buys more units.
+    "colab_cu": 100.0,
     "meta_usd": 140.0,  # $10 under the $150 credit, for billing lag
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b

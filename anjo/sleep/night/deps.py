@@ -41,6 +41,7 @@ from anjo.sleep.ports import (
 )
 from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.practice.transcripts import TranscriptStore
+from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.types import (
     CheckpointRef,
     Choice,
@@ -287,6 +288,8 @@ class NightDeps:
     ledger: Ledger | None = None
     # The app's reply-side crisis check on the note's final text, sources and all; False declines it.
     note_check: Callable[[str], bool] = field(default=lambda text: True)
+    # Wakes Glimmer before the first Modal step (practice or gates); None wakes nothing (tests, fakes).
+    wake: Callable[[], WakeResult] | None = None
 
 
 @dataclass(frozen=True)

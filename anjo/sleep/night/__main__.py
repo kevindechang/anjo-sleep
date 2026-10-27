@@ -26,6 +26,7 @@ import argparse
 import importlib
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -33,11 +34,12 @@ from typing import Any
 from anjo.sleep.budget import default_ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night.deps import NightOptions, Wiring
-from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.night.run import Window, run_night_batch_with
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
 from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
 from anjo.sleep.train.trainer import LoraTrainer
+from anjo.sleep.types import NightResult
 
 
 def _named(path: str) -> Any:
@@ -62,6 +64,39 @@ def _publish(folder: Path, name: str) -> None:
     put_adapter(folder, name)
 
 
+def execute(
+    *, wiring: str, night: date, users: Sequence[str], personas: Mapping[str, str], allow_real: bool = False,
+    practice_scenes: int = 16, teacher: bool = True, simulate: str | None = None, day: int | None = None,
+    seed: int = 20261028, windows: Mapping[str, Window] | None = None,
+) -> dict[str, NightResult]:
+    """The night for ``users`` under the lock and sweep, with Colab training and the adapter upload.
+    ``windows`` gives each person's own window (the real-time schedule's previous day); a simulated
+    ``day`` gives the window of the day it played. Also used by ``night/daily.py``."""
+    data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or _no_data_dir())
+    options = NightOptions(night=night, personas=dict(personas), allow_real=allow_real,
+                           practice_scenes=practice_scenes, practice_teacher=teacher)
+    # Colab trains only the people named with a persona (the wiring refuses a persona on an account
+    # that isn't registered synthetic), and anyone else only with --allow-real.
+    cli, ledger = _colab_cli(), default_ledger()
+    runner = ColabRunner(cli=cli, ledger=ledger, is_synthetic=lambda user_id: user_id in personas,
+                         allow_real=allow_real)
+    trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training", publish=_publish,
+                          revision=os.environ.get(REVISION_ENV) or None)
+    try:
+        with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept:
+            deps = _wiring(wiring)(trainer, options)
+            play = _named(simulate) if simulate else None
+            days = {user: play(user, persona, day, seed) for user, persona in personas.items()} if play else {}
+            return run_night_batch_with(deps, {user: night for user in users}, windows=windows, days=days,
+                                        sweep=swept)
+    except NightBusy as busy:
+        raise SystemExit(str(busy)) from None
+
+
+def _no_data_dir() -> str:
+    raise SystemExit(f"{DATA_DIR_ENV} is not set")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one night for the people named.")
     parser.add_argument("--wiring", required=True, help="the app's NightDeps builder, <module>:<function>")
@@ -82,26 +117,15 @@ def main(argv: list[str] | None = None) -> int:
     real = [user for user in args.users if user not in personas]
     if real and not args.allow_real:
         parser.error("a user without a persona is a real person: pass --allow-real only with their OK")
-    data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
-    options = NightOptions(night=args.night, personas=personas, allow_real=args.allow_real,
-                           practice_scenes=args.practice_scenes, practice_teacher=not args.no_teacher)
-    # Colab trains only the people named with a persona (the wiring refuses a persona on an account
-    # that isn't registered synthetic), and anyone else only with --allow-real.
-    cli, ledger = _colab_cli(), default_ledger()
-    runner = ColabRunner(cli=cli, ledger=ledger, is_synthetic=lambda user_id: user_id in personas,
-                         allow_real=args.allow_real)
-    trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training", publish=_publish,
-                          revision=os.environ.get(REVISION_ENV) or None)
     if (args.simulate is None) != (args.day is None):
         parser.error("--simulate and --day go together")
-    try:
-        with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept:
-            deps = _wiring(args.wiring)(trainer, options)
-            simulate = _named(args.simulate) if args.simulate else None
-            days = {user: simulate(user, persona, args.day, args.seed) for user, persona in personas.items()} if simulate else {}
-            results = run_night_batch_with(deps, {user: args.night for user in args.users}, days=days, sweep=swept)
-    except NightBusy as busy:
-        raise SystemExit(str(busy)) from None
+    if not os.environ.get(DATA_DIR_ENV, "").strip():
+        parser.error(f"{DATA_DIR_ENV} is not set")
+    results = execute(
+        wiring=args.wiring, night=args.night, users=args.users, personas=personas, allow_real=args.allow_real,
+        practice_scenes=args.practice_scenes, teacher=not args.no_teacher, simulate=args.simulate, day=args.day,
+        seed=args.seed,
+    )
     print(json.dumps({user: {"status": r.status, "failed_at": r.failed_at, "log": str(r.log_path)}
                       for user, r in results.items()}, indent=1))
     return 0 if all(r.status != "failed" for r in results.values()) else 1

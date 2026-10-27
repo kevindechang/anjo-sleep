@@ -188,16 +188,36 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 
-# /etc/systemd/system/anjo-sleep-night.service
+# /etc/systemd/system/anjo-sleep-day.service
 [Unit]
-Description=Anjo Sleep nightly run
+Description=Anjo Sleep: Tessa's simulated day (wakes Glimmer first)
 [Service]
 Type=oneshot
 User=anjo
 EnvironmentFile=/etc/anjo-sleep/env
 WorkingDirectory=/opt/anjo-sleep
-ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night
-TimeoutStartSec=4h
+ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase day --persona founder
+TimeoutStartSec=1h
+
+# /etc/systemd/system/anjo-sleep-day.timer
+[Unit]
+Description=Anjo Sleep day at 14:00 Taipei
+[Timer]
+OnCalendar=*-*-* 14:00:00 Asia/Taipei
+Persistent=true
+[Install]
+WantedBy=timers.target
+
+# /etc/systemd/system/anjo-sleep-night.service
+[Unit]
+Description=Anjo Sleep nightly run, then the morning probe run
+[Service]
+Type=oneshot
+User=anjo
+EnvironmentFile=/etc/anjo-sleep/env
+WorkingDirectory=/opt/anjo-sleep
+ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase night --persona founder
+TimeoutStartSec=5h
 
 # /etc/systemd/system/anjo-sleep-night.timer
 [Unit]
@@ -210,7 +230,52 @@ WantedBy=timers.target
 ```
 
 The night runs as its own process, so a long night can't take down the server.
-`python -m anjo.sleep.night` is Task 5's.
+
+**The real-time schedule** (`anjo/sleep/night/daily.py`). Tessa (`founder`) lives in real time from
+2026-10-28: one simulated day per real day, then the night, then the morning probe run.
+
+- `--phase day` (14:00 Taipei) plays that day's index (days since 2026-10-28) through the dev API,
+  waking Glimmer first. If Glimmer can't be woken the day does not start and the unit fails with
+  `glimmer_not_ready`; it is never counted as a short day.
+- `--phase night` (02:00 Taipei) runs the night for the previous Taipei calendar day, as its own
+  virtual date (the date it was lived on). It takes the night lock, sweeps, wakes Glimmer and trains
+  exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
+  checkpoint that serves, in the same process. A failed night is not scored.
+- The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=founder=<account id>` in the env file.
+  The env file also holds `ANJO_SLEEP_HOST=1`, `ANJO_SLEEP_MODAL_URL`, `ANJO_SLEEP_MODAL_TOKEN`,
+  `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.
+
+By hand, one night is `python -m anjo.sleep.night --wiring anjo.sleep.app.night:build --night <date>
+--user <id> --persona <name>`, with `--simulate anjo.sleep.app.sim_transport:simulate --day <i>` to
+play a day first. An accelerated run adds `--morning anjo.sleep.app.morning:build` (see
+`sim/accelerated.py`).
+
+## Waking Glimmer, and keep-warm windows
+
+Glimmer scales to zero after 600 idle seconds, and a cold start of the 30B model takes minutes,
+while the dev host waits `runtime.REPLY_DEADLINE_S` (20 s) for a reply. In a cleared session only
+Glimmer answers, so the first turn after an idle spell would fail. So everything that needs Glimmer
+wakes it first (`serving.client.wake`: it polls `GET /v1/models` with the bearer token, with a
+backoff, under a hard total of `WAKE_TOTAL_TIMEOUT_S`, 600 s):
+
+- **A simulated day** wakes before its first turn. If the wake fails the day does not start, and
+  the night records a `glimmer_not_ready` failure at `simulate`: an error, not a short day.
+- **A night** wakes before its first Modal step (practice), and **a morning run** before its first
+  arm call. Both record `wake_seconds` (the night in `summary.json`, the morning in its score file).
+- **Demos:** run `python -m anjo.sleep.serving.wake --wake` a few minutes before, and it prints how
+  many seconds the wake took.
+
+**Keep-warm windows** are for live demos and judging, where a cold start in front of people is not
+acceptable:
+
+```bash
+python -m anjo.sleep.serving.wake --keep-warm-minutes 90   # wakes, then pings every 240 s
+```
+
+It reads `ANJO_SLEEP_MODAL_URL` and `ANJO_SLEEP_MODAL_TOKEN` and never prints them. A window is
+capped at 180 minutes. If the process dies, the pings stop and Modal scales down by itself after 600
+idle seconds, so nothing stays up unbounded. The L40S costs about $2 an hour while it is up, so
+**each window needs Kevin's OK**.
 
 **Caddy** (`/etc/caddy/Caddyfile`):
 
@@ -222,7 +287,7 @@ The night runs as its own process, so a long night can't take down the server.
 
 **Checks after setup:**
 
-- `systemctl list-timers anjo-sleep-night.timer` shows the next run at 02:00 Taipei.
+- `systemctl list-timers 'anjo-sleep-*.timer'` shows the day at 14:00 and the night at 02:00 Taipei.
 - The dev app signs in over HTTPS.
 - A flagged turn is served by Glimmer.
 - After `modal app stop anjo-sleep-serve`, the same turn is answered by the frontier talker, and

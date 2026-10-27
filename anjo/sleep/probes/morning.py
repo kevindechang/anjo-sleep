@@ -8,6 +8,8 @@ the tie-inclusive score against arm 1 (arm 1 is 0.5 against itself by definition
 headline pairs (3 against 3x, 4 against 2C). The file holds numbers, the night, the label and the
 checkpoint id, never a reply or a probe, and nothing is written to history, evidence or memory (RF5).
 
+- Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
+  before any call, and the score file records ``wake_seconds``.
 - A night that already has a score file is refused before any call: the first score stands.
 - The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run.
 - Arm 3x needs the registered donor's promoted adapter. Without one, 3x is left out and recorded
@@ -44,6 +46,7 @@ from anjo.sleep.probes.score import (
     score_outcomes,
 )
 from anjo.sleep.reports import results
+from anjo.sleep.serving.client import GlimmerNotReady, WakeResult
 from anjo.sleep.types import CheckpointRef, Probe
 
 ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2F", "3", "3x", "4")
@@ -73,6 +76,7 @@ class Morning:
     ledger: Ledger | None = None
     root: Path | None = None
     timer: Callable[[], float] = time.monotonic
+    wake: Callable[[], WakeResult] | None = None  # wakes Glimmer before any arm calls it
 
 
 @dataclass(frozen=True)
@@ -184,6 +188,9 @@ def run_morning(
         raise MorningError(f"{user_id} has no sealed probes")
     if any(p.person_id != user_id for p in probes):
         raise MorningError("a sealed probe belongs to another person")
+    woke = None if morning.wake is None else morning.wake()
+    if woke is not None and not woke.ok:
+        raise GlimmerNotReady()  # nothing was called or written
     deps = replace(morning.arms, adapters=_Pinned(morning.arms.adapters, user_id, checkpoint), until=night,
                    context_cache={})
     judge = _Counting(morning.judge)
@@ -221,6 +228,8 @@ def run_morning(
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
     }
+    if woke is not None:
+        record["wake_seconds"] = woke.seconds
     folder.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.tmp")
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")

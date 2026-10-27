@@ -33,7 +33,7 @@ from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.judge_brief import judge_brief
 from anjo.sleep.probes.morning import Morning
 from anjo.sleep.probes.score import MuseJudge
-from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.serving.client import VllmClient, wake
 from anjo.sleep.types import Probe
 
 DONORS_ENV: Final = "ANJO_SLEEP_DONORS"
@@ -66,4 +66,5 @@ def build(user_id: str, persona: str, night: date) -> Morning:
             ServedBriefs(brief_store), until=night, settings=RECALL),
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
     return Morning(arms=arms, sealed=probes, judge=MuseJudge(meta_api.chat, lambda _person: judge_brief(persona)),
-                   prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME))
+                   prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
+                   wake=lambda: wake(_env(URL_ENV), _env(TOKEN_ENV)))
