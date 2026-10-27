@@ -177,10 +177,11 @@ def test_unknown_arm_is_refused():
 
 
 def test_arms_reply_saves_nothing(tmp_path: Path):
+    from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
     from anjo.sleep.evidence.store import JsonlEvidenceStore
 
     path = tmp_path / "evidence.jsonl"
-    real = JsonlEvidenceStore(path, "p1")
+    real = JsonlEvidenceStore(path, "p1", codec=PLAIN, guard=NO_GUARD)
     real.add([ev("e1", "a lesson"), ev("e2", "held", held_out=True)])
     before = path.read_bytes()
     d = ArmDeps(
