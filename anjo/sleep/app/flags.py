@@ -22,3 +22,21 @@ def sleep_host() -> bool:
 def require_sleep_host() -> None:
     if not sleep_host():
         raise SleepHostOff(f"Anjo Sleep runs only with {HOST_ENV}=1")
+
+
+# ── Per person (Task 4) ───────────────────────────────────────────────────────
+
+CAPABILITY: Final = "sleep"
+
+
+def sleep_enabled_for(user_id: str) -> bool:
+    """Whether this person's turns and nights are Anjo Sleep's: the host flag first, then the
+    ``sleep`` capability's switch and cohort (``ANJO_SLEEP_ENABLED``,
+    ``ANJO_SLEEP_FORCED_USER_IDS``, ``ANJO_SLEEP_ROLLOUT_PCT``). Off the host the capability is
+    never declared, so forced ids alone flag nobody and the app's manifest is unchanged."""
+    if not sleep_host():
+        return False
+    from anjo.core.capabilities import capability_enabled_for, declare_sleep_capability
+
+    declare_sleep_capability()
+    return bool(capability_enabled_for(CAPABILITY, user_id))

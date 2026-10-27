@@ -1,0 +1,201 @@
+"""What Glimmer's vLLM server runs with (Task 4).
+
+Standard library only: the Modal image copies this file in as a module of its own, so it imports
+nothing from Anjo. The chat side reads the same values, so the pin the dev host serves under and
+the server Modal runs can't drift apart.
+
+**Precision is one line.** ``SERVING`` is ``FP8_L40S`` (Glimmer quantized to FP8 when vLLM loads
+it, on one L40S) or ``BF16_A100`` (bf16 on one A100-80GB, the fallback). The base model and every
+personal adapter share one server, so every arm serves at the same precision by construction.
+
+**Adapters.** Each person's LoRA adapter is a folder ``p-<hash>-n<night>`` on the adapters volume.
+vLLM's filesystem resolver loads it the first time a request names it, so the base and the
+personal arms share one GPU. ``check_adapter`` holds a folder to what the resolver needs before it
+is uploaded.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
+
+APP_NAME: Final = "anjo-sleep-serve"
+WEIGHTS_VOLUME: Final = "anjo-sleep-weights"
+ADAPTERS_VOLUME: Final = "anjo-sleep-adapters"
+# The serving secret holds VLLM_API_KEY (the bearer token the dev host sends) and nothing else.
+# Downloading needs no secret, since the Glimmer repo isn't gated: a deploy that wants HF_TOKEN
+# anyway names a second Modal secret in HF_SECRET_ENV, and only download_weights gets it.
+SECRET_NAME: Final = "anjo-sleep-serve"
+HF_SECRET_ENV: Final = "ANJO_SLEEP_HF_SECRET"
+WEIGHTS_DIR: Final = "/weights"
+ADAPTERS_DIR: Final = "/adapters"
+PORT: Final = 8000
+
+MODEL: Final = "meta-models/Muse-Glimmer-30B"
+LICENSE: Final = "Apache-2.0"
+REVISION_ENV: Final = "ANJO_SLEEP_GLIMMER_REVISION"
+TOOL_PARSER_ENV: Final = "ANJO_SLEEP_TOOL_CALL_PARSER"
+SNAPSHOT_ENV: Final = "ANJO_SLEEP_GPU_SNAPSHOT"
+VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
+# The vLLM release the image installs unless the deploy names another. The Oct 28 check confirms
+# that it loads Glimmer, applies an adapter at the serving precision and parses its tool calls.
+DEFAULT_VLLM_VERSION: Final = "0.11.0"
+
+# Every function has a timeout (§12.1). Serving scales to zero after ten idle minutes, and one
+# container serves for at most three hours before Modal replaces it.
+SCALEDOWN_S: Final = 600
+SERVE_TIMEOUT_S: Final = 3 * 3600
+STARTUP_TIMEOUT_S: Final = 20 * 60
+DOWNLOAD_TIMEOUT_S: Final = 3600
+CONCURRENT_REQUESTS: Final = 16
+
+MAX_MODEL_LEN: Final = 32_768
+MAX_OUTPUT_TOKENS: Final = 4096
+# LoRA sizing (the memory math is in deploy/dev_host.md). Task 5 trains rank 16, and Meta's
+# recipe ranges up to 32, so the server takes rank 32 at most. About 6 to 8 adapters are live at
+# once (Kevin, Tessa, three lives and the arm-3x donors): all 8 fit on the GPU, and the CPU keeps
+# 16 warm so a ninth swaps in without reading the volume. vLLM queues a request past these.
+MAX_LORA_RANK: Final = 32
+MAX_LORAS: Final = 8
+MAX_CPU_LORAS: Final = 16
+GPU_MEMORY_UTILIZATION: Final = 0.92
+
+ADAPTER_NAME = re.compile(r"p-[0-9a-f]{8,64}-n[0-9]{1,5}")
+ADAPTER_FILES: Final = ("adapter_config.json", "adapter_model.safetensors")
+MAX_ADAPTER_BYTES: Final = 2 * 1024**3
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+_PARSER = re.compile(r"[a-z0-9_]{1,40}")
+_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+_SECRET = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+class ServeConfigError(ValueError):
+    """A serving setting or an adapter folder that the server can't take."""
+
+
+@dataclass(frozen=True)
+class Precision:
+    """One serving precision: the GPU it fits, vLLM's flags for it, and the name the pin records
+    (the pin vocabulary's quantization values)."""
+
+    name: str
+    gpu: str
+    quantization: str | None
+    dtype: str
+
+
+FP8_L40S: Final = Precision(name="fp8", gpu="L40S", quantization="fp8", dtype="bfloat16")
+BF16_A100: Final = Precision(name="bf16", gpu="A100-80GB", quantization=None, dtype="bfloat16")
+SERVING: Final = FP8_L40S  # the fallback is BF16_A100: change this line, then redeploy
+
+
+@dataclass(frozen=True)
+class ServeConfig:
+    """The deploy-time settings. ``revision`` is the Glimmer commit the weights are pinned to,
+    ``tool_parser`` vLLM's tool-call parser for Glimmer (None serves without tools),
+    ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
+    ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without)."""
+
+    precision: Precision
+    revision: str | None
+    tool_parser: str | None
+    gpu_snapshot: bool
+    vllm_version: str
+    hf_secret: str | None = None
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:
+        env = os.environ if environ is None else environ
+        revision = env.get(REVISION_ENV, "").strip() or None
+        if revision is not None and not _COMMIT.fullmatch(revision):
+            raise ServeConfigError(f"{REVISION_ENV} is a 40-character commit hash")
+        parser = env.get(TOOL_PARSER_ENV, "").strip() or None
+        if parser is not None and not _PARSER.fullmatch(parser):
+            raise ServeConfigError(f"{TOOL_PARSER_ENV} names one vLLM tool-call parser")
+        version = env.get(VLLM_VERSION_ENV, "").strip() or DEFAULT_VLLM_VERSION
+        if not _VERSION.fullmatch(version):
+            raise ServeConfigError(f"{VLLM_VERSION_ENV} is a release such as {DEFAULT_VLLM_VERSION}")
+        hf_secret = env.get(HF_SECRET_ENV, "").strip() or None
+        if hf_secret is not None and not _SECRET.fullmatch(hf_secret):
+            raise ServeConfigError(f"{HF_SECRET_ENV} names a Modal secret, never its value")
+        return cls(
+            precision=SERVING, revision=revision, tool_parser=parser,
+            gpu_snapshot=env.get(SNAPSHOT_ENV, "").strip() == "1", vllm_version=version,
+            hf_secret=hf_secret,
+        )
+
+    def pinned_revision(self) -> str:
+        if self.revision is None:
+            raise ServeConfigError(f"set {REVISION_ENV} to the Glimmer commit the weights pin to")
+        return self.revision
+
+
+def weights_path(revision: str) -> str:
+    """Where one pinned revision of Glimmer sits on the weights volume."""
+    return f"{WEIGHTS_DIR}/{MODEL}/{revision}"
+
+
+def vllm_command(config: ServeConfig) -> list[str]:
+    """The server's command line. The API key is read from VLLM_API_KEY (the Modal secret), never
+    passed as an argument, so it never shows in a process list."""
+    command = [
+        "vllm", "serve", weights_path(config.pinned_revision()),
+        "--served-model-name", MODEL,
+        "--host", "0.0.0.0", "--port", str(PORT),
+        "--dtype", config.precision.dtype,
+        "--max-model-len", str(MAX_MODEL_LEN),
+        "--gpu-memory-utilization", str(GPU_MEMORY_UTILIZATION),
+        "--enable-lora", "--max-lora-rank", str(MAX_LORA_RANK), "--max-loras", str(MAX_LORAS),
+        "--max-cpu-loras", str(MAX_CPU_LORAS),
+    ]
+    if config.precision.quantization is not None:
+        command += ["--quantization", config.precision.quantization]
+    if config.tool_parser is not None:
+        command += ["--enable-auto-tool-choice", "--tool-call-parser", config.tool_parser]
+    return command
+
+
+def vllm_env() -> dict[str, str]:
+    """The server's environment beside the secret: adapters resolve from the adapters volume by
+    name, and Hugging Face's cache stays on the weights volume."""
+    return {
+        "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True",
+        "VLLM_PLUGINS": "lora_filesystem_resolver",
+        "VLLM_LORA_RESOLVER_CACHE_DIR": ADAPTERS_DIR,
+        "HF_HOME": f"{WEIGHTS_DIR}/hf",
+        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+    }
+
+
+def check_adapter_name(name: str) -> str:
+    if not isinstance(name, str) or not ADAPTER_NAME.fullmatch(name):
+        raise ServeConfigError("an adapter is named p-<hash>-n<night>")
+    return name
+
+
+def check_adapter(folder: Path, name: str) -> None:
+    """A LoRA adapter folder the resolver will load: the PEFT files, a LoRA of Glimmer, a rank the
+    server takes, and nothing else."""
+    check_adapter_name(name)
+    if not folder.is_dir():
+        raise ServeConfigError("an adapter is a folder")
+    present = sorted(path.name for path in folder.iterdir())
+    if present != sorted(ADAPTER_FILES):
+        raise ServeConfigError(f"an adapter folder holds exactly {', '.join(ADAPTER_FILES)}")
+    if sum((folder / file).stat().st_size for file in ADAPTER_FILES) > MAX_ADAPTER_BYTES:
+        raise ServeConfigError("the adapter is larger than any rank the server takes")
+    try:
+        meta = json.loads((folder / "adapter_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ServeConfigError("adapter_config.json can't be read") from error
+    if not isinstance(meta, dict) or meta.get("peft_type") != "LORA":
+        raise ServeConfigError("the adapter is a PEFT LoRA")
+    if meta.get("base_model_name_or_path") != MODEL:
+        raise ServeConfigError(f"the adapter's base model is {MODEL}, as the resolver checks")
+    rank = meta.get("r")
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= MAX_LORA_RANK:
+        raise ServeConfigError(f"the adapter's rank is 1 to {MAX_LORA_RANK}")
