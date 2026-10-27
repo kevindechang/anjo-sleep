@@ -32,6 +32,7 @@ SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "record_expectation": ("expectation",),
         "resolve_expectation": ("expectation_id", "outcome"),
         "expectations": (),
+        "digest": (),
         "replay_digest": (),
         "export": (),
     },

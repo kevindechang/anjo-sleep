@@ -44,7 +44,9 @@ class EvidenceSource(Protocol):
         """Read the person's turns inside ``window`` and return evidence stamped with ``day``.
 
         Only the person's own turns are read; for a synthetic person, only cleared sessions.
-        Items imported from existing stores enter once across nights.
+        Items imported from existing stores enter once across nights. The app's source also
+        records what it returns: the items enter the evidence store once and their target
+        mentions update the target store, so storing them again changes nothing.
         """
 
 
@@ -108,6 +110,9 @@ class TargetStore(Protocol):
 
     def expectations(self) -> list[Expectation]:
         """Every expectation, resolved or not."""
+
+    def digest(self) -> str:
+        """Hash the live derived state; ``replay_digest`` must equal it (Task 9's chaos run)."""
 
     def replay_digest(self) -> str:
         """Fold the log again from scratch and hash the derived state."""
