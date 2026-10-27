@@ -18,7 +18,7 @@ from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.night.deps import InquiryOutcome, NightSettings
 from anjo.sleep.night.meter import WonderMeter
-from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.night.run import PROBES_WORST_USD, run_night_batch_with
 from anjo.sleep.note.hold import HELD_BACK_LINE
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tests.night_fakes import NIGHT, SOURCE_URL, Homework, World, step, steps, summary, thread, window
@@ -591,3 +591,37 @@ def test_a_pool_without_room_skips_the_note_but_keeps_the_night(tmp_path: Path) 
     result = _one(world, chooser=AlwaysNote(), ledger=_tight(tmp_path, modal_usd=1e-6))
     assert result.status == "promoted"  # the GPU job is NoGpu here; only the note's call is held
     assert step(result.log_path, "note")["note_error"] == "write: BudgetStop" and world.writer.calls == []
+
+
+class Refusing(Ledger):
+    """A ledger whose pools have no room for one step's hold."""
+
+    def __init__(self, path: Path, refused: str) -> None:
+        super().__init__(path)
+        self._refused = refused
+
+    def reserve(self, job: str, pools: Any, bound: Any) -> Any:
+        return None if job.startswith(f"night:{self._refused}:") else super().reserve(job, pools, bound)
+
+
+@pytest.mark.parametrize("refused", ["brief", "practice", "probes"])
+def test_a_pool_without_room_stops_the_brief_practice_and_probes_before_any_call(tmp_path: Path, refused: str) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    result = _one(world, ledger=Refusing(tmp_path / "budget.jsonl", refused), is_synthetic=lambda uid: False)
+    assert (result.status, result.failed_at) == ("failed", refused)
+    assert "BudgetStop" in step(result.log_path, refused)["error"]
+    made = {"brief": len([p for p in world.spark.prompts if p.startswith("# brief_v1")]),
+            "practice": len([p for p in world.spark.prompts if p.startswith("# scenes_v1")]) + world.glimmer.calls,
+            "probes": len([e for e in world.events if e[0] == "probes"])}[refused]
+    assert made == 0  # no call was made
+
+
+def test_a_real_persons_probes_hold_is_settled_in_full(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    _one(world, ledger=ledger, is_synthetic=lambda uid: False)
+    events = [e for e in read_records(ledger.path, PLAIN) if e["job"].startswith("night:probes:")]
+    assert [e["op"] for e in events] == ["reserve", "settle"]
+    assert events[1]["amount"] == pytest.approx(PROBES_WORST_USD) == pytest.approx(events[0]["amount"])

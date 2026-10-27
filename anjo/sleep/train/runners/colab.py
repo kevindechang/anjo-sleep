@@ -6,7 +6,8 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 1. refuse a person who isn't registered synthetic, unless ``allow_real=True`` (only Claude sets it,
    for Kevin, with his OK; the standing rule keeps real data off Colab otherwise);
 2. reserve the job's worst case on ``colab_cu`` before anything starts: the job's hard timeout at
-   the A100-80GB rate (``Bound``). With no room, the night stops (``BudgetStop``);
+   the A100-80GB rate (``Bound``), keyed by night and person with an attempt number
+   (``holds.hold``). With no room, the night stops (``BudgetStop``);
 3. ``new`` an A100 session, ``install`` the pinned training packages, ``upload`` the night's
    dataset (and, for a warm start, the previous adapter's two files), ``exec`` the training script
    (``colab_train.py``) with the recipe in its environment, and ``download`` the adapter and its
@@ -14,6 +15,9 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 4. ``stop`` the session in a ``finally``, on success, failure or cancel, then settle what the VM
    ran for. A stop that fails settles the whole hold and raises, so a VM that may still run is
    never silent.
+
+A run killed hard runs no ``finally``. Every session is named ``anjo-sleep-<adapter>``, so the
+night command's sweep (``stop_leftover_sessions``) stops any a killed run left before it starts.
 
 Every CLI call runs under a hard subprocess timeout, because the CLI can hang on a dropped
 connection, and the timeouts of all calls together fit inside the job's own. Nothing else is
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -32,8 +37,8 @@ from pathlib import Path
 from typing import Final, Literal
 
 from anjo.sleep.budget import Bound, Ledger, Reservation
+from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
-from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train
 from anjo.sleep.train.lora import DATASET_FILE, JOB
 
@@ -56,6 +61,9 @@ INSTALL_TIMEOUT_S: Final = 900.0
 UPLOAD_TIMEOUT_S: Final = 300.0
 DOWNLOAD_TIMEOUT_S: Final = 300.0
 STOP_TIMEOUT_S: Final = 180.0
+LIST_TIMEOUT_S: Final = 120.0
+SESSION_PREFIX: Final = "anjo-sleep-"
+_SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
 EXEC_MARGIN_S: Final = 60.0  # the CLI's own wait past the kernel's timeout
 MIN_EXEC_S: Final = 1800.0
 _OUTPUT_FILES: Final = (*config.ADAPTER_FILES, colab_train.RECEIPT)
@@ -90,6 +98,29 @@ class ColabCli:
         if done.returncode != 0:
             raise ColabError(f"colab {args[0]} failed with exit {done.returncode}")
         return done.stdout
+
+
+def hold_base(night: str, person_id: str) -> str:
+    """The training's hold key before its attempt number: one night, one person."""
+    return f"colab_train:{night}:{person_id}"
+
+
+def stop_leftover_sessions(cli: ColabCli) -> tuple[int, int]:
+    """Stop every live session the runner made (``anjo-sleep-…``), as the night command's sweep.
+
+    Returns how many were stopped and how many other sessions are up: another tool's, or one this
+    machine has no name for. Those are only counted. A list or a stop that fails raises, so a VM
+    that may run never goes unnoticed: stop it by hand before anything else.
+    """
+    listed = cli.call("sessions", timeout_s=LIST_TIMEOUT_S)
+    names = [m.group("name") for line in listed.splitlines() if (m := _SESSION_LINE.match(line.strip()))]
+    ours = [name for name in names if name.startswith(SESSION_PREFIX)]
+    for name in ours:
+        try:
+            cli.call("stop", "-s", name, timeout_s=STOP_TIMEOUT_S)
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:
+            raise ColabError("stopping a leftover session failed; stop it by hand before anything else") from error
+    return len(ours), len(names) - len(ours)
 
 
 def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
@@ -147,10 +178,9 @@ class ColabRunner:
         exec_s = timeout_s - _setup_s(len(uploads))
         if exec_s < MIN_EXEC_S:
             raise ColabError("the job's timeout leaves too little time to train")
-        reservation = self._ledger.reserve(f"colab_train:{name}", (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
-        if reservation is None:
-            raise BudgetStop(f"{POOL} can't hold this training's worst case")
-        session = f"anjo-sleep-{name}"
+        base = hold_base(str(inputs["night"]), str(inputs["person_id"]))
+        reservation = hold(self._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
+        session = f"{SESSION_PREFIX}{name}"
         out = Path(str(inputs["workdir"])) / "out"
         started = self._clock()
         vm = _Vm()

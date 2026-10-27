@@ -1,3 +1,5 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """``python -m anjo.sleep.night`` (Task 5): a real person runs only with ``--allow-real``, and the
 wiring is named, never imported by the core."""
 from __future__ import annotations
@@ -13,6 +15,25 @@ BASE = ["--wiring", "anjo.sleep.tests.test_night_cli:never", "--night", "2026-10
 
 def never(*args: object) -> object:
     raise AssertionError("the wiring is not reached")
+
+
+class Cli:
+    """The night command's Colab CLI: no VM, no network. ``colab sessions`` lists ``listed``."""
+
+    def __init__(self, listed: str = "") -> None:
+        self.listed = listed
+        self.calls: list[tuple[str, ...]] = []
+
+    def call(self, *args: str, timeout_s: float) -> str:
+        self.calls.append(args)
+        return self.listed if args[0] == "sessions" else ""
+
+
+@pytest.fixture(autouse=True)
+def no_colab(monkeypatch: pytest.MonkeyPatch) -> Cli:
+    cli = Cli()
+    monkeypatch.setattr("anjo.sleep.night.__main__._colab_cli", lambda: cli)
+    return cli
 
 
 def test_a_user_without_a_persona_needs_allow_real(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -74,3 +95,25 @@ def test_a_failed_note_still_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr("anjo.sleep.tests.test_night_cli.never",
                         lambda trainer, options: world.deps(chooser=AlwaysNote(), note_writer=Raising()))
     assert main([*BASE, "--user", "u1", "--persona", "founder"]) == 0
+
+
+def test_the_night_command_sweeps_a_killed_run_before_the_wiring(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_colab: Cli,
+) -> None:
+    from anjo.sleep.budget import default_ledger
+    from anjo.sleep.tests.test_night_sweep import _killed
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    no_colab.listed = "[anjo-sleep-p-aaaaaaaaaaaa-n3] gpu-a100-s-1 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    _killed(default_ledger())
+    seen: list[int] = []
+
+    def wiring(trainer: object, options: object) -> object:
+        seen.append(len(default_ledger().open_holds()))
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr("anjo.sleep.tests.test_night_cli.never", wiring)
+    with pytest.raises(RuntimeError, match="stop here"):
+        main([*BASE, "--user", "u1", "--persona", "founder"])
+    assert seen == [0]  # every stale hold settled before the wiring ran
+    assert no_colab.calls == [("sessions",), ("stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3")]

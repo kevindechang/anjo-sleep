@@ -11,6 +11,10 @@ turn Glimmer couldn't answer is logged as short, never as an error.
 collapse gate's fields). An account named without one is a real person, and runs only with
 ``--allow-real``, which Claude passes only for Kevin with his OK.
 
+Before anything else it takes the night lock and sweeps what a run killed hard left behind
+(``sweep.py``): leftover Colab sessions are stopped and stale holds settled at their full bound. A
+second command while one is live stops before it touches anything.
+
 This is the composition root. The engine core never imports the app (the import contract), so the
 app's wiring is named here and loaded by name. The trainer is built here: Colab trains (synthetic
 people only, unless ``--allow-real``), and each finished adapter is uploaded to the serving volume
@@ -30,8 +34,9 @@ from anjo.sleep.budget import default_ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night.deps import NightOptions, Wiring
 from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
-from anjo.sleep.train.runners.colab import ColabCli, ColabRunner
+from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
 from anjo.sleep.train.trainer import LoraTrainer
 
 
@@ -45,6 +50,10 @@ def _named(path: str) -> Any:
 def _wiring(path: str) -> Wiring:
     found: Wiring = _named(path)
     return found
+
+
+def _colab_cli() -> ColabCli:
+    return ColabCli()
 
 
 def _publish(folder: Path, name: str) -> None:
@@ -75,16 +84,21 @@ def main(argv: list[str] | None = None) -> int:
     options = NightOptions(night=args.night, personas=personas, allow_real=args.allow_real)
     # Colab trains only the people named with a persona (the wiring refuses a persona on an account
     # that isn't registered synthetic), and anyone else only with --allow-real.
-    runner = ColabRunner(cli=ColabCli(), ledger=default_ledger(), is_synthetic=lambda user_id: user_id in personas,
+    cli, ledger = _colab_cli(), default_ledger()
+    runner = ColabRunner(cli=cli, ledger=ledger, is_synthetic=lambda user_id: user_id in personas,
                          allow_real=args.allow_real)
     trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training", publish=_publish,
                           revision=os.environ.get(REVISION_ENV) or None)
     if (args.simulate is None) != (args.day is None):
         parser.error("--simulate and --day go together")
-    deps = _wiring(args.wiring)(trainer, options)
-    simulate = _named(args.simulate) if args.simulate else None
-    days = {user: simulate(user, persona, args.day, args.seed) for user, persona in personas.items()} if simulate else {}
-    results = run_night_batch_with(deps, {user: args.night for user in args.users}, days=days)
+    try:
+        with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept:
+            deps = _wiring(args.wiring)(trainer, options)
+            simulate = _named(args.simulate) if args.simulate else None
+            days = {user: simulate(user, persona, args.day, args.seed) for user, persona in personas.items()} if simulate else {}
+            results = run_night_batch_with(deps, {user: args.night for user in args.users}, days=days, sweep=swept)
+    except NightBusy as busy:
+        raise SystemExit(str(busy)) from None
     print(json.dumps({user: {"status": r.status, "failed_at": r.failed_at, "log": str(r.log_path)}
                       for user, r in results.items()}, indent=1))
     return 0 if all(r.status != "failed" for r in results.values()) else 1

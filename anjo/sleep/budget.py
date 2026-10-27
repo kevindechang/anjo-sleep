@@ -240,6 +240,10 @@ class Ledger:
                 raise BudgetError(f"job {job!r} has no overage to clear")
             self._append({"op": "clear", "job": job})
 
+    def open_holds(self) -> tuple[Reservation, ...]:
+        """Every hold not yet settled or released, in ledger order."""
+        return tuple(Reservation(job, hold.pools, hold.bound, self) for job, hold in self._holds().items() if hold.open)
+
     def overages(self) -> tuple[str, ...]:
         """The jobs whose overage still blocks their pools, in ledger order."""
         return tuple(job for job, hold in self._holds().items() if hold.overage)

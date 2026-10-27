@@ -3,18 +3,21 @@
 Every paid step reserves its worst case before its first call (``hold``) and settles what it
 metered, or releases the hold, when it ends (``held``). A pool without room stops the step with
 ``BudgetStop`` before any call. A job's key names the night, the step and the person, with an
-attempt number: a rerun reuses a hold that a killed run left open, and takes the next attempt
-after one that ended, so nothing is held or charged twice.
+attempt number: a rerun takes the next attempt after one that ended, so nothing is held or charged
+twice. A hold a killed run left open is settled at its full bound by the night command's sweep
+(``sweep.py``) before the rerun starts.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from anjo.sleep.budget import Bound, BudgetError, Ledger, Pool, Reservation
-from anjo.sleep.night.deps import Prices
 from anjo.sleep.stops import BudgetStop
+
+if TYPE_CHECKING:  # the Colab runner holds through here, and needs none of the night's ports
+    from anjo.sleep.night.deps import Prices
 
 MAX_ATTEMPTS: Final = 50
 HOUR_S: Final = 3600.0

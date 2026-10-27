@@ -42,6 +42,7 @@ from anjo.sleep.night.deps import (
     StudyOutcome,
 )
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
+from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.mind import receipt, snapshot
 from anjo.sleep.sim.day import DayRun
@@ -70,7 +71,7 @@ from anjo.sleep.types import (
 Window = tuple[datetime, datetime]
 PERSON_KINDS: Final = frozenset({"lesson", "correction", "preference", "tone_request"})
 USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
-    "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
+    "sweep": ("new", None), "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
     "probes": ("new", None), "choose": ("new", None), "brief": ("new", None),
     "practice": ("new", None), "dataset": ("new", None), "train": ("new", None),
     "gates": ("existing", "crisis check"), "promote": ("new", None), "note": ("existing", "outreach"),
@@ -142,12 +143,15 @@ class NightRunner:
 
     def run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None = None,
-        days: Mapping[str, DayRun] | None = None,
+        days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
     ) -> dict[str, NightResult]:
         days = days or {}
         windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}
         people = [self._start(uid, night, windows.get(uid) or day_window(night)) for uid, night in nights.items()]
         for p in people:
+            if sweep is not None:  # what the command's start swept for this batch, as counts
+                p.log.step("sweep", "ok", uses="new", system=None, holds_settled=sweep.holds_settled,
+                           sessions_stopped=sweep.sessions_stopped, sessions_not_ours=sweep.sessions_not_ours)
             if p.uid in days:  # a short day (a turn Glimmer couldn't answer) is recorded, never an error
                 day = days[p.uid]
                 p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
@@ -578,14 +582,15 @@ def _inside(summary: Mapping[str, Any], end: datetime, span: timedelta) -> bool:
 
 def run_night_batch_with(
     deps: NightDeps, nights: Mapping[str, date], *, windows: Mapping[str, Window] | None = None,
-    accelerated: bool = False, days: Mapping[str, DayRun] | None = None,
+    accelerated: bool = False, days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
 ) -> dict[str, NightResult]:
     """``run_night_batch`` over the given ports. ``accelerated`` runs pass each simulated day's
     window; the steps are the same. ``days`` are simulated days run just before the night: each
-    one's window is the night's, and its log starts with the day's counts."""
+    one's window is the night's, and its log starts with the day's counts. ``sweep`` is what the
+    night command's start swept (``sweep.py``), logged first."""
     if accelerated and not (windows or days):
         raise ValueError("an accelerated run passes each person's simulated window")
-    return NightRunner(deps).run_batch(nights, windows, days)
+    return NightRunner(deps).run_batch(nights, windows, days, sweep)
 
 
 _DEFAULT: list[Callable[[], NightDeps]] = []

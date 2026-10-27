@@ -219,7 +219,7 @@ def train_lora_with_receipt(
     try:  # the dataset is the person's words in plain text: it never outlives the run
         dataset_path.write_text(data.to_jsonl(), encoding="utf-8")
         outputs = runner.run(JOB, {
-            "person_id": person_id, "adapter_name": name, "dataset_path": str(dataset_path),
+            "person_id": person_id, "adapter_name": name, "night": night.isoformat(), "dataset_path": str(dataset_path),
             "config": settings, "prev_adapter_dir": None if prev_dir is None else str(prev_dir),
             "workdir": str(workdir),
         }, timeout_s=timeout_s)

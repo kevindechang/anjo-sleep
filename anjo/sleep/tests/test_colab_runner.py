@@ -26,6 +26,8 @@ from anjo.sleep.train.runners.colab import (
     ColabError,
     ColabRunner,
     RealPersonRefused,
+    hold_base,
+    stop_leftover_sessions,
 )
 
 TIMEOUT_S = 7200.0
@@ -74,7 +76,7 @@ def _inputs(tmp_path: Path, person: str = "synthetic-1", prev: Path | None = Non
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     (work / DATASET_FILE).write_text('{"id": "x"}\n')
-    return {"person_id": person, "adapter_name": NAME, "dataset_path": str(work / DATASET_FILE),
+    return {"person_id": person, "adapter_name": NAME, "night": "2026-10-28", "dataset_path": str(work / DATASET_FILE),
             "workdir": str(work), "config": {"r": 16}, "prev_adapter_dir": None if prev is None else str(prev)}
 
 
@@ -208,3 +210,49 @@ def test_a_new_that_timed_out_tries_the_stop_and_settles_the_whole_hold(tmp_path
         _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert fake.commands() == ["new", "stop"]
     assert ledger.used("colab_cu") == pytest.approx(Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount)  # a VM may have run
+
+
+SESSIONS = (
+    "[anjo-sleep-p-aaaaaaaaaaaa-n3] gpu-a100-s-1 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    "[?] gpu-t4-s-2 | Hardware: T4 | Shape: Standard | Variant: GPU\n"
+    "[voice-test] gpu-a100-s-3 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+)
+
+
+class Listing(FakeColab):
+    """``colab sessions`` prints ``listed``; ``stop`` may fail."""
+
+    def __init__(self, listed: str, fail: str | None = None) -> None:
+        super().__init__(fail)
+        self.listed = listed
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        done = super().__call__(args, timeout_s)
+        if list(args)[3] == "sessions" and done.returncode == 0:
+            return subprocess.CompletedProcess(list(args), 0, self.listed, "")
+        return done
+
+
+def test_leftover_sessions_the_runner_made_are_stopped_and_no_other() -> None:
+    fake = Listing(SESSIONS)
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=fake)) == (1, 2)
+    assert [args[3:] for args, _ in fake.calls] == [["sessions"], ["stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3"]]
+    assert all(0 < timeout < math.inf for _, timeout in fake.calls)
+    none = Listing("[colab] No active sessions found on server.\n")
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=none)) == (0, 0)
+
+
+def test_a_leftover_that_wont_stop_says_so() -> None:
+    with pytest.raises(ColabError, match="stop it by hand"):
+        stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing(SESSIONS, fail="stop")))
+    with pytest.raises(ColabError):  # an unlisted VM is unknown: the night doesn't start
+        stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=Listing("", fail="sessions")))
+
+
+def test_the_colab_hold_is_keyed_by_night_and_person_with_an_attempt(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    for _ in range(2):
+        _runner(FakeColab(), ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    jobs = [e["job"] for e in _events(ledger) if e["op"] == "reserve"]
+    assert jobs == [f"{hold_base('2026-10-28', 'synthetic-1')}:a1", f"{hold_base('2026-10-28', 'synthetic-1')}:a2"]
+    assert hold_base("2026-10-28", "synthetic-1").startswith("colab_train:2026-10-28:")
