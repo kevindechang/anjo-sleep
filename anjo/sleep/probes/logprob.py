@@ -2,7 +2,8 @@
 
 The two options are shown as "A" and "B"; the arm's score is the log-probability it gives each
 label as its answer. That is repeated with the options swapped. If the same option wins both
-times it is the arm's choice; if the order decides, the arm has no choice and the pair is a tie.
+times it is the arm's choice; if the order decides, the arm has no choice, and any comparison
+with that arm is a tie (spec 5.1: "an order flip is a tie"; ``score.taste_outcome``).
 There is no judge and no sampling, so the result is deterministic.
 """
 from __future__ import annotations
@@ -32,11 +33,9 @@ class TasteChoice:
     def flipped(self) -> bool:
         return self.picked is None
 
-    def standing(self, expected: str | None) -> float:
-        """1 for the expected option in both orders, 0.5 for a flip (a tie), 0 otherwise."""
-        if self.picked is None:
-            return 0.5
-        return 1.0 if self.picked == expected else 0.0
+    def correct(self, expected: str | None) -> bool | None:
+        """Whether the expected option won both orders; ``None`` for a flip (no choice)."""
+        return None if self.picked is None else self.picked == expected
 
 
 def present(

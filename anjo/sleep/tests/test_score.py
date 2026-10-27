@@ -150,7 +150,7 @@ def test_taste_is_scored_by_choice_not_by_a_judge():
     b = [_reply("", choice=wrong), _reply("", choice=flip), _reply("", choice=flip)]
     out = score(probes, a, b, judge, bootstrap=CFG)
     assert chat.calls == []
-    assert (out.wins, out.ties, out.losses) == (2, 1, 0)
+    assert (out.wins, out.ties, out.losses) == (1, 2, 0)
 
 
 def test_a_taste_reply_without_a_choice_is_refused():
@@ -191,7 +191,7 @@ def test_score_reports_per_life_and_per_dimension_results():
     assert set(out.per_dimension) == {"knowledge", "interaction", "reported"}
     assert out.per_dimension["knowledge"].n == 48
     assert out.per_dimension["interaction"].n == 1 and out.per_dimension["reported"].n == 1
-    assert out.n == 50
+    assert out.n == 49  # pushback is reported, not in the headline
 
 
 def test_bootstrap_interval_is_reproducible_and_brackets_the_score():
@@ -249,3 +249,53 @@ def test_pair_score_is_a_frozen_value():
     out = score([], [], [], _judge(lambda a, b: "A")[0], bootstrap=CFG)
     with pytest.raises(FrozenInstanceError):
         setattr(out, "wins", 3)  # noqa: B010
+
+
+def test_per_life_dimension_shows_a_life_ahead_on_one_and_behind_on_the_other():
+    judge, _ = _judge(_prefer("good"))
+    probes = [probe("k1", "new_work", person="l1", source_ids=("w1",)), probe("i1", "tone_hold", person="l1")]
+    out = score(probes, [_reply("good"), _reply("bad")], [_reply("bad"), _reply("good")], judge, bootstrap=CFG)
+    assert out.per_life_dimension[("l1", "knowledge")].score == 1.0
+    assert out.per_life_dimension[("l1", "interaction")].score == 0.0
+    assert out.per_life["l1"].score == 0.5  # pooled, descriptive only
+
+
+def test_reported_only_kinds_stay_out_of_the_headline():
+    judge, _ = _judge(_prefer("good"))
+    probes = [probe("k1", "new_work", source_ids=("w1",)), probe("p1", "pushback"), probe("p2", "pushback")]
+    out = score(probes, [_reply("good")] * 3, [_reply("bad"), _reply("good"), _reply("good")], judge, bootstrap=CFG)
+    assert (out.wins, out.ties, out.losses, out.n) == (1, 0, 0, 1)
+    assert out.score == 1.0 and out.ci == (1.0, 1.0)
+    assert out.per_kind["pushback"].n == 2 and out.per_dimension["reported"].n == 2
+    only = score(probes[1:], [_reply("good")] * 2, [_reply("bad")] * 2, judge, bootstrap=CFG)
+    assert only.n == 0 and only.score == 0.5 and only.per_kind["pushback"].n == 2
+
+
+def test_interval_uses_nearest_rank_at_both_ends():
+    from anjo.sleep.probes.score import _interval
+
+    assert _interval([float(i) for i in range(10_000)], 0.95) == (249.0, 9749.0)
+    assert _interval([float(i) for i in range(10)], 0.95) == (0.0, 9.0)
+
+
+def test_probe_order_does_not_change_the_score():
+    import random
+
+    judge, _ = _judge(_prefer("good"))
+    probes, a, b = _many({"l1": 0.75, "l2": 0.25})
+    first = score(probes, a, b, judge, bootstrap=CFG)
+    order = list(range(len(probes)))
+    random.Random(3).shuffle(order)
+    shuffled = score([probes[i] for i in order], [a[i] for i in order], [b[i] for i in order], judge, bootstrap=CFG)
+    assert shuffled == first
+
+
+def test_a_flip_by_either_arm_makes_the_taste_pair_a_tie():
+    p = taste()
+    right = TasteChoice((-0.1, -2.0), (-2.0, -0.1), options(p)[0])
+    wrong = TasteChoice((-2.0, -0.1), (-0.1, -2.0), options(p)[1])
+    flip = TasteChoice((-0.1, -2.0), (-0.1, -2.0), None)
+    judge, _ = _judge(lambda a, b: "A")
+    for ra, rb, want in ((right, flip, (0, 1, 0)), (flip, wrong, (0, 1, 0)), (right, wrong, (1, 0, 0)), (wrong, right, (0, 0, 1))):
+        out = score([p], [_reply("", choice=ra)], [_reply("", choice=rb)], judge, bootstrap=CFG)
+        assert (out.wins, out.ties, out.losses) == want

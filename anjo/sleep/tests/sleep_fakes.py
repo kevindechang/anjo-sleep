@@ -49,8 +49,8 @@ def ckpt(person: str, night: int = 1) -> CheckpointRef:
 class FakeModel:
     calls: list[dict[str, Any]] = field(default_factory=list)
 
-    def complete(self, adapter, messages, *, temperature):
-        self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature})
+    def complete(self, adapter, messages, *, temperature, seed=None):
+        self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature, "seed": seed})
         name = adapter.id if adapter else "base"
         words = sum(len(m["content"].split()) for m in messages)
         return ChatResult(text=f"reply from {name}", tool_calls=(), model=name,

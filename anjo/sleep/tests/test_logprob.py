@@ -28,20 +28,20 @@ def test_taste_scored_by_logprob_in_both_orders():
     assert shown == [options(p)[0]] * 2 + [options(p)[1]] * 2
     assert {c["continuation"] for c in client.calls} == set(LABELS)
     assert choice.picked == options(p)[0] and not choice.flipped
-    assert choice.standing(p.expected) == 1.0
+    assert choice.correct(p.expected) is True
 
 
 def test_picking_the_other_option_in_both_orders_is_wrong():
     p = taste()
     choice = forced_choice(FakeLogprobs(_picks(options(p)[1])), None, None, p)
-    assert choice.picked == options(p)[1] and choice.standing(p.expected) == 0.0
+    assert choice.picked == options(p)[1] and choice.correct(p.expected) is False
 
 
 def test_an_order_flip_is_a_tie():
     p = taste()
     choice = forced_choice(FakeLogprobs(lambda adapter, messages: "A"), None, None, p)  # always "A"
     assert choice.picked is None and choice.flipped
-    assert choice.standing(p.expected) == 0.5
+    assert choice.correct(p.expected) is None
 
 
 def test_equal_logprobs_in_one_order_are_a_tie():

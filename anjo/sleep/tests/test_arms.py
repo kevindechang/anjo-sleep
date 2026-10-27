@@ -232,3 +232,17 @@ def test_taste_probe_is_answered_by_forced_choice_not_sampling():
     assert calls(d) == []
     assert out.choice is not None
     assert len(lp_calls(d)) == 4  # two orders, two labels
+
+
+def test_reply_seed_is_stable_per_probe_arm_and_run_and_differs_across_them():
+    d = deps()
+    reply("1", "p1", probe("q1"), deps=d)
+    reply("1", "p1", probe("q1"), deps=d)
+    reply("3", "p1", probe("q1"), deps=d)
+    reply("1", "p1", probe("q2"), deps=d)
+    seeds = [c["seed"] for c in calls(d)]
+    assert seeds[0] == seeds[1] and len(set(seeds)) == 3 and all(isinstance(s, int) for s in seeds)
+    other = deps()
+    other = ArmDeps(**{**other.__dict__, "run_seed": 9, "context_cache": {}})
+    reply("1", "p1", probe("q1"), deps=other)
+    assert calls(other)[0]["seed"] != seeds[0]

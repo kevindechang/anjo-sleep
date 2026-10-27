@@ -14,6 +14,7 @@ judge brief or the scorer, which hold held-out preferences no arm may see.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -66,6 +67,7 @@ class ArmDeps:
     until: date
     window_tokens: int = GLIMMER_WINDOW_TOKENS
     temperature: float = REPLY_TEMPERATURE
+    run_seed: int = 0
     context_cache: dict[tuple[str, str], str] = field(default_factory=dict, compare=False, repr=False)
 
 
@@ -133,6 +135,13 @@ def _question_text(probe: Probe) -> str:
     return "\n".join((probe.prompt, *probe.options))
 
 
+def reply_seed(run_seed: int, probe_id: str, arm: Arm) -> int:
+    """A per-probe, per-arm sampling seed derived from the run seed. Saved replies stay the
+    record of a run; the seed only makes a re-draw repeatable where the server honours it."""
+    digest = hashlib.sha256(f"{run_seed}:{probe_id}:{arm}".encode()).digest()
+    return int.from_bytes(digest[:4], "big")
+
+
 def reply(
     arm: Arm, user_id: str, probe: Probe, *, deps: ArmDeps, donor: str | None = None,
 ) -> ArmReply:
@@ -159,5 +168,8 @@ def reply(
     messages = [{"role": "user", "content": probe.prompt}]
     if context is not None:
         messages.insert(0, {"role": "system", "content": context})
-    result = deps.model.complete(adapter, messages, temperature=deps.temperature)
+    result = deps.model.complete(
+        adapter, messages, temperature=deps.temperature,
+        seed=reply_seed(deps.run_seed, probe.id, arm),
+    )
     return ArmReply(result.text, result.input_tokens, dropped)

@@ -18,8 +18,9 @@ class ModelClient(Protocol):
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
+        seed: int | None = None,
     ) -> ChatResult:
-        """One sampled reply. ``input_tokens`` is the prompt's length as the server counted it."""
+        """One sampled reply; ``seed`` (when the server supports it) makes the draw repeatable. ``input_tokens`` is the prompt's length as the server counted it."""
 
 
 @runtime_checkable

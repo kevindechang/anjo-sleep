@@ -18,6 +18,7 @@ block across the lives that share it. The resamples, confidence and seed come fr
 from __future__ import annotations
 
 import json
+import math
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -105,14 +106,15 @@ def judge_both_orders(judge: PairwiseJudge, probe: Probe, reply_a: str, reply_b:
 
 
 def taste_outcome(probe: Probe, reply_a: ArmReply, reply_b: ArmReply) -> Outcome:
-    """Arm A's outcome on a forced choice: the better standing wins (a flip stands between)."""
+    """Arm A's outcome on a forced choice. An order flip by either arm is a tie (spec 5.1);
+    otherwise the arm that picked the expected option wins, and equal picks tie."""
     if reply_a.choice is None or reply_b.choice is None:
         raise ValueError(f"{probe.id} is taste_ab: both replies need a forced-choice result (choice)")
-    standing_a = reply_a.choice.standing(probe.expected)
-    standing_b = reply_b.choice.standing(probe.expected)
-    if standing_a == standing_b:
+    right_a = reply_a.choice.correct(probe.expected)
+    right_b = reply_b.choice.correct(probe.expected)
+    if right_a is None or right_b is None or right_a == right_b:
         return "tie"
-    return "win" if standing_a > standing_b else "loss"
+    return "win" if right_a else "loss"
 
 
 # ── Registered rules ──────────────────────────────────────────────────────────
@@ -175,7 +177,13 @@ class Tally(_Counts):
 class PairScore(_Counts):
     """Arm A against arm B over the probes given. ``ci`` is the block-bootstrap interval of
     ``score``; each dimension carries its own. It covers these lives' probes, conditional on
-    these lives, and is not a population estimate."""
+    these lives, and is not a population estimate.
+
+    The headline (``wins``, ``ties``, ``losses``, ``score``, ``decisive_share``, ``ci``) leaves
+    out the reported-only kinds (``pushback``); they appear in ``per_kind`` and in the
+    ``reported`` dimension only. The registered win rule applies per dimension, so "ahead in 2
+    of 3 lives" reads ``per_life_dimension[(life, dimension)]``; ``per_life`` pools every
+    dimension and is descriptive only."""
 
     wins: int
     ties: int
@@ -184,9 +192,10 @@ class PairScore(_Counts):
     per_life: Mapping[str, Tally] = field(hash=False)
     per_dimension: Mapping[str, Tally] = field(hash=False)
     per_kind: Mapping[str, Tally] = field(hash=False)
+    per_life_dimension: Mapping[tuple[str, str], Tally] = field(hash=False)
 
     def __post_init__(self) -> None:
-        for name in ("per_life", "per_dimension", "per_kind"):
+        for name in ("per_life", "per_dimension", "per_kind", "per_life_dimension"):
             object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
 
 
@@ -211,7 +220,7 @@ def bootstrap_blocks(probes: Sequence[Probe]) -> dict[BlockKey, list[int]]:
     blocks: dict[BlockKey, list[int]] = {}
     for index, probe in enumerate(probes):
         blocks.setdefault(_block_key(probe), []).append(index)
-    return blocks
+    return dict(sorted(blocks.items()))
 
 
 def _strata(probes: Sequence[Probe], blocks: Mapping[BlockKey, list[int]]) -> list[list[BlockKey]]:
@@ -234,15 +243,21 @@ def _strata(probes: Sequence[Probe], blocks: Mapping[BlockKey, list[int]]) -> li
     for key, indices in blocks.items():
         life = find(probes[indices[0]].person_id) if key[0] == "taste_ab" else key[1]
         groups.setdefault((key[0], life), []).append(key)
-    return list(groups.values())
+    return [sorted(groups[name]) for name in sorted(groups)]
+
+
+def _rank(q: float, n: int) -> int:
+    """Nearest-rank index ``ceil(q * n) - 1``, clamped to the sample. The product is rounded
+    first so float error (0.975 * 10000) can't move it a whole rank."""
+    return min(n - 1, max(0, math.ceil(round(q * n, 9)) - 1))
 
 
 def _interval(values: list[float], ci: float) -> tuple[float, float]:
+    """The percentile interval by one convention for both ends: nearest-rank, ``values[ceil(q*n) - 1]``
+    for q = tail and q = 1 - tail. ``thresholds.json`` names no other method."""
     values.sort()
     tail = (1.0 - ci) / 2.0
-    low = values[int(tail * len(values))]
-    high = values[min(len(values) - 1, int((1.0 - tail) * len(values)))]
-    return low, high
+    return values[_rank(tail, len(values))], values[_rank(1.0 - tail, len(values))]
 
 
 def _bootstrap(
@@ -256,24 +271,29 @@ def _bootstrap(
     }
     strata = _strata(probes, blocks)
     names = sorted({dim for dim, _, _ in stats.values()})
+    for key in stats:  # sums of floats: add in a fixed order, whatever the probe order was
+        dim, _, count = stats[key]
+        stats[key] = (dim, math.fsum(points[i] for i in blocks[key]), count)
     rng = random.Random(config.seed)
     overall: list[float] = []
     by_dimension: dict[str, list[float]] = {name: [] for name in names}
     for _ in range(config.resamples):
-        total = [0.0, 0]
+        total = [0.0, 0]  # the headline: reported-only kinds are not in it
         parts = {name: [0.0, 0] for name in names}
         for group in strata:
             for key in rng.choices(group, k=len(group)):
                 dim, got, count = stats[key]
-                total[0] += got
-                total[1] += count
+                if dim != REPORTED:
+                    total[0] += got
+                    total[1] += count
                 parts[dim][0] += got
                 parts[dim][1] += count
-        overall.append(total[0] / total[1])
+        if total[1]:
+            overall.append(total[0] / total[1])
         for name in names:
             by_dimension[name].append(parts[name][0] / parts[name][1])
     return (
-        _interval(overall, config.ci),
+        _interval(overall, config.ci) if overall else (0.5, 0.5),
         {name: _interval(values, config.ci) for name, values in by_dimension.items()},
     )
 
@@ -287,6 +307,15 @@ def _grouped(
     groups: dict[str, list[Outcome]] = {}
     for probe, outcome in zip(probes, outcomes, strict=True):
         groups.setdefault(by(probe), []).append(outcome)
+    return groups
+
+
+def _grouped2(
+    probes: Sequence[Probe], outcomes: Sequence[Outcome], dims: Mapping[str, str],
+) -> dict[tuple[str, str], list[Outcome]]:
+    groups: dict[tuple[str, str], list[Outcome]] = {}
+    for probe, outcome in zip(probes, outcomes, strict=True):
+        groups.setdefault((probe.person_id, dims[probe.kind]), []).append(outcome)
     return groups
 
 
@@ -319,12 +348,12 @@ def score(
         if neutral:
             text_a, text_b = rewrite(text_a), rewrite(text_b)
         outcomes.append(judge_both_orders(judge, probe, text_a, text_b))
-    total = _tally(outcomes)
+    dims = dimension_of()
+    total = _tally([o for p, o in zip(probes, outcomes, strict=True) if dims[p.kind] != REPORTED])
     if not probes:
-        return PairScore(0, 0, 0, (0.5, 0.5), {}, {}, {})
+        return PairScore(0, 0, 0, (0.5, 0.5), {}, {}, {}, {})
     points = [_POINTS[outcome] for outcome in outcomes]
     interval, by_dimension = _bootstrap(probes, points, config)
-    dims = dimension_of()
     dimension_tallies = {
         name: Tally(t.wins, t.ties, t.losses, by_dimension[name])
         for name, t in ((n, _tally(o)) for n, o in _grouped(probes, outcomes, lambda p: dims[p.kind]).items())
@@ -334,4 +363,8 @@ def score(
         per_life={k: _tally(v) for k, v in _grouped(probes, outcomes, lambda p: p.person_id).items()},
         per_dimension=dimension_tallies,
         per_kind={k: _tally(v) for k, v in _grouped(probes, outcomes, lambda p: p.kind).items()},
+        per_life_dimension={
+            (life, dim): _tally(v)
+            for (life, dim), v in _grouped2(probes, outcomes, dims).items()
+        },
     )
