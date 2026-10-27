@@ -223,7 +223,11 @@ def _stage(repo: Path, opts: Options, cfg: Config, staging: Path) -> bool:
     Returns whether the index changed.
     """
     staging.mkdir(parents=True)
-    index = integration.build_index(repo, opts.base)
+
+    def rewrite(subject: str) -> str:
+        return strip_lists.apply_replacements(subject.encode(), cfg.rules).decode("utf-8", "replace")
+
+    index = integration.build_index(repo, opts.base, rewrite)
     index_changed = index != _committed_text(repo, integration.INDEX_PATH)
     if index_changed:
         target = staging / integration.INDEX_PATH

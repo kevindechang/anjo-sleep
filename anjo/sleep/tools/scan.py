@@ -66,6 +66,9 @@ def load_env_values(path: Path, skip_keys: frozenset[str]) -> EnvValues:
             continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
+        elif " #" in value:
+            # An unquoted value ends at an inline comment; the shorter prefix only adds hits.
+            value = value.split(" #", 1)[0].rstrip()
         if len(value) < MIN_ENV_VALUE_LEN or _NUMERIC.match(value):
             short += 1
             continue

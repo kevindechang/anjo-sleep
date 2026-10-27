@@ -13,6 +13,7 @@ nothing and needs no commit.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,7 +116,9 @@ def _fence(body: str) -> str:
     return fence
 
 
-def _file_section(repo: Path, since: str, change: boundary.Change) -> str:
+def _file_section(
+    repo: Path, since: str, change: boundary.Change, rewrite: Callable[[str], str]
+) -> str:
     if change.added is None:
         return f"## `{change.path}` (binary)\n\nA binary file; its contents are not listed.\n"
     out = [f"## `{change.path}` (+{change.added} -{change.removed})\n"]
@@ -127,7 +130,7 @@ def _file_section(repo: Path, since: str, change: boundary.Change) -> str:
     lines = head_lines.split("\n")
     added = {h.start + i for h in hunks for i in range(len(h.added))}
     for hunk in hunks:
-        subjects = _blame_subjects(repo, since, change.path, hunk)
+        subjects = [rewrite(s) for s in _blame_subjects(repo, since, change.path, hunk)]
         by = "; ".join(f"`{s}`" for s in subjects) if subjects else "an unattributed commit"
         body_lines = []
         signature = _enclosing_signature(lines, hunk, added)
@@ -140,11 +143,21 @@ def _file_section(repo: Path, since: str, change: boundary.Change) -> str:
     return "\n".join(out)
 
 
-def build_index(repo: Path, base: str) -> str:
-    """The full text of INTEGRATION.md for the branch's changes since ``merge-base(base, HEAD)``."""
+def _unchanged(subject: str) -> str:
+    return subject
+
+
+def build_index(
+    repo: Path, base: str, rewrite_subject: Callable[[str], str] = _unchanged
+) -> str:
+    """The full text of INTEGRATION.md for the branch's changes since ``merge-base(base, HEAD)``.
+
+    ``rewrite_subject`` applies the publish's message rules to each quoted commit subject, so
+    a subject fixed through ``replace_messages.txt`` is fixed here too.
+    """
     since = _git.merge_base(repo, base)
     outside = [c for c in boundary.branch_changes(repo, since) if boundary.is_outside(c.path)]
     if not outside:
         return f"{_INTRO}\n{_NOTHING}"
-    sections = [_file_section(repo, since, change) for change in outside]
+    sections = [_file_section(repo, since, change, rewrite_subject) for change in outside]
     return _INTRO + "\n" + "\n".join(sections)

@@ -445,6 +445,43 @@ def test_replace_messages_fixes_a_leaked_message(
 
 
 @needs_publish_tools
+def test_replace_messages_also_rewrite_subjects_quoted_in_the_index(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = make_trunk(tmp_path)
+    chat = trunk.read("anjo/core/chat.py")
+    trunk.commit(f"feat: hook for {DENY_TERM} [t1]", {"anjo/core/chat.py": chat + "HOOK = 1\n"})
+    (trunk.path / "ops" / "sleep" / "replace_messages.txt").write_text(f"{DENY_TERM}==>[redacted]\n")
+    remote, _ = make_remote(tmp_path)
+
+    rc, out = _publish(trunk, remote, tmp_path, capsys)
+
+    assert rc == 0, out
+    index = git(remote, "show", "main:anjo/sleep/INTEGRATION.md")
+    assert "`feat: hook for [redacted] [t1]`" in index
+    assert DENY_TERM not in git(trunk.path, "show", "HEAD:anjo/sleep/INTEGRATION.md")
+
+
+def test_env_values_skip_short_values_and_inline_comments(tmp_path: Path) -> None:
+    from anjo.sleep.tools import scan
+
+    env_file = tmp_path / "fake.env"
+    env_file.write_text(
+        "# a comment = with an equals sign\n"
+        "FLAG=1\n"
+        "MODE=dev\n"
+        f"export QUOTED='{PLANTED}'\n"
+        f"COMMENTED={PLANTED}x # set by hand\n"
+        f"SKIPPED={PLANTED}y\n"
+    )
+
+    env = scan.load_env_values(env_file, frozenset({"SKIPPED"}))
+
+    assert env.values == {"QUOTED": PLANTED.encode(), "COMMENTED": (PLANTED + "x").encode()}
+    assert env.skipped_short == 2
+
+
+@needs_publish_tools
 def test_commit_check_rejects_unformatted_subject(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
