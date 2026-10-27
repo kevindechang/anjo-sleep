@@ -188,8 +188,8 @@ class IntentionSource(Protocol):
 
 @runtime_checkable
 class Chooser(Protocol):
-    """Her chooser (Task 7a), or the ``RuleChooser`` fallback until it lands. Both methods are
-    pure: no clock, database, model call or environment read."""
+    """Her chooser (Task 7a's ``StateChooser``), with ``RuleChooser`` kept as the labeled fallback.
+    Both methods are pure: no clock, database, model call or environment read."""
 
     def choose(self, opportunity: Opportunity, wants: Sequence[Want], ctx: ChoiceContext) -> Choice:
         """Pick at most one want for ``opportunity`` and record a reason for every other."""

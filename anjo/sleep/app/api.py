@@ -8,10 +8,12 @@ and marks it cleared (Task 3's ``mark_cleared``), for the persona simulator's
 its messages to ``/api/chat/<session_id>/message`` and ends it with the existing chat route. Only
 a flagged, synthetic person may clear a session; anyone else gets 403 and nothing is written.
 ``{"cleared": false}`` opens the session unchanged. ``GET /api/sleep/dev/sessions/<id>`` says
-whether a session is cleared.
+whether a session is cleared. A cleared open holds pending outreach back (``delivery.no_delivery``),
+so a held note waits for the next uncleared open.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Final
 
@@ -20,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool
 
 from anjo.dashboard.auth import get_current_user_id
 from anjo.sleep.app.cleared_sessions import NotSynthetic, cleared_sessions, is_synthetic, mark_cleared
+from anjo.sleep.app.delivery import no_delivery
 from anjo.sleep.app.flags import sleep_enabled_for, sleep_host
 
 PREFIX: Final = "/sleep/dev"
@@ -54,7 +57,8 @@ def open_session(body: SessionRequest, user_id: str = Depends(flagged_user)) -> 
 
     if body.cleared and not is_synthetic(user_id):
         raise HTTPException(status_code=403, detail=NOT_SYNTHETIC)  # before a session is made
-    session_id, _created = get_or_create_session_with_status(user_id)
+    with no_delivery(user_id) if body.cleared else nullcontext():  # a note waits for an uncleared open
+        session_id, _created = get_or_create_session_with_status(user_id)
     if body.cleared:
         try:
             mark_cleared(user_id, session_id, at=datetime.now(timezone.utc))

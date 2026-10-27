@@ -18,6 +18,21 @@ CORE = (
     "anjo.sleep.budget",
     "anjo.sleep.serving",
     "anjo.sleep.serving.config",
+    "anjo.sleep.serving.client",
+    "anjo.sleep.checkpoints",
+    "anjo.sleep.gates.general",
+    "anjo.sleep.gates.collapse",
+    "anjo.sleep.gates.safety",
+    "anjo.sleep.night.deps",
+    "anjo.sleep.night.run",
+    "anjo.sleep.night.gpu",
+    "anjo.sleep.note.hold",
+    "anjo.sleep.practice.run",
+    "anjo.sleep.train.dataset",
+    "anjo.sleep.train.lora",
+    "anjo.sleep.train.trainer",
+    "anjo.sleep.train.runners.colab",
+    "anjo.sleep.train.colab_train",
 )
 
 
