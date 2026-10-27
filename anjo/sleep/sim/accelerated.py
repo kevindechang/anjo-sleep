@@ -12,6 +12,7 @@ A window that is empty, or starts before the life's previous window ended, stops
 second night reading the first day's lines again would train on them twice.
 
     python -m anjo.sleep.sim.accelerated --fake --days 3          # the daily integration gate, offline
+    python -m anjo.sleep.sim.accelerated --fake --days 3 --mind   # the same, with MIND's inquiry on (Task 17)
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.sim.accelerated --wiring anjo.sleep.app.night:build \\
         --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona founder \\
         --days 2 --start 2026-11-03
@@ -191,12 +192,13 @@ def _report(
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
 
 
-def _fake(days: int, start: date, seed: int) -> int:
-    """The whole loop on fakes: no model, no GPU, no network, no data dir."""
+def _fake(days: int, start: date, seed: int, mind: bool = False) -> int:
+    """The whole loop on fakes: no model, no GPU, no network, no data dir. ``mind`` turns on MIND's
+    inquiry on a fake thinker."""
     rig_module = importlib.import_module("anjo.sleep.tests.accelerated_rig")  # test support, loaded only here
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
-        fake = rig_module.FakeAccelerated(Path(root))
+        fake = rig_module.FakeAccelerated(Path(root), mind_from=start if mind else None)
         results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
@@ -243,7 +245,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 runner.lives(life_timeout_s=life_s) as lives:
             trainer = LoraTrainer(lives, root=data_dir / "sleep" / "training", publish=night_command._publish,
                                   revision=os.environ.get(REVISION_ENV) or None)
-            rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas)),
+            rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas,
+                                                                          mind_inquiry=args.mind)),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       on_day=lives.note_day, on_scoring=lives.note_scoring, vm_record=lambda uid, night: _vm_record(lives, uid, night),
                       score=score)
@@ -270,11 +273,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--morning", help="the app's morning-run builder (user, persona, night), <module>:<function>")
     parser.add_argument("--user", action="append", default=[], dest="users")
     parser.add_argument("--persona", action="append", default=[], dest="personas")
+    parser.add_argument("--mind", action="store_true", help="MIND's inquiry in each night (Task 17)")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days is at least 1")
     if args.fake:
-        return _fake(args.days, args.start, args.seed)
+        return _fake(args.days, args.start, args.seed, mind=args.mind)
     return _real(args, parser)
 
 

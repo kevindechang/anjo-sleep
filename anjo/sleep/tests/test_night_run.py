@@ -16,7 +16,7 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.choose import StateChooser
-from anjo.sleep.night.deps import InquiryOutcome, NightSettings
+from anjo.sleep.night.deps import InquiryOutcome, MindCall, NightSettings, NoInquiry
 from anjo.sleep.night.meter import WonderMeter
 from anjo.sleep.night.run import PROBES_WORST_USD, run_night_batch_with
 from anjo.sleep.note.hold import HELD_BACK_LINE
@@ -366,7 +366,7 @@ def test_a_study_that_runs_out_of_wonder_records_budget(tmp_path: Path) -> None:
 
 
 def test_spent_wonder_leaves_inquire_and_note_available(tmp_path: Path) -> None:
-    class Inquiry:
+    class Inquiry(NoInquiry):
         available = True
 
         def inquire(self, *args: Any) -> InquiryOutcome:
@@ -376,7 +376,7 @@ def test_spent_wonder_leaves_inquire_and_note_available(tmp_path: Path) -> None:
     world.plan("p1", NIGHT)
     _with_thread(world)
     chooser = Recording()
-    settings = NightSettings(token_cap=16384, min_new_examples=1, wonder_usd_month=0.0)
+    settings = NightSettings(token_cap=16384, min_new_examples=1, wonder_usd_month=0.0, mind_inquiry=True)
     result = _one(world, chooser=chooser, settings=settings, homework=Homework(world), inquiry=Inquiry())
     ctx = chooser.contexts[0]
     assert ctx.allowance.available_model_calls == 0
@@ -386,11 +386,11 @@ def test_spent_wonder_leaves_inquire_and_note_available(tmp_path: Path) -> None:
 
 
 def test_inquiry_cycles_not_debited_from_actions(tmp_path: Path) -> None:
-    class Inquiry:
+    class Inquiry(NoInquiry):
         available = True
 
-        def inquire(self, user_id: str, question_id: str, night: date, meter: WonderMeter) -> InquiryOutcome:
-            anchored = Result("r-inq", "p1-t1", None, 0, window(night)[1] - timedelta(minutes=5), False,
+        def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome:
+            anchored = Result("r-inq", "p1-t1", None, 0, window(call.night)[1] - timedelta(minutes=5), False,
                               basis="evidence", user_cites=2)
             return InquiryOutcome(result=anchored, cycles=7, research_calls=0)
 
@@ -406,7 +406,8 @@ def test_inquiry_cycles_not_debited_from_actions(tmp_path: Path) -> None:
     world.plan("p1", NIGHT)
     _with_thread(world)
     chooser = Inquiring()
-    result = _one(world, chooser=chooser, inquiry=Inquiry())
+    settings = NightSettings(token_cap=16384, min_new_examples=1, mind_inquiry=True)
+    result = _one(world, chooser=chooser, settings=settings, inquiry=Inquiry())
     assert step(result.log_path, "choose")["inquiry"] == {"cycles": 7, "research_calls": 0, "result": "r-inq"}
     assert chooser.contexts[1].allowance.actions_left == 2  # thinker cycles cost no action
     assert summary(result.log_path)["paid_actions"] == 0

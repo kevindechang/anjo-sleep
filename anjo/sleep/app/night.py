@@ -18,8 +18,9 @@ it off the serving path). Everything else is here:
 - the held note through outreach (``delivery``), its final text through the reply check;
 - every paid step's hold on the sleep host's budget ledger.
 
-Notice and inquiry (Task 17) stay no-op ports. Task 16's estimator stays ``None`` until its
-coefficients are registered, so no expectation is recorded before then.
+Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
+(``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
+estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource
+from anjo.sleep.app.mind_night import build_mind
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
 from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
 from anjo.sleep.app.intentions import LedgerIntentions
@@ -63,7 +65,9 @@ from anjo.sleep.gates.collapse import CollapseGate
 from anjo.sleep.gates.general import GeneralGate
 from anjo.sleep.gates.safety import SafetyGate
 from anjo.sleep.mind.choose import StateChooser
-from anjo.sleep.night.deps import GateCheck, NightDeps, NightOptions, NightSettings, Prices, Trainer
+from anjo.sleep.night.deps import (
+    GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
+)
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
@@ -160,7 +164,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
     client = serving.client()
     night_settings = replace(settings(), practice_scenes=options.practice_scenes,
-                             practice_teacher=options.practice_teacher)
+                             practice_teacher=options.practice_teacher, mind_inquiry=options.mind_inquiry)
     night_prices = prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
@@ -173,6 +177,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)
+    mind = (build_mind(client, ledger, night_prices, seed=night_settings.seed, wake=serving.wake)
+            if options.mind_inquiry else None)
 
     return NightDeps(
         extractor=lambda chat: HistorySource(chat=chat), extract_chat=spark_open,
@@ -189,5 +195,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now,
+        inquiry=mind or NoInquiry(), notice=mind or NoNotice(),
     )
 

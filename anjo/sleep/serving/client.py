@@ -185,11 +185,12 @@ class VllmClient:
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
-        seed: int | None = None,
+        seed: int | None = None, max_tokens: int | None = None,
     ) -> ChatResult:
+        """One reply; ``max_tokens`` caps this call alone (MIND's thinker passes its allowance)."""
         body: dict[str, Any] = {
             "model": model_name(adapter), "messages": messages, "temperature": temperature,
-            "top_p": TOP_P, "top_k": TOP_K, "max_tokens": self._max_tokens,
+            "top_p": TOP_P, "top_k": TOP_K, "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
         }
         if seed is not None:
             body["seed"] = seed

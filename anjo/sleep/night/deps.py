@@ -10,7 +10,8 @@ import it.
   ``NoHomework`` stays for tests and the public example: its ``available`` is False, so the night
   offers no study action (the chooser records ``action_not_offered``).
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
-  ``NoNotice``.
+  ``NoNotice``. ``anjo.sleep.night.mind.MindNight`` is both, and the night calls it only while
+  ``NightSettings.mind_inquiry`` is on; off, the night is Task 7a's as specced.
 
 ``estimator`` is Task 16's registered ``p_needed`` estimator: ``None`` until its coefficients are
 registered, and a chosen study then records no expectation.
@@ -31,8 +32,9 @@ from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
-from anjo.sleep.night.meter import ExtractChat, WonderMeter
-from anjo.sleep.note.hold import NoteWriter
+from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
+from anjo.sleep.note.hold import Fact, NoteWriter
 from anjo.sleep.ports import (
     Chooser,
     Decontaminator,
@@ -96,43 +98,84 @@ class NoHomework:
 
 @dataclass(frozen=True)
 class InquiryOutcome:
-    """An inquiry's result (an anchored evidence result, or none), its thinker cycles (her own
-    Glimmer, never debited from the night's actions) and its research calls (Wonder, debited)."""
+    """An inquiry's result (an anchored result, or none), its thinker cycles (her own Glimmer, never
+    debited from the night's actions), its research calls (Wonder, debited), why it stopped early
+    (``budget``: a hold found no room; ``failed``) and its receipt's content-free counts."""
 
     result: Result | None
     cycles: int = 0
     research_calls: int = 0
+    stopped: str | None = None
+    receipt: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MindCall:
+    """What a MIND step reads of one person's night (Task 17): her stores, her meters, the night's
+    clock (``as_of``) and the wall-clock stamp (``at``), the step's job key for its holds, and the
+    cancel flag, read before each write (RF2)."""
+
+    user_id: str
+    night: date
+    as_of: datetime
+    at: datetime
+    store: EvidenceStore
+    targets: TargetStore
+    spend: SpendMeter
+    wonder: WonderMeter
+    actions_left: int
+    job: str
+    cancelled: Callable[[], bool]
 
 
 class Inquiry(Protocol):
+    """Task 17's step 4 and the share side of step 10: the questions her workspace holds (for the
+    snapshot), an inquiry into one, the results her findings raise ``share`` with, and a shared
+    finding's facts for the note."""
+
     available: bool
 
-    def inquire(self, user_id: str, question_id: str, night: date, meter: WonderMeter) -> InquiryOutcome: ...
+    def questions(self, call: MindCall) -> tuple[QuestionState, ...]: ...
+
+    def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome: ...
+
+    def share(self, call: MindCall) -> tuple[Result, ...]: ...
+
+    def facts(self, call: MindCall, target_id: str) -> list[Fact]: ...
 
 
 class NoInquiry:
-    """Task 17 isn't built: no inquiry runs."""
+    """No inquiry: no question, so no inquiry runs and nothing is shared."""
 
     available: bool = False
 
-    def inquire(self, user_id: str, question_id: str, night: date, meter: WonderMeter) -> InquiryOutcome:
-        raise RuntimeError("no inquiry port yet")
+    def questions(self, call: MindCall) -> tuple[QuestionState, ...]:
+        return ()
+
+    def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome:
+        raise RuntimeError("no inquiry port")
+
+    def share(self, call: MindCall) -> tuple[Result, ...]:
+        return ()
+
+    def facts(self, call: MindCall, target_id: str) -> list[Fact]:
+        return []
 
 
 class Notice(Protocol):
-    """Task 17's step 2b: one thinker pass over new evidence; returns how many questions it
-    opened. It acts on nothing."""
+    """Task 17's step 2b: one thinker pass over new evidence; returns its receipt (the questions it
+    opened, as counts). It acts on nothing."""
 
     available: bool
 
-    def notice(self, user_id: str, night: date, new: Sequence[Evidence]) -> int: ...
+    def notice(self, call: MindCall, new: Sequence[Evidence]) -> Mapping[str, object]: ...
 
 
 class NoNotice:
     available: bool = False
 
-    def notice(self, user_id: str, night: date, new: Sequence[Evidence]) -> int:
-        return 0
+    def notice(self, call: MindCall, new: Sequence[Evidence]) -> Mapping[str, object]:
+        return {"questions_opened": 0}
 
 
 class NoIntentions:
@@ -233,6 +276,7 @@ class NightSettings:
     rolling_actions: int = 4
     practice_scenes: int = 16  # full practice's scenes a night, 16 to 20
     practice_teacher: bool = True  # full practice's Spark Open teacher candidate
+    mind_inquiry: bool = False  # MIND's inquiry in the night (Task 17: steps 2b, 4 and 10); off is Task 7a's night
 
 
 @dataclass(frozen=True)
@@ -284,13 +328,15 @@ class NightOptions:
     """What the command line (``python -m anjo.sleep.night``) hands the app's wiring with the
     trainer: the batch's night, and each synthetic person's persona (their sealed probes and the
     collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``.
-    ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7)."""
+    ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7);
+    ``mind_inquiry`` turns on MIND's inquiry (Task 17)."""
 
     night: date
     personas: Mapping[str, str]
     allow_real: bool = False
     practice_scenes: int = 16
     practice_teacher: bool = True
+    mind_inquiry: bool = False
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]
