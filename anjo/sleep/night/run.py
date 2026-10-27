@@ -7,8 +7,11 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
 4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
-   with the night's allowance. A study runs homework (Task 7) and marks its revision acted; no
-   study is offered while the homework port is a no-op. ``hold_note`` is written at step 10.
+   with the night's allowance. A study runs homework (Task 7's ``do_homework``), stores its
+   artifact as hosted evidence and its ``research`` result, and marks the target's revision acted.
+   Wonder's dollars are what the person's rolling $3-a-month cap has left; with none left no study
+   runs, and the record says so (``wonder_month``). No study is offered while the homework port is
+   a no-op. ``hold_note`` is written at step 10.
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
    training brief is the pre-practice one).
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
@@ -118,6 +121,7 @@ class _Night:
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)
     paid_actions: int = 0
+    wonder_month_spent: float = 0.0
     receipts: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -203,6 +207,7 @@ class NightRunner:
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),
             wonder=WonderMeter(deps.settings.homework_call_cap, max(0.0, deps.settings.wonder_usd_month - wonder_spent)),
             actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid),
+            wonder_month_spent=wonder_spent,
         )
 
     def _do(self, p: _Night, step: str, fn: Callable[[_Night], Mapping[str, Any]]) -> bool:
@@ -317,12 +322,19 @@ class NightRunner:
         choice = deps.chooser.choose("away", deps.chooser.derive(state), ctx)
         p.choices.append(choice)
         action = choice.action
+        cap = deps.settings.wonder_usd_month
+        month = {"cap_usd": cap, "spent_usd": round(p.wonder_month_spent, 6),
+                 "left_usd": round(max(0.0, cap - p.wonder_month_spent), 6)}
+        homework = "available" if deps.homework.available else "no-op: no study offered"
+        if deps.homework.available and month["left_usd"] <= 0:
+            homework = f"capped: the monthly Wonder cap of ${cap:.2f} is spent, so no study runs"
         done: dict[str, Any] = {
             "action": action, "target_id": choice.target_id, "offered": sorted(offered),
             "allowance": {"actions_left": p.actions_left, "calls_left": p.wonder.calls_left, "usd_left": p.wonder.usd_left},
+            "wonder_month": month,
             "ports": {
                 "chooser": type(deps.chooser).__name__,
-                "homework": "available" if deps.homework.available else "no-op (Task 7): no study offered",
+                "homework": homework,
                 "inquiry": "available" if deps.inquiry.available else "no-op (Task 17)",
                 "expectations": "available" if deps.expectations.available else "no-op (Task 16)",
             },
@@ -346,10 +358,14 @@ class NightRunner:
         deps.expectations.record(p.uid, "pre_study", state, choice)
         p.actions_left -= 1  # a study that started is a spent action, even if it then fails
         p.paid_actions += 1
+        calls_before = p.wonder.calls
         try:
-            outcome = deps.homework.study(p.uid, target, p.night, p.wonder)
+            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.end)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
+        if outcome.stopped == "budget" and p.wonder.calls == calls_before:  # it never started: no action spent
+            p.actions_left += 1
+            p.paid_actions -= 1
         if outcome.stopped is None:  # a study the budget stopped didn't run: the want stays
             p.targets.mark_acted(target.id, target.revision)
         if outcome.evidence:
@@ -357,9 +373,9 @@ class NightRunner:
         if outcome.result is not None:
             p.targets.add_result(outcome.result)
         p.study = outcome
-        return {"study": {"result": outcome.result.id if outcome.result else None, "stopped": outcome.stopped,
-                          "homework_items": len(outcome.evidence), "wonder_calls": p.wonder.calls,
-                          "wonder_usd": p.wonder.usd}}
+        return {"study": {**outcome.receipt, "result": outcome.result.id if outcome.result else None,
+                          "stopped": outcome.stopped, "homework_items": len(outcome.evidence),
+                          "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd}}
 
     def _inquire(self, p: _Night, choice: Choice) -> Mapping[str, Any]:
         if choice.question_id is None:

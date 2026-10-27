@@ -6,8 +6,9 @@ import it.
 
 **No-op ports.** Until their tasks land, these do nothing and say so in the night log:
 
-- ``Homework`` (Task 7): ``NoHomework.available`` is False, so the night offers no study action
-  (the chooser records ``action_not_offered``); practice and training still run.
+- ``Homework``: Task 7's ``WonderHomework`` (``anjo.sleep.homework.agent``) in the app.
+  ``NoHomework`` stays for tests and the public example: its ``available`` is False, so the night
+  offers no study action (the chooser records ``action_not_offered``).
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
   ``NoNotice``.
 - ``Expectations`` (Task 16): ``NoExpectations`` records nothing.
@@ -59,30 +60,36 @@ ALL_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread", "inquire
 
 @dataclass(frozen=True)
 class StudyOutcome:
-    """What a study left: a committed result (or none), the homework items it stored, and why it
-    stopped early (``budget`` when Wonder's calls or dollars ran out)."""
+    """What a study left: a committed result (or none), the homework items it stored, why it
+    stopped early (``budget`` when Wonder's calls or dollars ran out) and its receipt's counts."""
 
     result: Result | None
     evidence: tuple[Evidence, ...] = ()
     stopped: str | None = None
+    receipt: Mapping[str, object] = field(default_factory=dict)
 
 
 class Homework(Protocol):
-    """Task 7's homework agent. It debits every Wonder call it makes, retries and failures
-    included, from ``meter``."""
+    """Task 7's homework agent: studies ``target`` for the chosen ``action``, its items stamped
+    ``at``. It debits every Wonder call it makes, retries and failures included, from ``meter``,
+    and raises ``WonderSpent`` when not one call fits."""
 
     available: bool
 
-    def study(self, user_id: str, target: Target, night: date, meter: WonderMeter) -> StudyOutcome: ...
+    def study(
+        self, user_id: str, target: Target, night: date, meter: WonderMeter, *, action: str, at: datetime,
+    ) -> StudyOutcome: ...
 
 
 class NoHomework:
-    """Task 7 isn't built: no study is offered."""
+    """No homework (tests and the public example): no study is offered."""
 
     available: bool = False
 
-    def study(self, user_id: str, target: Target, night: date, meter: WonderMeter) -> StudyOutcome:
-        raise RuntimeError("no homework port yet: the night never offers a study")
+    def study(
+        self, user_id: str, target: Target, night: date, meter: WonderMeter, *, action: str, at: datetime,
+    ) -> StudyOutcome:
+        raise RuntimeError("no homework port: the night never offers a study")
 
 
 @dataclass(frozen=True)

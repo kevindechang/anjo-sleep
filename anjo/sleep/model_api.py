@@ -72,13 +72,17 @@ def post_chat(
     timeout_s: float,
     temperature: float | None,
     transport: httpx.BaseTransport | None,
+    max_tokens: int | None = None,
 ) -> ChatResult:
-    """POST one chat completion to ``url`` and parse the reply."""
+    """POST one chat completion to ``url`` and parse the reply. ``max_tokens`` caps the reply
+    (sent as ``max_completion_tokens``)."""
     body: dict[str, Any] = {"model": model, "messages": messages}
     if tools is not None:
         body["tools"] = tools
     if temperature is not None:
         body["temperature"] = temperature
+    if max_tokens is not None:
+        body["max_completion_tokens"] = max_tokens
     headers = {"Authorization": f"Bearer {read_key(key_env)}"}
     where = f"{provider} chat with {model}"
     try:
