@@ -18,7 +18,7 @@ from anjo.sleep import types as t
 from anjo.sleep.mind.apd import score
 from anjo.sleep.mind.apd import types as apd
 from anjo.sleep.mind.inquiry import types as it
-from anjo.sleep.tests import apd_fakes as fx
+from anjo.sleep.tests import apd_eval_fakes as fx
 
 LIFE = fx.life(10)
 DAYS = LIFE.days

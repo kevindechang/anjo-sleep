@@ -18,7 +18,7 @@ from anjo.sleep.mind.apd import arms
 from anjo.sleep.mind.apd import types as apd
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.inquiry.ports import InquiryPorts
-from anjo.sleep.tests import apd_fakes as fx
+from anjo.sleep.tests import apd_eval_fakes as fx
 
 AB: tuple[apd.ArmName, ...] = ("A", "B")
 MIND: tuple[apd.ArmName, ...] = ("M", "M-persist", "M-kernel", "M-control")
