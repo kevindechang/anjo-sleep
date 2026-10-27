@@ -39,6 +39,7 @@ from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
 from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
 from anjo.sleep.train.trainer import LoraTrainer
+from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
 
@@ -67,11 +68,12 @@ def _publish(folder: Path, name: str) -> None:
 def execute(
     *, wiring: str, night: date, users: Sequence[str], personas: Mapping[str, str], allow_real: bool = False,
     practice_scenes: int = 16, teacher: bool = True, simulate: str | None = None, day: int | None = None,
-    seed: int = 20261028, windows: Mapping[str, Window] | None = None,
+    seed: int = 20261028, windows: Mapping[str, Window] | None = None, days: Mapping[str, DayRun] | None = None,
 ) -> dict[str, NightResult]:
     """The night for ``users`` under the lock and sweep, with Colab training and the adapter upload.
     ``windows`` gives each person's own window (the real-time schedule's previous day); a simulated
-    ``day`` gives the window of the day it played. Also used by ``night/daily.py``."""
+    ``day`` gives the window of the day it played. ``days`` are days already lived (or missed: a day
+    with a ``failure`` fails the night at ``simulate``). Also used by ``night/daily.py``."""
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or _no_data_dir())
     options = NightOptions(night=night, personas=dict(personas), allow_real=allow_real,
                            practice_scenes=practice_scenes, practice_teacher=teacher)
@@ -86,8 +88,9 @@ def execute(
         with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept:
             deps = _wiring(wiring)(trainer, options)
             play = _named(simulate) if simulate else None
-            days = {user: play(user, persona, day, seed) for user, persona in personas.items()} if play else {}
-            return run_night_batch_with(deps, {user: night for user in users}, windows=windows, days=days,
+            played = {user: play(user, persona, day, seed) for user, persona in personas.items()} if play else {}
+            return run_night_batch_with(deps, {user: night for user in users}, windows=windows,
+                                        days={**played, **(days or {})},
                                         sweep=swept)
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None

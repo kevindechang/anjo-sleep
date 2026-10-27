@@ -90,7 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     done = keep_warm(url, token, minutes)
     print(json.dumps({"keep_warm_minutes": minutes, "pings": done.pings, "failed_pings": done.failed,
                       "seconds": round(done.seconds, 1)}))
-    return 0 if done.failed < done.pings else 1
+    return 0 if done.failed == 0 else 1
 
 
 if __name__ == "__main__":

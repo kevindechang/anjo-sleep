@@ -10,12 +10,20 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep.checkpoints import DATA_DIR_ENV
+from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night import daily
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
 AT_2AM = datetime(2026, 10, 30, 2, 0, tzinfo=daily.TAIPEI)  # 18:00 UTC on the 29th
 AT_2PM = datetime(2026, 10, 30, 14, 0, tzinfo=daily.TAIPEI)
+
+
+def _good_day(tmp_path: Path) -> Path:
+    folder = tmp_path / "markers"
+    daily.write_marker(folder, "founder", date(2026, 10, 29), 1, DayRun((AT_2PM, AT_2PM), 4, 0, ()))
+    return folder
 
 
 def test_night_phase_uses_previous_day_window_and_virtual_date_equals_real_date(tmp_path: Path) -> None:
@@ -31,7 +39,8 @@ def test_night_phase_uses_previous_day_window_and_virtual_date_equals_real_date(
 
     scored: list[tuple[Any, ...]] = []
     result = daily.run_night_phase(
-        "acct", "founder", AT_2AM, nights=nights, morning=lambda u, p, n: ("ports", u, p, n),
+        "acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=nights,
+        morning=lambda u, p, n: ("ports", u, p, n),
         score=lambda *a, **kw: scored.append((a, kw)))
     assert result.status == "promoted"
     assert seen["night"] == plan.night and seen["windows"] == {"acct": plan.window}
@@ -44,7 +53,7 @@ def test_night_phase_uses_previous_day_window_and_virtual_date_equals_real_date(
 def test_a_failed_night_is_not_scored(tmp_path: Path) -> None:
     scored: list[object] = []
     failed = NightResult("failed", "practice", None, {}, (), 0.0, {}, tmp_path / "log.jsonl")
-    result = daily.run_night_phase("acct", "founder", AT_2AM, nights=lambda **kw: {"acct": failed},
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=lambda **kw: {"acct": failed},
                                    morning=lambda *a: None, score=lambda *a, **kw: scored.append(a))
     assert result.status == "failed" and scored == []
 
@@ -69,3 +78,80 @@ def test_users_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv(daily.USERS_ENV, raising=False)
     with pytest.raises(SystemExit):  # no account for the persona: the run stops
         daily.main(["--phase", "day", "--persona", "founder"])
+
+
+# ── the marker: the night sees the day it closes ─────────────────────────────
+
+import json  # noqa: E402
+
+from anjo.sleep.night.run import run_night_batch_with  # noqa: E402
+from anjo.sleep.tests.night_fakes import World, step  # noqa: E402
+
+
+def _nights_on(world: World, seen: dict[str, Any]) -> Any:
+    def nights(**kw: Any) -> dict[str, NightResult]:
+        seen.update(kw)
+        world.plan("acct", kw["night"])
+        return run_night_batch_with(world.deps(), {"acct": kw["night"]}, windows=kw["windows"],
+                                    days=kw.get("days") or None)
+
+    return nights
+
+
+def test_night_records_missing_day(tmp_path: Path) -> None:
+    scored: list[object] = []
+    seen: dict[str, Any] = {}
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=tmp_path / "daily",
+                                   nights=_nights_on(World(tmp_path / "w"), seen),
+                                   morning=lambda *a: None, score=lambda *a, **kw: scored.append(a))
+    assert result.status == "failed" and result.failed_at == "simulate" and scored == []
+    assert step(result.log_path, "simulate")["error"] == "day_missing"
+    assert seen["days"]["acct"].window == daily.night_plan(AT_2AM).window
+
+
+@pytest.mark.parametrize(("status", "failure", "code"), [
+    ("failed", "glimmer_not_ready", "glimmer_not_ready"), ("short", None, "short_day")])
+def test_night_records_failed_day_and_skips_morning(tmp_path: Path, status: str, failure: str | None, code: str) -> None:
+    markers = tmp_path / "daily"
+    day = DayRun((AT_2PM, AT_2PM), 1, 0 if failure else 2, (), failure=failure)
+    daily.write_marker(markers, "founder", date(2026, 10, 29), 1, day)
+    assert json.loads((markers / "founder-2026-10-29.json").read_text())["status"] == status
+    scored: list[object] = []
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=markers,
+                                   nights=_nights_on(World(tmp_path / "w"), {}),
+                                   morning=lambda *a: None, score=lambda *a, **kw: scored.append(a))
+    assert result.status == "failed" and result.failed_at == "simulate" and scored == []
+    assert step(result.log_path, "simulate")["error"] == code
+
+
+def test_night_runs_on_a_good_days_marker(tmp_path: Path) -> None:
+    markers = tmp_path / "daily"
+    daily.write_marker(markers, "founder", date(2026, 10, 29), 1, DayRun((AT_2PM, AT_2PM), 4, 0, ()))
+    seen: dict[str, Any] = {}
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=markers,
+                                   nights=_nights_on(World(tmp_path / "w"), seen),
+                                   morning=lambda *a: None, score=lambda *a, **kw: None)
+    assert result.status != "failed" and not seen.get("days")
+
+
+def _day_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, day: DayRun, *extra: str) -> int:
+    monkeypatch.setenv(daily.USERS_ENV, "founder=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(night_command, "_named", lambda path: lambda *a: day)
+    return daily.main(["--phase", "day", "--persona", "founder", *extra])
+
+
+@pytest.mark.parametrize("day", [
+    DayRun((AT_2PM, AT_2PM), 2, 1, ()),  # Glimmer died mid-day: a short day
+    DayRun((AT_2PM, AT_2PM), 0, 0, (), failure="glimmer_not_ready")])
+def test_day_phase_exits_1_unless_the_day_ran_whole(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, day: DayRun) -> None:
+    assert _day_main(monkeypatch, tmp_path, day, "--for-date", "2026-10-30") == 1
+    assert (tmp_path / "sleep" / "daily" / "founder-2026-10-30.json").is_file()
+
+
+def test_day_phase_marker_carries_the_intended_date(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ok = DayRun((AT_2PM, AT_2PM), 4, 0, ())
+    assert _day_main(monkeypatch, tmp_path, ok, "--for-date", "2026-10-30") == 0
+    marker = json.loads((tmp_path / "sleep" / "daily" / "founder-2026-10-30.json").read_text())
+    assert marker == {"persona": "founder", "date": "2026-10-30", "day_index": 2, "status": "ok",
+                      "failure": None, "failed_turns": 0}

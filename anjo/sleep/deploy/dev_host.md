@@ -204,7 +204,6 @@ TimeoutStartSec=1h
 Description=Anjo Sleep day at 14:00 Taipei
 [Timer]
 OnCalendar=*-*-* 14:00:00 Asia/Taipei
-Persistent=true
 [Install]
 WantedBy=timers.target
 
@@ -237,10 +236,19 @@ The night runs as its own process, so a long night can't take down the server.
 - `--phase day` (14:00 Taipei) plays that day's index (days since 2026-10-28) through the dev API,
   waking Glimmer first. If Glimmer can't be woken the day does not start and the unit fails with
   `glimmer_not_ready`; it is never counted as a short day.
+  The day timer has no `Persistent=`: a day that was missed stays missed, and the night records it.
+  After the day, the phase writes a marker `$ANJO_SLEEP_DATA_DIR/sleep/daily/<persona>-<date>.json`
+  (persona, the date the day was meant for, day index, status `ok`/`short`/`failed`, the failure
+  code, failed turns) and exits 1 unless the day ran whole, a mid-day Glimmer death included.
+  `--for-date YYYY-MM-DD` runs it by hand for another date (default: today, Taipei); the marker
+  carries that date.
 - `--phase night` (02:00 Taipei) runs the night for the previous Taipei calendar day, as its own
   virtual date (the date it was lived on). It takes the night lock, sweeps, wakes Glimmer and trains
   exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
-  checkpoint that serves, in the same process. A failed night is not scored.
+  checkpoint that serves, in the same process. It first reads the marker of the day it closes: a
+  missing, short or failed day fails the night at `simulate` (`day_missing`, `short_day` or the
+  day's failure code), and nothing is scored. A failed night is never scored. This timer keeps
+  `Persistent=true`: the night lock makes a catch-up safe.
 - The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=founder=<account id>` in the env file.
   The env file also holds `ANJO_SLEEP_HOST=1`, `ANJO_SLEEP_MODAL_URL`, `ANJO_SLEEP_MODAL_TOKEN`,
   `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.
@@ -260,8 +268,11 @@ backoff, under a hard total of `WAKE_TOTAL_TIMEOUT_S`, 600 s):
 
 - **A simulated day** wakes before its first turn. If the wake fails the day does not start, and
   the night records a `glimmer_not_ready` failure at `simulate`: an error, not a short day.
-- **A night** wakes before its first Modal step (practice), and **a morning run** before its first
-  arm call. Both record `wake_seconds` (the night in `summary.json`, the morning in its score file).
+- **A night** wakes before its first Modal step (practice) and again right before the gates, since
+  Colab training outlasts Modal's 600 s idle window (nothing pings during training: that would hold
+  a $2/h GPU for hours). A wake that fails or raises fails that person with `glimmer_not_ready` at
+  `practice` or `gates`. `summary.json` records `wake_seconds` and `gates_wake_seconds`. **A morning
+  run** wakes before its first arm call and records `wake_seconds` in its score file.
 - **Demos:** run `python -m anjo.sleep.serving.wake --wake` a few minutes before, and it prints how
   many seconds the wake took.
 
