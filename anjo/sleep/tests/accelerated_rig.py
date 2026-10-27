@@ -4,16 +4,23 @@ line with a fake clock, and an extractor that reads back only the lines inside t
 No model, no GPU, no network. ``python -m anjo.sleep.sim.accelerated --fake`` runs on it."""
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from anjo.sleep.personas.model import Persona
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.sim.accelerated import Rig
 from anjo.sleep.sim.day import DayRun, run_day
+from anjo.sleep.night.deps import Prices
+from anjo.sleep.probes.arms import ArmDeps
+from anjo.sleep.probes.morning import Morning, run_morning
+from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.night_fakes import World
-from anjo.sleep.types import Evidence
+from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy
+from anjo.sleep.types import CheckpointRef, Evidence, Probe
 
 FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
 CLOCK_START = datetime(2026, 10, 28, 8, 0, tzinfo=timezone.utc)
@@ -38,6 +45,37 @@ class Line:
 class Replies:
     def of_reply(self, session_id: str) -> frozenset[str] | None:
         return frozenset({GLIMMER})
+
+
+class Verdicts:
+    """A deterministic fake judge: the verdict is a hash of the two replies."""
+
+    def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
+        return ("A", "B", "tie")[int(hashlib.sha256(f"{probe.id}|{first}|{second}".encode()).hexdigest(), 16) % 3]
+
+
+class Adapters:
+    """The serving checkpoint of each life (the night's registry), and a promoted donor for each."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def last_promoted(self, person_id: str) -> CheckpointRef | None:
+        if person_id.startswith(DONOR_PREFIX):
+            return CheckpointRef(f"{person_id}-n1", person_id, date(2026, 10, 28), f"fake://{person_id}", None)
+        return self.world.registry.last_promoted(person_id)
+
+
+DONOR_PREFIX = "donor-of-"
+
+
+def sealed_probes(user_id: str) -> list[Probe]:
+    kinds = ("new_work", "vocab", "tone_hold", "pushback")
+    probes = [Probe(f"{user_id}-{kind}-{i}", user_id, kind, f"A {kind} question {i}?", None, None, ())  # type: ignore[arg-type]
+              for kind in kinds for i in range(2)]
+    options = ("keep it short", "go deep")
+    return [*probes, *(Probe(f"{user_id}-taste-{i}", user_id, "taste_ab", f"Which do you prefer {i}?", options,
+                             options[0], ()) for i in range(2))]
 
 
 @dataclass
@@ -85,6 +123,22 @@ class FakeAccelerated:
             line.ancestry = turn.ancestry
         return day
 
+    def scores_dir(self, user_id: str) -> Path:
+        return self.root / "results" / user_id / "scores"
+
+    def morning(self, user_id: str) -> Morning:
+        arms = ArmDeps(model=FakeModel(), adapters=Adapters(self.world), contexts=FakeContexts(),
+                       evidence=lambda uid: StoreSpy([]), logprobs=FakeLogprobs(lambda adapter, messages: "A"),
+                       donors={user_id: f"{DONOR_PREFIX}{user_id}"}, until=CLOCK_START.date())
+        return Morning(arms=arms, sealed=sealed_probes, judge=Verdicts(),
+                       prices=Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5,
+                                     serve_gpu_per_hour=1.95),
+                       root=self.root / "results")
+
+    def score(self, user_id: str, night: date, label: str) -> Any:
+        checkpoint = self.world.registry.last_promoted(user_id)
+        return run_morning(user_id, night, checkpoint, morning=self.morning(user_id), label=label)
+
     def rig(self, sha: str = FAKE_SHA) -> Rig:
         deps = self.world.deps(extractor=lambda chat: self)
-        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha)
+        return Rig(deps_for=lambda night: deps, simulate=self.simulate, sha=sha, score=self.score)

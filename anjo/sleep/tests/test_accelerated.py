@@ -133,3 +133,23 @@ def test_the_vm_record_and_day_lengths_pass_through_the_rig(tmp_path: Path) -> N
     results = run_accelerated("u1", FOUNDER, 2, START, rig=rig)
     assert [uid for uid, _ in seen] == ["u1", "u1"] and all(seconds > 0 for _, seconds in seen)
     assert _summary(results[0].log_path)["vm"] == {"night": START.isoformat(), "vm_kept": False, "idle_s_before": None}
+
+
+def test_fake_gate_includes_scoring(capsys: pytest.CaptureFixture[str]) -> None:
+    assert accelerated.main(["--fake", "--days", "2"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["scored_nights"] == 2
+    for scored in report["scores"]:
+        assert set(scored["arms"]) == {"1", "2C", "2F", "3", "3x", "4"} and scored["unavailable"] == {}
+        assert set(scored["pairs"]) == {"3_vs_3x", "4_vs_2C"}
+    assert report["scores"][0]["night"] != report["scores"][1]["night"]
+
+
+def test_each_accelerated_night_is_scored_once_after_it_runs(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    run_accelerated("u1", FOUNDER, 2, START, rig=fake.rig())
+    assert sorted(p.name for p in fake.scores_dir("u1").iterdir()) == ["night-01.json", "night-02.json"]
+    bad = FakeAccelerated(tmp_path / "bad")
+    bad.world.extract_fails["u1"] = RuntimeError("boom")
+    run_accelerated("u1", FOUNDER, 1, START, rig=bad.rig())
+    assert not bad.scores_dir("u1").exists()  # a failed night scores nothing

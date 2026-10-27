@@ -13,10 +13,10 @@ second night reading the first day's lines again would train on them twice.
 
     python -m anjo.sleep.sim.accelerated --fake --days 3          # the daily integration gate, offline
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.sim.accelerated --wiring anjo.sleep.app.night:build \\
-        --simulate anjo.sleep.app.sim_transport:simulate --user <account id> --persona founder \\
+        --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona founder \\
         --days 2 --start 2026-11-03
 
-Real runs train on Colab, one VM per life (``ColabLives``), synthetic people only.
+After each night the morning probe run scores every arm (`probes.morning`). Real runs train on Colab, one VM per life (``ColabLives``), synthetic people only.
 """
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ from anjo.sleep.night.nightlog import SUMMARY
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
+from anjo.sleep.probes.morning import run_morning
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -70,6 +71,9 @@ class Rig:
     # VM record (kept or stopped, idle seconds), stamped into the summary.
     on_day: Callable[[str, float], None] | None = None
     vm_record: Callable[[str, str], Mapping[str, Any] | None] | None = None
+    # The morning probe run after a night: ``score(user_id, night, label)`` scores every arm on the
+    # checkpoint serving after it (``probes.morning``) and writes that night's score file.
+    score: Callable[[str, date, str], object] | None = None
 
 
 def git_sha(repo: Path = REPO) -> str:
@@ -137,6 +141,10 @@ def run_accelerated_batch(
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
             _stamp(result, sha=sha, label=kind, day_index=i, vm=vm)
             out[uid].append(result)
+        if rig.score is not None:
+            for uid, result in results.items():
+                if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
+                    rig.score(uid, night, kind)
     return out
 
 
@@ -161,13 +169,17 @@ def _normal(summary: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in summary.items() if k != "log_path"}
 
 
-def _report(results: Sequence[NightResult], *, fake: bool, days: int, sha: str) -> dict[str, Any]:
+def _report(
+    results: Sequence[NightResult], *, fake: bool, days: int, sha: str, scores: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     summaries = [_normal(json.loads((r.log_path.parent / SUMMARY).read_text(encoding="utf-8"))) for r in results]
-    digest = hashlib.sha256(json.dumps(summaries, sort_keys=True, default=str).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps([summaries, list(scores)], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
                "cost_usd": s["cost_usd"]} for s in summaries]
-    return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest}
+    return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
+            "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],
+                                                      "unavailable": sc["unavailable"]} for sc in scores]}
 
 
 def _fake(days: int, start: date, seed: int) -> int:
@@ -177,7 +189,8 @@ def _fake(days: int, start: date, seed: int) -> int:
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
         fake = rig_module.FakeAccelerated(Path(root))
         results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
-        print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40), indent=1, sort_keys=True))
+        scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
+        print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
     return 0 if all(r.status != "failed" for r in results) else 1
 
 
@@ -197,8 +210,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
     from anjo.sleep.train.trainer import LoraTrainer
 
-    if not (args.wiring and args.simulate and args.users and args.personas and args.start):
-        parser.error("a real run needs --wiring, --simulate, --start and a --user with its --persona (or --fake)")
+    if not (args.wiring and args.simulate and args.morning and args.users and args.personas and args.start):
+        parser.error("a real run needs --wiring, --simulate, --morning, --start and a --user with its --persona (or --fake)")
     if len(args.personas) != len(args.users):
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
@@ -207,7 +220,13 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     cli, ledger = ColabCli(), default_ledger()
     runner = ColabRunner(cli=cli, ledger=ledger, is_synthetic=lambda uid: uid in personas, allow_real=False)
     life_s = LIFE_NIGHT_TIMEOUT_S * (LIFE_NIGHTS_HELD + args.days)
-    wiring, simulate = _named(args.wiring), _named(args.simulate)
+    wiring, simulate, morning = _named(args.wiring), _named(args.simulate), _named(args.morning)
+
+    def score(uid: str, night: date, label: str) -> object:
+        """The morning probe run on the checkpoint serving after the night."""
+        ports = morning(uid, personas[uid], night)
+        return run_morning(uid, night, ports.arms.adapters.last_promoted(uid), morning=ports, label=label)
+
     try:
         with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept, \
                 runner.lives(life_timeout_s=life_s) as lives:
@@ -215,7 +234,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                                   revision=os.environ.get(REVISION_ENV) or None)
             rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas)),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      on_day=lives.note_day, vm_record=lambda uid, night: _vm_record(lives, uid, night))
+                      on_day=lives.note_day, vm_record=lambda uid, night: _vm_record(lives, uid, night),
+                      score=score)
             results = run_accelerated_batch(people, args.days, args.start, rig=rig, seed=args.seed,
                                             label=args.label, sweep=swept)
     except NightBusy as busy:
@@ -235,6 +255,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--label", choices=LABELS, default="development")
     parser.add_argument("--wiring", help="the app's NightDeps builder, <module>:<function>")
     parser.add_argument("--simulate", help="the app's day runner, <module>:<function>")
+    parser.add_argument("--morning", help="the app's morning-run builder (user, persona, night), <module>:<function>")
     parser.add_argument("--user", action="append", default=[], dest="users")
     parser.add_argument("--persona", action="append", default=[], dest="personas")
     args = parser.parse_args(argv)

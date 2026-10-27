@@ -22,7 +22,7 @@ from typing import Any, Final
 
 LABELS: Final = ("development", "final")
 ARMS: Final = ("1", "2C", "2F", "3", "3x", "4")
-DIMENSIONS: Final = ("knowledge", "style")  # shown first, in this order; others follow alphabetically
+DIMENSIONS: Final = ("knowledge", "interaction")  # shown first, in this order; others follow alphabetically
 DATA_DIR_ENV: Final = "ANJO_DATA_DIR"
 MISSING: Final = "-"
 

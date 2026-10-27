@@ -27,7 +27,7 @@ from typing import Final
 
 from anjo.sleep.budget import Ledger
 
-NIGHT_KINDS: Final = ("night:", "night_gpu:", "colab_train:", "colab_life:", "sim:")
+NIGHT_KINDS: Final = ("night:", "night_gpu:", "colab_train:", "colab_life:", "morning:", "sim:")
 LOCK_NAME: Final = "night.lock"
 _HELD: ContextVar[frozenset[Path]] = ContextVar("night_lock_held", default=frozenset())
 
