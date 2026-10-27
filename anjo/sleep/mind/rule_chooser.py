@@ -5,6 +5,9 @@ change (``revision - acted_revision``) and forms no note: it never picks ``hold_
 chooser it stands in for, it is pure (no clock, database, model call or environment read), and
 every candidate that doesn't win gets an allowlisted reason code in the choice's receipt.
 
+It keeps its original hold order: on a want that is both unknown-class and not offered it records
+the unknown class, while ``StateChooser`` records ``action_not_offered``.
+
 Candidates are sorted by priority class, then effective strength, then base strength, then want
 id, so the choice never depends on the order wants arrive in.
 """
@@ -13,13 +16,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final
 
+from anjo.sleep.mind.choose import rank_key, record_of, require_codes
+from anjo.sleep.mind.policy import LOST, NO_BUDGET, NOT_OFFERED, OVER_CAP, UNKNOWN_CLASS
 from anjo.sleep.types import (
     Choice,
     ChoiceContext,
     Considered,
-    ConsideredStatus,
     Opportunity,
-    Policy,
     Target,
     Want,
     WantSnapshot,
@@ -29,13 +32,7 @@ THREAD_CLASS: Final = "active_thread"
 STUDY: Final = "revisit_thread"
 
 # The reason codes this chooser writes. A policy must allowlist every one of them.
-UNKNOWN_CLASS = "unknown_priority_class"
-NOT_OFFERED = "action_not_offered"
-OVER_CAP = "candidate_limit"
-NO_BUDGET = "budget"
-LOST = "lost_to_target"
 REASON_CODES = frozenset({UNKNOWN_CLASS, NOT_OFFERED, OVER_CAP, NO_BUDGET, LOST})
-_REJECTIONS = frozenset({UNKNOWN_CLASS, OVER_CAP})
 
 
 class RuleChooser:
@@ -47,8 +44,8 @@ class RuleChooser:
 
     def choose(self, opportunity: Opportunity, wants: Sequence[Want], ctx: ChoiceContext) -> Choice:
         """The strongest offered want that the allowance can pay for, or nothing."""
-        _require_reason_codes(ctx.policy)
-        ranked = sorted(wants, key=lambda want: _order(want, ctx.policy))
+        require_codes(ctx.policy, REASON_CODES)
+        ranked = sorted(wants, key=lambda want: rank_key(want, ctx.policy))
         winner: Want | None = None
         offered = 0  # candidates inside the cap so far: offered wants of a known class
         considered: list[Considered] = []
@@ -60,7 +57,7 @@ class RuleChooser:
                 reason = LOST
             elif reason is None:
                 winner = want
-            considered.append(_considered(want, reason))
+            considered.append(record_of(want, reason))
         return Choice(opportunity=opportunity, want=winner, considered=tuple(considered))
 
 
@@ -82,18 +79,6 @@ def _thread_want(target: Target) -> Want:
     )
 
 
-def _require_reason_codes(policy: Policy) -> None:
-    missing = REASON_CODES - policy.reason_codes
-    if missing:
-        raise ValueError(f"the policy's reason codes lack {sorted(missing)}")
-
-
-def _order(want: Want, policy: Policy) -> tuple[int, float, float, str]:
-    classes = policy.priority_classes
-    rank = classes.index(want.priority_class) if want.priority_class in classes else len(classes)
-    return (rank, -want.effective_strength, -want.strength, want.id)
-
-
 def _held_reason(want: Want, ctx: ChoiceContext, offered: int) -> str | None:
     """Why ``want`` can't win, checked in order, or ``None`` when it can."""
     if want.priority_class not in ctx.policy.priority_classes:
@@ -105,23 +90,3 @@ def _held_reason(want: Want, ctx: ChoiceContext, offered: int) -> str | None:
     if ctx.allowance.available_model_calls == 0:
         return NO_BUDGET
     return None
-
-
-def _considered(want: Want, reason: str | None) -> Considered:
-    status: ConsideredStatus
-    if reason is None:
-        status = "won"
-    elif reason in _REJECTIONS:
-        status = "rejected"
-    else:
-        status = "held_back"
-    return Considered(
-        want_id=want.id,
-        kind=want.kind,
-        target_id=want.target_id,
-        action=want.action,
-        strength=want.strength,
-        weight=want.weight,
-        status=status,
-        reason=reason,
-    )
