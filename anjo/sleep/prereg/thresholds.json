@@ -174,5 +174,8 @@
  "judge_checks": {
   "kevin_dev_pairs_per_week": 20,
   "kevin_final_pairs": 30
+ },
+ "hand_written": {
+  "film_student_and_donor_taste_ab": "The 16 shared taste_ab items of the two development personas were written by hand (Claude, as the build worker), not by a Muse Spark call as 5.1 describes for lives. Development personas only; the 20 lives pairs follow 5.1."
  }
 }

@@ -106,10 +106,12 @@ def load_collapse(
     return tuple(prompts)
 
 
-def collapse_for(field: str, prompts: tuple[CollapsePrompt, ...]) -> tuple[CollapsePrompt, ...]:
-    """The gate excludes prompts whose domain matches the person's field."""
-    f = field.strip().lower()
-    return tuple(c for c in prompts if c.domain.strip().lower() not in f and f not in c.domain.strip().lower())
+def collapse_for(
+    field_domains: tuple[str, ...], prompts: tuple[CollapsePrompt, ...]
+) -> tuple[CollapsePrompt, ...]:
+    """The gate excludes prompts whose domain is one of the person's `field_domains`."""
+    tags = {d.strip().lower() for d in field_domains}
+    return tuple(c for c in prompts if c.domain.strip().lower() not in tags)
 
 
 def _check_ids(ids: list[str], expected: int | None, name: str) -> None:

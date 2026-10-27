@@ -4,6 +4,12 @@
   "name": "Mara Quillen",
   "age": 22,
   "field": "film school",
+  "field_domains": [
+   "film",
+   "movies",
+   "tv",
+   "video"
+  ],
   "line": "Mara Quillen, 22, is in her final year at a small film school by the sea and is making her thesis short, a quiet fifteen-minute film about her grandmother's last season working a passenger ferry.",
   "project": {
    "title": "Salt Line",

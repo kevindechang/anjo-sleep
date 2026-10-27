@@ -34,6 +34,7 @@ FILES: tuple[tuple[str, str], ...] = (
     ("prompt_judge", "probes/prompts/judge_v1.md"),
     ("prompt_neutral", "probes/prompts/neutral_v1.md"),
     ("prompt_brief", "context/prompts/brief_v1.md"),
+    ("prompt_sim", "sim/prompts/sim_v1.md"),
     ("thresholds", "prereg/thresholds.json"),
     ("set_general", "sets/general.jsonl"),
     ("set_collapse", "sets/collapse.jsonl"),

@@ -47,7 +47,7 @@ def test_sim_prompt_has_no_held_out_slot():
 def test_registration_list_is_stable_and_complete():
     items = r.compute_items()
     kinds = [i.kind for i in items]
-    for k in ("prompt_probe", "prompt_judge", "prompt_neutral", "prompt_brief", "thresholds",
+    for k in ("prompt_probe", "prompt_judge", "prompt_neutral", "prompt_brief", "prompt_sim", "thresholds",
               "set_general", "set_collapse", "lives", "donor_rule"):
         assert k in kinds
     assert kinds.count("persona_visible") == 2 and kinds.count("persona_held_out") == 2

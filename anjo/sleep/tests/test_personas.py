@@ -88,3 +88,11 @@ def test_person_file_round_trips_through_dicts():
     pf = load(NAMES[1])
     data = {"visible": m.to_visible_dict(pf.visible), "held_out": m.to_held_out_dict(pf.held_out)}
     assert m.person_file_from_dict(data) == pf
+
+
+def test_field_domains_required_lowercase_and_non_empty():
+    pf = load(NAMES[0])
+    for bad in ((), ("Film",), ("",)):
+        with pytest.raises(m.PersonaError):
+            m.validate_person_file(replace(pf, visible=replace(pf.visible, field_domains=bad)))
+    assert "movies" in pf.visible.field_domains

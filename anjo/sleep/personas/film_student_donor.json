@@ -4,6 +4,12 @@
   "name": "Dev Hartnell",
   "age": 23,
   "field": "film school",
+  "field_domains": [
+   "film",
+   "movies",
+   "tv",
+   "video"
+  ],
   "line": "Dev Hartnell, 23, is in his final year at the same small film school by the sea and is making a twelve-minute heist thriller as his thesis short.",
   "project": {
    "title": "Last Call at the Rialto",

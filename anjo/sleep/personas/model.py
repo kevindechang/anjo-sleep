@@ -60,6 +60,7 @@ class Persona:
     name: str
     age: int
     field: str
+    field_domains: tuple[str, ...]
     line: str
     project: Project
     preferences: tuple[Statement, ...]
@@ -139,6 +140,7 @@ def _persona_from(d: dict[str, Any]) -> Persona:
         name=_text(d, "name", "visible"),
         age=_int(d, "age", "visible"),
         field=_text(d, "field", "visible"),
+        field_domains=tuple(str(x) for x in _req(d, "field_domains", "visible")),
         line=_text(d, "line", "visible"),
         project=Project(
             _text(proj, "title", "project"),
@@ -199,6 +201,10 @@ def person_file_from_dict(data: dict[str, Any]) -> PersonFile:
 def validate_person_file(pf: PersonFile, *, planned_nights: int = PLANNED_NIGHTS) -> None:
     """Raise PersonaError unless the file meets Task 2's counts and the leak rules."""
     v, h = pf.visible, pf.held_out
+    if not v.field_domains or any(
+        not d.strip() or d != d.lower() for d in v.field_domains
+    ):
+        raise PersonaError("field_domains must be non-empty lowercase tags")
     if v.age < MIN_ADULT_AGE:
         raise PersonaError("persona must be an adult")
     if len(v.plans) < MIN_PLANS or any(p.day < 0 for p in v.plans):
@@ -279,6 +285,7 @@ def to_visible_dict(v: Persona) -> dict[str, Any]:
         "name": v.name,
         "age": v.age,
         "field": v.field,
+        "field_domains": list(v.field_domains),
         "line": v.line,
         "project": {
             "title": v.project.title,
