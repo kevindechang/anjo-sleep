@@ -1,4 +1,4 @@
-"""Wake Glimmer on Modal, and keep it warm for a live window (``python -m anjo.sleep.serving.wake``).
+"""Wake Glimmer, and keep it warm for a live window (``python -m anjo.sleep.serving.wake``).
 
     python -m anjo.sleep.serving.wake --wake                      # wake it, print the seconds
     python -m anjo.sleep.serving.wake --keep-warm-minutes 90      # wake it, then keep it up 90 min
@@ -17,12 +17,17 @@ the L40S up costs about $2 an hour, so every window needs Kevin's OK.
 
 The URL and token come from ``ANJO_SLEEP_MODAL_URL`` and ``ANJO_SLEEP_MODAL_TOKEN``, and are never
 printed.
+
+**On SageMaker** (``ANJO_SLEEP_BACKEND``, ``serving.backend``) the same command wakes the inference
+component (copy count 1, then the poll) and pings through the endpoint. A keep-warm window runs as
+one phase, so its end, an error or Ctrl-C sets the copy count back to 0, and the idle alarm does it
+after 15 minutes without a call if this process dies. ``--wake`` alone leaves Glimmer up for the
+demo that follows, unless the wake failed.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -30,10 +35,11 @@ from typing import Final
 
 import httpx
 
-from anjo.sleep.serving import client
+from anjo.sleep.serving import backend, client
+from anjo.sleep.serving.config import ServeConfigError
 
-URL_ENV: Final = "ANJO_SLEEP_MODAL_URL"
-TOKEN_ENV: Final = "ANJO_SLEEP_MODAL_TOKEN"
+URL_ENV: Final = backend.MODAL_URL_ENV
+TOKEN_ENV: Final = backend.MODAL_TOKEN_ENV
 KEEP_WARM_PING_S: Final = 240.0  # well under Modal's 600 s scale-down window
 MAX_KEEP_WARM_MIN: Final = 180
 
@@ -49,29 +55,38 @@ def keep_warm(
     base_url: str, token: str, minutes: float, *, transport: httpx.BaseTransport | None = None,
     clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
 ) -> KeepWarmResult:
-    """Ping every ``KEEP_WARM_PING_S`` until ``minutes`` (at most ``MAX_KEEP_WARM_MIN``) pass."""
+    """Ping Modal every ``KEEP_WARM_PING_S`` until ``minutes`` (at most ``MAX_KEEP_WARM_MIN``) pass."""
+    return keep_warm_with(lambda: client.ping(base_url, token, transport=transport), minutes,
+                          clock=clock, sleep=sleep)
+
+
+def keep_warm_with(
+    ping: Callable[[], bool], minutes: float, *, clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> KeepWarmResult:
+    """Call ``ping`` every ``KEEP_WARM_PING_S`` until ``minutes`` (at most ``MAX_KEEP_WARM_MIN``) pass."""
+    now, pause = clock or time.monotonic, sleep or time.sleep
     window_s = min(minutes, MAX_KEEP_WARM_MIN) * 60.0
-    started = clock()
+    started = now()
     pings = failed = 0
     while True:
         pings += 1
-        if not client.ping(base_url, token, transport=transport):
+        if not ping():
             failed += 1
-        left = window_s - (clock() - started)
+        left = window_s - (now() - started)
         if left <= 0:
-            return KeepWarmResult(clock() - started, pings, failed)
-        sleep(min(KEEP_WARM_PING_S, left))
+            return KeepWarmResult(now() - started, pings, failed)
+        pause(min(KEEP_WARM_PING_S, left))
 
 
-def _env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise SystemExit(f"{name} is not set")
-    return value
+def _keep_warm(serving: backend.Serving, minutes: float) -> KeepWarmResult:
+    if isinstance(serving, backend.ModalServing):
+        return keep_warm(serving.url, serving.token, minutes)  # Modal's window, as before
+    return keep_warm_with(serving.ping, minutes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Wake Glimmer on Modal, and optionally keep it warm.")
+    parser = argparse.ArgumentParser(description="Wake Glimmer, and optionally keep it warm.")
     parser.add_argument("--wake", action="store_true", help="wake it and print the seconds it took")
     parser.add_argument("--keep-warm-minutes", type=float, help=f"wake it, then keep it up (at most {MAX_KEEP_WARM_MIN})")
     args = parser.parse_args(argv)
@@ -79,18 +94,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("pass --wake or --keep-warm-minutes N")
     if args.keep_warm_minutes is not None and args.keep_warm_minutes <= 0:
         parser.error("--keep-warm-minutes is above 0")
-    url, token = _env(URL_ENV), _env(TOKEN_ENV)
-    woke = client.wake(url, token, client.WAKE_TOTAL_TIMEOUT_S)
-    print(json.dumps({"wake_seconds": round(woke.seconds, 1), "ok": woke.ok}))
-    if not woke.ok:
-        return 1
+    try:
+        serving = backend.from_env()
+    except ServeConfigError as error:
+        raise SystemExit(str(error)) from None
     if args.keep_warm_minutes is None:
-        return 0
-    minutes = min(args.keep_warm_minutes, MAX_KEEP_WARM_MIN)
-    done = keep_warm(url, token, minutes)
-    print(json.dumps({"keep_warm_minutes": minutes, "pings": done.pings, "failed_pings": done.failed,
-                      "seconds": round(done.seconds, 1)}))
-    return 0 if done.failed == 0 else 1
+        woke = None
+        try:
+            woke = serving.wake()
+        finally:
+            if woke is None or not woke.ok:
+                serving.sleep_now()  # a wake that failed or raised leaves nothing up
+        print(json.dumps({"wake_seconds": round(woke.seconds, 1), "ok": woke.ok}))
+        return 0 if woke.ok else 1
+    with backend.phase(serving.sleep_now):  # the window ends asleep, however it ends
+        woke = serving.wake()
+        print(json.dumps({"wake_seconds": round(woke.seconds, 1), "ok": woke.ok}))
+        if not woke.ok:
+            return 1
+        minutes = min(args.keep_warm_minutes, MAX_KEEP_WARM_MIN)
+        done = _keep_warm(serving, minutes)
+        print(json.dumps({"keep_warm_minutes": minutes, "pings": done.pings, "failed_pings": done.failed,
+                          "seconds": round(done.seconds, 1)}))
+        return 0 if done.failed == 0 else 1
 
 
 if __name__ == "__main__":

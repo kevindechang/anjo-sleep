@@ -9,7 +9,8 @@ when Glimmer is down for a cleared session) raises ``TurnFailed``: the day ends 
 with ``NewestReply`` so each line Anjo answers carries its recorded ancestry. The day's Spark Open
 calls hold their worst case on ``baseten_sleep_usd`` first and settle the tokens they metered,
 under the night lock (``night_lock``), so a night start never sweeps a live day's hold.
-Glimmer is woken first (``client.wake``); if it can't be, the day does not start.
+Glimmer is woken first (``serving.backend``); if it can't be, the day does not start. The day
+ends with Glimmer put back to sleep.
 """
 from __future__ import annotations
 
@@ -21,12 +22,11 @@ import httpx
 
 from anjo.sleep.app.ancestry import NewestReply
 from anjo.sleep.app.flags import require_sleep_host
-from anjo.sleep.app.runtime import TOKEN_ENV, URL_ENV
 from anjo.sleep.app.storage import SLEEP_DIR, data_root
 from anjo.sleep.budget import LEDGER_NAME, Ledger
 from anjo.sleep.night.holds import held, spark_usd, spark_worst_usd, usd
 from anjo.sleep.night.sweep import night_lock
-from anjo.sleep.serving import client
+from anjo.sleep.serving import backend
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.sim.day import DayRun, SparkSim, TurnFailed, run_day
 from anjo.sleep.sim.persona_sim import MAX_TURNS
@@ -87,5 +87,6 @@ def simulate(user_id: str, persona: str, day_index: int, seed: int) -> DayRun:
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     with night_lock(ledger), held(ledger, f"sim:{user_id}:d{day_index}:s{seed}", ("baseten_sleep_usd",),
                                   usd(spark_worst_usd(price, MAX_TURNS)), lambda: spark_usd(price, *model.tokens)):
+        serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
         return run_day(person, day_index, seed, model=model, transport=transport, replies=NewestReply(user_id),
-                       wake=lambda: client.wake(os.environ[URL_ENV], os.environ[TOKEN_ENV]))
+                       wake=serving.wake, sleep=serving.sleep_now)

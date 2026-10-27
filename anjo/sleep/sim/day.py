@@ -22,6 +22,7 @@ from typing import Any, Final
 from anjo.sleep import baseten_api
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.personas.model import Persona
+from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.sim.persona_sim import ChatTransport, ReplyAncestry, SimModel, Turn, simulate_day
 
@@ -61,20 +62,23 @@ class _Counting:
 def run_day(
     person: Persona, day_index: int, seed: int, *, model: SimModel, transport: ChatTransport,
     replies: ReplyAncestry, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    wake: Callable[[], WakeResult] | None = None,
+    wake: Callable[[], WakeResult] | None = None, sleep: Callable[[], None] | None = None,
 ) -> DayRun:
-    counting = _Counting(transport)
-    start = clock()
-    woke = None if wake is None else wake()
-    if woke is not None and not woke.ok:
-        return DayRun((start, clock()), 0, 0, (), wake_seconds=woke.seconds, failure=NOT_READY)
-    try:
-        turns = tuple(simulate_day(person, day_index, seed, model=model, transport=counting, replies=replies))
-        failed = 0
-    except TurnFailed:
-        turns, failed = (), 1
-    return DayRun((start, clock()), counting.answered, failed, turns,
-                  wake_seconds=None if woke is None else woke.seconds)
+    """One simulated day. ``wake`` wakes Glimmer first; ``sleep`` puts it back when the day ends,
+    however it ends (``serving.backend.phase``)."""
+    with phase(sleep):
+        counting = _Counting(transport)
+        start = clock()
+        woke = None if wake is None else wake()
+        if woke is not None and not woke.ok:
+            return DayRun((start, clock()), 0, 0, (), wake_seconds=woke.seconds, failure=NOT_READY)
+        try:
+            turns = tuple(simulate_day(person, day_index, seed, model=model, transport=counting, replies=replies))
+            failed = 0
+        except TurnFailed:
+            turns, failed = (), 1
+        return DayRun((start, clock()), counting.answered, failed, turns,
+                      wake_seconds=None if woke is None else woke.seconds)
 
 
 class SparkSim:

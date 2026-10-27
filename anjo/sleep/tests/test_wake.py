@@ -18,6 +18,12 @@ URL = "https://glimmer.example.test"
 TOKEN = "-".join(("fake", "bearer", "value"))  # built at runtime: no key-shaped literal for the secret scan
 
 
+@pytest.fixture(autouse=True)
+def on_modal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests serve through Modal, the fallback backend; SageMaker's are in test_sagemaker*.py."""
+    monkeypatch.setenv("ANJO_SLEEP_BACKEND", "modal")
+
+
 class Clock:
     """Time that only moves when something sleeps or the server takes its time."""
 

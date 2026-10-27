@@ -1,5 +1,5 @@
-"""The night's client for Glimmer on the Modal vLLM server (Task 5): practice, every gate and every
-arm go through it, so all of them sample one server at one precision (``config.SERVING``).
+"""The night's client for Glimmer's vLLM server (Task 5): practice, every gate and every arm go
+through it, so all of them sample one server at one precision (``config.SERVING``).
 
 It is the ``ModelClient`` and ``TokenLogprobs`` port over vLLM's OpenAI-compatible API:
 
@@ -10,15 +10,19 @@ It is the ``ModelClient`` and ``TokenLogprobs`` port over vLLM's OpenAI-compatib
   (with the generation prompt) and the continuation into token ids, and ``/v1/completions`` returns
   the prompt's log-probabilities with ``prompt_logprobs``, one generated token at most.
 
-The URL and token come from the app (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``), never
-from here. Errors name the endpoint and the status, never a message's words.
+Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
+Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
+by the app, never here), or the SageMaker endpoint's signed envelope
+(``serving.sagemaker.invoke.SageMakerPoster``). The serving backend (``serving.backend``) picks one.
+Errors name the endpoint and the status, never a message's words.
 """
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import httpx
 
@@ -105,14 +109,32 @@ def model_name(adapter: CheckpointRef | None) -> str:
     return config.MODEL if adapter is None else config.check_adapter_name(adapter.id)
 
 
-class VllmClient:
-    """``ModelClient`` and ``TokenLogprobs`` over one vLLM server."""
+class Poster(Protocol):
+    """One JSON POST to a vLLM path, read back as a JSON object. Raises ``ServingError`` naming
+    the path and the status, never the body."""
 
-    precision: Final = config.SERVING.name
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def close(self) -> None: ...
+
+
+def json_object(path: str, raw: bytes | str) -> dict[str, Any]:
+    """A reply's JSON object, or ``ServingError`` naming the path."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ServingError(f"{path} sent a reply that is not JSON") from None
+    if not isinstance(data, dict):
+        raise ServingError(f"{path} sent a reply that is not an object")
+    return data
+
+
+class HttpPoster:
+    """vLLM's https server with the bearer token (Modal)."""
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
-        timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS,
+        timeout_s: float = REQUEST_TIMEOUT_S,
     ) -> None:
         if not base_url.startswith("https://"):
             raise ServingError("the serving URL is https")
@@ -122,25 +144,44 @@ class VllmClient:
             base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
             transport=transport, timeout=timeout_s,
         )
-        self._max_tokens = max_tokens
 
     def close(self) -> None:
         self._http.close()
 
-    def _post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         try:
             response = self._http.post(path, json=dict(body))
         except httpx.HTTPError as error:
             raise ServingError(f"{path} failed in transport ({type(error).__name__})") from None
         if response.is_error:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
-        try:
-            data = response.json()
-        except ValueError:
-            raise ServingError(f"{path} sent a reply that is not JSON") from None
-        if not isinstance(data, dict):
-            raise ServingError(f"{path} sent a reply that is not an object")
-        return data
+        return json_object(path, response.content)
+
+
+class VllmClient:
+    """``ModelClient`` and ``TokenLogprobs`` over one vLLM server: Modal's https URL with its
+    bearer token, or any other ``Poster`` (``VllmClient.over``)."""
+
+    precision: Final = config.SERVING.name
+
+    def __init__(
+        self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
+        timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS,
+    ) -> None:
+        self._poster: Poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
+        self._max_tokens = max_tokens
+
+    @classmethod
+    def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
+        client = cls.__new__(cls)
+        client._poster, client._max_tokens = poster, max_tokens
+        return client
+
+    def close(self) -> None:
+        self._poster.close()
+
+    def _post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._poster.post(path, body)
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,

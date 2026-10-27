@@ -44,6 +44,7 @@ from anjo.sleep.night.deps import (
     NightDeps,
     StudyOutcome,
 )
+from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
@@ -155,6 +156,14 @@ class NightRunner:
     def run_batch(
         self, nights: Mapping[str, date], windows: Mapping[str, Window] | None = None,
         days: Mapping[str, DayRun] | None = None, sweep: Sweep | None = None,
+    ) -> dict[str, NightResult]:
+        """The batch as one phase: Glimmer goes back to sleep when it ends, however it ends."""
+        with phase(self.deps.sleep):
+            return self._run_batch(nights, windows, days, sweep)
+
+    def _run_batch(
+        self, nights: Mapping[str, date], windows: Mapping[str, Window] | None,
+        days: Mapping[str, DayRun] | None, sweep: Sweep | None,
     ) -> dict[str, NightResult]:
         days = days or {}
         windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}

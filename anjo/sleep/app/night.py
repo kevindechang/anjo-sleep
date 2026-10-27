@@ -7,8 +7,8 @@ it off the serving path). Everything else is here:
 - evidence, targets, briefs and practice transcripts in the person's encrypted ``sleep/`` folder;
 - extraction through the history store (``HistorySource``) on Spark Open; briefs, practice scenes,
   the teacher candidate and the critic on Spark Open; full practice's personal Glimmer candidates,
-  the gates and the note on the Modal vLLM server at serving precision (``VllmClient``), its spend
-  held on ``modal_usd`` (``ReservedGpu``);
+  the gates and the note on Glimmer's vLLM server at serving precision (``VllmClient``; SageMaker,
+  or Modal, per ``serving.backend``), its spend held on ``modal_usd`` (``ReservedGpu``);
 - homework (Task 7): Muse Wonder on the Meta Model API, searching Wikipedia's public API and
   fetching public pages only (``WonderHomework``), each call held on ``meta_usd``;
 - her chooser (``StateChooser``) with the registered policy and the outcome ledger's intentions;
@@ -39,7 +39,6 @@ from anjo.sleep.app.history_source import HistorySource
 from anjo.sleep.app.intentions import LedgerIntentions
 from anjo.sleep.app.policy import build_policy
 from anjo.sleep.app.recall import MiniLmRecall
-from anjo.sleep.app.runtime import TOKEN_ENV, URL_ENV
 from anjo.sleep.app.safety_gate import load_cases
 from anjo.sleep.app.storage import (
     SLEEP_DIR,
@@ -71,7 +70,8 @@ from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
-from anjo.sleep.serving.client import VllmClient, wake
+from anjo.sleep.serving import backend
+from anjo.sleep.serving.client import VllmClient
 from anjo.sleep.types import Probe
 
 SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
@@ -157,7 +157,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         if not is_synthetic(user_id):
             raise ValueError(f"{persona} runs only on an account registered as synthetic")
     registry = checkpoint_registry()
-    client = VllmClient(_env(URL_ENV), _env(TOKEN_ENV))
+    serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
+    client = serving.client()
     night_settings = replace(settings(), practice_scenes=options.practice_scenes,
                              practice_teacher=options.practice_teacher)
     night_prices = prices()
@@ -186,6 +187,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         logs=_logs_root, is_synthetic=is_synthetic, settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
-        wake=lambda: wake(_env(URL_ENV), _env(TOKEN_ENV)),
+        wake=serving.wake, sleep=serving.sleep_now,
     )
 

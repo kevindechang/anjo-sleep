@@ -1,5 +1,5 @@
-"""Glimmer on Modal as a host of Anjo's model, and the route that sends a flagged person there
-(Task 4).
+"""Glimmer (on SageMaker, or Modal as the fallback) as a host of Anjo's model, and the route that
+sends a flagged person there (Task 4).
 
 **The pin.** ``GlimmerPin`` is a ``HostPin`` for host ``sleep_modal``. Anjo's processor vocabulary
 (N-PROC) has no family for Glimmer, and adding one is a change to a closed vocabulary and its
@@ -16,6 +16,11 @@ a cold or stopped server and any error before the first token end the call with 
 chat route's existing fallback answers with the frontier talker (RF3). Modal holds a request
 through a cold start of up to 20 minutes, so the runtime calls it under a short deadline of its
 own (``REPLY_DEADLINE_S``), apart from the container's three-hour limit.
+
+**SageMaker** (``ANJO_SLEEP_BACKEND``, the default): the same request goes through the endpoint's
+envelope (``sagemaker_transport``), signed by the dev host's role, with no bearer token, under the
+same deadline. A turn never wakes SageMaker: while Glimmer sleeps (no copy) the endpoint refuses at
+once, and the frontier talker answers. Days, nights, mornings and demos wake it first.
 
 **The route.** ``sleep_route`` is the route override: a flagged person who chose the open-model
 talker gets a route pinned to ``sleep_modal``; everyone else's route is unchanged.
@@ -54,11 +59,11 @@ from anjo.core.model_io import (
 from anjo.core.processors import Family
 from anjo.sleep.app.ancestry import record_served
 from anjo.sleep.app.flags import sleep_enabled_for
-from anjo.sleep.serving import config
+from anjo.sleep.serving import backend, config
 
 HOST: Final = "sleep_modal"
-URL_ENV: Final = "ANJO_SLEEP_MODAL_URL"
-TOKEN_ENV: Final = "ANJO_SLEEP_MODAL_TOKEN"
+URL_ENV: Final = backend.MODAL_URL_ENV
+TOKEN_ENV: Final = backend.MODAL_TOKEN_ENV
 INTERNAL_MODEL_ID: Final = "anjo-sleep-30b"
 PRICES_AS_OF: Final = "2026-10-27"
 # Nominal, per million tokens: the turn's spend gate needs a price, and Modal's real cost is GPU
@@ -165,6 +170,22 @@ def deadline_transport(inner: httpx.BaseTransport | None = None) -> HttpTranspor
     return HttpTransport(client=httpx.Client(transport=inner, timeout=timeout, follow_redirects=False))
 
 
+def on_sagemaker() -> bool | None:
+    """Whether turns go to SageMaker; None when ``ANJO_SLEEP_BACKEND`` names neither backend."""
+    try:
+        return backend.backend_name() == "sagemaker"
+    except config.ServeConfigError:
+        return None
+
+
+def default_transport() -> Transport:
+    if on_sagemaker():
+        from anjo.sleep.app.sagemaker_transport import default_transport as through_sagemaker
+
+        return through_sagemaker(REPLY_DEADLINE_S, CONNECT_DEADLINE_S)
+    return deadline_transport()
+
+
 def holds_words(request: ModelRequest) -> bool:
     """Whether the call is a tool round, whose words the loop holds back until the round ends
     cleanly (anjo/agent/loop.py); any other call's words are shown as they stream."""
@@ -179,7 +200,7 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
     def __init__(self, pin: HostPin, *, transport: Transport | None = None) -> None:
         if not isinstance(pin, GlimmerPin):
             raise PinError(f"the {HOST} runtime serves a Glimmer pin")
-        super().__init__(pin, transport=transport or deadline_transport())
+        super().__init__(pin, transport=transport or default_transport())
         self._glimmer = pin
 
     def stream(
@@ -205,8 +226,15 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         return self._glimmer.adapter or config.MODEL
 
     def _endpoint(self) -> tuple[str, dict[str, str]]:
+        sagemaker = on_sagemaker()
+        if sagemaker is None or not self._glimmer.upstream_commit:
+            raise RequestNotSent("rejected")
+        if sagemaker:
+            from anjo.sleep.app.sagemaker_transport import endpoint_url
+
+            return endpoint_url("/v1/chat/completions"), {}  # SigV4 signs it; no token travels
         base = os.environ.get(URL_ENV, "").strip().rstrip("/")
-        if not _URL.fullmatch(base) or not self._glimmer.upstream_commit:
+        if not _URL.fullmatch(base):
             raise RequestNotSent("rejected")
         return f"{base}/v1/chat/completions", bearer(os.environ.get(TOKEN_ENV, "").strip())
 

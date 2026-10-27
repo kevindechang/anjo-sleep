@@ -290,6 +290,8 @@ class NightDeps:
     note_check: Callable[[str], bool] = field(default=lambda text: True)
     # Wakes Glimmer before the first Modal step (practice or gates); None wakes nothing (tests, fakes).
     wake: Callable[[], WakeResult] | None = None
+    # Puts Glimmer back to sleep when the batch ends, however it ends; None sleeps nothing (Modal idles out).
+    sleep: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
