@@ -28,6 +28,7 @@ from anjo.sleep.train.lora import (
     TrainError,
     plan_steps,
     train_lora_with_receipt,
+    training_config,
 )
 from anjo.sleep.types import CheckpointRef
 
@@ -220,3 +221,95 @@ def test_the_plain_text_dataset_is_deleted_whatever_the_run_did(tmp_path: Path) 
         except RuntimeError:
             pass
         assert not (tmp_path / "work" / DATASET_FILE).exists()
+
+
+# ── Task 7: the sft_dpo objective ─────────────────────────────────────────────
+
+
+def _with_pairs(n: int) -> Dataset:
+    from anjo.sleep.train.dataset import Pair
+
+    base = _examples(n)
+    pairs = tuple(
+        Pair(id=f"x{i}", prompt=(("user", f"question {i}"),), chosen=f"answer {i}", rejected=f"worse {i}",
+             chosen_from="glimmer", rejected_from="glimmer", tokens=12)
+        for i in range(n)
+    )
+    return Dataset(examples=base.examples, tokens=base.tokens, dropped={}, pairs=pairs)
+
+
+def test_objective_is_sft_by_default_and_sft_dpo_is_allowed() -> None:
+    assert LoraCfg().objective == "sft"
+    cfg = LoraCfg(objective="sft_dpo")
+    assert (cfg.dpo_beta, cfg.dpo_lr) == (0.1, 5e-7)
+    with pytest.raises(LoraCfgError):
+        LoraCfg(objective="dpo")  # type: ignore[arg-type]
+    with pytest.raises(LoraCfgError):
+        LoraCfg(objective="sft_dpo", dpo_beta=0.0)
+    with pytest.raises(LoraCfgError):
+        LoraCfg(objective="sft_dpo", dpo_lr=1e-3)
+    settings = training_config(cfg, 12, warm=False, revision=REVISION)
+    assert settings["objective"] == "sft_dpo"
+    assert (settings["dpo_beta"], settings["dpo_learning_rate"]) == (0.1, 5e-7)
+
+
+def test_sft_dpo_sends_the_nights_pairs_and_sft_sends_none(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    class Reading(_Runner):
+        def run(self, job: str, inputs: Mapping[str, object], *, timeout_s: float) -> Mapping[str, object]:
+            seen.append(Path(str(inputs["dataset_path"])).read_text(encoding="utf-8"))
+            return super().run(job, inputs, timeout_s=timeout_s)
+
+    for objective, cache in (("sft", "a"), ("sft_dpo", "b")):
+        train_lora_with_receipt(None, _with_pairs(3), LoraCfg(objective=objective), Reading(),  # type: ignore[arg-type]
+                                person_id="p1", night=NIGHT, name=adapter_name("p1", 1, 0),
+                                workdir=tmp_path / objective, adapter_cache=tmp_path / cache,
+                                publish=lambda folder, n: None, revision=REVISION)
+    sft_rows, dpo_rows = ([json.loads(line) for line in text.splitlines()] for text in seen)
+    assert not any("chosen" in row for row in sft_rows)
+    pairs = [row for row in dpo_rows if "chosen" in row]
+    assert len(pairs) == 3 and pairs[0]["rejected"] == [{"role": "assistant", "content": "worse 0"}]
+
+
+def test_training_script_builds_a_dpo_pass_with_the_adapter_off_as_reference() -> None:
+    plan = plan_steps(12, LoraCfg())
+    base = {
+        "r": 16, "alpha": 32, "dropout": 0.05, "target_modules": list(DEFAULT_TARGET_MODULES),
+        "learning_rate": 2e-4, "seed": 7, "max_seq_length": 8192, "packing": False,
+        "accumulation": plan.accumulation, "epochs": plan.epochs, "batch_size": 1,
+        "warm_start": False, "revision": "a" * 40,
+    }
+    sft = colab_train.build_settings(colab_train.load_config(json.dumps({**base, "objective": "sft"})))
+    assert "dpo" not in sft
+    raw = json.dumps({**base, "objective": "sft_dpo", "dpo_beta": 0.1, "dpo_learning_rate": 5e-7,
+                      "min_optimizer_steps": 8})
+    settings = colab_train.build_settings(colab_train.load_config(raw))
+    dpo = settings["dpo"]
+    assert dpo["beta"] == 0.1 and dpo["learning_rate"] == 5e-7
+    assert dpo["max_length"] == 8192 and dpo["bf16"] is True and dpo["seed"] == 7
+    assert dpo["precompute_ref_log_probs"] is False and dpo["save_strategy"] == "no"
+    source = Path(colab_train.__file__).read_text(encoding="utf-8")
+    assert "ref_model=None" in source  # PEFT: the adapter switched off is the reference
+    for broken in ({**base, "objective": "sft_dpo"}, {**base, "objective": "sft_dpo", "dpo_beta": 2.0,
+                                                       "dpo_learning_rate": 5e-7}, {**base, "objective": "dpo"}):
+        with pytest.raises(ValueError):
+            colab_train.load_config(json.dumps(broken))
+    rows = [{"prompt": [{"role": "user", "content": "q"}], "completion": [{"role": "assistant", "content": "a"}]},
+            {"prompt": [{"role": "user", "content": "q"}], "chosen": [{"role": "assistant", "content": "a"}],
+             "rejected": [{"role": "assistant", "content": "b"}]}]
+    sft_rows, pair_rows = colab_train.split_rows(rows)
+    assert sft_rows == rows[:1] and pair_rows == rows[1:]
+
+
+def test_the_dpo_pass_keeps_the_minimum_optimizer_steps() -> None:
+    cfg = LoraCfg(objective="sft_dpo")
+    sent = training_config(cfg, 12, warm=False, revision=REVISION)
+    assert sent["min_optimizer_steps"] == cfg.min_optimizer_steps
+    loaded = colab_train.load_config(json.dumps(sent))
+    for pairs in (1, 3, 8, 20, 40, 200):
+        plan = plan_steps(pairs, cfg)
+        assert colab_train.dpo_plan(pairs, loaded) == (plan.accumulation, plan.epochs), pairs
+    without = {key: value for key, value in sent.items() if key != "min_optimizer_steps"}
+    with pytest.raises(ValueError):
+        colab_train.load_config(json.dumps(without))

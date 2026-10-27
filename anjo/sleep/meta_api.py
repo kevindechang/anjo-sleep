@@ -36,9 +36,10 @@ def chat(
     *,
     temperature: float | None = None,
     transport: httpx.BaseTransport | None = None,
+    max_tokens: int | None = None,
 ) -> ChatResult:
-    """One chat completion on ``model``, sent as its pinned version. ``transport`` is for tests
-    (``httpx.MockTransport``)."""
+    """One chat completion on ``model``, sent as its pinned version, its reply capped at
+    ``max_tokens`` when given. ``transport`` is for tests (``httpx.MockTransport``)."""
     base = os.environ.get(BASE_ENV, "").strip().rstrip("/") or DEFAULT_BASE
     pinned = PINNED_MODELS[model]
     result = post_chat(
@@ -51,5 +52,6 @@ def chat(
         timeout_s=timeout_s,
         temperature=temperature,
         transport=transport,
+        max_tokens=max_tokens,
     )
     return replace(result, model=pinned)

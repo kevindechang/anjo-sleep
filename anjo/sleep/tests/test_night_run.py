@@ -339,7 +339,7 @@ def test_second_offer_gets_allowance_after_actual_calls(tmp_path: Path) -> None:
 
 def test_retries_and_failed_calls_are_debited(tmp_path: Path) -> None:
     class Flaky(Homework):
-        def study(self, user_id: str, target: Any, night: date, meter: WonderMeter) -> Any:
+        def study(self, user_id: str, target: Any, night: date, meter: WonderMeter, **kw: Any) -> Any:
             for _ in range(2):  # two calls fail, and are retried
                 meter.require()
                 meter.debit(0.05)

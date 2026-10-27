@@ -60,6 +60,9 @@ class PracticeRun:
     f_ids: tuple[str, ...]
     dropped_cued: int
     dropped_cut: int = 0  # replies that ended without a normal stop (cut at max tokens): never targets
+    pairs: int = 0  # full practice: scenes that kept a (best, worst) pair
+    teacher_targets: int = 0  # full practice: scenes whose target is the teacher's
+    critic_unreadable: int = 0  # full practice: scenes whose critic reply couldn't be read
 
 
 def has_cue(message: str) -> bool:
@@ -108,6 +111,8 @@ def _scenes(raw: str, count: int) -> list[str]:
 
 class MinimalPractice:
     """Task 5's practice: ``run`` for the night (with counts), ``practice`` for the spec's port."""
+
+    max_spark_calls: Final = 1  # the scenes
 
     def __init__(
         self, *, chat: ChatFn, client: ModelClient, snapshot: Snapshot, seed: int,

@@ -1,8 +1,11 @@
 """Practice transcripts and where they are kept (Task 5).
 
 A practice transcript is one scene: the person's message (Spark Open playing them), her reply
-(Glimmer with context F, the training target) and the snapshot of context C taken before tonight's
-practice, which becomes the example's input. The night stores each transcript twice:
+(the training target: Glimmer with context F, or under full practice the critic's best candidate)
+and the snapshot of context C taken before tonight's practice, which becomes the example's input.
+Full practice (Task 7) also keeps where the target came from (``target``: ``glimmer`` or
+``teacher``) and the critic's worst candidate (``rejected``), for the night's preference pairs.
+The night stores each transcript twice:
 
 - as a ``practice`` evidence item, readable in her served context and folded into the next brief;
 - here, in the person's transcript log, with the immutable C snapshot and the scene's parts, so
@@ -17,10 +20,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.types import Evidence
+
+Candidate = Literal["glimmer", "teacher"]
+CANDIDATES: tuple[Candidate, ...] = get_args(Candidate)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,9 @@ class PracticeTranscript:
     f_ids: tuple[str, ...]
     ancestry: frozenset[str] | None
     created_at: datetime
+    target: Candidate = "glimmer"
+    rejected: str | None = None
+    rejected_from: Candidate | None = None
 
     def evidence(self) -> Evidence:
         """The transcript as a ``practice`` evidence item."""
@@ -57,13 +66,21 @@ def transcript_record(item: PracticeTranscript) -> dict[str, Any]:
         "f_ids": list(item.f_ids),
         "ancestry": None if item.ancestry is None else sorted(item.ancestry),
         "created_at": item.created_at.isoformat(),
+        "target": item.target, "rejected": item.rejected, "rejected_from": item.rejected_from,
     }
+
+
+def _candidate(value: object, *, optional: bool) -> Any:
+    if (value is None and optional) or value in CANDIDATES:
+        return value
+    raise ValueError("not a practice candidate")
 
 
 def transcript_from_record(record: Mapping[str, Any]) -> PracticeTranscript:
     try:
         ancestry = record["ancestry"]
         context = record["context"]
+        rejected = record.get("rejected")
         scene = record["scene"]
         if isinstance(scene, bool) or not isinstance(scene, int):
             raise TypeError("scene")
@@ -75,6 +92,9 @@ def transcript_from_record(record: Mapping[str, Any]) -> PracticeTranscript:
             f_ids=tuple(str(item) for item in record["f_ids"]),
             ancestry=None if ancestry is None else frozenset(str(name) for name in ancestry),
             created_at=datetime.fromisoformat(record["created_at"]),
+            target=_candidate(record.get("target", "glimmer"), optional=False),
+            rejected=None if rejected is None else str(rejected),
+            rejected_from=_candidate(record.get("rejected_from"), optional=True),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise LogError(f"not a practice transcript ({type(error).__name__})") from None

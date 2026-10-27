@@ -7,8 +7,11 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
 4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
-   with the night's allowance. A study runs homework (Task 7) and marks its revision acted; no
-   study is offered while the homework port is a no-op. ``hold_note`` is written at step 10.
+   with the night's allowance. A study runs homework (Task 7's ``do_homework``), stores its
+   artifact as hosted evidence and its ``research`` result, and marks the target's revision acted.
+   Wonder's dollars are what the person's rolling $3-a-month cap has left; with none left no study
+   runs, and the record says so (``wonder_month``). No study is offered while the homework port is
+   a no-op. ``hold_note`` is written at step 10.
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
    training brief is the pre-practice one).
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
@@ -43,8 +46,10 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
+from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.mind import receipt, snapshot
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
@@ -80,11 +85,13 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
 # Worst cases for the paid steps' holds (holds.py): Spark Open calls per step, and the rest.
 EXTRACT_MAX_CALLS: Final = 2  # the day's one call, and one retry
 BRIEF_MAX_CALLS: Final = 2  # the served and the training brief
-SCENES_MAX_CALLS: Final = 1
 PROBES_WORST_USD: Final = 0.50  # Muse Spark writing a real person's night probes (about 8 calls)
 NOTE_MAX_S: Final = 300.0  # one Glimmer call on the serving GPU, inside the client's request timeout
 
 GPU_STEPS: Final = ("practice", "dataset", "train", "gates", "promote")
+# A study that fails this way stops the study, not the night: a Wonder error or timeout, a meta_usd
+# hold with no room, a request that can't fit its bound, a page in an unknown encoding.
+STUDY_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, LookupError)
 
 
 def day_window(night: date) -> Window:
@@ -118,6 +125,7 @@ class _Night:
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)
     paid_actions: int = 0
+    wonder_month_spent: float = 0.0
     receipts: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -203,6 +211,7 @@ class NightRunner:
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),
             wonder=WonderMeter(deps.settings.homework_call_cap, max(0.0, deps.settings.wonder_usd_month - wonder_spent)),
             actions_left=actions_left, store=deps.evidence(uid), targets=deps.targets(uid),
+            wonder_month_spent=wonder_spent,
         )
 
     def _do(self, p: _Night, step: str, fn: Callable[[_Night], Mapping[str, Any]]) -> bool:
@@ -317,12 +326,19 @@ class NightRunner:
         choice = deps.chooser.choose("away", deps.chooser.derive(state), ctx)
         p.choices.append(choice)
         action = choice.action
+        cap = deps.settings.wonder_usd_month
+        month = {"cap_usd": cap, "spent_usd": round(p.wonder_month_spent, 6),
+                 "left_usd": round(max(0.0, cap - p.wonder_month_spent), 6)}
+        homework = "available" if deps.homework.available else "no-op: no study offered"
+        if deps.homework.available and month["left_usd"] <= 0:
+            homework = f"capped: the monthly Wonder cap of ${cap:.2f} is spent, so no study runs"
         done: dict[str, Any] = {
             "action": action, "target_id": choice.target_id, "offered": sorted(offered),
             "allowance": {"actions_left": p.actions_left, "calls_left": p.wonder.calls_left, "usd_left": p.wonder.usd_left},
+            "wonder_month": month,
             "ports": {
                 "chooser": type(deps.chooser).__name__,
-                "homework": "available" if deps.homework.available else "no-op (Task 7): no study offered",
+                "homework": homework,
                 "inquiry": "available" if deps.inquiry.available else "no-op (Task 17)",
                 "expectations": "available" if deps.expectations.available else "no-op (Task 16)",
             },
@@ -331,7 +347,8 @@ class NightRunner:
         outcome: receipt.Outcome | None = None
         if action in STUDY_ACTIONS:
             done.update(self._study(p, state, choice))
-            outcome = "budget" if p.study is not None and p.study.stopped == "budget" else "ran"
+            stopped = p.study.stopped if p.study is not None else None
+            outcome = "budget" if stopped == "budget" else "failed" if stopped == "failed" else "ran"
         elif action == "inquire":
             done.update(self._inquire(p, choice))
             outcome = "ran"
@@ -346,20 +363,26 @@ class NightRunner:
         deps.expectations.record(p.uid, "pre_study", state, choice)
         p.actions_left -= 1  # a study that started is a spent action, even if it then fails
         p.paid_actions += 1
+        calls_before = p.wonder.calls
         try:
-            outcome = deps.homework.study(p.uid, target, p.night, p.wonder)
+            outcome = deps.homework.study(p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.end)
         except WonderSpent:
             outcome = StudyOutcome(result=None, stopped="budget")
-        if outcome.stopped is None:  # a study the budget stopped didn't run: the want stays
+        except STUDY_FAILURES as error:  # the study failed, not the night: its calls stay debited
+            outcome = StudyOutcome(result=None, stopped="failed", receipt={"error": type(error).__name__})
+        if outcome.stopped is not None and p.wonder.calls == calls_before:  # it never started: no action spent
+            p.actions_left += 1
+            p.paid_actions -= 1
+        if outcome.stopped is None:  # a study the budget stopped, or that failed, didn't run: the want stays
             p.targets.mark_acted(target.id, target.revision)
         if outcome.evidence:
             p.store.add(list(outcome.evidence))
         if outcome.result is not None:
             p.targets.add_result(outcome.result)
         p.study = outcome
-        return {"study": {"result": outcome.result.id if outcome.result else None, "stopped": outcome.stopped,
-                          "homework_items": len(outcome.evidence), "wonder_calls": p.wonder.calls,
-                          "wonder_usd": p.wonder.usd}}
+        return {"study": {**outcome.receipt, "result": outcome.result.id if outcome.result else None,
+                          "stopped": outcome.stopped, "homework_items": len(outcome.evidence),
+                          "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd}}
 
     def _inquire(self, p: _Night, choice: Choice) -> Mapping[str, Any]:
         if choice.question_id is None:
@@ -400,12 +423,17 @@ class NightRunner:
         started = self._timer()
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
-        with self._metered(p, "practice", "practice", SCENES_MAX_CALLS):
+        with self._metered(p, "practice", "practice", runner.max_spark_calls):
             run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.end)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
+        share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
         return {"scenes": len(run.transcripts), "dropped_cued": run.dropped_cued, "dropped_cut": run.dropped_cut,
-                "f_items": len(run.f_ids),
+                "f_items": len(run.f_ids), "pairs": run.pairs, "teacher_targets": run.teacher_targets,
+                "critic_unreadable": run.critic_unreadable,
+                "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
+                            "teacher_share": round(share, 4)},
+                "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
                 "homework": None, "seconds": self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:

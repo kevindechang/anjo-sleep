@@ -187,7 +187,10 @@ class Homework:
         self.calls = calls
         self.verified = verified
 
-    def study(self, user_id: str, target: Target, night: date, meter: WonderMeter) -> StudyOutcome:
+    def study(
+        self, user_id: str, target: Target, night: date, meter: WonderMeter, *, action: str = "",
+        at: datetime | None = None,
+    ) -> StudyOutcome:
         for _ in range(self.calls):
             meter.require()
             meter.debit(0.1)

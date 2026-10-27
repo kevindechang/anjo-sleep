@@ -5,9 +5,12 @@ the composition root builds: the app never imports the training code (the import
 it off the serving path). Everything else is here:
 
 - evidence, targets, briefs and practice transcripts in the person's encrypted ``sleep/`` folder;
-- extraction through the history store (``HistorySource``) on Spark Open; briefs and practice
-  scenes on Spark Open; practice replies, the gates and the note on the Modal vLLM server at
-  serving precision (``VllmClient``), its spend held on ``modal_usd`` (``ReservedGpu``);
+- extraction through the history store (``HistorySource``) on Spark Open; briefs, practice scenes,
+  the teacher candidate and the critic on Spark Open; full practice's personal Glimmer candidates,
+  the gates and the note on the Modal vLLM server at serving precision (``VllmClient``), its spend
+  held on ``modal_usd`` (``ReservedGpu``);
+- homework (Task 7): Muse Wonder on the Meta Model API, searching Wikipedia's public API and
+  fetching public pages only (``WonderHomework``), each call held on ``meta_usd``;
 - her chooser (``StateChooser``) with the registered policy and the outcome ledger's intentions;
 - probes: a synthetic person's were sealed once (``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``);
   a real person's are written from the day's evidence by Muse Spark and sealed before training;
@@ -15,13 +18,14 @@ it off the serving path). Everything else is here:
 - the held note through outreach (``delivery``), its final text through the reply check;
 - every paid step's hold on the sleep host's budget ledger.
 
-Homework (Task 7), notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
+Notice and inquiry (Task 17) and expectations (Task 16) stay no-op ports.
 """
 from __future__ import annotations
 
 import json
 import os
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Final
@@ -61,7 +65,10 @@ from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
-from anjo.sleep.practice.run import MinimalPractice
+from anjo.sleep.app.names import person_names
+from anjo.sleep.homework.agent import MetaWonder, WonderHomework
+from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
+from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.serving.client import VllmClient
@@ -151,13 +158,20 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
             raise ValueError(f"{persona} runs only on an account registered as synthetic")
     registry = checkpoint_registry()
     client = VllmClient(_env(URL_ENV), _env(TOKEN_ENV))
-    night_settings, night_prices = settings(), prices()
+    night_settings = replace(settings(), practice_scenes=options.practice_scenes,
+                             practice_teacher=options.practice_teacher)
+    night_prices = prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
 
-    def practice(chat: ChatFn, night: date) -> MinimalPractice:
-        return MinimalPractice(chat=chat, client=client, snapshot=context.snapshot, seed=night_settings.seed)
+    def practice(chat: ChatFn, night: date) -> FullPractice:
+        return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
+                            seed=night_settings.seed, scenes=night_settings.practice_scenes,
+                            teacher=night_settings.practice_teacher)
+
+    homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
+                              evidence=evidence_store, ledger=ledger, names=person_names)
 
     return NightDeps(
         extractor=lambda chat: HistorySource(chat=chat), extract_chat=spark_open,
@@ -171,6 +185,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         note_check=passes_reply_check, ledger=ledger,
         logs=_logs_root, is_synthetic=is_synthetic, settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
-        intentions=LedgerIntentions(),
+        intentions=LedgerIntentions(), homework=homework,
     )
 
