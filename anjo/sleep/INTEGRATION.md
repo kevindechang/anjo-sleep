@@ -20,6 +20,110 @@ At line 154, added by `feat: boundary check and publish pipeline for anjo-sleep 
 +ops/sleep/publish_state.json
 ```
 
+## `anjo/core/anjo_model/assignment.py` (+16 -3)
+
+At line 115, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
+existing: class QualifiedPin:
++    processor: ProcessorRecord | None  # None for an override's pin outside the vocabulary
+```
+
+At line 140, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++# Routes that replace a chosen route: each hook returns a route for the person, or None to pass.
++# Anjo Sleep adds one on its own host (anjo/sleep/app/register.py); core never imports it.
++OVERRIDE_CAUSE: Final = "override"
++ROUTE_OVERRIDES: list[Callable[[str], ModelRoute | None]] = []
++
++
++def route_override(user_id: str) -> ModelRoute | None:
++    return next((r for r in (hook(user_id) for hook in ROUTE_OVERRIDES) if r is not None), None)
++
++
+```
+
+At line 272, added by `fix: override keeps the gates and served means shown [task4]`:
+
+```diff
++    override = route_override(user_id)  # past every gate: it swaps the pins, nothing else
++    if override is not None:
++        return override
+```
+
+At line 327, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
+existing: def _log_route(user_id: str, route: ModelRoute) -> None:
++    if route.cause == OVERRIDE_CAUSE or get_db().in_transaction or not account_exists(user_id):
++        return  # capability_transitions has no cause for an override
+```
+
+## `anjo/core/anjo_model/client.py` (+8 -2)
+
+At line 35, added by `fix: override keeps the gates and served means shown [task4]`:
+
+```diff
++# Hosts whose pins name no N-PROC family, so a stream they serve has no processor record. Anjo
++# Sleep registers its own (anjo/sleep/app/register.py); every other pin's record is built.
++OFF_VOCABULARY_HOSTS: set[str] = set()
+```
+
+At line 115, added by `fix: override keeps the gates and served means shown [task4]`; `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
+existing: def processor(self) -> ProcessorRecord | None:
++        """The N-PROC record of the pin that served (R6-05 persists it); none for a pin on an
++        OFF_VOCABULARY_HOSTS host. Any other pin without a family fails here."""
++        if self._served_pin is None or self._served_pin.host in OFF_VOCABULARY_HOSTS:
++            return None
++        return processor_record(self._served_pin)
+```
+
+## `anjo/core/anjo_model/hosts.py` (+13 -3)
+
+At line 17, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++_FACTORIES: dict[str, Callable[[HostPin], HostRuntime]] = {
++    "openrouter": OpenRouterRuntime,
++    "vertex": VertexRuntime,
++}
++RUNTIMES: Mapping[str, Callable[[HostPin], HostRuntime]] = MappingProxyType(_FACTORIES)
++
++
++def register_runtime(host: str, factory: Callable[[HostPin], HostRuntime]) -> None:
++    """Add a host outside the pin file's (Anjo Sleep's, on its own host only). A host is never
++    replaced: the pinned hosts' runtimes stay the ones above."""
++    if _FACTORIES.get(host, factory) is not factory:
++        raise ValueError(f"the {host!r} runtime is already registered")
++    _FACTORIES[host] = factory
+```
+
+## `anjo/core/capabilities.py` (+16 -0)
+
+At line 521, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`; `fix: override keeps the gates and served means shown [task4]`:
+
+```diff
++
++
++def declare_sleep_capability() -> None:
++    """Anjo Sleep's per-person switch (anjo/sleep/app/flags.py). Declared only on its own host
++    (ANJO_SLEEP_HOST=1), so everywhere else the manifest is unchanged. Release-gated: on only for
++    the people its cohort names, and never swept on by the open preview. Declaring it again
++    with other env vars raises."""
++    switch = "ANJO_SLEEP_ENABLED"
++    cohort = CapabilityCohort("ANJO_SLEEP_ROLLOUT_PCT", "ANJO_SLEEP_FORCED_USER_IDS")
++    if CAPABILITY_ENV_VARS.setdefault("sleep", switch) != switch or (
++        CAPABILITY_COHORTS.setdefault("sleep", cohort) != cohort
++    ):
++        raise ValueError("the sleep capability is already declared with other env vars")
++    _UNSWEPT_CAPABILITIES.add("sleep")
++
++
+```
+
 ## `anjo/core/export_inventory.py` (+14 -2)
 
 At line 19, added by `fix: harden sleep export and cleared sessions [task3]`:
@@ -115,6 +219,30 @@ At line 184, added by `feat: evidence store, targets and extraction [task3]`:
 +
 ```
 
+## `anjo/core/open_model_turn.py` (+12 -0)
+
+At line 59, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++# Rewrites of a turn before it runs: (turn, tool_defs, facts, session_id, pins) -> (turn, tool_defs).
++# Anjo Sleep adds one on its own host (anjo/sleep/app/register.py); core never imports it. A hook
++# that raises fails the turn before any model call, so the caller's fallback answers.
++TurnHook = Callable[
++    [AnjoTurnInput, Sequence[Mapping[str, Any]], TurnFacts, str | None, Sequence[HostPin]],
++    tuple[AnjoTurnInput, Sequence[Mapping[str, Any]]],
++]
++TURN_HOOKS: list[TurnHook] = []
++
++
+```
+
+At line 228, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++    for hook in TURN_HOOKS:
++        turn, tool_defs = hook(turn, tool_defs, facts, session_id, pins)
+```
+
 ## `anjo/core/surfacing.py` (+19 -0)
 
 At line 247, added by `feat: evidence store, targets and extraction [task3]`:
@@ -146,6 +274,43 @@ At line 982, added by `feat: evidence store, targets and extraction [task3]`; `f
 +    ),
 ```
 
+## `anjo/core/talker_choice.py` (+6 -0)
+
+At line 22, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++from collections.abc import Callable
+```
+
+At line 37, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++# Checks that offer the open-model talker to one person while it is off the menu: Anjo Sleep
++# adds one on its own host for the people it flags (anjo/sleep/app/register.py).
++MENU_OVERRIDES: list[Callable[[str], bool]] = []
+```
+
+At line 112, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`; `fix: override keeps the gates and served means shown [task4]`:
+
+```diff
+existing: def _is_available(user_id: str, choice: str) -> bool:
++    if choice == ANJO_MODEL_CHOICE and any(offered(user_id) for offered in MENU_OVERRIDES):
++        return cloud_talker_choice_enabled(user_id) and gemma_offered(user_id)
+```
+
+## `anjo/dashboard/app.py` (+6 -0)
+
+At line 546, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+
+```diff
++# Anjo Sleep (hackathon): its route, runtime and prompt hooks and its dev API, on its host only.
++if os.environ.get("ANJO_SLEEP_HOST") == "1":
++    from anjo.sleep.app.register import register_sleep
++
++    register_sleep(app)
++
+```
+
 ## `pyproject.toml` (+20 -2)
 
 At line 70, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
@@ -160,10 +325,10 @@ At line 73, added by `feat: shared types, ports and model API clients for anjo/s
 +testpaths = ["tests", "anjo/sleep/tests"]
 ```
 
-At line 188, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 188, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
 
 ```diff
-+    "anjo.sleep.serving.**",
++    "anjo.sleep.serving", "anjo.sleep.serving.**", "anjo.sleep.app", "anjo.sleep.app.**",
 ```
 
 At line 190, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
