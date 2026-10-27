@@ -202,6 +202,57 @@ def test_a_reflects_once_a_night_with_everything_said_so_far() -> None:
     assert [r.finding_id for r in run.reports] == ["f1", "f2", "f3"]  # no finding_id: a new finding each night
 
 
+def test_a_reflects_with_the_same_tools_until_it_reports() -> None:
+    def look_then_report(prompt: str) -> str:
+        results = prompt.split(arms.A_RESULTS_HEADING, 1)[1].split("\n## ", 1)[0]
+        if "evidence_search" not in results:
+            return 'Let me check the plan first.\n{"tool": "evidence_search", "query": "plan scene"}'
+        if "world_query" not in results:
+            return '{"tool": "world_query", "text": "How close can an 85 mm lens focus?"}'
+        return a_reply(prompt)
+
+    life = fx.life(2, split="held_out")
+    run, thinker, world, _ = _run("A", life, look_then_report, tokens=100)
+    for tool in ("evidence_search", "world_query"):
+        assert f'"tool": "{tool}"' in thinker.calls[0][0]
+    assert len(thinker.calls) == 6 and len(world.calls) == 2  # three steps a night
+    assert run.tokens == (3 * 100 + 50,) * 2  # every thinker and world_query token is charged
+    assert [cap for _, cap in thinker.calls[:3]] == [20_000, 19_900, 19_750]
+    third = thinker.calls[2][0].split(arms.A_RESULTS_HEADING, 1)[1]
+    assert "[e-01-1]" in third and "general knowledge" in third and "e-02-1" not in third  # masked to its night
+    assert arms.A_EVIDENCE_HEADING in thinker.calls[2][0] and "e-01-2" in thinker.calls[2][0]  # still all history
+    assert [r.finding_id for r in run.reports] == ["f1", "f2"] and run.contexts[life.days[0]].startswith("One gap")
+
+    def forever(prompt: str) -> str:
+        return '{"tool": "evidence_search", "query": "kitchen"}'
+
+    run, thinker, _, _ = _run("A", fx.life(1, split="held_out"), forever, tokens=10)
+    assert len(thinker.calls) == it.CYCLE_CAP + 1 and run.reports == ()  # the cap ends a reflection that never reports
+
+
+def test_mind_reports_in_log_order_and_retractions_as_the_chance_they_hold() -> None:
+    at = arms.night_as_of(fx.DAY0)
+
+    def question(n: int) -> tuple[it.Question, tuple[it.Hypothesis, ...]]:
+        q = f"q{n}"
+        return it.Question(q, ("t-scene4",), "gap", ("e-01-1",), "active", at, f"subject {n}"), (
+            it.Hypothesis(f"{q}.h1", q, "a", 0.2), it.Hypothesis(f"{q}.h2", q, "b", 0.7),
+            it.Hypothesis(it.catch_all_id(q), q, it.CATCH_ALL, 0.1),
+        )
+
+    (q1, h1), (q2, h2) = question(1), question(2)
+    start = it.RunStart(fx.DAY0, at, "inquiry", it.FULL_RULES, "priority", None, it.Budget())
+    ops: tuple[it.ConcludeOp | it.RetractOp, ...] = (it.ConcludeOp("q1", "q1.h1", "suspicion", "a", ("e-01-1",)),
+           it.ConcludeOp("q2", "q2.h2", "suspicion", "b", ("e-01-1",)), it.RetractOp("q1", "a is gone", ("e-01-1",)))
+    history = (it.Step(0, at, start), *(it.Step(n, at, op, cycle=0, focus=op.question_id) for n, op in enumerate(ops, 1)))
+    ws = it.Workspace(questions=(q1, q2), hypotheses=(*h1, *h2), history=history, findings=(
+        it.Finding("f1", "q1", "a is gone", 0.2, ("e-01-1",), "retraction", "q1.h1"),
+        it.Finding("f2", "q2", "b", 0.7, ("e-01-1",), "suspicion", "q2.h2"),
+    ))
+    registry = arms.sync_findings(apd.FindingRegistry(), ws, day=fx.DAY0, citable=frozenset({"e-01-1"}))
+    assert [(r.finding_id, r.kind, r.p) for r in registry.reports] == [("f2", "suspicion", 0.7), ("f1", "retraction", 0.8)]
+
+
 def test_b_keeps_its_notebook_across_nights_and_charges_world_queries() -> None:
     life = fx.life(2)
     run, thinker, world, _ = _run("B", life, tokens=100)

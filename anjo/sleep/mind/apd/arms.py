@@ -14,8 +14,11 @@ Every arm gets the same things, and only these:
 
 How the arms differ:
 
-- **A, full memory:** one reflection call a night with every item said so far in context. Its
-  reply ends with a JSON array of ``report_finding`` calls; its reflections are its state.
+- **A, full memory:** one reflection a night with every item said so far in context, using the
+  same tools: a reply that ends with a tool call gets its result in the next step, and the
+  reflection ends at the reply that doesn't (its last JSON array of ``report_finding`` calls is
+  the night's report) or at the night's cap. Its steps are counted and charged as B's are, and
+  its reflections are its state.
 - **B, the notebook agent:** a ReAct loop with the same tools and a free-text notebook it keeps
   across nights. Its night has MIND's shape: one opening call (MIND's notice pass) and then up to
   ``cycle_cap`` cycles, one thinker call each; a reply with no action costs its cycle.
@@ -23,7 +26,9 @@ How the arms differ:
   ``loop.run_inquiry``, on one in-memory workspace log. M-persist wipes the workspace on each
   night's first call, M-kernel runs ``NO_KERNEL`` and M-control ``control="newest"``. M+replay and
   M+shuffled run as M: they are Task 17b's hooks, and its adapter arrives as ``ArmModels.thinker``.
-  After every loop call, each workspace finding that changed is reported under its own id.
+  After every loop call, each workspace finding that changed is reported under its own id, in
+  the order the log changed them. A report's ``p`` is the probability that its statement is
+  true, so a retraction reports ``1 - p``: MIND's is the withdrawn hypothesis's credence.
 
 A night is masked to the end of its day, UTC (``night_as_of``), so every item must be stamped
 within its own day (``check_clock``). 17-core's functions arrive as a
@@ -54,7 +59,7 @@ from anjo.sleep.mind.apd.types import (
     FindingReport,
     Life,
 )
-from anjo.sleep.mind.inquiry.ports import InquiryPorts, Thinker, WorkspaceLog
+from anjo.sleep.mind.inquiry.ports import InquiryPorts, Thinker, WorkspaceLog, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
     FINDING_KINDS,
     FULL_RULES,
@@ -62,12 +67,14 @@ from anjo.sleep.mind.inquiry.types import (
     RECENT_OPS,
     Applied,
     Budget,
+    ConcludeOp,
     ControlMode,
     FindingKind,
     InquiryRun,
     KernelRules,
     ModelReply,
     Rejected,
+    RetractOp,
     Step,
     Turn,
     Workspace,
@@ -79,6 +86,7 @@ BRIEF_PATH: Final = Path(__file__).parent / "prompts" / "brief_v1.md"
 APD_TOOLS: Final = frozenset({"evidence_search", "world_query", "report_finding"})  # no research: APD is offline
 SEARCH_K: Final = 5
 A_EVIDENCE_HEADING: Final = "## Everything the person has said, up to tonight"
+A_RESULTS_HEADING: Final = "## What your tools returned tonight"
 B_STEPS_HEADING: Final = "## Your steps so far tonight"
 _NONE: Final = "none"
 _WORD: Final = re.compile(r"\w+")
@@ -362,11 +370,31 @@ _FINDING_SHAPE: Final = (
     '{"problem": "...", "conclusion": "...", "p": 0.4, "cites": ["<item id>"], "kind": "suspicion", '
     '"finding_id": "<only to update one of yours>"}'
 )
+_LOOKUP_SHAPES: Final = ('{"tool": "evidence_search", "query": "..."}', '{"tool": "world_query", "text": "..."}')
+
+
+def _lookup(
+    action: Mapping[str, object], inputs: NightInputs, search: LifeSearch, world: WorldQuery, budget: Budget,
+) -> tuple[str, Budget] | None:
+    """A and B's ``evidence_search`` or ``world_query``: what the arm is told and its budget after
+    (a ``world_query`` is charged its tokens), or ``None`` for any other action."""
+    tool, query, text = action.get("tool"), action.get("query"), action.get("text")
+    if tool == "evidence_search" and isinstance(query, str):
+        found = search.search(query, inputs.as_of, SEARCH_K)
+        lines = "\n".join(f"  [{item.id}] {item.day}: {item.text}" for item in found) or "  nothing"
+        return f'- evidence_search "{query}" found:\n{lines}', budget
+    if tool == "world_query" and isinstance(text, str):
+        if not budget.tokens_left:
+            return "- world_query: no tokens left tonight", budget
+        answer = world.ask(text, budget.tokens_left)
+        return f'- world_query "{text}": {answer.text}', budget.spend(tokens=answer.tokens)
+    return None
+
 
 # ── A, full memory ────────────────────────────────────────────────────────────
 
 _A_PROMPT: Final = "\n".join((
-    "## Tonight: {{NIGHT}}",
+    "## Tonight: {{NIGHT}}, step {{STEP}} of {{STEPS}}",
     "",
     "## Open plans and threads",
     "{{TARGETS}}",
@@ -377,30 +405,62 @@ _A_PROMPT: Final = "\n".join((
     A_EVIDENCE_HEADING,
     "{{EVIDENCE}}",
     "",
+    A_RESULTS_HEADING,
+    "{{RESULTS}}",
+    "",
     "## Your reply",
-    "Reflect on everything above, then end with one JSON array of report_finding calls, each:",
+    "Reflect on everything above. To look something up first, end with one JSON object calling a tool:",
+    *_LOOKUP_SHAPES,
+    "Otherwise end with one JSON array of report_finding calls, each:",
     _FINDING_SHAPE,
-    "An empty array reports nothing.",
+    "That array ends tonight's reflection. An empty array reports nothing.",
 ))
 
 
+def _file_last_array(registry: FindingRegistry, values: Sequence[object], inputs: NightInputs) -> FindingRegistry:
+    arrays = [value for value in values if isinstance(value, list)]
+    for call in (finding_call(item) for item in (arrays[-1] if arrays else ())):
+        if call is not None:
+            registry = report_finding(registry, call, day=inputs.night, citable=inputs.citable).registry
+    return registry
+
+
+def _a_night(
+    inputs: NightInputs, registry: FindingRegistry, models: ArmModels, thinker: Thinker, search: LifeSearch,
+    budget: Budget,
+) -> tuple[FindingRegistry, Budget, str]:
+    """One reflection: an opening call, then one call (and one cycle) per tool result, until a
+    reply calls no tool or the cap is reached. Returns the registry, the budget spent and the last
+    reply."""
+    results: tuple[str, ...] = ()
+    step, text = 0, ""
+    while budget.stop_reason is None:
+        step += 1
+        prompt = render(_A_PROMPT, {
+            "NIGHT": str(inputs.night), "STEP": str(step), "STEPS": str(budget.cycle_cap + 1),
+            "TARGETS": _targets_text(inputs.targets), "FINDINGS": findings_text(registry.reports),
+            "EVIDENCE": _items_text(inputs.seen), "RESULTS": "\n".join(results) or _NONE,
+        })
+        reply = thinker.propose(prompt, budget.tokens_left)
+        budget, text = budget.spend(cycles=0 if step == 1 else 1, tokens=reply.tokens), reply.text
+        values = json_values(reply.text)
+        last = values[-1] if values else None
+        looked = _lookup(last, inputs, search, models.world, budget) if isinstance(last, dict) else None
+        if looked is None:
+            return _file_last_array(registry, values, inputs), budget, text
+        line, budget = looked
+        results = (*results, line)
+    return registry, budget, text
+
+
 def _run_a(life: Life, models: ArmModels, budget: Budget, brief: str) -> ArmRun:
-    thinker = BriefedThinker(models.thinker, brief)
+    thinker, search = BriefedThinker(models.thinker, brief), LifeSearch(life.evidence)
     registry = FindingRegistry()
     tokens: tuple[int, ...] = ()
     contexts: dict[date, str] = {}
     for night in life.days:
-        inputs = night_inputs(life, night)
-        prompt = render(_A_PROMPT, {
-            "NIGHT": str(night), "TARGETS": _targets_text(inputs.targets),
-            "FINDINGS": findings_text(registry.reports), "EVIDENCE": _items_text(inputs.seen),
-        })
-        reply = thinker.propose(prompt, budget.tokens_left)
-        arrays = [value for value in json_values(reply.text) if isinstance(value, list)]
-        for call in (finding_call(item) for item in (arrays[-1] if arrays else ())):
-            if call is not None:
-                registry = report_finding(registry, call, day=night, citable=inputs.citable).registry
-        tokens, contexts = (*tokens, reply.tokens), {**contexts, night: reply.text}
+        registry, spent, reflection = _a_night(night_inputs(life, night), registry, models, thinker, search, budget)
+        tokens, contexts = (*tokens, spent.tokens_used), {**contexts, night: reflection}
     return ArmRun(arm="A", life_id=life.id, reports=registry.reports, tokens=tokens, contexts=contexts)
 
 
@@ -428,8 +488,7 @@ _B_PROMPT: Final = "\n".join((
     'One JSON object: {"notebook": "...", "action": {...}}. "notebook" is optional; when present it '
     "replaces your whole notebook. Track questions, hypotheses and tests in it in any structure you "
     'like. "action" is one of:',
-    '{"tool": "evidence_search", "query": "..."}',
-    '{"tool": "world_query", "text": "..."}',
+    *_LOOKUP_SHAPES,
     '{"tool": "report_finding", ' + _FINDING_SHAPE[1:],
     '{"tool": "stop"}',
 ))
@@ -461,16 +520,10 @@ def _b_act(
     action: Mapping[str, object], inputs: NightInputs, desk: _Desk, budget: Budget,
 ) -> tuple[str, _Desk, Budget]:
     """One tool call: what B is told, its desk and its budget after it."""
-    tool, query, text = action.get("tool"), action.get("query"), action.get("text")
-    if tool == "evidence_search" and isinstance(query, str):
-        found = desk.search.search(query, inputs.as_of, SEARCH_K)
-        lines = "\n".join(f"  [{item.id}] {item.day}: {item.text}" for item in found) or "  nothing"
-        return f'- evidence_search "{query}" found:\n{lines}', desk, budget
-    if tool == "world_query" and isinstance(text, str):
-        if not budget.tokens_left:
-            return "- world_query: no tokens left tonight", desk, budget
-        answer = desk.models.world.ask(text, budget.tokens_left)
-        return f'- world_query "{text}": {answer.text}', desk, budget.spend(tokens=answer.tokens)
+    looked = _lookup(action, inputs, desk.search, desk.models.world, budget)
+    if looked is not None:
+        return looked[0], desk, looked[1]
+    tool = action.get("tool")
     call = finding_call(action) if tool == "report_finding" else None
     if call is not None:
         filed = report_finding(desk.registry, call, day=inputs.night, citable=inputs.citable)
@@ -558,13 +611,25 @@ def mind_night(
     return noticed, inquired
 
 
+def _changed_at(ws: Workspace) -> dict[str, int]:
+    """Each question's last applied CONCLUDE or RETRACT, by seq."""
+    return {
+        step.entry.question_id: step.seq
+        for step in ws.history if step.applied and isinstance(step.entry, (ConcludeOp, RetractOp))
+    }
+
+
 def sync_findings(registry: FindingRegistry, ws: Workspace, *, day: date, citable: frozenset[str]) -> FindingRegistry:
-    """Report each workspace finding that changed since its last report, under its own id."""
+    """Report each workspace finding that changed since its last report, under its own id, in the
+    order the log changed them. A retraction reports ``1 - p``: a report's ``p`` is that its
+    statement is true, and a MIND retraction's is the withdrawn hypothesis's credence."""
     latest = {report.finding_id: report for report in registry.reports}
-    for finding in ws.findings:
+    changed_at = _changed_at(ws)
+    for finding in sorted(ws.findings, key=lambda f: changed_at.get(f.question_id, -1)):
         question = ws.question(finding.question_id)
+        p = 1.0 - finding.p if finding.kind == "retraction" else finding.p
         call = FindingCall(
-            problem=question.subject if question else finding.statement, conclusion=finding.statement, p=finding.p,
+            problem=question.subject if question else finding.statement, conclusion=finding.statement, p=p,
             cites=tuple(cite for cite in finding.cites if cite in citable), kind=finding.kind,
             finding_id=finding.id if finding.id in latest else None,
         )
