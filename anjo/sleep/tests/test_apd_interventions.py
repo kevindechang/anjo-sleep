@@ -1,0 +1,181 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
+"""The intervention test and kill-resume (Task 17-eval): an edited snapshot and its unedited twin
+resume on the same evidence, each on its own log; a killed run rebuilds from its log alone, with
+the digest the live run logged, and resumes."""
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+import pytest
+
+from anjo.sleep.mind.apd import arms, interventions, resume
+from anjo.sleep.mind.apd import types as apd
+from anjo.sleep.mind.inquiry import types as it
+from anjo.sleep.mind.inquiry.ports import InquiryPorts
+from anjo.sleep.tests import apd_fakes as fx
+
+
+def _m_run(life: apd.Life, reply: fx.Reply = fx.mind_reply) -> tuple[apd.ArmRun, fx.FakeCore, apd.ArmModels]:
+    fake = fx.FakeCore()
+    models = fx.models(fx.ScriptThinker(reply))
+    return arms.run_arm("M", life, models, core=fake.core()), fake, models
+
+
+def _first(events: Sequence[it.WorkspaceEvent], kind: type) -> int:
+    return next(n for n, e in enumerate(events) if isinstance(e.step.entry, kind))
+
+
+@dataclass
+class Wrong:
+    calls: list[tuple[str, int]] = field(default_factory=list)
+
+    def write(self, question: it.Question, hypotheses: Sequence[it.Hypothesis]) -> str:
+        self.calls.append((question.id, len(hypotheses)))
+        return "The plan lacks a lens rental"
+
+
+# ── The spec's test ───────────────────────────────────────────────────────────
+
+
+def test_interventions_hold_evidence_fixed() -> None:
+    life = fx.life(2)
+    whole, fake, models = _m_run(life)
+    snapshot = whole.events[: _first(whole.events, it.InvestigateOp)]  # after PREDICT, before the search
+    point = resume.resume_point(snapshot)
+    start = point.start
+    question = point.focus
+    assert question is not None and start.call == "inquiry"
+    ports = arms.mind_ports(models, life, arms.MemoryLog(), arms.load_brief())
+    edit = it.Edit("swap_lead", question, hypothesis_id=f"{question}.h2")
+    fake.calls.clear()
+    fake.searches.clear()
+
+    unedited, edited = interventions.resume_after_edit(
+        snapshot, edit, ports, point.budget, night=start.night, targets=life.targets[start.night], as_of=start.as_of,
+        core=fake.core(),
+    )
+
+    first, second = (c for c in fake.calls if c["call"] == "inquiry")
+    for name in ("night", "as_of", "targets", "budget", "focus", "rules", "control"):
+        assert first[name] == second[name], name
+    assert first["as_of"] == start.as_of and first["focus"] == question
+    a, b = first["ports"], second["ports"]
+    assert isinstance(a, InquiryPorts) and isinstance(b, InquiryPorts)
+    assert a.search is b.search is ports.search and a.resolver is b.resolver  # the same evidence, held fixed
+    assert a.log is not b.log and ports.log.events() == ()  # each branch on its own fresh log
+    assert a.log.events() == (*snapshot, *unedited.events)
+    edit_event = b.log.events()[len(snapshot)]
+    assert edit_event.step.entry == edit and edit_event.step.at == start.as_of
+    assert b.log.events() == (*snapshot, edit_event, *edited.events)
+    assert fx.fold(b.log.events()) == edited.ws  # the edited branch is a fold of its own log
+    (q1, at1, found1), (q2, at2, found2) = fake.searches
+    assert (q1, at1, found1) == (q2, at2, found2) and at1 == start.as_of
+    assert found1 and all(e.day <= start.night for e in life.evidence if e.id in found1)
+    concluded = {run.ws.finding_of(question).hypothesis_id for run in (unedited, edited)}  # type: ignore[union-attr]
+    assert concluded == {f"{question}.h1", f"{question}.h2"}  # her state, not the evidence, moved the conclusion
+
+
+# ── The harness ───────────────────────────────────────────────────────────────
+
+
+def test_snapshots_are_mid_inquiry_with_a_live_hypothesized_focus() -> None:
+    life = fx.life(3)
+    whole, fake, _ = _m_run(life)
+    core = fake.core()
+    snapshots = interventions.draw_snapshots([(life, whole)], core, seed=3, count=4)
+    assert len(snapshots) == 4 and snapshots == interventions.draw_snapshots([(life, whole)], core, seed=3, count=4)
+    for snap in snapshots:
+        ws = fx.fold(snap.events)
+        question = ws.question(snap.question_id)
+        assert question is not None and question.status in it.LIVE_STATUSES and ws.hypotheses_of(question.id)
+        last, following = snap.events[-1].step, whole.events[len(snap.events)].step
+        assert last.cycle is not None and not isinstance(following.entry, it.RunStart)  # the run goes on
+    with pytest.raises(ValueError, match="development"):
+        interventions.draw_snapshots([(fx.life(3, split="held_out"), whole)], core, seed=3)
+
+
+def test_three_edits_per_snapshot_and_skips_are_recorded() -> None:
+    life = fx.life(1)
+    whole, fake, models = _m_run(life)
+    hypothesized = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.PredictOp)], "q2")
+    predicted = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.InvestigateOp)], "q2")
+    wrong = Wrong()
+    results, skipped = interventions.intervention_test(
+        (hypothesized, predicted), {life.id: life}, models, wrong, core=fake.core(),
+    )
+    assert [(r.at, r.edit.kind) for r in results] == [
+        (len(hypothesized.events), "swap_lead"), (len(hypothesized.events), "inject_hypothesis"),
+        (len(predicted.events), "swap_lead"), (len(predicted.events), "delete_prediction"),
+        (len(predicted.events), "inject_hypothesis"),
+    ]
+    assert skipped == (interventions.Skipped(life.id, len(hypothesized.events), "delete_prediction",
+                                             "no_pending_prediction"),)
+    assert wrong.calls == [("q2", 3), ("q2", 3)]
+    swap = results[0]
+    assert swap.edit.hypothesis_id == "q2.h2" and swap.conclusion_differs
+    assert swap.unedited.finding == ("resolution", "q2.h1") and swap.edited.finding == ("resolution", "q2.h2")
+    deleted = results[3]
+    assert deleted.next_op_differs  # with its prediction gone, she predicts again instead of searching
+    assert json.loads(deleted.edited.ops[0])["op"] == "PREDICT" and json.loads(deleted.unedited.ops[0])["op"] == "INVESTIGATE"
+
+
+def test_injection_skips_a_question_that_already_holds_four() -> None:
+    def four(prompt: str) -> str:
+        reply = json.loads(fx.mind_reply(prompt)) if "\nCYCLE " in prompt else None
+        if reply is None or reply["op"] != "HYPOTHESIZE":
+            return fx.mind_reply(prompt)
+        reply["hypotheses"] = [{"statement": f"alternative {n}", "credence": 0.4 - 0.1 * n} for n in range(4)]
+        return json.dumps(reply)
+
+    life = fx.life(1)
+    whole, fake, models = _m_run(life, four)
+    snapshot = interventions.Snapshot(life.id, whole.events[: _first(whole.events, it.HypothesizeOp) + 2], "q2")
+    assert len(fx.fold(snapshot.events).hypotheses_of("q2")) == 5
+    results, skipped = interventions.intervention_test((snapshot,), {life.id: life}, models, Wrong(), core=fake.core())
+    assert [r.edit.kind for r in results] == ["swap_lead"]
+    assert {(s.kind, s.reason) for s in skipped} == {
+        ("inject_hypothesis", "four_alternatives"), ("delete_prediction", "no_pending_prediction"),
+    }
+
+
+# ── Kill-resume ───────────────────────────────────────────────────────────────
+
+
+def test_resume_point_rebuilds_budget_and_focus_from_the_log() -> None:
+    life = fx.life(1)
+    whole, _, _ = _m_run(life)
+    upto = _first(whole.events, it.InvestigateOp) + 2  # the INVESTIGATE and its search
+    point = resume.resume_point(whole.events[:upto])
+    assert point.start.call == "inquiry" and point.focus == "q2"
+    notice_tokens = point.start.budget.tokens_used
+    assert point.budget == it.Budget(cycles_used=3, tokens_used=notice_tokens + 300)
+    with pytest.raises(ValueError, match="RunStart"):
+        resume.resume_point(())
+
+
+def test_kill_resume_digest_identical() -> None:
+    life = fx.life(3, split="held_out")
+    whole, fake, models = _m_run(life)
+    night2 = next(n for n, e in enumerate(whole.events)
+                  if isinstance(e.step.entry, it.RunStart) and e.step.entry.call == "inquiry" and e.step.entry.night == life.days[1])
+    for kill_at in (night2 + 2, night2, 0):  # mid-inquiry, on an inquiry's RunStart, in the first notice pass
+        result = resume.kill_resume(life, models, kill_at, core=fx.FakeCore().core())
+        assert result.digest_equal and result.conclusions_agree, kill_at
+        assert result.resumed == result.uninterrupted and len(result.resumed) == 3
+    with pytest.raises(ValueError, match="before operation"):
+        resume.kill_resume(life, models, len(whole.events) + 5, core=fake.core())
+
+
+def test_killing_log_kills_once_after_logging() -> None:
+    whole, _, _ = _m_run(fx.life(1))
+    log = resume.KillingLog(2)
+    log.append(whole.events[0])
+    log.append(whole.events[1])
+    with pytest.raises(resume.Killed):
+        log.append(whole.events[2])
+    assert log.events() == whole.events[:3]  # the event was logged before the kill
+    log.append(whole.events[3])
+    assert len(log.events()) == 4
