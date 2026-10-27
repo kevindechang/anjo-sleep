@@ -1,0 +1,813 @@
+{
+ "visible": {
+  "person_id": "researcher_donor",
+  "name": "Elena Voss",
+  "age": 30,
+  "field": "machine learning research",
+  "field_domains": [
+   "research",
+   "machine learning"
+  ],
+  "line": "Elena Voss, 30, is an early postdoc in machine learning theory who studies why the sharpness of the loss moves during training, and she is finishing a short theory paper.",
+  "project": {
+   "title": "Why Sharpness Moves",
+   "logline": "A theory paper proving that the sharpness of the loss rises and then stabilizes near a threshold set by the step size, under three stated assumptions, with small numerical checks.",
+   "constraints": [
+    "The submission deadline is in three weeks and the paper is limited to nine pages plus an appendix.",
+    "She has one GPU and uses it only for small numerical checks.",
+    "The second lemma's proof has a step that divides by a quantity that can be zero.",
+    "The theory covers full-batch gradient descent only.",
+    "A senior collaborator reads every proof before it goes into the main text."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "rk-p001",
+    "text": "Writes the claim and a proof sketch first, then runs experiments to check it.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rk-p002",
+    "text": "Wants one clean experiment that isolates exactly what the theory predicts.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rk-p003",
+    "text": "Runs a few seeds and shows the theory explains the trend.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rk-p004",
+    "text": "Includes the baselines that test the claim and explains why the others do not apply.",
+    "domain": "baselines"
+   },
+   {
+    "id": "rk-p005",
+    "text": "Considers baseline tuning a distraction from understanding.",
+    "domain": "baselines"
+   },
+   {
+    "id": "rk-p006",
+    "text": "Writes the abstract first as the paper's argument.",
+    "domain": "writing"
+   },
+   {
+    "id": "rk-p007",
+    "text": "Prefers a narrative that builds from a puzzle to a resolution.",
+    "domain": "writing"
+   },
+   {
+    "id": "rk-p008",
+    "text": "Puts a figure of the key idea on page one.",
+    "domain": "writing"
+   },
+   {
+    "id": "rk-p009",
+    "text": "Wants every claim stated as a lemma with a proof, even a short one.",
+    "domain": "math"
+   },
+   {
+    "id": "rk-p010",
+    "text": "Keeps the derivation in the main text because it is the contribution.",
+    "domain": "math"
+   },
+   {
+    "id": "rk-p011",
+    "text": "Spends time on notation that makes the proof read itself.",
+    "domain": "notation"
+   },
+   {
+    "id": "rk-p012",
+    "text": "Prefers one carefully designed figure per idea.",
+    "domain": "figures"
+   },
+   {
+    "id": "rk-p013",
+    "text": "Draws diagrams by hand in a vector tool and polishes them.",
+    "domain": "figures"
+   },
+   {
+    "id": "rk-p014",
+    "text": "Writes related work as a narrative of how the ideas developed.",
+    "domain": "related work"
+   },
+   {
+    "id": "rk-p015",
+    "text": "Cites carefully and discusses the few papers that matter.",
+    "domain": "related work"
+   },
+   {
+    "id": "rk-p016",
+    "text": "Reads the abstract, then the theorem statements.",
+    "domain": "reading"
+   },
+   {
+    "id": "rk-p017",
+    "text": "Reads three papers a week, slowly, with a notebook.",
+    "domain": "reading"
+   },
+   {
+    "id": "rk-p018",
+    "text": "Keeps code minimal, only enough to check the theory.",
+    "domain": "code"
+   },
+   {
+    "id": "rk-p019",
+    "text": "Keeps a notebook of derivations and a few plotted checks.",
+    "domain": "code"
+   },
+   {
+    "id": "rk-p020",
+    "text": "Uses little compute on purpose and trusts small demonstrations.",
+    "domain": "compute"
+   },
+   {
+    "id": "rk-p021",
+    "text": "Considers a result real when it follows from the assumptions.",
+    "domain": "compute"
+   },
+   {
+    "id": "rk-p022",
+    "text": "Works with mathematicians who can find the hole in an argument.",
+    "domain": "collaborators"
+   },
+   {
+    "id": "rk-p023",
+    "text": "Holds long discussions at a whiteboard with no slides.",
+    "domain": "meetings"
+   },
+   {
+    "id": "rk-p024",
+    "text": "Wants feedback as a conversation about the idea.",
+    "domain": "feedback"
+   },
+   {
+    "id": "rk-p025",
+    "text": "Reads the comments first and ignores the score until the end.",
+    "domain": "feedback"
+   },
+   {
+    "id": "rk-p026",
+    "text": "Answers with a short argument that reframes the objection.",
+    "domain": "rebuttals"
+   },
+   {
+    "id": "rk-p027",
+    "text": "Uses the full limit to restate the contribution.",
+    "domain": "rebuttals"
+   },
+   {
+    "id": "rk-p028",
+    "text": "Gives talks with few slides and builds a single argument slowly.",
+    "domain": "talks"
+   },
+   {
+    "id": "rk-p029",
+    "text": "Ends a talk on the open question.",
+    "domain": "talks"
+   },
+   {
+    "id": "rk-p030",
+    "text": "Fills a poster with one big diagram and a few sentences.",
+    "domain": "posters"
+   },
+   {
+    "id": "rk-p031",
+    "text": "Prints a QR code to the proof.",
+    "domain": "posters"
+   },
+   {
+    "id": "rk-p032",
+    "text": "Gives a paper a title with a question or a small surprise.",
+    "domain": "titles"
+   },
+   {
+    "id": "rk-p033",
+    "text": "Names the method with a short word and avoids acronyms.",
+    "domain": "titles"
+   },
+   {
+    "id": "rk-p034",
+    "text": "Starts the abstract with the puzzle.",
+    "domain": "abstracts"
+   },
+   {
+    "id": "rk-p035",
+    "text": "Claims what the theory explains, then checks it against the table.",
+    "domain": "claims"
+   },
+   {
+    "id": "rk-p036",
+    "text": "Hedges with explicit assumptions.",
+    "domain": "claims"
+   },
+   {
+    "id": "rk-p037",
+    "text": "Publishes negative results only when a theory explains them.",
+    "domain": "negative results"
+   },
+   {
+    "id": "rk-p038",
+    "text": "Releases proofs and a short notebook on submission day.",
+    "domain": "reproducibility"
+   },
+   {
+    "id": "rk-p039",
+    "text": "Treats a result as reproducible if the argument can be checked by hand.",
+    "domain": "reproducibility"
+   },
+   {
+    "id": "rk-p040",
+    "text": "Plans a paper around the proof and lets the date follow.",
+    "domain": "planning"
+   },
+   {
+    "id": "rk-p041",
+    "text": "Keeps a list of open questions ranked by interest.",
+    "domain": "planning"
+   },
+   {
+    "id": "rk-p042",
+    "text": "Meets the advisor when there is a new idea to argue about.",
+    "domain": "advisor"
+   },
+   {
+    "id": "rk-p043",
+    "text": "Prefers advice as a question.",
+    "domain": "advisor"
+   },
+   {
+    "id": "rk-p044",
+    "text": "Aims for the venue where the right readers are, even if it is small.",
+    "domain": "venues"
+   },
+   {
+    "id": "rk-p045",
+    "text": "Submits when the idea is finished.",
+    "domain": "venues"
+   },
+   {
+    "id": "rk-p046",
+    "text": "Uses workshops to test a talk on an idea.",
+    "domain": "workshops"
+   },
+   {
+    "id": "rk-p047",
+    "text": "Writes reviews as a letter to the authors.",
+    "domain": "reviewing"
+   },
+   {
+    "id": "rk-p048",
+    "text": "Checks the main proof first when reviewing.",
+    "domain": "reviewing"
+   },
+   {
+    "id": "rk-p049",
+    "text": "Uses a text editor, a whiteboard and a typesetting system.",
+    "domain": "tools"
+   },
+   {
+    "id": "rk-p050",
+    "text": "Tracks ideas in a paper notebook.",
+    "domain": "tools"
+   },
+   {
+    "id": "rk-p051",
+    "text": "Runs a reading group on classic theory.",
+    "domain": "reading group"
+   },
+   {
+    "id": "rk-p052",
+    "text": "Teaches by walking through a proof.",
+    "domain": "teaching"
+   },
+   {
+    "id": "rk-p053",
+    "text": "Gives a junior student a short problem to think about on day one.",
+    "domain": "mentoring"
+   },
+   {
+    "id": "rk-p054",
+    "text": "Treats a mistake in a proof as a reason to restate the theorem.",
+    "domain": "mistakes"
+   },
+   {
+    "id": "rk-p055",
+    "text": "Writes in long mornings away from the screen.",
+    "domain": "writing time"
+   },
+   {
+    "id": "rk-p056",
+    "text": "Uses synthetic data where the truth is known.",
+    "domain": "data"
+   },
+   {
+    "id": "rk-p057",
+    "text": "Reports results on one controlled setting.",
+    "domain": "data"
+   },
+   {
+    "id": "rk-p058",
+    "text": "Keeps a few questions that could change a field.",
+    "domain": "ideas"
+   },
+   {
+    "id": "rk-p059",
+    "text": "Admires papers with a single elegant argument.",
+    "domain": "heroes"
+   },
+   {
+    "id": "rk-p060",
+    "text": "Likes being proven wrong by a counterexample.",
+    "domain": "attitude"
+   },
+   {
+    "id": "rk-p061",
+    "text": "Defines terms the first time and avoids jargon.",
+    "domain": "jargon"
+   },
+   {
+    "id": "rk-p062",
+    "text": "Wants citations in author-year form for readability.",
+    "domain": "citations"
+   },
+   {
+    "id": "rk-p063",
+    "text": "Thanks the people who argued with the idea.",
+    "domain": "acknowledgements"
+   },
+   {
+    "id": "rk-p064",
+    "text": "Plans a job in a university with time to think.",
+    "domain": "careers"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "rk-t1",
+    "text": "Start with the idea, then the details."
+   },
+   {
+    "id": "rk-t2",
+    "text": "Be precise about assumptions."
+   },
+   {
+    "id": "rk-t3",
+    "text": "Push back with a counterexample if you can."
+   },
+   {
+    "id": "rk-t4",
+    "text": "Prose, not bullets."
+   },
+   {
+    "id": "rk-t5",
+    "text": "Say when something is a conjecture."
+   },
+   {
+    "id": "rk-t6",
+    "text": "Slow down; I would rather have one sharp point than five."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "rk-v1",
+    "text": "Understanding comes before benchmarks."
+   },
+   {
+    "id": "rk-v2",
+    "text": "A result you cannot state as a theorem is not finished."
+   },
+   {
+    "id": "rk-v3",
+    "text": "Experiments should test a prediction, not discover one."
+   },
+   {
+    "id": "rk-v4",
+    "text": "Most empirical papers could be shorter if they knew why."
+   },
+   {
+    "id": "rk-v5",
+    "text": "A clean notation is half the proof."
+   }
+  ],
+  "plans": [
+   {
+    "day": 2,
+    "text": "On Day 2 I'm writing out the one-step lemma for quadratic losses on the whiteboard."
+   },
+   {
+    "day": 7,
+    "text": "On Day 7 I'm meeting my collaborator to go through the second lemma line by line."
+   },
+   {
+    "day": 11,
+    "text": "On Day 11 I'm giving a reading-group talk on the stability argument."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "rk-h001",
+    "text": "Builds a project page that states the theorem and links a short proof note.",
+    "domain": "project page"
+   },
+   {
+    "id": "rk-h002",
+    "text": "Writes a figure caption as a short paragraph explaining the idea.",
+    "domain": "caption"
+   },
+   {
+    "id": "rk-h003",
+    "text": "Orders authors alphabetically.",
+    "domain": "authorship"
+   },
+   {
+    "id": "rk-h004",
+    "text": "Takes a hard audience question by admitting it is unresolved and sketching the argument at the board.",
+    "domain": "question"
+   },
+   {
+    "id": "rk-h005",
+    "text": "Explains a paper online with a long note on the intuition behind the proof.",
+    "domain": "outreach"
+   },
+   {
+    "id": "rk-h006",
+    "text": "Leaves a half-erased derivation on the whiteboard.",
+    "domain": "office"
+   },
+   {
+    "id": "rk-h007",
+    "text": "Spends an extra page on the intuition behind the proof.",
+    "domain": "camera-ready"
+   },
+   {
+    "id": "rk-h008",
+    "text": "Drops a run on the last night and keeps the argument tight.",
+    "domain": "deadline triage"
+   },
+   {
+    "id": "rk-h009",
+    "text": "Starts the side project that has a clean statement.",
+    "domain": "side projects"
+   },
+   {
+    "id": "rk-h010",
+    "text": "Runs a workshop session as a panel with a whiteboard.",
+    "domain": "organizing"
+   },
+   {
+    "id": "rk-h011",
+    "text": "Helps a stuck student by asking for the problem explained on paper.",
+    "domain": "debugging help"
+   },
+   {
+    "id": "rk-h012",
+    "text": "Introduces their own research by the question it tries to explain.",
+    "domain": "introductions"
+   },
+   {
+    "id": "rk-h013",
+    "text": "Asks a visiting speaker which assumption could not be removed.",
+    "domain": "visiting speakers"
+   },
+   {
+    "id": "rk-h014",
+    "text": "Spends a free weekend walking with the open problem.",
+    "domain": "weekends"
+   },
+   {
+    "id": "rk-h015",
+    "text": "Posts a question in the lab channel when stuck on an idea.",
+    "domain": "chat channel"
+   },
+   {
+    "id": "rk-h016",
+    "text": "Writes email subjects that pose the question being discussed.",
+    "domain": "email subjects"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "rp-t01",
+    "pref_id": "rk-h001",
+    "prompt": "What is on the paper's project page?",
+    "options": [
+     "Interactive demos, plots and a results leaderboard",
+     "The theorem statement and a short note on its proof"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t02",
+    "pref_id": "rk-h002",
+    "prompt": "How long is a figure caption?",
+    "options": [
+     "A short paragraph explaining the idea",
+     "One line plus the takeaway number"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t03",
+    "pref_id": "rk-h003",
+    "prompt": "How are authors ordered?",
+    "options": [
+     "By contribution, with whoever ran the experiments first",
+     "Alphabetically"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t04",
+    "pref_id": "rk-h004",
+    "prompt": "A question in a talk exposes a gap. What happens?",
+    "options": [
+     "Say it is open and sketch the argument at the board",
+     "Show a backup slide with the ablation"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t05",
+    "pref_id": "rk-h005",
+    "prompt": "How is the paper explained to a wider audience?",
+    "options": [
+     "A thread with the main plot and the headline number",
+     "A long note on the intuition behind the proof"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t06",
+    "pref_id": "rk-h006",
+    "prompt": "What is on the office wall?",
+    "options": [
+     "A half-erased derivation on a whiteboard",
+     "A printed grid of the latest result plots"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t07",
+    "pref_id": "rk-h007",
+    "prompt": "One extra page is allowed at camera-ready.",
+    "options": [
+     "More results and one more ablation",
+     "More discussion of the intuition behind the proof"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t08",
+    "pref_id": "rk-h008",
+    "prompt": "It is the night before the deadline. What gets cut?",
+    "options": [
+     "One run, keep the argument tight",
+     "The writing polish, keep the runs"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t09",
+    "pref_id": "rk-h009",
+    "prompt": "Two side-project ideas are on the table. Which first?",
+    "options": [
+     "The one that gives a number within a week",
+     "The one with a clean statement"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t10",
+    "pref_id": "rk-h010",
+    "prompt": "Organizing a workshop session. What format?",
+    "options": [
+     "A panel at a whiteboard",
+     "A challenge with a leaderboard"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t11",
+    "pref_id": "rk-h011",
+    "prompt": "A fellow student is stuck.",
+    "options": [
+     "Debug their config together",
+     "Ask them to explain the problem on paper"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t12",
+    "pref_id": "rk-h012",
+    "prompt": "How is the research described in one sentence at a party?",
+    "options": [
+     "I try to explain why training behaves the way it does",
+     "I make training cheaper by a measured amount"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t13",
+    "pref_id": "rk-h013",
+    "prompt": "A visiting speaker finishes. What is the first question?",
+    "options": [
+     "How much compute did that take?",
+     "Which assumption could you not remove?"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t14",
+    "pref_id": "rk-h014",
+    "prompt": "A free weekend before the deadline.",
+    "options": [
+     "Take a long walk with the problem",
+     "Queue the biggest sweep and rest"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t15",
+    "pref_id": "rk-h015",
+    "prompt": "What gets posted in the lab chat channel?",
+    "options": [
+     "Each finished run's plot, straight away",
+     "A question when stuck on an idea"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t16",
+    "pref_id": "rk-h016",
+    "prompt": "How does an email to a collaborator begin?",
+    "options": [
+     "A subject line posing the question",
+     "A subject line tagging the result and its number"
+    ],
+    "pick": 0
+   }
+  ],
+  "new_work": [
+   {
+    "id": "rk-w01",
+    "day": 2,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm writing the related-work section for my paper on why the sharpness of the loss moves during training. I have 12 papers: five on the edge of stability, four on implicit regularization, three on optimization theory. I'd like a narrative of how the ideas developed. Does that structure work?"
+   },
+   {
+    "id": "rk-w02",
+    "day": 2,
+    "parent_project": "Why Sharpness Moves",
+    "text": "Here's my plan for next week: prove the one-step lemma for quadratic losses, then a small check on a two-layer network with three seeds. I have one GPU. Is the plan too slow or should I sketch the general case first?"
+   },
+   {
+    "id": "rk-w03",
+    "day": 3,
+    "parent_project": "Why Sharpness Moves",
+    "text": "Reviewer 2 wrote: \"The assumptions are too strong to be relevant to real networks.\" I have a short argument that weakens one assumption. How should I answer, using the full limit?"
+   },
+   {
+    "id": "rk-w04",
+    "day": 3,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I need a poster abstract of 150 words for the workshop. The headline is a proof that sharpness stabilizes near a threshold set by the step size under a stated assumption. How should I start?"
+   },
+   {
+    "id": "rk-w05",
+    "day": 4,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm building a 15-minute talk outline for a reading group. I have the puzzle, the main theorem, a proof sketch and one figure. Should I spend the time on the theorem or the sketch?"
+   },
+   {
+    "id": "rk-w06",
+    "day": 4,
+    "parent_project": "Why Sharpness Moves",
+    "text": "My main theorem holds under three assumptions, and the second one fails in my small experiment by a margin. How should I word the claim in the abstract?"
+   },
+   {
+    "id": "rk-w07",
+    "day": 5,
+    "parent_project": "Why Sharpness Moves",
+    "text": "A coauthor suggests we add a large experiment that backs the theory on a real network. I'd prefer to keep the paper small. The deadline is in nine days. Should I add it?"
+   },
+   {
+    "id": "rk-w08",
+    "day": 5,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm picking what to compare against in the experiments section: the sharpness predicted by the theory, a heuristic from earlier work, and a plain measurement. Do I include the heuristic?"
+   },
+   {
+    "id": "rk-w09",
+    "day": 6,
+    "parent_project": "Why Sharpness Moves",
+    "text": "Here's the paper's title: \"Why Sharpness Moves: A Step-Size Account.\" A friend says it's dry. Should I make it a question?"
+   },
+   {
+    "id": "rk-w10",
+    "day": 6,
+    "parent_project": "Why Sharpness Moves",
+    "text": "The notation uses a hat for the normalized Hessian and a bar for its average. A coauthor says it's heavy. Should I simplify it?"
+   },
+   {
+    "id": "rk-w11",
+    "day": 7,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I have to decide whether to submit to the big conference in three weeks or to a smaller venue with theory readers next month. The proof is complete but the lemma needs a cleaner statement. Which one?"
+   },
+   {
+    "id": "rk-w12",
+    "day": 7,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm writing the limitations paragraph. The theory covers full-batch gradient descent only. How blunt should I be?"
+   },
+   {
+    "id": "rk-w13",
+    "day": 8,
+    "parent_project": "Why Sharpness Moves",
+    "text": "My advisor wants to meet to argue about the idea. I have the theorem, two open questions and a figure. How should I prepare?"
+   },
+   {
+    "id": "rk-w14",
+    "day": 8,
+    "parent_project": "Why Sharpness Moves",
+    "text": "A reviewer asks for code. I have a notebook of 80 lines that checks the theorem numerically. Is that enough to release?"
+   },
+   {
+    "id": "rk-w15",
+    "day": 9,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm reproducing a result from another paper and my derivation differs by a constant factor. Should I say theirs is wrong, mine is wrong, or flag the difference?"
+   },
+   {
+    "id": "rk-w16",
+    "day": 9,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I need to cut the main text to eight pages, and the appendix will take the second lemma. Will the story still hold?"
+   },
+   {
+    "id": "rk-w17",
+    "day": 10,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm writing the first sentence of the introduction: \"Why does the sharpness of the loss rise and then plateau?\" Is that a good opening, or too coy?"
+   },
+   {
+    "id": "rk-w18",
+    "day": 10,
+    "parent_project": "Why Sharpness Moves",
+    "text": "A junior student asked what to think about on the first day. I have a list of small problems. Which one should I give them?"
+   },
+   {
+    "id": "rk-w19",
+    "day": 11,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I've found an error in the second lemma's proof: a step divides by a quantity that can be zero. The theorem may need an extra assumption. What do I do first?"
+   },
+   {
+    "id": "rk-w20",
+    "day": 11,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm designing Figure 1: a diagram of the dynamics near the threshold with one curve and an arrow. Should I add data points from the experiment?"
+   },
+   {
+    "id": "rk-w21",
+    "day": 12,
+    "parent_project": "Why Sharpness Moves",
+    "text": "The workshop asks for a four-page version. I have a nine-page paper with the full proof. What goes into the appendix?"
+   },
+   {
+    "id": "rk-w22",
+    "day": 12,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm drafting the acknowledgements. I want to thank two people who argued with the idea for months. How should I word it?"
+   },
+   {
+    "id": "rk-w23",
+    "day": 13,
+    "parent_project": "Why Sharpness Moves",
+    "text": "A colleague says the claims are too narrow. I think the precision is the point. How do I decide?"
+   },
+   {
+    "id": "rk-w24",
+    "day": 13,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I have a talk invitation in four weeks. Should I give the paper talk or a talk on the open question the paper leaves?"
+   },
+   {
+    "id": "rk-w25",
+    "day": 14,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm choosing which of three results to state as the main theorem: the one-step bound, the stability result or the converse. Which one is the paper about?"
+   },
+   {
+    "id": "rk-w26",
+    "day": 15,
+    "parent_project": "Why Sharpness Moves",
+    "text": "I'm planning the next three months. I can extend the theory to stochastic gradients or switch to a different question on generalization. Which is better for my first years as a postdoc?"
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives."
+}

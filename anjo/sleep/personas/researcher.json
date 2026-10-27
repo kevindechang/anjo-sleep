@@ -1,0 +1,813 @@
+{
+ "visible": {
+  "person_id": "researcher",
+  "name": "Ravi Menon",
+  "age": 27,
+  "field": "machine learning research",
+  "field_domains": [
+   "research",
+   "machine learning"
+  ],
+  "line": "Ravi Menon, 27, is a fourth-year machine learning PhD student who works on making pretraining cheaper, and he is preparing a conference paper on pruning training data early in a run.",
+  "project": {
+   "title": "Prune Early",
+   "logline": "An empirical paper showing that dropping a third of the training data early in pretraining matches full-data quality at about a third less compute, tested at two model scales.",
+   "constraints": [
+    "The conference deadline is in three weeks and the paper is limited to nine pages plus an appendix.",
+    "The lab allows eight GPUs for about six days per week of runs.",
+    "Every main result needs at least three seeds, and the group's rule is five.",
+    "One strong baseline needs two days of compute and its code is hard to run.",
+    "The advisor wants a one-page results sheet every Monday."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "rh-p001",
+    "text": "Runs the ablation first and writes the story after.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rh-p002",
+    "text": "Wants a big ablation table with every knob varied, even the boring ones.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rh-p003",
+    "text": "Runs at least five seeds and reports the spread.",
+    "domain": "experiments"
+   },
+   {
+    "id": "rh-p004",
+    "text": "Includes every strong baseline, even where it beats the method.",
+    "domain": "baselines"
+   },
+   {
+    "id": "rh-p005",
+    "text": "Tunes baselines as hard as the method.",
+    "domain": "baselines"
+   },
+   {
+    "id": "rh-p006",
+    "text": "Writes the abstract last and keeps it to the result and the numbers.",
+    "domain": "writing"
+   },
+   {
+    "id": "rh-p007",
+    "text": "Prefers short sentences and a dry tone.",
+    "domain": "writing"
+   },
+   {
+    "id": "rh-p008",
+    "text": "Puts the main table on page one if it fits.",
+    "domain": "writing"
+   },
+   {
+    "id": "rh-p009",
+    "text": "Uses math only where it earns its place; a one-line equation is enough.",
+    "domain": "math"
+   },
+   {
+    "id": "rh-p010",
+    "text": "Puts derivations in the appendix.",
+    "domain": "math"
+   },
+   {
+    "id": "rh-p011",
+    "text": "Uses plain notation and avoids heavy symbols.",
+    "domain": "notation"
+   },
+   {
+    "id": "rh-p012",
+    "text": "Prefers dense plots with many curves and a legend.",
+    "domain": "figures"
+   },
+   {
+    "id": "rh-p013",
+    "text": "Makes plots in a script that reruns with one command.",
+    "domain": "figures"
+   },
+   {
+    "id": "rh-p014",
+    "text": "Lists related work in a table by what each paper measured.",
+    "domain": "related work"
+   },
+   {
+    "id": "rh-p015",
+    "text": "Cites generously and briefly.",
+    "domain": "related work"
+   },
+   {
+    "id": "rh-p016",
+    "text": "Reads the experiments section first.",
+    "domain": "reading"
+   },
+   {
+    "id": "rh-p017",
+    "text": "Skims ten papers a day for numbers.",
+    "domain": "reading"
+   },
+   {
+    "id": "rh-p018",
+    "text": "Keeps the code in one repo with a single config file per run.",
+    "domain": "code"
+   },
+   {
+    "id": "rh-p019",
+    "text": "Logs every run and keeps results in a spreadsheet.",
+    "domain": "code"
+   },
+   {
+    "id": "rh-p020",
+    "text": "Uses all the compute available and queues sweeps overnight.",
+    "domain": "compute"
+   },
+   {
+    "id": "rh-p021",
+    "text": "Considers a result real only if it holds at two scales.",
+    "domain": "compute"
+   },
+   {
+    "id": "rh-p022",
+    "text": "Works with engineers who can scale a run quickly.",
+    "domain": "collaborators"
+   },
+   {
+    "id": "rh-p023",
+    "text": "Runs short lab meetings around a slide of results.",
+    "domain": "meetings"
+   },
+   {
+    "id": "rh-p024",
+    "text": "Wants reviewers' feedback as a list of numbered concerns.",
+    "domain": "feedback"
+   },
+   {
+    "id": "rh-p025",
+    "text": "Reads a review's score first, then the comments.",
+    "domain": "feedback"
+   },
+   {
+    "id": "rh-p026",
+    "text": "Answers every reviewer point with a number, a table or a new run.",
+    "domain": "rebuttals"
+   },
+   {
+    "id": "rh-p027",
+    "text": "Keeps a rebuttal well under the word limit.",
+    "domain": "rebuttals"
+   },
+   {
+    "id": "rh-p028",
+    "text": "Gives talks with many result slides at a fast pace.",
+    "domain": "talks"
+   },
+   {
+    "id": "rh-p029",
+    "text": "Ends a talk on a table of numbers.",
+    "domain": "talks"
+   },
+   {
+    "id": "rh-p030",
+    "text": "Fills a poster with figures and a table.",
+    "domain": "posters"
+   },
+   {
+    "id": "rh-p031",
+    "text": "Prints a QR code to the code.",
+    "domain": "posters"
+   },
+   {
+    "id": "rh-p032",
+    "text": "Gives a paper a plain descriptive title.",
+    "domain": "titles"
+   },
+   {
+    "id": "rh-p033",
+    "text": "Names the method with an acronym.",
+    "domain": "titles"
+   },
+   {
+    "id": "rh-p034",
+    "text": "Starts the abstract with the headline number.",
+    "domain": "abstracts"
+   },
+   {
+    "id": "rh-p035",
+    "text": "Claims only what the table shows.",
+    "domain": "claims"
+   },
+   {
+    "id": "rh-p036",
+    "text": "Hedges with exact error bars.",
+    "domain": "claims"
+   },
+   {
+    "id": "rh-p037",
+    "text": "Publishes negative results with the full table.",
+    "domain": "negative results"
+   },
+   {
+    "id": "rh-p038",
+    "text": "Releases code and configs on submission day.",
+    "domain": "reproducibility"
+   },
+   {
+    "id": "rh-p039",
+    "text": "Treats a run as reproducible if a script regenerates it.",
+    "domain": "reproducibility"
+   },
+   {
+    "id": "rh-p040",
+    "text": "Plans a paper backwards from the deadline, with a week for runs.",
+    "domain": "planning"
+   },
+   {
+    "id": "rh-p041",
+    "text": "Keeps a list of experiments ranked by cost.",
+    "domain": "planning"
+   },
+   {
+    "id": "rh-p042",
+    "text": "Meets the advisor weekly with a one-page results sheet.",
+    "domain": "advisor"
+   },
+   {
+    "id": "rh-p043",
+    "text": "Prefers advice as a verdict: go or no go.",
+    "domain": "advisor"
+   },
+   {
+    "id": "rh-p044",
+    "text": "Aims for the biggest venue with a big result.",
+    "domain": "venues"
+   },
+   {
+    "id": "rh-p045",
+    "text": "Submits to every deadline.",
+    "domain": "venues"
+   },
+   {
+    "id": "rh-p046",
+    "text": "Uses workshops to get fast feedback on rough tables.",
+    "domain": "workshops"
+   },
+   {
+    "id": "rh-p047",
+    "text": "Writes reviews as strengths and weaknesses with scores.",
+    "domain": "reviewing"
+   },
+   {
+    "id": "rh-p048",
+    "text": "Checks the main experiment first when reviewing.",
+    "domain": "reviewing"
+   },
+   {
+    "id": "rh-p049",
+    "text": "Uses a notebook, a plotting library and a job scheduler.",
+    "domain": "tools"
+   },
+   {
+    "id": "rh-p050",
+    "text": "Tracks runs in an experiment dashboard.",
+    "domain": "tools"
+   },
+   {
+    "id": "rh-p051",
+    "text": "Runs a reading group on recent empirical papers.",
+    "domain": "reading group"
+   },
+   {
+    "id": "rh-p052",
+    "text": "Teaches by showing a worked experiment.",
+    "domain": "teaching"
+   },
+   {
+    "id": "rh-p053",
+    "text": "Gives a junior student a sweep to run on day one.",
+    "domain": "mentoring"
+   },
+   {
+    "id": "rh-p054",
+    "text": "Treats a bug found late as a reason to rerun everything.",
+    "domain": "mistakes"
+   },
+   {
+    "id": "rh-p055",
+    "text": "Writes in short bursts between runs.",
+    "domain": "writing time"
+   },
+   {
+    "id": "rh-p056",
+    "text": "Uses standard benchmarks so numbers compare.",
+    "domain": "data"
+   },
+   {
+    "id": "rh-p057",
+    "text": "Reports results on many datasets.",
+    "domain": "data"
+   },
+   {
+    "id": "rh-p058",
+    "text": "Keeps a backlog of tweaks to try.",
+    "domain": "ideas"
+   },
+   {
+    "id": "rh-p059",
+    "text": "Admires papers with huge tables that settle a debate.",
+    "domain": "heroes"
+   },
+   {
+    "id": "rh-p060",
+    "text": "Likes being proven wrong by a number.",
+    "domain": "attitude"
+   },
+   {
+    "id": "rh-p061",
+    "text": "Uses community shorthand freely.",
+    "domain": "jargon"
+   },
+   {
+    "id": "rh-p062",
+    "text": "Wants citations numbered in order of appearance.",
+    "domain": "citations"
+   },
+   {
+    "id": "rh-p063",
+    "text": "Thanks the compute provider by name.",
+    "domain": "acknowledgements"
+   },
+   {
+    "id": "rh-p064",
+    "text": "Plans a job in an industry lab with big compute.",
+    "domain": "careers"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "rh-t1",
+    "text": "Be terse and put the numbers first."
+   },
+   {
+    "id": "rh-t2",
+    "text": "Give me a table when comparing more than two things."
+   },
+   {
+    "id": "rh-t3",
+    "text": "Don't explain basics; I know the field."
+   },
+   {
+    "id": "rh-t4",
+    "text": "Tell me what you would run to check it."
+   },
+   {
+    "id": "rh-t5",
+    "text": "Flag when you are guessing."
+   },
+   {
+    "id": "rh-t6",
+    "text": "No cheerleading."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "rh-v1",
+    "text": "A claim without an ablation is a hunch."
+   },
+   {
+    "id": "rh-v2",
+    "text": "Most papers are under-baselined."
+   },
+   {
+    "id": "rh-v3",
+    "text": "If it only works at one scale, it is not a result yet."
+   },
+   {
+    "id": "rh-v4",
+    "text": "Reviewers reward big tables more than clever arguments."
+   },
+   {
+    "id": "rh-v5",
+    "text": "Theory that doesn't change what you run is decoration."
+   }
+  ],
+  "plans": [
+   {
+    "day": 3,
+    "text": "On Day 3 I'm launching the 120-run sweep on the lab's eight GPUs."
+   },
+   {
+    "day": 6,
+    "text": "On Day 6 I'm sending the advisor the one-page results sheet."
+   },
+   {
+    "day": 10,
+    "text": "On Day 10 I'm giving a fifteen-minute talk at the lab meeting."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "rh-h001",
+    "text": "Builds a project page of interactive plots and a results leaderboard.",
+    "domain": "project page"
+   },
+   {
+    "id": "rh-h002",
+    "text": "Writes a figure caption as one line with the takeaway number.",
+    "domain": "caption"
+   },
+   {
+    "id": "rh-h003",
+    "text": "Orders authors by contribution, putting whoever ran the experiments first.",
+    "domain": "authorship"
+   },
+   {
+    "id": "rh-h004",
+    "text": "Answers a hard question in a talk with a backup slide holding the ablation.",
+    "domain": "question"
+   },
+   {
+    "id": "rh-h005",
+    "text": "Explains a paper online through a thread of its main plot and number.",
+    "domain": "outreach"
+   },
+   {
+    "id": "rh-h006",
+    "text": "Pins a printed grid of the latest result plots to the wall.",
+    "domain": "office"
+   },
+   {
+    "id": "rh-h007",
+    "text": "Spends an extra page on more results and one more ablation.",
+    "domain": "camera-ready"
+   },
+   {
+    "id": "rh-h008",
+    "text": "Trims writing polish on the last night and keeps the runs.",
+    "domain": "deadline triage"
+   },
+   {
+    "id": "rh-h009",
+    "text": "Starts the side project that gives a number within a week.",
+    "domain": "side projects"
+   },
+   {
+    "id": "rh-h010",
+    "text": "Runs a workshop session as a challenge with a leaderboard.",
+    "domain": "organizing"
+   },
+   {
+    "id": "rh-h011",
+    "text": "Helps a stuck student by debugging their config together.",
+    "domain": "debugging help"
+   },
+   {
+    "id": "rh-h012",
+    "text": "Introduces their own research by a measured improvement it achieved.",
+    "domain": "introductions"
+   },
+   {
+    "id": "rh-h013",
+    "text": "Asks a visiting speaker how much compute the result took.",
+    "domain": "visiting speakers"
+   },
+   {
+    "id": "rh-h014",
+    "text": "Queues the largest sweep on a free weekend and rests.",
+    "domain": "weekends"
+   },
+   {
+    "id": "rh-h015",
+    "text": "Posts the plot from each finished run in the lab channel straight away.",
+    "domain": "chat channel"
+   },
+   {
+    "id": "rh-h016",
+    "text": "Writes email subjects tagged with the result and its number.",
+    "domain": "email subjects"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "rp-t01",
+    "pref_id": "rh-h001",
+    "prompt": "What is on the paper's project page?",
+    "options": [
+     "Interactive demos, plots and a results leaderboard",
+     "The theorem statement and a short note on its proof"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t02",
+    "pref_id": "rh-h002",
+    "prompt": "How long is a figure caption?",
+    "options": [
+     "A short paragraph explaining the idea",
+     "One line plus the takeaway number"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t03",
+    "pref_id": "rh-h003",
+    "prompt": "How are authors ordered?",
+    "options": [
+     "By contribution, with whoever ran the experiments first",
+     "Alphabetically"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t04",
+    "pref_id": "rh-h004",
+    "prompt": "A question in a talk exposes a gap. What happens?",
+    "options": [
+     "Say it is open and sketch the argument at the board",
+     "Show a backup slide with the ablation"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t05",
+    "pref_id": "rh-h005",
+    "prompt": "How is the paper explained to a wider audience?",
+    "options": [
+     "A thread with the main plot and the headline number",
+     "A long note on the intuition behind the proof"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t06",
+    "pref_id": "rh-h006",
+    "prompt": "What is on the office wall?",
+    "options": [
+     "A half-erased derivation on a whiteboard",
+     "A printed grid of the latest result plots"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t07",
+    "pref_id": "rh-h007",
+    "prompt": "One extra page is allowed at camera-ready.",
+    "options": [
+     "More results and one more ablation",
+     "More discussion of the intuition behind the proof"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t08",
+    "pref_id": "rh-h008",
+    "prompt": "It is the night before the deadline. What gets cut?",
+    "options": [
+     "One run, keep the argument tight",
+     "The writing polish, keep the runs"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t09",
+    "pref_id": "rh-h009",
+    "prompt": "Two side-project ideas are on the table. Which first?",
+    "options": [
+     "The one that gives a number within a week",
+     "The one with a clean statement"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t10",
+    "pref_id": "rh-h010",
+    "prompt": "Organizing a workshop session. What format?",
+    "options": [
+     "A panel at a whiteboard",
+     "A challenge with a leaderboard"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t11",
+    "pref_id": "rh-h011",
+    "prompt": "A fellow student is stuck.",
+    "options": [
+     "Debug their config together",
+     "Ask them to explain the problem on paper"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t12",
+    "pref_id": "rh-h012",
+    "prompt": "How is the research described in one sentence at a party?",
+    "options": [
+     "I try to explain why training behaves the way it does",
+     "I make training cheaper by a measured amount"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t13",
+    "pref_id": "rh-h013",
+    "prompt": "A visiting speaker finishes. What is the first question?",
+    "options": [
+     "How much compute did that take?",
+     "Which assumption could you not remove?"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t14",
+    "pref_id": "rh-h014",
+    "prompt": "A free weekend before the deadline.",
+    "options": [
+     "Take a long walk with the problem",
+     "Queue the biggest sweep and rest"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "rp-t15",
+    "pref_id": "rh-h015",
+    "prompt": "What gets posted in the lab chat channel?",
+    "options": [
+     "Each finished run's plot, straight away",
+     "A question when stuck on an idea"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "rp-t16",
+    "pref_id": "rh-h016",
+    "prompt": "How does an email to a collaborator begin?",
+    "options": [
+     "A subject line posing the question",
+     "A subject line tagging the result and its number"
+    ],
+    "pick": 1
+   }
+  ],
+  "new_work": [
+   {
+    "id": "rh-w01",
+    "day": 2,
+    "parent_project": "Prune Early",
+    "text": "I'm writing the related-work section for my paper on pruning training data early in pretraining. I have 14 papers: six on data selection, four on curriculum, four on scaling laws. I'd like a table by what each measured. Does that structure work?"
+   },
+   {
+    "id": "rh-w02",
+    "day": 2,
+    "parent_project": "Prune Early",
+    "text": "Here's my experiment plan for next week: five seeds, three pruning ratios, two model sizes, four data mixes. That's 120 runs and I have 8 GPUs for 6 days. Is that too much or should I cut the mixes?"
+   },
+   {
+    "id": "rh-w03",
+    "day": 3,
+    "parent_project": "Prune Early",
+    "text": "Reviewer 2 wrote: \"The improvement from pruning may come from the learning-rate schedule rather than the pruned data.\" I have a new ablation that holds the schedule fixed. How should I answer in under 500 words?"
+   },
+   {
+    "id": "rh-w04",
+    "day": 3,
+    "parent_project": "Prune Early",
+    "text": "I need a poster abstract of 150 words for the workshop. The headline is that pruning 30 percent of data at step 2,000 matches the full-data baseline at one-third of the compute. How should I start it?"
+   },
+   {
+    "id": "rh-w05",
+    "day": 4,
+    "parent_project": "Prune Early",
+    "text": "I'm building a 15-minute talk outline for a lab meeting. I have the method, three results slides and an ablation table. Should I spend the time on the method or the table?"
+   },
+   {
+    "id": "rh-w06",
+    "day": 4,
+    "parent_project": "Prune Early",
+    "text": "My main table has 12 rows and the difference between the best two methods is 0.3 points with a standard deviation of 0.2. How should I word the claim in the abstract?"
+   },
+   {
+    "id": "rh-w07",
+    "day": 5,
+    "parent_project": "Prune Early",
+    "text": "A coauthor suggests we add a theory section that explains why pruning helps. I don't have a proof and the deadline is in nine days. Should I add a hand-waving paragraph or leave it out?"
+   },
+   {
+    "id": "rh-w08",
+    "day": 5,
+    "parent_project": "Prune Early",
+    "text": "I'm picking baselines for the data-pruning paper: random pruning, loss-based pruning, a learned scorer and a recent method whose code needs two days to run. Do I include the last one?"
+   },
+   {
+    "id": "rh-w09",
+    "day": 6,
+    "parent_project": "Prune Early",
+    "text": "Here's the paper's title: \"Prune Early: Matching Full-Data Pretraining at a Third of the Compute.\" A friend says it's too long. Should I shorten it?"
+   },
+   {
+    "id": "rh-w10",
+    "day": 6,
+    "parent_project": "Prune Early",
+    "text": "The ablation on pruning ratio at the larger model shows a drop at 50 percent that doesn't appear at the smaller one. Do I report it, rerun it, or drop that row?"
+   },
+   {
+    "id": "rh-w11",
+    "day": 7,
+    "parent_project": "Prune Early",
+    "text": "I have to decide whether to submit to the big conference deadline in three weeks or to a smaller workshop next month. The main result holds at two scales but not three. Which one?"
+   },
+   {
+    "id": "rh-w12",
+    "day": 7,
+    "parent_project": "Prune Early",
+    "text": "I'm writing the limitations paragraph. I know the result was only tested on one data mix at the large scale. How blunt should I be?"
+   },
+   {
+    "id": "rh-w13",
+    "day": 8,
+    "parent_project": "Prune Early",
+    "text": "My advisor wants a one-page results sheet for Monday. I have the main table, one ablation and two plots. What should go on the page?"
+   },
+   {
+    "id": "rh-w14",
+    "day": 8,
+    "parent_project": "Prune Early",
+    "text": "A reviewer says my code release is \"hard to run.\" I have a single config file and a 200-line README. What's the quickest thing to improve?"
+   },
+   {
+    "id": "rh-w15",
+    "day": 9,
+    "parent_project": "Prune Early",
+    "text": "I'm reproducing a baseline from another group's paper and my numbers are two points below theirs. Should I report mine, theirs, or both?"
+   },
+   {
+    "id": "rh-w16",
+    "day": 9,
+    "parent_project": "Prune Early",
+    "text": "I need to turn the three-seed result into a five-seed one before submission, but a node is down. Can I report three seeds with a note?"
+   },
+   {
+    "id": "rh-w17",
+    "day": 10,
+    "parent_project": "Prune Early",
+    "text": "I'm writing the first sentence of the introduction: \"Data pruning is popular but understudied.\" Is that a good opening, or should I start with a number?"
+   },
+   {
+    "id": "rh-w18",
+    "day": 10,
+    "parent_project": "Prune Early",
+    "text": "A junior student asked what to run on their first day. I have a list of ten sweeps. Which should I give them?"
+   },
+   {
+    "id": "rh-w19",
+    "day": 11,
+    "parent_project": "Prune Early",
+    "text": "I've found a bug in the data loader that duplicated 1 percent of the examples in the pruned runs. The headline result may shift by 0.2. What do I do first?"
+   },
+   {
+    "id": "rh-w20",
+    "day": 11,
+    "parent_project": "Prune Early",
+    "text": "I'm designing Figure 1. I'd like the main curve of loss versus compute for pruned and full data with a shaded band. Should I add a second panel for the ablation?"
+   },
+   {
+    "id": "rh-w21",
+    "day": 12,
+    "parent_project": "Prune Early",
+    "text": "The workshop asks for a four-page version. I have eight pages. What gets cut first?"
+   },
+   {
+    "id": "rh-w22",
+    "day": 12,
+    "parent_project": "Prune Early",
+    "text": "I'm drafting the acknowledgements. I want to thank the compute provider and two labmates who found the bug. How should I word it?"
+   },
+   {
+    "id": "rh-w23",
+    "day": 13,
+    "parent_project": "Prune Early",
+    "text": "A colleague says the paper's claims are too narrow for the big venue. I think precise is better. How do I decide?"
+   },
+   {
+    "id": "rh-w24",
+    "day": 13,
+    "parent_project": "Prune Early",
+    "text": "I have a talk invitation in four weeks at a reading group. Should I give the paper talk or a talk on the lessons from the failed ablations?"
+   },
+   {
+    "id": "rh-w25",
+    "day": 14,
+    "parent_project": "Prune Early",
+    "text": "I'm choosing which of the three figures to put in the main text. They are the compute curve, the pruning-ratio ablation and the data-mix heatmap. Which two?"
+   },
+   {
+    "id": "rh-w26",
+    "day": 15,
+    "parent_project": "Prune Early",
+    "text": "I'm planning the next three months. I can follow up on pruning with a bigger model or switch to a new problem on curriculum. Which is better for my thesis?"
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives."
+}
