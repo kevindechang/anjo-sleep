@@ -177,7 +177,7 @@ def test_training_script_parses_and_builds_its_config_offline() -> None:
         "load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_use_double_quant": True,
         "bnb_4bit_compute_dtype": "bfloat16", "bnb_4bit_quant_storage": "bfloat16"}
     assert settings["lora"]["r"] == 16 and settings["lora"]["lora_alpha"] == 32
-    assert settings["lora"]["target_modules"] == list(DEFAULT_TARGET_MODULES)
+    assert settings["lora"]["target_modules"] == colab_train.lora_targets(DEFAULT_TARGET_MODULES)
     sft = settings["sft"]
     assert sft["max_length"] == 8192 and sft["packing"] is False
     assert sft["completion_only_loss"] is True and sft["bf16"] is True

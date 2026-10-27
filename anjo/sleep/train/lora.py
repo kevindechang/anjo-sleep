@@ -5,7 +5,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
 
 - rank ``r`` 16 by default and at most 32, the serving cap (``config.MAX_LORA_RANK``); alpha is
   always 2r and dropout 0.05;
-- the attention projections and the MLP (q, k, v, o, gate, up, down);
+- the attention projections and the MLP (q, k, v, o, gate, up, down) of the text decoder only: the
+  training script anchors the names there, since Glimmer's vision tower has a q, k and v too;
 - lr 2e-4, or 5e-5 for a warm start on the last promoted adapter; fixed seeds;
 - at least ``min_optimizer_steps`` updates: a tiny night with batch 1 and accumulation 16 would
   make one or two, so accumulation shrinks to ``n // min_optimizer_steps`` (between 1 and 16) and,
