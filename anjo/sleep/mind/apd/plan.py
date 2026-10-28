@@ -2,8 +2,12 @@
 runs: its Colab session and hard timeout, and each hold it takes on each pool, priced at the list
 prices given, Spark Open's on its provider's pool (``mind.spark_provider``). Beside each worst
 case it shows the expected spend when a timing has been measured (``timing.json``), and beside the
-holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. Printing a plan spends
-nothing and reaches nothing."""
+holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. ``generate`` and
+``generate-pairs`` also print their worst case in all and their expected cost, in all and on each
+pool (the writer's, the reader's and Muse Spark's): each life's (or pair's) calls in one attempt
+that passes, counted from its own items as the gates read them and priced by each call's token
+shape (``costs``) at its model's prices, and say when a pool's part passes its whole cap. Printing a
+plan spends nothing and reaches nothing."""
 from __future__ import annotations
 
 import math
@@ -11,12 +15,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from anjo.sleep.mind.apd import colab_vllm, generate
-from anjo.sleep.mind.apd.backend import gen_holds
+from anjo.sleep.budget import CAPS, Pool
+from anjo.sleep.mind.apd import colab_vllm, costs, generate
+from anjo.sleep.mind.apd.backend import GEMINI_THINKING, GEN_SPARK_RETRIES, GenCalls, gen_holds, life_calls
 from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
+from anjo.sleep.mind.apd.generate import LifeSpec
+from anjo.sleep.mind.apd.generators import SPARK, Generator
+from anjo.sleep.mind.apd.pairs import LAST_DAY, OUTCOME_DAYS, PAIR_CALLS, PAIR_EXPECTED, PAIR_ITEMS
+from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
@@ -51,6 +60,7 @@ class Plan:
     ceiling_usd: float | None = None  # --max-usd, for the commands that take it
     ceiling_unit: str = ""  # what the ceiling is checked before
     parallel: int = 1  # the units that may be in flight at once
+    totals: tuple[str, ...] = ()  # the worst case in all and the expected cost, when the plan prints them
 
 
 def _night(provider: SparkProvider, prices: Prices, nights: int, what: str, timing: Timing | None) -> Hold:
@@ -67,14 +77,169 @@ def _session_cu(timing: Timing | None, nights: int) -> float | None:
     return None if timing is None else cu(timing.setup_s) + nights * timing.cu_per_night
 
 
-def generate_plan(lives: int, prices: Prices, rates: Mapping[str, Rate], split: str, *,
-                  provider: SparkProvider) -> Plan:
-    worst = gen_holds(prices, rates, provider.pool)
-    attempts = lives * generate.MAX_ATTEMPTS
-    return Plan(f"generate {lives} {split} li{'fe' if lives == 1 else 'ves'}", None, (
-        Hold(provider.pool, worst[provider.pool], attempts, "Spark Open per attempt: writer, extractor, gate readers"),
-        Hold("meta_usd", worst["meta_usd"], attempts, "Muse Spark per attempt: the gates' auditor"),
-    ), (_spark(provider), f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts"))
+def _mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _lives(count: int) -> str:
+    return f"{count} li{'fe' if count == 1 else 'ves'}"
+
+
+def surface_days(spec: LifeSpec) -> tuple[int, ...]:
+    """The day index each planted item of ``spec``'s first attempt surfaces on."""
+    return tuple(item.surface_day for item in generate.plan(spec.split, spec.field, spec.families, spec.prevalence,
+                                                            spec.seed))
+
+
+@dataclass(frozen=True)
+class Pricing:
+    """Who writes and reads a generation command's lives, at what prices, on which pools."""
+
+    writer: str
+    write: Rate
+    write_pool: Pool
+    reader: str
+    read: Rate
+    read_pool: Pool
+    muse: Rate
+    thinks: bool  # the reader is billed for its thoughts (Gemini)
+
+
+def pricing(prices: Prices, rates: Mapping[str, Rate], provider: SparkProvider, generator: Generator = SPARK,
+            generator_rate: Rate | None = None, reader: Reader = SPARK_READER,
+            reader_rate: Rate | None = None) -> Pricing:
+    spark = Rate(prices.spark_in_per_m, prices.spark_out_per_m)
+    write = spark if generator.model is None or generator_rate is None else generator_rate
+    read = spark if reader.model is None or reader_rate is None else reader_rate
+    return Pricing("Spark Open" if generator.model is None else generator.name, write, provider.pool,
+                   "Spark Open" if reader.model is None else f"Gemini ({reader.model})", read,
+                   reader.pool_on(provider), rates[MUSE], reader.model is not None)
+
+
+def expected(tokens: costs.AttemptTokens, on: Pricing) -> dict[Pool, float]:
+    """One attempt that passes, priced by its calls' shapes on each pool it uses."""
+    found: dict[Pool, float] = {on.write_pool: tokens.writes.usd(on.write)}
+    found[on.read_pool] = found.get(on.read_pool, 0.0) + tokens.reads.usd(on.read)
+    found["meta_usd"] = tokens.muse.usd(on.muse)
+    return found
+
+
+def life_expected(surfaces: Sequence[int], on: Pricing) -> dict[Pool, float]:
+    """One life whose items surface on ``surfaces``, one attempt that passes, on each pool."""
+    return expected(costs.life_tokens(tuple(surfaces), thinks=on.thinks), on)
+
+
+def _worst(on: Pricing, prices: Prices, rates: Mapping[str, Rate], calls: GenCalls) -> dict[Pool, float]:
+    return gen_holds(prices, rates, on.write_pool, calls, on.write, read_rate=on.read, read_pool=on.read_pool)
+
+
+def _pools(on: Pricing) -> tuple[Pool, ...]:
+    return tuple(dict.fromkeys((on.write_pool, on.read_pool, "meta_usd")))
+
+
+def _who(on: Pricing, pool: Pool) -> str:
+    parts = [*(["writer and extractor (" + on.writer + ")"] if pool == on.write_pool else []),
+             *(["gate readers (" + on.reader + ")"] if pool == on.read_pool else []),
+             *(["the gates' auditor (Muse Spark)"] if pool == "meta_usd" else [])]
+    extra = f", and {GEN_SPARK_RETRIES} extra tries" if pool != "meta_usd" else ""
+    return " and ".join(parts) + extra
+
+
+def _shapes(on: Pricing) -> str:
+    thoughts = f", {costs.GEMINI_THOUGHTS} thought tokens a Gemini read" if on.thinks else ""
+    return (f"expected by each call's token shape (costs): a day of {costs.DAY_TOKENS:,} tokens, the size that makes "
+            f"the life measured on 2026-10-28 cost its ${costs.MEASURED_LIFE_USD:.2f}{thoughts}; replies' sizes "
+            "assumed; `calls` prints the real shapes once a life is logged")
+
+
+def _per_pool(on: Pricing, worst: Mapping[Pool, float], each: Sequence[Mapping[Pool, float]], what: str) -> tuple[str, ...]:
+    lines = []
+    for pool in _pools(on):
+        found = [one.get(pool, 0.0) for one in each]
+        lines.append(f"On {pool}: worst case ${worst.get(pool, 0.0):,.2f}; expected about ${sum(found):,.2f} for "
+                     f"{what}, ${min(found, default=0.0):,.2f} to ${max(found, default=0.0):,.2f} each.")
+        if sum(found) > CAPS[pool]:
+            lines.append(f"Over the cap: about ${sum(found):,.2f} of it is on {pool}, more than its whole "
+                         f"${CAPS[pool]:,.2f} cap; the run stops once the pool is full (BudgetStop), and a rerun goes "
+                         "on from what was saved.")
+    return tuple(lines)
+
+
+def _writer_note(generator: Generator, on: Pricing) -> tuple[str, ...]:
+    if generator.model is None:
+        return ()
+    effort = "" if generator.reasoning_effort is None else (
+        f", reasoning effort {generator.reasoning_effort}, any reasoning held and settled as output but not in the "
+        "expected")
+    trains = "" if generator.trains is None else f"; its lives may train the core: {generator.trains}"
+    return (f"the writer and extractor are {generator.name} on Fireworks ({generator.model}{effort}) at "
+            f"${on.write.per_m_in:g}/${on.write.per_m_out:g} per 1M tokens{trains}",)
+
+
+def _reader_note(reader: Reader, on: Pricing) -> tuple[str, ...]:
+    if reader.model is None:
+        return ("the gates read on Spark Open",)
+    return (f"the gates read on Gemini ({reader.model}, Vertex, thinking {GEMINI_THINKING}) at "
+            f"${on.read.per_m_in:g}/${on.read.per_m_out:g} per 1M tokens, held on {on.read_pool}: verdicts only, "
+            "never a life's text",)
+
+
+def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provider: SparkProvider,
+               generator: Generator = SPARK, generator_rate: Rate | None = None, reader: Reader = SPARK_READER,
+               reader_rate: Rate | None = None) -> Plan:
+    """Generating ``count`` counterfactual pairs, each attempt held for both histories."""
+    on = pricing(prices, rates, provider, generator, generator_rate, reader, reader_rate)
+    worst = _worst(on, prices, rates, PAIR_CALLS)
+    attempts = count * generate.MAX_ATTEMPTS
+    holds = tuple(Hold(pool, worst[pool], attempts, f"{pool} per pair attempt: " + (
+        f"{LIFE_DAYS} days written and extracted once and each history's {len(OUTCOME_DAYS)} outcomes extracted, "
+        if pool == on.write_pool else "") + _who(on, pool)) for pool in _pools(on))
+    total = sum(hold.each * hold.count for hold in holds)
+    pairs = f"{count} pair{'' if count == 1 else 's'}"
+    one = expected(costs.pair_tokens((LAST_DAY,) * PAIR_ITEMS, len(OUTCOME_DAYS), thinks=on.thinks), on)
+    worst_all = {pool: worst[pool] * attempts for pool in _pools(on)}
+    return Plan(f"generate {pairs} of histories in core-test's fields", None, holds, (
+        _spark(provider), *_writer_note(generator, on), *_reader_note(reader, on),
+        f"at most {generate.MAX_ATTEMPTS} attempts a pair; both histories pass the gates or the pair is written again",
+        "a pair that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
+    ), totals=(
+        f"Worst case: ${total:,.2f} for {pairs}: every pair taking all {generate.MAX_ATTEMPTS} attempts, every call "
+        "at its cap and every extra try used.",
+        f"Expected: about ${count * sum(one.values()):,.2f} for {pairs}, one attempt each: "
+        f"${sum(one.values()):,.2f} a pair, {PAIR_EXPECTED.spark + PAIR_EXPECTED.muse} calls, {_shapes(on)}.",
+        *_per_pool(on, worst_all, [one] * count, pairs),
+    ))
+
+
+def generate_plan(lives: Sequence[Sequence[int]], prices: Prices, rates: Mapping[str, Rate], split: str, *,
+                  provider: SparkProvider, generator: Generator = SPARK, generator_rate: Rate | None = None,
+                  reader: Reader = SPARK_READER, reader_rate: Rate | None = None) -> Plan:
+    """Generating one life per entry of ``lives``, each its items' surface days: each attempt held
+    for its own items, and expected by its own calls' shapes (``costs``) on each pool."""
+    count, on = len(lives), pricing(prices, rates, provider, generator, generator_rate, reader, reader_rate)
+    worst = [_worst(on, prices, rates, life_calls(len(items))) for items in lives]
+    each = [life_expected(items, on) for items in lives]
+    attempts = count * generate.MAX_ATTEMPTS
+    sized = "sized to its life's planted items; the mean shown"
+    holds = tuple(Hold(pool, _mean([w[pool] for w in worst]), attempts, f"{pool} per attempt: {_who(on, pool)}, {sized}")
+                  for pool in _pools(on))
+    total = sum(hold.each * hold.count for hold in holds)
+    items = sorted(len(found) for found in lives) or [0]
+    lives_usd = [sum(one.values()) for one in each]
+    worst_all = {pool: sum(w[pool] for w in worst) * generate.MAX_ATTEMPTS for pool in _pools(on)}
+    return Plan(f"generate {_lives(count)} of {split}", None, holds, (
+        _spark(provider), *_writer_note(generator, on), *_reader_note(reader, on),
+        f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts, its calls sharing "
+        f"{GEN_SPARK_RETRIES} extra tries for a transient failure",
+        "a life that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
+    ), totals=(
+        f"Worst case: ${total:,.2f} for {_lives(count)}: every life taking all {generate.MAX_ATTEMPTS} attempts, every "
+        "call at its cap and every extra try used.",
+        f"Expected: about ${sum(lives_usd):,.2f} for {_lives(count)}, one attempt each: "
+        f"${min(lives_usd, default=0.0):,.2f} to ${max(lives_usd, default=0.0):,.2f} a life by its planted items "
+        f"({items[0]} to {items[-1]}), {_shapes(on)}.",
+        *_per_pool(on, worst_all, each, _lives(count)),
+    ))
 
 
 def run_plan(lives: int, arms: Sequence[str], prices: Prices, session_s: float, parallel: int,
@@ -165,7 +330,8 @@ def describe(plan: Plan) -> str:
         expected = "" if hold_.expected is None else (
             f"; expected about ${hold_.expected:.4f} each (timing), ${hold_.expected * hold_.count:.2f} in all")
         lines.append(f"Hold on {hold_.pool}: {amount} each{times}{expected}: {hold_.what}.")
-    lines.extend(_ceiling(plan))
+    lines.extend(_ceiling(plan))  # beside the holds
+    lines.extend(plan.totals)
     lines.extend(f"Note: {note}." for note in plan.notes)
     lines.append("Nothing has run. Add --yes to start it.")
     return "\n".join(lines)
