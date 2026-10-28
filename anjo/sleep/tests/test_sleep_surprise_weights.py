@@ -6,6 +6,7 @@ term and a pair's its DPO term, before the chunk's mean; a row without one train
 logs nothing new. Offline: a tiny CPU model."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 import time
@@ -19,8 +20,8 @@ from anjo.sleep.tests.test_lora import REVISION, _examples, _with_pairs
 from anjo.sleep.tests.test_sft_dpo_default import NIGHT, Seen
 from anjo.sleep.tests.test_sleep_objective import _plan, _tiny, _Tokens, _torch
 from anjo.sleep.train import colab_train, sleep_job, sleep_loss
-from anjo.sleep.train.lora import LoraCfg, adapter_name
-from anjo.sleep.train.trainer import LoraTrainer
+from anjo.sleep.train.lora import LoraCfg, TrainReceipt, adapter_name
+from anjo.sleep.train.trainer import OPTIONAL_KEYS, LoraTrainer
 
 ROW = sleep_loss.Seq((1, 2), (3, 4, 11))
 PAIR = sleep_loss.PairSeq((1, 5), (6, 11), (7, 11))
@@ -101,3 +102,6 @@ def test_the_night_log_says_whether_the_weights_reached_the_loss(tmp_path: Path)
         _, logged = trainer.train("p1", NIGHT, None, data, adapter_name("p1", 3, 0))
         assert logged.get("surprise_weights") == note and ("surprise_weights" in logged) == bool(note)
         assert json.dumps(logged)
+    # Every switch off, the log is today's receipt: no key a switch fills, not even an empty one.
+    today = {f.name for f in dataclasses.fields(TrainReceipt)} - set(OPTIONAL_KEYS)
+    assert set(logged) == today and {"projector", "channel_receipt"} <= set(OPTIONAL_KEYS)

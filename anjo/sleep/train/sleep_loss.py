@@ -219,14 +219,16 @@ def step_plan(n: int, min_steps: int) -> tuple[int, int, int]:
 
 
 def schedule(main_steps: int) -> Callable[[int], float]:
-    """The rate's factor: a 3% warmup, a cosine over the main steps, then the dream block's share."""
+    """The rate's factor: a 3% warmup, a cosine over the main steps, then the dream block's share. Over
+    the main steps it is today's trainer's (transformers' ``get_cosine_schedule_with_warmup``, warmup
+    ``ceil(3%)`` steps): 0 on the first step, ``step / warm`` through the warmup (a test holds it)."""
     warm = max(1, math.ceil(WARMUP * main_steps))
 
     def factor(step: int) -> float:
         if step >= main_steps:
             return DREAM_RATE
         if step < warm:
-            return (step + 1) / (warm + 1)
+            return step / warm
         return 0.5 * (1.0 + math.cos(math.pi * (step - warm) / max(1, main_steps - warm)))
 
     return factor

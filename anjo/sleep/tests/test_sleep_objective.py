@@ -8,6 +8,7 @@ without it."""
 from __future__ import annotations
 
 import json
+import math
 import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -397,7 +398,8 @@ def test_with_the_fold_the_teacher_has_the_long_term_ranks_on_and_tonights_slot_
     long_term = model.lora_B.detach().clone()
     assert not long_term[:, 2:].any()  # the fresh slot starts empty
     seeds = tuple(sleep_loss.SeedSeq((1, i), (9, 9, 1, i), (4, 5, 11)) for i in range(2, 6))
-    sleep_loss.train_terms(model, sleep_loss.Batch(seeds=seeds), _plan(long_term_rank=2))
+    # Four updates: the first is at rate 0 (today's warmup), so a later student pass sees the slot filled.
+    sleep_loss.train_terms(model, sleep_loss.Batch(seeds=seeds), _plan(long_term_rank=2, min_steps=3))
     taught = [b for ids, on, grad, _, b in model.calls if ids[:2] == (9, 9) and on and not grad]
     trained = [b for ids, on, grad, _, b in model.calls if ids[:2] != (9, 9) and on and grad]
     assert len(taught) >= len(seeds) and all(torch.equal(b, long_term) for b in taught)
@@ -447,6 +449,20 @@ def test_with_seeding_on_the_dpo_step_is_todays() -> None:
     assert 0.1 * plan.dpo_lr <= dpo["max_update"] <= 3.2 * plan.dpo_lr < plan.lr / 100
     with_dpo_lr = sleep_loss.train_terms(_tiny(torch), batch, replace(plan, dpo_lr=plan.lr))["dpo"]
     assert with_dpo_lr["max_update"] > 10 * dpo["max_update"]  # what sharing the SFT rate would have done
+
+
+def test_the_schedule_is_todays_cosine_with_warmup_step_for_step() -> None:
+    """The main and DPO blocks' rate is the one today's trainer gives (transformers' cosine with a
+    ``ceil(3%)``-step warmup, 0 on the first step), so a seeded night gets no extra rate over today's."""
+    torch = _torch()
+    transformers = pytest.importorskip("transformers")
+    for total in (8, 16, 40, 67, 100):
+        warm = math.ceil(sleep_loss.WARMUP * total)
+        optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+        today = transformers.get_cosine_schedule_with_warmup(optimizer, warm, total).lr_lambdas[0]
+        ours = sleep_loss.schedule(total)
+        assert [ours(step) for step in range(total)] == pytest.approx([today(step) for step in range(total)], abs=1e-12)
+    assert sleep_loss.schedule(8)(0) == 0.0 and sleep_loss.schedule(8)(8) == sleep_loss.DREAM_RATE
 
 
 def test_the_imitation_reward_is_edit_similarity_cut_at_z0() -> None:
