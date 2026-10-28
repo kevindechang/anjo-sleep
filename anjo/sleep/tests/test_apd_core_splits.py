@@ -15,7 +15,7 @@ import pytest
 
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import core_families, core_splits, families, gen_batch
+from anjo.sleep.mind.apd import core_families, core_splits, families, gen_batch, plan
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import CORE_SPLITS, FAMILIES, MAX_PREVALENCE, CoreSplit
 from anjo.sleep.mind.spark_provider import FIREWORKS
@@ -149,4 +149,5 @@ def test_the_core_generate_plan_holds_each_life_at_its_own_prevalence(tmp_path: 
     live = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
     assert cli.main([*live, "--data", str(tmp_path), "generate", "--split", "core-train"], out=lines.append) == 0
     text = "\n".join(lines)
-    assert "generate 120 lives of core-train" in text and "Expected: about $33.60 for 120 lives" in text
+    expected = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(s))) for s in core_splits.core_specs("core-train"))
+    assert "generate 120 lives of core-train" in text and f"Expected: about ${expected:,.2f} for 120 lives" in text

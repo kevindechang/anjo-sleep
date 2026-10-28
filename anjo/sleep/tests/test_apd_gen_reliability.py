@@ -250,10 +250,12 @@ def test_generate_plan_prints_worst_case_and_expected(tmp_path: Path, monkeypatc
     lines: list[str] = []
     assert cli.main([*LIVE, "--data", str(tmp_path), "generate"], out=lines.append) == 0
     text = "\n".join(lines)
-    lives = len(generate.development_specs())
+    specs = generate.development_specs()
+    lives = len(specs)
+    expected = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(spec))) for spec in specs)
     worst = sum(float(line.split("at most $")[1].split(" ")[0].replace(",", ""))
                 for line in text.splitlines() if line.startswith("Hold on "))
     assert f"Worst case: ${worst:,.2f} for {lives} lives" in text
-    assert f"Expected: about ${lives * plan.EXPECTED_LIFE_USD:,.2f}" in text
+    assert f"Expected: about ${expected:,.2f} for {lives} lives" in text
     assert "up to 4 at once" in text and f"{backends.GEN_SPARK_RETRIES} extra tries" in text
     assert list(tmp_path.iterdir()) == []

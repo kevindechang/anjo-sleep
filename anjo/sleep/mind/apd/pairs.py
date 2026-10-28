@@ -34,7 +34,7 @@ from typing import Final
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.mind.apd import gates
-from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, held_attempt
+from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, held_attempt, item_reads
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
 from anjo.sleep.mind.apd.families import Template
@@ -67,7 +67,9 @@ FORK_DAY: Final = 6  # the first day the histories may differ
 OUTCOME_DAYS: Final = (6, 8)  # the commitment's two outcomes, one history's each
 LAST_DAY: Final = LIFE_DAYS - 1
 PAIR_WRITTEN_DAYS: Final = LIFE_DAYS + len(OUTCOME_DAYS)  # the shared days once, the outcome days twice
-PAIR_CALLS: Final = GenCalls(2 * PAIR_WRITTEN_DAYS, 3 * GEN_READS_PER_ITEM, 3 + 2)  # 2 + 1 items; their audits
+PAIR_ITEMS: Final = 3  # the unrelated item in both histories, the commitment's gap in the failed one
+PAIR_CALLS: Final = GenCalls(2 * PAIR_WRITTEN_DAYS, PAIR_ITEMS * GEN_READS_PER_ITEM, PAIR_ITEMS + 2)  # + both audits
+PAIR_EXPECTED: Final = GenCalls(PAIR_CALLS.writes, PAIR_ITEMS * item_reads(LAST_DAY), PAIR_CALLS.muse, retries=0)
 KEPT_BEATS: Final = ("k.o", "k.d")
 
 

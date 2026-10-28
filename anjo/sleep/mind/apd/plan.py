@@ -2,10 +2,11 @@
 runs: its Colab session and hard timeout, and each hold it takes on each pool, priced at the list
 prices given, Spark Open's on its provider's pool (``mind.spark_provider``). Beside each worst
 case it shows the expected spend when a timing has been measured (``timing.json``), and beside the
-holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. ``generate`` also prints
-its worst case in all and its expected cost, from what one life cost when measured
-(``EXPECTED_LIFE_USD``), and ``generate-pairs`` its own (``EXPECTED_PAIR_USD``). Printing a plan spends
-nothing and reaches nothing."""
+holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. ``generate`` and
+``generate-pairs`` also print their worst case in all and their expected cost: each life's (or
+pair's) calls in one attempt that passes, counted from its own items as the gates read them
+(``expected_calls``), at one call's measured price (``CALL_USD``), and say when the Spark Open part
+alone passes its pool's whole cap. Printing a plan spends nothing and reaches nothing."""
 from __future__ import annotations
 
 import math
@@ -13,13 +14,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from anjo.sleep.budget import CAPS, Pool
 from anjo.sleep.mind.apd import colab_vllm, generate
-from anjo.sleep.mind.apd.backend import GEN_SPARK_RETRIES, gen_holds, life_calls
+from anjo.sleep.mind.apd.backend import GEN_SPARK_RETRIES, GEN_WRITE_CALLS, GenCalls, gen_holds, item_reads, life_calls
 from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
-from anjo.sleep.mind.apd.pairs import PAIR_CALLS, PAIR_WRITTEN_DAYS
+from anjo.sleep.mind.apd.generate import LifeSpec
+from anjo.sleep.mind.apd.pairs import PAIR_CALLS, PAIR_EXPECTED, PAIR_WRITTEN_DAYS
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
@@ -30,8 +33,11 @@ from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX
 
 NIGHT_WHAT: Final = "screen and resolver, held at a night's first call and settled at what it priced"
-EXPECTED_LIFE_USD: Final = 0.28  # one development life on Fireworks, one attempt, measured live on 2026-10-28
-EXPECTED_PAIR_USD: Final = 0.40  # a life's, scaled to 12 written days against 10, rounded up; not measured
+MEASURED_LIFE_USD: Final = 0.28  # a development life with no items, one attempt, on Fireworks, measured 2026-10-28
+CALL_USD: Final = MEASURED_LIFE_USD / GEN_WRITE_CALLS  # one call, from that life's writer and extractor calls
+PRICED: Final = (f"at ${CALL_USD:.3f} a call: a life with no items cost ${MEASURED_LIFE_USD:.2f} for its "
+                 f"{GEN_WRITE_CALLS} writer and extractor calls on Fireworks (measured 2026-10-28); the gates' "
+                 "reads and Muse Spark's calls priced the same, not measured")
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,30 @@ def _lives(count: int) -> str:
     return f"{count} li{'fe' if count == 1 else 'ves'}"
 
 
+def surface_days(spec: LifeSpec) -> tuple[int, ...]:
+    """The day index each planted item of ``spec``'s first attempt surfaces on."""
+    return tuple(item.surface_day for item in generate.plan(spec.split, spec.field, spec.families, spec.prevalence,
+                                                            spec.seed))
+
+
+def expected_calls(surfaces: Sequence[int]) -> GenCalls:
+    """One attempt that passes, its items surfacing on ``surfaces`` (day indexes): the writer and
+    extractor each day, each item's reads (``item_reads``) and identify call, and the script audit."""
+    return GenCalls(GEN_WRITE_CALLS, sum(item_reads(day) for day in surfaces), len(surfaces) + 1, retries=0)
+
+
+def expected_usd(calls: GenCalls) -> float:
+    return (calls.spark + calls.muse) * CALL_USD
+
+
+def _over_cap(spark_usd: float, pool: Pool) -> tuple[str, ...]:
+    cap = CAPS[pool]
+    if spark_usd <= cap:
+        return ()
+    return (f"Over the cap: about ${spark_usd:,.2f} of it is Spark Open on {pool}, more than its whole ${cap:,.2f} cap; "
+            "the run stops once the pool is full (BudgetStop), and a rerun goes on from what was saved.",)
+
+
 def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provider: SparkProvider) -> Plan:
     """Generating ``count`` counterfactual pairs, each attempt held for both histories."""
     pool = provider.pool
@@ -100,17 +130,21 @@ def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provide
     ), totals=(
         f"Worst case: ${total:,.2f} for {pairs}: every pair taking all {generate.MAX_ATTEMPTS} attempts, every call "
         "at its cap and every extra try used.",
-        f"Expected: about ${count * EXPECTED_PAIR_USD:,.2f} for {pairs}, at ${EXPECTED_PAIR_USD:.2f} a pair "
-        f"(a life's ${EXPECTED_LIFE_USD:.2f} scaled to {PAIR_WRITTEN_DAYS} written days, rounded up; not measured).",
+        f"Expected: about ${count * expected_usd(PAIR_EXPECTED):,.2f} for {pairs}, one attempt each: "
+        f"${expected_usd(PAIR_EXPECTED):,.2f} a pair, {PAIR_EXPECTED.spark + PAIR_EXPECTED.muse} calls, {PRICED}.",
+        *_over_cap(count * PAIR_EXPECTED.spark * CALL_USD, pool),
     ))
 
 
-def generate_plan(prevalences: Sequence[int], prices: Prices, rates: Mapping[str, Rate], split: str, *,
+def generate_plan(lives: Sequence[Sequence[int]], prices: Prices, rates: Mapping[str, Rate], split: str, *,
                   provider: SparkProvider) -> Plan:
-    """Generating one life per entry of ``prevalences``, each attempt held for its own planted items."""
-    lives, pool = len(prevalences), provider.pool
-    worst = [gen_holds(prices, rates, pool, life_calls(prevalence)) for prevalence in prevalences]
-    attempts = lives * generate.MAX_ATTEMPTS
+    """Generating one life per entry of ``lives``, each its items' surface days: each attempt held
+    for its own items, and expected at its own calls (``expected_calls``)."""
+    count, pool = len(lives), provider.pool
+    worst = [gen_holds(prices, rates, pool, life_calls(len(items))) for items in lives]
+    each = [expected_calls(items) for items in lives]
+    expected = [expected_usd(calls) for calls in each]
+    attempts = count * generate.MAX_ATTEMPTS
     sized = "sized to its life's planted items; the mean shown"
     holds = (
         Hold(pool, _mean([w[pool] for w in worst]), attempts,
@@ -119,16 +153,18 @@ def generate_plan(prevalences: Sequence[int], prices: Prices, rates: Mapping[str
              f"Muse Spark per attempt: the gates' auditor, {sized}"),
     )
     total = sum(hold.each * hold.count for hold in holds)
-    return Plan(f"generate {_lives(lives)} of {split}", None, holds, (
+    items = sorted(len(found) for found in lives) or [0]
+    return Plan(f"generate {_lives(count)} of {split}", None, holds, (
         _spark(provider),
         f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts, its Spark Open calls "
         f"sharing {GEN_SPARK_RETRIES} extra tries for a transient failure",
         "a life that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
     ), totals=(
-        f"Worst case: ${total:,.2f} for {_lives(lives)}: every life taking all {generate.MAX_ATTEMPTS} attempts, every "
+        f"Worst case: ${total:,.2f} for {_lives(count)}: every life taking all {generate.MAX_ATTEMPTS} attempts, every "
         "call at its cap and every extra try used.",
-        f"Expected: about ${lives * EXPECTED_LIFE_USD:,.2f} for {_lives(lives)}, at ${EXPECTED_LIFE_USD:.2f} a life "
-        "(one development life, one attempt, on Fireworks, measured 2026-10-28).",
+        f"Expected: about ${sum(expected):,.2f} for {_lives(count)}, one attempt each: ${min(expected, default=0.0):,.2f} "
+        f"to ${max(expected, default=0.0):,.2f} a life by its planted items ({items[0]} to {items[-1]}), {PRICED}.",
+        *_over_cap(sum(calls.spark for calls in each) * CALL_USD, pool),
     ))
 
 

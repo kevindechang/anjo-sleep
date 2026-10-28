@@ -16,7 +16,7 @@ import pytest
 
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import core_families, gates, labels, pairs
+from anjo.sleep.mind.apd import core_families, gates, labels, pairs, plan
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import PAIR_DECISIONS, CounterfactualPair, GateVerdict, Life, ProblemFile
 from anjo.sleep.mind.spark_provider import FIREWORKS
@@ -174,5 +174,7 @@ def test_the_pairs_plan_prints_worst_case_and_expected(tmp_path: Path) -> None:
     live = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
     assert cli.main([*live, "--data", str(tmp_path), "generate-pairs"], out=lines.append) == 0
     text = "\n".join(lines)
-    assert "generate 20 pairs" in text and "Expected: about $8.00 for 20 pairs" in text and "Worst case: $" in text
+    expected = 20 * plan.expected_usd(pairs.PAIR_EXPECTED)
+    assert "generate 20 pairs" in text and f"Expected: about ${expected:,.2f} for 20 pairs" in text
+    assert "Worst case: $" in text
     assert list(tmp_path.iterdir()) == []

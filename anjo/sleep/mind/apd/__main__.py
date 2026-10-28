@@ -75,6 +75,7 @@ from anjo.sleep.mind.apd.types import (
     CORE_SPLITS,
     HELD_OUT_LIVES,
     KILL_RESUME_LIVES,
+    LIFE_DAYS,
     MAX_PREVALENCE,
     ArmName,
     Life,
@@ -269,9 +270,9 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
     on_disk = len(_lives(data, split, args.only, getattr(args, "subset", None)))
-    if args.command == "generate":  # the held-out lives' items are drawn at the freeze: held at the most
-        found = ([MAX_PREVALENCE] * args.lives if split == "held_out"
-                 else [spec.prevalence for spec in _specs(split)])
+    if args.command == "generate":  # the held-out lives' items are drawn at the freeze: at the most, surfacing last
+        found = ([(LIFE_DAYS - 1,) * MAX_PREVALENCE] * args.lives if split == "held_out"
+                 else [plan.surface_days(spec) for spec in _specs(split)])
         return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider)
     if args.command == "generate-pairs":
         return plan.pairs_plan(args.n, prices, rates, provider=provider)

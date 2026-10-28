@@ -57,8 +57,19 @@ from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.runners.colab import COLAB_BIN, ColabCli
 
+
+
+def item_reads(pre_surface_days: int) -> int:
+    """The gates' Spark Open reads of one item read over ``pre_surface_days`` days (its surface
+    day's index): every day and every two adjacent days in both views (``gates._leak``), and its
+    discoverability read. A life that passes makes all of them."""
+    if pre_surface_days < 1:
+        raise ValueError("an item surfaces after at least one day")
+    return 2 * (2 * pre_surface_days - 1) + 1
+
+
 GEN_WRITE_CALLS: Final = 2 * LIFE_DAYS  # the writer and the extractor, once a day
-GEN_READS_PER_ITEM: Final = 2 * (2 * LIFE_DAYS - 1) + 1  # an item's leak windows in both views, and its discovery
+GEN_READS_PER_ITEM: Final = item_reads(LIFE_DAYS)  # the hold's bound per item: more than any surface day's
 GEN_SPARK_RETRIES: Final = 6  # extra tries one attempt holds for transient Spark Open failures, shared by its calls
 JUDGE_TIMEOUT_S: Final = 120.0
 JUDGE_MAX_TOKENS: Final = 400
