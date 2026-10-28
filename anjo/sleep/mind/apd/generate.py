@@ -64,6 +64,12 @@ REPAIR_PROMPT: Final = Path(__file__).parent / "prompts" / "repair_v1.md"  # a d
 # A core split's generator (DeepSeek) sometimes leaves ``placed`` out of a day with nothing to
 # place; told this line, and read leniently there (``_read_day``). Spark Open's prompt is unchanged.
 ALWAYS_PLACED: Final = "Always include `placed`, even on a day with nothing to place: then it is `{}`."
+# A core split's writer with ``--keep-off`` gets its life's planted topics (``keep_off``) and this
+# line: told nothing of the other days' beats, a writer narrates their subjects as the project's
+# story (the 2026-10-29 quarantine). The registered prompts are unchanged.
+KEEP_OFF: Final = "`keep_off` names subjects that belong to the beats: write about them only in a `plant` or `ask` " \
+                  "message, never in another message or on another day: no progress, plans, purchases, repairs or " \
+                  "decisions about them. Move the project on through other work, and never say how anything feels."
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -239,11 +245,12 @@ def _check_model(reply: ChatResult, model: str) -> None:
 
 def writer_messages(
     field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat], *,
-    model: str, repair: Mapping[str, Any] | None = None,
+    model: str, repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """The writer's call for day ``index`` (from 0): ``life_v1.md`` (and, for a core split's
-    generator, ``ALWAYS_PLACED``) and the day's payload; a day written again (``repair``) adds
-    ``repair_v1.md`` and what the repair says (the day as it was, why, the days after it)."""
+    generator, ``ALWAYS_PLACED``) and the day's payload; topics to ``keep_off`` add ``KEEP_OFF``
+    and the topics; a day written again (``repair``) adds ``repair_v1.md`` and what the repair says
+    (the day as it was, why, the days after it)."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
@@ -252,6 +259,8 @@ def writer_messages(
     }
     prompt = LIFE_PROMPT.read_text(encoding="utf-8")
     system = f"{prompt.rstrip()}\n{ALWAYS_PLACED}\n" if model in BY_MODEL else prompt
+    if keep_off:
+        system, payload = f"{system.rstrip()}\n{KEEP_OFF}\n", {**payload, "keep_off": list(keep_off)}
     if repair is not None:
         system, payload = f"{system.rstrip()}\n\n{REPAIR_PROMPT.read_text(encoding='utf-8')}", {**payload, **repair}
     return [
@@ -262,10 +271,10 @@ def writer_messages(
 
 def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
-    beats: Sequence[Beat], repair: Mapping[str, Any] | None = None,
+    beats: Sequence[Beat], repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
 ) -> tuple[list[str], dict[str, int]]:
-    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair), None,
-                 TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair,
+                                        keep_off=keep_off), None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
     _check_model(reply, model)
     text: str | None = None
     try:
@@ -362,6 +371,7 @@ class Draft:
     written: tuple[WrittenDay, ...] = ()
     held: Mapping[str, Target] = dataclasses.field(default_factory=lambda: MappingProxyType({}))
     targets: Mapping[date, tuple[Target, ...]] = dataclasses.field(default_factory=lambda: MappingProxyType({}))
+    keep_off: tuple[str, ...] = ()  # the topics each write is told to keep to their beats (``--keep-off``)
 
     @property
     def evidence(self) -> tuple[Evidence, ...]:
@@ -377,7 +387,8 @@ class Draft:
         messages' sources, so two branches' versions of one day never share an evidence id;
         ``repair`` writes it again (``writer_messages``)."""
         earlier = [{"day": done.index + 1, "messages": list(done.texts)} for done in self.written]
-        texts, placed = _write_day(chat, self.model, self.field, index, day, self.seed, earlier, beats, repair)
+        texts, placed = _write_day(chat, self.model, self.field, index, day, self.seed, earlier, beats, repair,
+                                   self.keep_off)
         turns = [Turn(f"{self.life_id}:d{index}{branch}:m{i}", "user", text, frozenset({self.model}))
                  for i, text in enumerate(texts)]
         found = _extract_day(chat, self.model, self.life_id, day, turns, tuple(self.held.values()),
@@ -441,14 +452,16 @@ def life(
 
 def drafted(
     field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: LifeSplit, chat: ChatFn,
-    model: str = SPARK_OPEN,
+    model: str = SPARK_OPEN, keep_off: bool = False,
 ) -> tuple[Draft, tuple[ItemPlan, ...]]:
-    """``life``'s draft, every day written and extracted, and its plan."""
+    """``life``'s draft, every day written and extracted, and its plan; with ``keep_off``, each
+    write is given the planted items' topics (``KEEP_OFF``)."""
     if field not in fields(split):
         raise ValueError(f"{field!r} is not a {split} field")
     plans = plan(split, field, families, prevalence, seed)
     beats = beats_of(plans)
-    draft = Draft(life_id_for(split, field, seed), field, seed, model)
+    topics = tuple(item.template.topic for item in plans) if keep_off else ()
+    draft = Draft(life_id_for(split, field, seed), field, seed, model, keep_off=topics)
     for index, day in enumerate(life_days()):
         draft = draft.add(draft.write(chat, index, day, beats.get(index, [])))
     return draft, plans

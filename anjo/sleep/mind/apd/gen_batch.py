@@ -153,9 +153,9 @@ Keep = Callable[[repair.Tried, int, int], None]  # a failed check's life kept, b
 def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None, keep: Keep | None = None) -> Generated:
     """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
     the backend's generator (``generators``), its gates read by its reader (``readers``), every
-    try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak or
-    the script audit first takes up to ``repair.ROUNDS`` repair rounds, each held as an attempt
-    is; ``keep`` is handed each check that failed."""
+    try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak, a
+    missed origin day or the script audit first takes up to ``repair.ROUNDS`` repair rounds, each
+    held as an attempt is; ``keep`` is handed each check that failed."""
     on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(generate.MAX_ATTEMPTS):
         if on_call is not None:
@@ -180,7 +180,7 @@ def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
     seed, writes = generate.attempt_seed(spec.seed, attempt), backend.generator.writes_with(backend.provider)
     tried = _checked(spec, backend, log, attempt, 0, life_calls(spec.prevalence), memo,
                      lambda chat: generate.drafted(spec.field, spec.families, spec.prevalence, seed, split=spec.split,
-                                                   chat=chat, model=writes))
+                                                   chat=chat, model=writes, keep_off=backend.keep_off))
     round_ = 0
     while tried is not None and not tried.passed:
         if keep is not None:
@@ -218,11 +218,16 @@ def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
         verdicts = gates.check(built, problems, reader=read, auditor=audit, model=model)
         audited = all(verdict.passed for verdict in verdicts if verdict.gate == "script_audit")
         issues = () if audited else gates.audit_issues(built, problems, audit)  # the audit's reply, from the memo
+        if not backend.repair:
+            return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues)
         items = {item.id: item for item in problems.items}
-        windows = {} if not backend.repair else {  # each flagged window's days, its single day's reply from the memo
+        windows = {  # each flagged window's days, its single day's reply from the memo
             verdict.item_id: found for verdict in verdicts if verdict.item_id in items
             and (found := gates.flagged_window(built, items[verdict.item_id], verdict, read, model)) is not None}
-        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues, windows)
+        missed = {  # each origin day a discoverability reader passed over, its reply from the memo
+            verdict.item_id: gates.missed_origin_days(built, items[verdict.item_id], read, model)
+            for verdict in verdicts if verdict.item_id in items and verdict.reason == gates.MISSED_ORIGIN}
+        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues, windows, missed)
 
 
 class CallFailed(RuntimeError):
@@ -309,10 +314,12 @@ def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str, data: Data
 
 def made_record(backend: Backend) -> dict[str, object]:
     """Who wrote and read a life or pair, and why its lives may train the MIND core (``None``: no
-    clearance recorded for its writer)."""
+    clearance recorded for its writer); ``keep_off`` when its writer was given its topics
+    (``--keep-off``), absent otherwise, as on every life made before it."""
     return {"writer": backend.generator.name, "writer_model": backend.generator.writes_with(backend.provider),
             "trains": backend.generator.trains, "reader": backend.read_by.name,
-            "reader_model": backend.read_by.reads_with(backend.provider)}
+            "reader_model": backend.read_by.reads_with(backend.provider),
+            **({"keep_off": True} if backend.keep_off else {})}
 
 
 @dataclass(frozen=True)

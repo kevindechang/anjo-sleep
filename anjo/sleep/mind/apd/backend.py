@@ -138,8 +138,9 @@ class Backend:
     read_by: Reader = SPARK_READER  # who reads a core split's and the pairs' gates (``readers``), through ``reader``
     reader_rate: Rate | None = None  # its list prices, when it isn't Spark Open
     read_limit: Limiter | None = field(default=None, compare=False)  # the run's one limit on the reader's calls
-    repair: bool = False  # a core split's attempt failing a leak or the audit has its days written again (``repair``)
+    repair: bool = False  # a core split's failed attempt has the days a leak, missed origin or audit names rewritten
     keep_failed: bool = False  # a core split's failed attempt is kept under ``quarantine`` (``store``)
+    keep_off: bool = False  # a core split's writer is given its life's topics (``generate.KEEP_OFF``)
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:

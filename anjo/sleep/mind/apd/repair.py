@@ -1,13 +1,17 @@
 """Repairing a core split's failed attempt (MIND's data; ``--repair``).
 
-A core split's attempt that fails only a leak or the script audit need not be thrown away whole:
-the days the failure names are written again, the rest kept.
+A core split's attempt that fails only a leak, a missed origin day or the script audit need not be
+thrown away whole: the days the failure names are written again, the rest kept.
 
 - **What is repaired** (``fixes``): a leak verdict names the window it flagged (``gates.flagged``,
   ``gates.flagged_window``: one day, or two), and its days are written again, told which view
   gave the item away; a failed script audit names its days by date in its issues, and each is
-  written again with the issues that name it. A discoverability verdict, an issue that names no
-  day of the life, or more than ``REPAIR_DAYS`` days in one round is left to a fresh attempt.
+  written again with the issues that name it (an issue naming no date names the one day whose
+  messages hold the longest run of its words, ``quoted_day``); a discoverability reader that missed an origin day
+  (``gates.missed_origin_days``) has each origin day it passed over written again, told to make the
+  planted fact findable without stating a conclusion. Any other discoverability verdict, an issue
+  that names no day of the life and quotes none, or more than ``REPAIR_DAYS`` days in one round is
+  left to a fresh attempt.
 - **How a day is written again** (``rewritten``): the writer gets ``life_v1.md``, the same beats
   and ``repair_v1.md``, with the days before it as they now stand, the day as it was, why, and the
   days after it, which it keeps to. The day is extracted again on the targets held before it, its
@@ -51,12 +55,17 @@ from anjo.sleep.model_api import ChatResult
 
 ROUNDS: Final = 2  # the repair rounds one attempt may take
 REPAIR_DAYS: Final = 3  # the most days one round writes again; a failure naming more is a fresh attempt
-REPAIRABLE: Final = frozenset({"leak", "script_audit"})
+REPAIRABLE: Final = frozenset({"leak", "script_audit"})  # and discoverability's ``gates.MISSED_ORIGIN`` alone
 _SEEN: Final = {"evidence": "the notes taken from", "sessions": "the messages of"}
 LEAK_REASON: Final = 'A reader shown {seen} {window} could already see the whole {family} about "{topic}" before ' \
                      "the person raises it."
 AUDIT_REASON: Final = "The script audit found: {issue}"
+DISCOVER_REASON: Final = 'A reader looking for the {family} about "{topic}" did not cite this day, though it rests on ' \
+                         "what the person says here. Make that fact findable: say it plainly, in a message of its " \
+                         "own, without stating any conclusion, and write nothing else about {topic} on this day."
 _DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+QUOTE_WORDS: Final = 4  # the fewest of an undated issue's words in a row that name the day holding them
+_WORD: Final = re.compile(r"[\w']+")
 
 
 @dataclass
@@ -89,30 +98,40 @@ class Tried:
     verdicts: tuple[GateVerdict, ...]
     issues: tuple[str, ...] = ()
     windows: Mapping[str, tuple[date, ...]] = dataclasses.field(default_factory=dict)  # a flagged item's window
+    missed: Mapping[str, tuple[date, ...]] = dataclasses.field(default_factory=dict)  # an item's uncited origin days
 
     @property
     def passed(self) -> bool:
         return gates.passed(self.verdicts)
 
     def fixes(self) -> dict[int, tuple[str, ...]] | None:
-        return fixes(self.life, self.problems, self.verdicts, self.issues, self.windows)
+        return fixes(self.life, self.problems, self.verdicts, self.issues, self.windows, missed=self.missed)
 
     def why(self, attempt: int, round_: int) -> dict[str, Any]:
         """Why it failed, as ``--keep-failed`` keeps it beside its life."""
         return {"attempt": attempt, "round": round_, "verdicts": [dataclasses.asdict(v) for v in self.verdicts],
-                "issues": list(self.issues)}
+                "issues": list(self.issues),
+                "missed": {item: [day.isoformat() for day in days] for item, days in self.missed.items()}}
 
 
 def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], issues: Sequence[str],
-          windows: Mapping[str, tuple[date, ...]] | None = None) -> dict[int, tuple[str, ...]] | None:
+          windows: Mapping[str, tuple[date, ...]] | None = None, *,
+          missed: Mapping[str, tuple[date, ...]] | None = None) -> dict[int, tuple[str, ...]] | None:
     """The days to write again (by index, from 0), each with why; ``None`` when nothing failed or
     a rewrite can't mend what did. ``windows`` gives a flagged item's window (by item id); one not
-    given is its first day alone."""
+    given is its first day alone. ``missed`` gives the origin days an item's discoverability reader
+    did not cite; an item that missed one with none given is left to a fresh attempt."""
     failed = [verdict for verdict in verdicts if not verdict.passed]
-    if not failed or any(verdict.gate not in REPAIRABLE for verdict in failed):
+    if not failed or not all(_repairable(verdict) for verdict in failed):
         return None
     items = {item.id: item for item in problems.items}
     found: dict[int, list[str]] = {}
+    for verdict in (verdict for verdict in failed if verdict.gate == "discoverability"):
+        origins, item = (missed or {}).get(verdict.item_id or "", ()), items.get(verdict.item_id or "")
+        if not origins or item is None or not set(origins) <= set(life.days):
+            return None
+        for day in origins:
+            found.setdefault(life.days.index(day), []).append(DISCOVER_REASON.format(family=item.family, topic=item.topic))
     for verdict in (verdict for verdict in failed if verdict.gate == "leak"):
         where, item = gates.flagged(verdict), items.get(verdict.item_id or "")
         window = (windows or {}).get(verdict.item_id or "") or (() if where is None else (where[1],))
@@ -125,6 +144,8 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
     if any(verdict.gate == "script_audit" for verdict in failed):
         for issue in issues:
             days = sorted({life.days.index(day) for day in _dates(issue) if day in life.days})
+            if not days and (quoted := quoted_day(life, issue)) is not None:
+                days = [life.days.index(quoted)]
             if not days:
                 return None
             for index in days:
@@ -132,6 +153,30 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
     if not found or len(found) > REPAIR_DAYS:
         return None
     return {index: tuple(reasons) for index, reasons in sorted(found.items())}
+
+
+def quoted_day(life: Life, issue: str) -> date | None:
+    """The day an issue naming no date quotes: the one day whose messages hold the longest run of
+    its words, at least ``QUOTE_WORDS`` long (case and punctuation aside); ``None`` when no run that
+    long is in any day's messages, or the longest is in more than one day's."""
+    said: dict[date, list[str]] = {}
+    for session in life.sessions:
+        said.setdefault(session.day, []).extend(_words(session.text))
+    words, texts = _words(issue), {day: f" {' '.join(found)} " for day, found in said.items() if day in life.days}
+    for size in range(len(words), QUOTE_WORDS - 1, -1):
+        runs = {" ".join(words[start:start + size]) for start in range(len(words) - size + 1)}
+        days = {day for day, text in texts.items() if any(f" {run} " in text for run in runs)}
+        if days:
+            return next(iter(days)) if len(days) == 1 else None
+    return None
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(text.replace("\u2019", "'").lower())
+
+
+def _repairable(verdict: GateVerdict) -> bool:
+    return verdict.gate in REPAIRABLE or (verdict.gate == "discoverability" and verdict.reason == gates.MISSED_ORIGIN)
 
 
 def _dates(text: str) -> list[date]:
@@ -171,7 +216,7 @@ def rewritten(tried: Tried, found: Mapping[int, Sequence[str]], round_: int,
 
 def refolded(draft: Draft, days: Sequence[WrittenDay]) -> Draft:
     """``draft``'s life holding ``days``, its targets folded again from the first."""
-    found = Draft(draft.life_id, draft.field, draft.seed, draft.model)
+    found = Draft(draft.life_id, draft.field, draft.seed, draft.model, keep_off=draft.keep_off)
     for done in days:
         found = found.add(done)
     return found

@@ -128,6 +128,25 @@ class FlagsTheMark(GateReader):
 
 
 @dataclasses.dataclass
+class BuriesTheMark(GateReader):
+    """The fake reader, its discoverability reader citing no day whose messages hold ``MARK`` (a
+    planted fact buried in narration is passed over) or that ``dates`` names; each discover request
+    kept."""
+
+    dates: frozenset[str] = frozenset()
+    discovers: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        if calls.kind_of(messages) != "discover":
+            return super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+        body = json.loads(messages[-1]["content"])
+        self.discovers.append(body)
+        cited = [day["date"] for day in body["days"] if MARK not in day["text"] and day["date"] not in self.dates]
+        return ChatResult(json.dumps({"found": True, "statement": "found it", "days": cited}), (), model, 10, 2, "stop")
+
+
+@dataclasses.dataclass
 class AuditsOnce:
     """The fake auditor, its first script audit finding ``issues``; the rest pass."""
 
@@ -263,6 +282,89 @@ def test_an_audit_naming_a_day_has_that_day_written_again(tmp_path: Path) -> Non
     assert asked["day"] == 4 and issue in asked["reason"]
 
 
+def test_an_undated_audit_issue_has_the_day_it_quotes_written_again(tmp_path: Path) -> None:
+    # Arrange: day 4 as first written draws a conclusion, and the audit quotes it without a date
+    issue = f"The script draws a conclusion: {MARK.lower().rstrip('.')}"
+    writer, auditor = LeakyDay(day=4), AuditsOnce((issue,))
+    made = gen_batch.generate_life(SPEC, _backend(tmp_path, life_chat=writer, auditor=auditor, repair=True))
+    assert made.attempts == 1 and made.repaired == 1 and auditor.audits == 2
+    (asked,) = writer.repairs
+    assert asked["day"] == 4 and issue in asked["reason"]
+
+
+def _saying(life: Life, said: str, *days: int) -> Life:
+    return dataclasses.replace(life, sessions=tuple(
+        dataclasses.replace(session, text=f"{session.text}\n\n{said}") if index in days else session
+        for index, session in enumerate(life.sessions)))
+
+
+def test_an_undated_issue_names_the_one_day_holding_the_longest_phrase_it_quotes() -> None:
+    life, problems = _life()
+    audit = GateVerdict("script_audit", None, False, "1 issue(s) found")
+    issue = "Script describes feelings with Feels strange to be at the end."
+    reason = repair.AUDIT_REASON.format(issue=issue)
+    felt = _saying(life, "Feels strange to be at the end of the shoot.", 3)
+    assert repair.fixes(felt, problems, (audit,), (issue,)) == {3: (reason,)}
+    # a shorter run of its words on another day loses to the longest
+    assert repair.fixes(_saying(felt, "I need to be at the yard by six.", 5), problems, (audit,), (issue,)) == {3: (reason,)}
+    # no run of QUOTE_WORDS words in any day's messages, or the longest on two days: a fresh attempt, as today
+    assert repair.fixes(life, problems, (audit,), (issue,)) is None
+    assert repair.fixes(_saying(life, "Feels strange.", 3), problems, (audit,), (issue,)) is None
+    assert repair.fixes(_saying(life, "Feels strange to be at the end of it.", 3, 5), problems, (audit,), (issue,)) is None
+
+
+def test_a_day_written_again_keeps_the_topics_it_was_first_given(tmp_path: Path) -> None:
+    writer = LeakyDay()
+    backend = _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True, keep_off=True)
+    made = gen_batch.generate_life(SPEC, backend)
+    (asked,) = writer.repairs
+    assert made.repaired == 1 and asked["keep_off"] == [item.topic for item in made.problems.items]
+
+
+# ── An origin day the reader missed ───────────────────────────────────────────
+
+
+def test_an_origin_day_the_reader_missed_is_written_again_findable_and_the_life_passes(tmp_path: Path) -> None:
+    # Arrange: day 6 (2026-09-12) holds an origin fact, buried as first written so the reader passes it over
+    writer, reader, log, kept = LeakyDay(), BuriesTheMark(), CallLog(), list[dict[str, Any]]()
+    backend = _backend(tmp_path, life_chat=writer, reader=reader, repair=True)
+
+    # Act
+    made = gen_batch.generate_life(SPEC, backend, log, lambda tried, attempt, round_: kept.append(tried.why(attempt, round_)))
+
+    # Assert: one round wrote day 6 again, told to make the planted fact findable, and the life passed
+    assert made.attempts == 1 and made.repaired == 1 and gates.passed(made.verdicts) and not log.failures
+    (asked,) = writer.repairs
+    (item,) = [item for item in made.problems.items
+               if made.life.days[LEAKY_DAY - 1] in {e.day for e in made.life.evidence if e.id in item.origin_ids}]
+    assert asked["day"] == LEAKY_DAY and MARK in asked["before"]
+    assert asked["reason"] == repair.DISCOVER_REASON.format(family=item.family, topic=item.topic)
+    assert "findable" in asked["reason"] and "conclusion" in asked["reason"]
+    # the missed day came from the discover reply already paid for, and is kept with why the check failed
+    assert sum(c.kind == "discover" and c.repair == 0 for c in log.calls) == SPEC.prevalence
+    (why,) = kept
+    assert why["missed"] == {item.id: ["2026-09-12"]}
+    assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
+
+
+def test_the_missed_origin_days_come_from_the_discover_reply_already_sent() -> None:
+    # Arrange: the third item's origins are 2026-09-10 and 2026-09-12; the reader passes over the 12th
+    life, problems = _life()
+    first, third = problems.items[0], problems.items[2]
+    reader, memo = BuriesTheMark(dates=frozenset({"2026-09-12"})), dict[str, ChatResult]()
+    read = repair.Memo(reader, memo)
+
+    # Act
+    verdicts = gates.check(life, problems, reader=read, auditor=fakes.FakeGateAuditor())
+    asked = len(reader.discovers)
+
+    # Assert
+    assert [v.reason for v in verdicts if v.item_id == third.id and v.gate == "discoverability"] == [gates.MISSED_ORIGIN]
+    assert gates.missed_origin_days(life, third, read) == (life.days[5],)
+    assert gates.missed_origin_days(life, first, read) == ()  # its origins, the 10th and the 13th, were cited
+    assert len(reader.discovers) == asked  # answered from the memo, no call
+
+
 # ── What can be repaired ──────────────────────────────────────────────────────
 
 
@@ -290,6 +392,23 @@ def test_fixes_name_each_day_with_its_reasons_or_none_when_a_rewrite_cannot_help
     assert repair.fixes(life, problems, (audit,), (many,)) is None
     assert repair.fixes(life, problems, (leak, audit), ("On 2026-09-08 and 2026-09-09.",), pair) is None  # 4 days
     assert repair.fixes(life, problems, (), ()) is None  # nothing failed
+
+
+def test_a_missed_origin_day_is_named_with_why_and_no_other_discoverability_failure_is() -> None:
+    life, problems = _life()
+    item = problems.items[2]  # origins on 2026-09-10 and 2026-09-12
+    missed = GateVerdict("discoverability", item.id, False, gates.MISSED_ORIGIN)
+    days = {item.id: (life.days[5],)}
+    reason = repair.DISCOVER_REASON.format(family=item.family, topic=item.topic)
+    assert repair.fixes(life, problems, (missed,), (), missed=days) == {5: (reason,)}
+    # with a leak of the same item: each day, with its reasons
+    leak = GateVerdict("leak", item.id, False, "sessions flagged from 2026-09-14")
+    assert sorted(repair.fixes(life, problems, (leak, missed), (), missed=days) or {}) == [5, 7]
+    # no missed day given, or another discoverability failure, is left to a fresh attempt
+    assert repair.fixes(life, problems, (missed,), ()) is None
+    assert repair.fixes(life, problems, (missed,), (), missed={item.id: ()}) is None
+    for other in ("the reader found nothing", "the statement isn't the planted item", "origin evidence is not in the life"):
+        assert repair.fixes(life, problems, (dataclasses.replace(missed, reason=other),), (), missed=days) is None
 
 
 def test_a_round_holds_its_writes_and_a_full_read_again() -> None:
