@@ -77,8 +77,7 @@ def test_transport_error_retries_then_succeeds() -> None:
     assert fake.seen[COMPLETIONS] == 2 and fake.seen[vllm.LOAD_PATH] == 2  # the load is sent again too
     assert waits.slept == [vllm.BACKOFF_S[0]] * 2
     assert client.retries() == 2 and client.on(date(2026, 11, 1)).retries() == 2  # its copies share the count
-    assert fake.probes == [vllm.LIVENESS_S]  # the lost load came before any answer, a cold start: not asked
-    # the lost completion came once the server had answered: it still answered /v1/models, so it went again
+    assert fake.probes == []  # each went again unasked: only a request about to give up asks /v1/models
 
 
 def test_transport_error_gives_up_after_three_attempts() -> None:
@@ -158,11 +157,26 @@ def test_a_warm_client_meets_a_restarted_container() -> None:
     assert len(fake.loads) == 2 and client.retries() == 1  # loaded again once, sent again once
 
 
-def test_a_wedged_server_fails_the_client_fast_and_all_at_once() -> None:
+def test_restart_mid_night_is_waited_out() -> None:
+    """A warm server's container restarts mid-night: Modal holds every request, /v1/models included, for
+    its cold start of about 3 minutes. The client asks /v1/models only when a request is about to give
+    up, so the attempt after a lost one gets the rest of the 300 s and the night goes on."""
+    waits = Waits()
+    fake = Hangs(waits, lose=0, paths=("/tokenize",))
+    client = _client(fake, waits)
+    client.complete(None, MESSAGES, temperature=1.0)  # warm
+    fake.lose = fake.seen["/tokenize"] + 1  # the next request is lost while the container restarts
+    fake.alive = False  # and /v1/models would be held past LIVENESS_S as well
+    assert client.complete(None, MESSAGES, temperature=1.0).text == "hello"  # the new container answers in time
+    assert fake.probes == [] and client.retries() == 1
+    assert client.complete(None, MESSAGES, temperature=1.0).text == "hello"  # never marked down
+
+
+def test_wedge_is_marked_down_after_one_round() -> None:
     """Night 1c (2026-10-28): the container took requests and answered none, not even /v1/models, and
-    each gate thread waited out 300 s per request. A request lost in transport now asks /v1/models
-    within ``LIVENESS_S``; with no answer it fails as ``ServerUnresponsive``, and every request the client
-    and its copies send for the next ``DOWN_HOLD_S`` fails at once, without being sent."""
+    each gate thread waited out 300 s per request. Now a request that gives up after its 300 s round asks
+    /v1/models within ``LIVENESS_S``; with no answer it fails as ``ServerUnresponsive``, and every request
+    the client and its copies send for the next ``DOWN_HOLD_S`` fails at once, without being sent."""
     waits = Waits()
     fake = Hangs(waits, lose=0, paths=("/tokenize", COMPLETIONS))
     client = _client(fake, waits)
@@ -172,15 +186,15 @@ def test_a_wedged_server_fails_the_client_fast_and_all_at_once() -> None:
     with pytest.raises(vllm.ServerUnresponsive, match="/v1/models") as raised:
         client.complete(None, MESSAGES, temperature=1.0)
     assert isinstance(raised.value, ServingError)
-    assert waits.now - started == vllm.WARM_TIMEOUT_S + vllm.LIVENESS_S < vllm.REQUEST_TIMEOUT_S
-    assert fake.probes == [vllm.LIVENESS_S] and waits.slept == [] and client.retries() == 0  # never sent again
+    assert waits.now - started == vllm.REQUEST_TIMEOUT_S + vllm.LIVENESS_S  # one round, then the question
+    assert fake.probes == [vllm.LIVENESS_S] and waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1
 
     sent = dict(fake.seen)
     for copy in (client, client.on(date(2026, 11, 1)), client.once(), client.with_load_wait(0)):
         with pytest.raises(vllm.ServerUnresponsive):
             copy.complete(ADAPTER, MESSAGES, temperature=1.0)
-    assert fake.seen == sent and fake.probes == [vllm.LIVENESS_S] # nothing sent
-    assert waits.now - started == vllm.WARM_TIMEOUT_S + vllm.LIVENESS_S
+    assert fake.seen == sent and fake.probes == [vllm.LIVENESS_S]  # nothing sent
+    assert waits.now - started == vllm.REQUEST_TIMEOUT_S + vllm.LIVENESS_S
 
     waits.now += vllm.DOWN_HOLD_S  # a minute on, a new container answers
     fake.lose, fake.alive = 0, True

@@ -226,10 +226,12 @@ night has loaded the adapter into the running container, or a container started 
 live page also tries where a stage puts adapters. `Serve` runs one container
 at most (`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one wake started two.
 
-A wedged server fails the night fast. After a request lost in transport, the client asks
-`/v1/models` (which never reaches vLLM's engine) within 15 s (`client.LIVENESS_S`). With no answer,
-that request and every request the client sends for the next 60 s (`client.DOWN_HOLD_S`) fail at once
-as `ServerUnresponsive`, instead of each gate thread waiting out 300 s per request. A cold start never
+A wedged server fails the night fast. When a request lost in transport gives up after its 300 s
+round, the client asks `/v1/models` (which never reaches vLLM's engine) within 15 s
+(`client.LIVENESS_S`). With no answer, that request and every request the client sends for the next
+60 s (`client.DOWN_HOLD_S`) fail at once as `ServerUnresponsive`, instead of each gate thread waiting
+out 300 s per request. A container that restarts mid-night is not asked about early: the attempt after
+a lost one gets the rest of the 300 s, more than its cold start of about 3 minutes. A cold start never
 counts: the client asks only once the server has answered within its 600 s scale-down window. To tell a wedge
 from a slow server by hand, the probe times each step (it wakes the container, so it costs money; it
 prints its plan without `--go`):
