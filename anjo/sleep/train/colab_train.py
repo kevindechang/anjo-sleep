@@ -42,8 +42,10 @@ The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_loss.py`
 this file (Modal's image only; the Colab runner refuses the objective), runs the one weighted loss over
 the SFT rows, the pairs and the dataset's ``kind`` rows (seeding, dreams, anchors), each tokenized as
 the server renders it (``served_ids``). Its recipe carries ``terms``: ``fold_rank`` (fold the night into
-the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and ``dreams``. ``match_minutes``, the live
-comparison's control, lets today's ``sft_dpo`` keep training SFT until the job has used that many minutes.
+the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and ``dreams``. ``match_minutes`` is the live
+comparison's matched control and nothing else: the SFT pass (or ``sft_dpo_seed``'s main block, dreams
+off) trains for that many minutes by the clock, one warmup and one cosine over them (``stretch``), and the
+DPO pass follows as today. The receipt's ``match`` gives the budget, the minutes used and the steps.
 
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
@@ -69,7 +71,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +95,7 @@ LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
 KINDS = ("seed", "dream", "anchor")
 SURPRISE_RANGE = (0.5, 2.0)  # MIND's surprise weight on a row (the Sleep link); a row without one weighs 1.0
 MAX_MATCH_MINUTES = 100.0
+STRETCH_STEPS = 1_000_000  # the stretched SFT's step cap: its clock stops it long before
 MAX_DPO_LR = 1e-5
 MAX_ACCUMULATION = 16
 MAX_EPOCHS = 4
@@ -177,7 +180,7 @@ def load_config(raw: str) -> dict[str, Any]:
 
 
 def _check_terms(cfg: dict[str, Any]) -> None:
-    """``terms`` comes with ``sft_dpo_seed`` and only then; ``match_minutes`` only without it."""
+    """``terms`` comes with ``sft_dpo_seed`` and only then; ``match_minutes`` never with dreams."""
     seeded, terms = cfg["objective"] == SEED_OBJECTIVE, cfg.get("terms")
     if seeded != (terms is not None):
         raise ValueError(f"terms come with the {SEED_OBJECTIVE} objective, and only with it")
@@ -187,10 +190,10 @@ def _check_terms(cfg: dict[str, Any]) -> None:
                 or (fold is not None and (isinstance(fold, bool) or not isinstance(fold, int)
                                           or not cfg["r"] <= fold <= MAX_RANK))):
             raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}) and dreams (true or false)")
-    if "match_minutes" in cfg and (seeded or isinstance(cfg["match_minutes"], bool)
+    if "match_minutes" in cfg and ((seeded and bool(terms and terms["dreams"])) or isinstance(cfg["match_minutes"], bool)
                                    or not isinstance(cfg["match_minutes"], int | float)
                                    or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):
-        raise ValueError(f"match_minutes pads today's objective only, up to {MAX_MATCH_MINUTES:g} minutes")
+        raise ValueError(f"match_minutes is a control's budget, up to {MAX_MATCH_MINUTES:g} minutes, never with dreams")
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -608,7 +611,8 @@ def _train_seed(cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, t
     eot = tokenizer.convert_tokens_to_ids(REPLY_END)
     plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
                      seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
-                     dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"])
+                     dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"],
+                     stretch_s=cfg.get("match_minutes", 0.0) * 60.0)
     terms = loss.train_terms(model, batch, plan)
     model.save_pretrained(str(out))
     terms |= {"dropped_truncated": too_long, "fold_rank": fold,
@@ -638,15 +642,48 @@ def _check_seed_tokens(tokenizer: Any, batch: Any, kept: list[tuple[dict[str, An
     return done
 
 
-def _match_sft(trainer: Any, minutes: float, started: float) -> int:  # pragma: no cover - needs the training stack
-    """The live comparison's control: after today's SFT and DPO, another SFT pass on today's rows (the
-    recipe's own epochs and schedule) while the job has trained under ``minutes``; none starts past
-    the mark. Returns the extra steps."""
-    extra = 0
-    while (time.monotonic() - started) / 60.0 < minutes:
-        trainer.train()
-        extra += int(trainer.state.global_step)
-    return extra
+def stretch(share: float) -> float:
+    """The rate's factor at ``share`` of a time budget used: a 3% linear warmup, then a cosine to zero
+    (``sleep_loss.stretch``'s standalone copy; a test holds them equal)."""
+    share = min(max(share, 0.0), 1.0)
+    if share < WARMUP:
+        return share / WARMUP
+    return 0.5 * (1.0 + math.cos(math.pi * (share - WARMUP) / (1.0 - WARMUP)))
+
+
+class StretchClock:
+    """The matched control's SFT by the clock, as TRL callback events: each optimizer step at the rate
+    ``stretch`` gives the share of ``budget_s`` used since training began, and training stops once it
+    is used. ``main`` mixes it into a ``TrainerCallback``; the SFT config holds the rate constant."""
+
+    def __init__(self, budget_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.budget_s, self._clock = budget_s, clock
+        self.started: float | None = None
+        self.used = 0.0
+
+    def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        self.started = self._clock()
+
+    def on_pre_optimizer_step(self, args: Any, state: Any, control: Any, optimizer: Any = None, **kwargs: Any) -> None:
+        if self.started is None or optimizer is None:
+            raise ValueError("the stretched SFT sets the rate of a started run's optimizer")
+        rate = args.learning_rate * stretch((self._clock() - self.started) / self.budget_s)
+        for group in optimizer.param_groups:
+            group["lr"] = rate
+
+    def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        self.used = self._clock() - (self.started or 0.0)
+        if self.used >= self.budget_s:
+            control.should_training_stop = True
+
+    def receipt(self, steps: int) -> dict[str, float]:
+        return {"budget_minutes": round(self.budget_s / 60.0, 4), "minutes": round(self.used / 60.0, 4), "steps": steps}
+
+
+def stretched_sft(settings: dict[str, Any]) -> dict[str, Any]:
+    """The SFT config the stretch drives: a constant rate it sets itself, no warmup, and more steps
+    than any budget takes (the callback stops it)."""
+    return {**settings, "lr_scheduler_type": "constant", "warmup_steps": 0, "max_steps": STRETCH_STEPS}
 
 
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
@@ -654,7 +691,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     import torch  # type: ignore[import-not-found, unused-ignore]
     from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from peft import LoraConfig, PeftModel  # type: ignore[import-not-found, unused-ignore]
-    from transformers import AutoTokenizer, set_seed  # type: ignore[import-not-found, unused-ignore]
+    from transformers import AutoTokenizer, TrainerCallback, set_seed  # type: ignore[import-not-found, unused-ignore]
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
@@ -695,6 +732,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
             "objective": cfg["objective"], "dpo_steps": 0, "pairs_dropped_truncated": len(pair_rows) - len(pairs),
             "dpo_reference": "adapter_off", "rendering": cfg["rendering"],
             **({"surprise_weights": surprise} if surprise else {}),
+            **({"match": done["terms"]["stretch"]} if "stretch" in done["terms"] else {}),
         }
         (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
         return 0
@@ -704,9 +742,10 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     else:
         peft_config = LoraConfig(**settings["lora"])
     data = Dataset.from_list([plain for _, plain in kept])
+    clock = type("Stretch", (StretchClock, TrainerCallback), {})(cfg["match_minutes"] * 60.0) if "match_minutes" in cfg else None
     trainer = SFTTrainer(
-        model=model, args=SFTConfig(output_dir=str(out / "run"), **settings["sft"]),
-        train_dataset=data, processing_class=tokenizer, peft_config=peft_config,
+        model=model, args=SFTConfig(output_dir=str(out / "run"), **(settings["sft"] if clock is None else stretched_sft(settings["sft"]))),
+        train_dataset=data, processing_class=tokenizer, peft_config=peft_config, callbacks=[clock] if clock else None,
     )
     prompts: list[dict[str, Any]] = []
     checked = _check_sft(tokenizer, kept, trainer.train_dataset, template, prompts)
@@ -717,7 +756,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         accumulation, epochs = dpo_plan(len(pairs), cfg)
         dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
         dpo_steps, reference = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template, prompts)
-    matched = _match_sft(trainer, cfg["match_minutes"], started) if "match_minutes" in cfg else 0
+    sft_steps = int(trainer.state.global_step)
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     record_rendering(out, cfg["rendering"])
@@ -726,13 +765,13 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     if smoke is not None:
         (out / SMOKE_TOKENS).write_text(json.dumps(prompts), encoding="utf-8")
     receipt = {
-        "steps": int(trainer.state.global_step), "epochs": cfg["epochs"], "train_minutes": minutes,
+        "steps": sft_steps, "epochs": cfg["epochs"], "train_minutes": minutes,
         "examples": len(kept), "dropped_truncated": len(rows) - len(kept),
         "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu", "objective": cfg["objective"],
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
         "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
-        **({"match_minutes": cfg["match_minutes"], "match_steps": matched} if "match_minutes" in cfg else {}),
+        **({"match": clock.receipt(sft_steps)} if clock is not None else {}),
         **({"surprise_weights": surprise} if surprise else {}),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")

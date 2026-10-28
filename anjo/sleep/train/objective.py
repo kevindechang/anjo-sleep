@@ -13,13 +13,11 @@ Two more switches ride on ``sft_dpo_seed`` and are refused with any other object
   stays bounded across nights;
 - ``ANJO_SLEEP_DREAMS=1``: the night adds Glimmer's dreams from MIND's dream states (``night/dreams.py``).
 
-``ANJO_SLEEP_MATCH_MINUTES`` is the live comparison's equal-budget control and nothing else: today's
-objective keeps training SFT until the job has used that many minutes. Every real night leaves it unset.
-Each switch off (unset, blank or ``0``) is today's night.
+Each switch off (unset, blank or ``0``) is today's night. The live comparison's matched control is no
+switch: it is set per run (``sim.accelerated --match-file``), so no host setting can pad a real night.
 """
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from typing import Final
 
@@ -30,7 +28,6 @@ from anjo.sleep.train.lora import LoraCfg, LoraCfgError, Objective
 OBJECTIVE_ENV: Final = "ANJO_SLEEP_OBJECTIVE"
 FOLD_ENV: Final = "ANJO_SLEEP_ADAPTER_FOLD"
 DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
-MATCH_ENV: Final = "ANJO_SLEEP_MATCH_MINUTES"
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft_dpo", "sft", "sft_dpo_seed")
 DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo"
 SEED_OBJECTIVE: Final[Objective] = "sft_dpo_seed"
@@ -56,19 +53,6 @@ def _on(environ: Mapping[str, str], name: str) -> bool:
     return value == "1"
 
 
-def _match_minutes(environ: Mapping[str, str]) -> float | None:
-    raw = environ.get(MATCH_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        minutes = float(raw)
-    except ValueError:
-        raise ObjectiveError(f"{MATCH_ENV} is a number of minutes") from None
-    if not math.isfinite(minutes):
-        raise ObjectiveError(f"{MATCH_ENV} is a number of minutes")
-    return minutes
-
-
 def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     """The nights' recipe: the default one with the settings' objective and switches."""
     chosen = objective_name(environ)
@@ -76,8 +60,7 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     if (fold or dreams) and chosen != SEED_OBJECTIVE:
         raise ObjectiveError(f"{FOLD_ENV} and {DREAMS_ENV} run only with {OBJECTIVE_ENV}={SEED_OBJECTIVE}")
     try:
-        return LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams,
-                       match_minutes=_match_minutes(environ))
+        return LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams)
     except LoraCfgError as error:
         raise ObjectiveError(str(error)) from None
 

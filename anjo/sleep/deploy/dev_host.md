@@ -256,7 +256,7 @@ Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) 
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
 | `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default), `sft`, or `sft_dpo_seed` (the sleep paradigm's one loss, `train/sleep_loss.py`; Modal only); any other value stops the night, the accelerated run and the example before they start |
 | `ANJO_SLEEP_ADAPTER_FOLD`, `ANJO_SLEEP_DREAMS` | `1` turns on the nightly fold into one rank-32 adapter, or dreams from MIND's dream seeds; only with `sft_dpo_seed`, unset or `0` is off |
-| `ANJO_SLEEP_MATCH_MINUTES` | the live comparison's equal-budget control only (`tools/sleep_objective_live.py`): today's objective trains SFT on until the job has used that many minutes; every real night leaves it unset |
+| `ANJO_SLEEP_PRESSURE` | the live comparison sets `0` in every arm (`tools/sleep_objective_live.py`), so sleep pressure never changes how much a night trains; its matched control is no setting but a per-run `--match-file` to `sim.accelerated`, so no host value can pad a real night |
 | App, function | `anjo-sleep-train`, `train` (`train/modal_app.py`); the runner calls the deployed function by name |
 | GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 21 minutes (the start, the return and a cancel's margin) |
 | Volumes | `anjo-sleep-weights` mounted read-only (Glimmer at the pinned revision), `anjo-sleep-adapters` read-write |

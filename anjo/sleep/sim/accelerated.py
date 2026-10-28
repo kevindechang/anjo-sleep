@@ -277,6 +277,21 @@ def _named(path: str) -> Any:
     return getattr(importlib.import_module(module), name)
 
 
+def match_by_night(path: Path, start: date, days: int) -> tuple[tuple[date, float], ...]:
+    """The live comparison's matched control (``--match-file``): a JSON object of each night's date
+    and its training budget in minutes, one for every night of the run, checked before anything runs."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        budgets = {date.fromisoformat(night): minutes for night, minutes in raw.items()}
+    except (OSError, ValueError, AttributeError) as error:
+        raise AcceleratedError(f"the match file isn't each night's date and minutes ({error})") from None
+    nights = [start + timedelta(days=i) for i in range(days)]
+    missing = [night.isoformat() for night in nights if night not in budgets]
+    if missing or not all(isinstance(m, int | float) and not isinstance(m, bool) for m in budgets.values()):
+        raise AcceleratedError(f"the match file has no budget, in minutes, for {', '.join(missing) or 'every night'}")
+    return tuple((night, float(budgets[night])) for night in nights)
+
+
 def _with_terms(deps: NightDeps, terms: Terms) -> NightDeps:
     """The wiring's ports with sft_dpo_seed's terms; with every switch off, untouched (today's night)."""
     return replace(deps, terms=terms) if terms != Terms() else deps
@@ -290,6 +305,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
     from anjo.sleep.train import objective
+    from anjo.sleep.train.lora import LoraCfgError
     from anjo.sleep.train.trainer import LoraTrainer
 
     if not (args.wiring and args.simulate and args.morning and args.users and args.personas):
@@ -298,6 +314,11 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
+    if args.match_file is not None:
+        try:
+            cfg = replace(cfg, match_by_night=match_by_night(args.match_file, start, args.days))
+        except (AcceleratedError, LoraCfgError) as error:
+            parser.error(str(error))
     terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows, as the night command sets them
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
@@ -347,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--user", action="append", default=[], dest="users")
     parser.add_argument("--persona", action="append", default=[], dest="personas")
     parser.add_argument("--mind", action="store_true", help="MIND's inquiry in each night (Task 17)")
+    parser.add_argument("--match-file", type=Path, default=None,
+                        help="the live comparison's matched control only: JSON of each night's date and budget minutes")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days is at least 1")

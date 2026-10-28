@@ -39,6 +39,10 @@ downloaded):
    the day in context) unmoved by the adapter's updates, the seeding KL moved, the DPO block at today's rate, and
    the adapter folded: night 3 to its own rank, night 4 (the long-term rank plus the night's) to the
    set rank, 32, which PEFT then loads as a plain LoRA with the file's weights (``smoke_model --load``).
+8. runs the live comparison's matched control, cold, for a few seconds each: night 5 ``sft_dpo`` with
+   its SFT stretched by the clock, night 6 ``sft_dpo_seed`` (dreams off) with its main block stretched.
+   Each receipt's ``match`` must have used its budget, give or take one step, in more steps than the
+   step plan, and the DPO pass must still follow.
 
 It prints one line per step and exits 1 on the first failed check.
 
@@ -114,6 +118,8 @@ TODAY_RECEIPT: Final = frozenset({
     "pairs_dropped_truncated", "rows_checked", "dpo_reference", "rendering",
 })
 TEACHER_TOLERANCE: Final = 1e-5  # fp32 on the CPU: the night-start teacher's logits don't move at all
+CONTROL_MINUTES: Final = 0.04  # the CPU control nights' budget: a few seconds, many tiny steps
+CONTROL_SLACK_MINUTES: Final = 0.05  # one CPU step past the budget, at most
 _LORA_KEY: Final = re.compile(
     rf"base_model\.model\.(?P<module>{colab_train.TEXT_DECODER}\.(?P<name>[a-z0-9_]+))\.lora_[AB]\.weight")
 
@@ -414,7 +420,7 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
             raise SmokeError(f"{night} wrote {present}, without the files the runner downloads")
     lines.append(f"target_modules: {colab_train.lora_targets(DEFAULT_TARGET_MODULES)}")
     lines.append("switches off: both nights' recipes and receipts are exactly today's (no terms, no match_minutes)")
-    return [*lines, *seed_nights(python, base, root, template)]
+    return [*lines, *seed_nights(python, base, root, template), *control_nights(python, base, root, template)]
 
 
 def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
@@ -448,6 +454,42 @@ def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]
                  f"{held['long_term_drift']}) + {cfg.r} fresh, folded to "
                  f"{rank}; PEFT loads it as a plain LoRA, r {loaded['r']}, alpha {loaded['alpha']}, "
                  f"{loaded['modules']} modules, the file's weights exactly")
+    return lines
+
+
+def check_match(receipt: Mapping[str, Any], planned: int) -> Mapping[str, Any]:
+    """A matched control's receipt: its budget used, give or take one step, in more steps than ``planned``."""
+    match = receipt.get("match") or {}
+    budget, used, steps = match.get("budget_minutes"), match.get("minutes"), match.get("steps")
+    if budget != CONTROL_MINUTES or not isinstance(used, float) or not budget <= used <= budget + CONTROL_SLACK_MINUTES:
+        raise SmokeError(f"the control used {used} of its {budget} minutes")
+    if not isinstance(steps, int) or steps <= planned:
+        raise SmokeError(f"the control took {steps} steps, no more than the plan's {planned}")
+    return match
+
+
+def control_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """The live comparison's matched control on the tiny model, cold: night 5 ``sft_dpo`` (its SFT
+    stretched), night 6 ``sft_dpo_seed`` with dreams off (its main block stretched)."""
+    lines = []
+    for night, cfg, data in (
+        ("night5", LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS), smoke_dataset()),
+        ("night6", LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS), replace(seed_smoke_dataset(),
+                                                                                             dreams=(), anchors=())),
+    ):
+        recipe = {**training_config(replace(cfg, match_by_night=((NIGHT, CONTROL_MINUTES),)), len(data.examples),
+                                    warm=False, revision=REVISION, night=NIGHT), **template}
+        done = _night(python, base, root / night, recipe, data, None)
+        seeded = cfg.objective == "sft_dpo_seed"
+        dpo = done["terms"]["dpo"]["steps"] if seeded else done["dpo_steps"]  # type: ignore[index]
+        match = check_match(done, MIN_STEPS)
+        if not isinstance(dpo, int) or dpo < 1:
+            raise SmokeError(f"{night}: the DPO pass didn't follow the stretched block")
+        if not seeded and set(done) != TODAY_RECEIPT | {"match"}:
+            raise SmokeError(f"{night}: the control's receipt is today's plus its match, not {sorted(done)}")
+        lines.append(f"{night[:5]} {night[5:]} ({cfg.objective} matched control, cold): {match['steps']} steps in "
+                     f"{match['minutes'] * 60:.1f} s of a {CONTROL_MINUTES * 60:.1f} s budget, one warmup and one decay "
+                     f"by the clock, then {dpo} DPO steps")
     return lines
 
 

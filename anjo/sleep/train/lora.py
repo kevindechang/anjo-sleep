@@ -95,7 +95,9 @@ class LoraCfg:
     dpo_lr: float = DPO_LR
     fold_rank: int | None = None  # sft_dpo_seed: fold the night into a long-term adapter of this rank
     dreams: bool = False  # sft_dpo_seed: train on the night's dream rows
-    match_minutes: float | None = None  # the live comparison only: pad today's objective with SFT to these minutes
+    # The live comparison's matched control only: each night's training budget in minutes (its reference
+    # arm's, serving included), which the job fills by the clock; every real night leaves it empty.
+    match_by_night: tuple[tuple[date, float], ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.r, bool) or not isinstance(self.r, int) or not 1 <= self.r <= MAX_RANK:
@@ -123,8 +125,10 @@ class LoraCfg:
             raise LoraCfgError("the fold and dreams train only under sft_dpo_seed")
         if self.fold_rank is not None and (isinstance(self.fold_rank, bool) or not self.r <= self.fold_rank <= MAX_RANK):
             raise LoraCfgError(f"the long-term rank is from the night's rank {self.r} to {MAX_RANK}")
-        if self.match_minutes is not None and (seeded or not 0 < self.match_minutes <= MAX_MATCH_MINUTES):
-            raise LoraCfgError(f"match_minutes pads today's objective only, up to {MAX_MATCH_MINUTES:g} minutes")
+        nights = [night for night, _ in self.match_by_night]
+        if self.match_by_night and (self.dreams or len(set(nights)) != len(nights)
+                                    or not all(0 < minutes <= MAX_MATCH_MINUTES for _, minutes in self.match_by_night)):
+            raise LoraCfgError(f"a matched control has one budget a night, up to {MAX_MATCH_MINUTES:g} minutes, and no dreams")
 
     @property
     def alpha(self) -> int:
@@ -190,8 +194,11 @@ def training_config(
         fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.
     rate = cfg.warm_lr if warm and cfg.fold_rank is None else cfg.lr
-    if cfg.match_minutes is not None:
-        fixed |= {"match_minutes": cfg.match_minutes}
+    if cfg.match_by_night:
+        budget = dict(cfg.match_by_night).get(night)
+        if budget is None:
+            raise LoraCfgError(f"the matched control has no budget for the night of {night.isoformat()}")
+        fixed |= {"match_minutes": budget}
     return {**fixed,
         "r": cfg.r, "alpha": cfg.alpha, "dropout": cfg.dropout,
         "target_modules": list(cfg.target_modules),
@@ -225,6 +232,7 @@ class TrainReceipt:
     pairs: int = 0  # the (best, worst) pairs sent when it trained sft_dpo; a count, never the words
     terms: Mapping[str, object] | None = None  # sft_dpo_seed's receipt: rows, minutes and loss per term, dreams kept
     surprise_weights: str | None = None  # whether the rows' surprise weights reached the loss; None when none had one
+    match: Mapping[str, object] | None = None  # a matched control's budget, the minutes it used and its steps
 
 
 AdapterPublisher = Callable[[Path, str], None]
@@ -342,6 +350,7 @@ def train_lora_with_receipt(
         objective=trained_objective, pairs=trained_pairs,
         terms=dict(terms) if cfg.objective == "sft_dpo_seed" and isinstance(terms, Mapping) else None,
         surprise_weights=str(outputs["surprise_weights"]) if outputs.get("surprise_weights") else None,
+        match=dict(match) if cfg.match_by_night and isinstance(match := outputs.get("match"), Mapping) else None,
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

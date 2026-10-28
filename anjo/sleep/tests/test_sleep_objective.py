@@ -155,7 +155,7 @@ class _NoLeak:
 
 
 def test_switches_off_are_todays_night(tmp_path: Path) -> None:
-    for env in ({}, {objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0", objective.MATCH_ENV: ""}):
+    for env in ({}, {objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0"}, {"ANJO_SLEEP_MATCH_MINUTES": "6.5"}):
         cfg = objective.night_cfg(env)
         assert cfg == LoraCfg(objective="sft_dpo") and cfg.fold_rank is None and not cfg.dreams
         assert objective.night_terms(env) == Terms() and not (Terms().seed or Terms().dreams)
@@ -213,11 +213,9 @@ def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night()
     cfg = objective.night_cfg(on)
     assert (cfg.objective, cfg.fold_rank, cfg.dreams) == ("sft_dpo_seed", config.MAX_LORA_RANK, True)
     assert objective.night_terms(on) == Terms(seed=True, dreams=True)
-    for bad in ({objective.FOLD_ENV: "1"}, {objective.DREAMS_ENV: "1"}, {objective.FOLD_ENV: "yes"},
-                {**on, objective.MATCH_ENV: "5"}, {objective.MATCH_ENV: "-1"}):
+    for bad in ({objective.FOLD_ENV: "1"}, {objective.DREAMS_ENV: "1"}, {objective.FOLD_ENV: "yes"}):
         with pytest.raises(objective.ObjectiveError):
             objective.night_cfg(bad)
-    assert objective.night_cfg({objective.MATCH_ENV: "6.5"}).match_minutes == 6.5  # the live comparison's control
     with pytest.raises(LoraCfgError):
         LoraCfg(objective="sft", fold_rank=32)
     with pytest.raises(LoraCfgError):

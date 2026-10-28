@@ -40,6 +40,11 @@ One job trains every term, with these weights (``WEIGHTS``):
   decision, or ``random``, the control), and the receipt gives the filter's choices by kind: whether
   the boundary's dreams carry more gradient than a random thread's is the cheap test of targeting.
 
+**The matched control** (``Plan.stretch_s``, the live comparison only): the main block trains for a
+time budget instead of a step plan, epochs of the rows in fresh seeded orders, each step at the rate
+``stretch`` gives the share of the budget used (one warmup, one cosine to zero); then the DPO block, as
+any night. It never dreams: it is the control a dreaming arm is held to.
+
 **The fold** (``fold``, ``fold_folder``): with ``long_term_rank`` set, the job trains a LoRA whose
 first ranks hold the person's long-term adapter, frozen by gradient masks, and whose last ranks are
 tonight's fresh slot (B at zero: the reset). After training, each module's product B A is cut to the
@@ -139,6 +144,7 @@ class Plan:
     dpo_lr: float  # today's DPO rate: the DPO block's own optimizer, never the main block's rate
     long_term_rank: int = 0  # the fold: the leading ranks that hold the long-term adapter, frozen
     dreams: bool = False
+    stretch_s: float = 0.0  # the matched control: the main block trains this long by the clock (0: the step plan)
 
 
 # ── the pure parts ───────────────────────────────────────────────────────────
@@ -190,6 +196,15 @@ def schedule(main_steps: int) -> Callable[[int], float]:
         return 0.5 * (1.0 + math.cos(math.pi * (step - warm) / max(1, main_steps - warm)))
 
     return factor
+
+
+def stretch(share: float) -> float:
+    """The rate's factor at ``share`` of a time budget used: a 3% linear warmup, then a cosine to zero.
+    The matched control's schedule by the clock; ``colab_train.stretch`` is the same (a test holds it)."""
+    share = min(max(share, 0.0), 1.0)
+    if share < WARMUP:
+        return share / WARMUP
+    return 0.5 * (1.0 + math.cos(math.pi * (share - WARMUP) / (1.0 - WARMUP)))
 
 
 def _until_eot(ids: Sequence[int], eot: int) -> Ids:
@@ -502,6 +517,30 @@ def _stream(batch: Batch, rng: random.Random) -> tuple[list[tuple[str, Any]], in
     return items, len(imitate)
 
 
+class _Held:
+    """A schedule that leaves the rate where the stretched block set it."""
+
+    def step(self) -> None:
+        return None
+
+
+def _stretched(run: _Run, items: Sequence[tuple[str, Any]], accumulation: int, timer: Callable[[], float]) -> dict[str, Any]:
+    """The matched control's main block: fresh seeded orders of ``items`` until ``plan.stretch_s`` is
+    used, each step at the rate ``stretch`` gives the share used. No step starts past the budget."""
+    budget, started, steps = run.plan.stretch_s, timer(), 0
+    while items and timer() - started < budget:
+        order = list(items)
+        run.rng.shuffle(order)
+        for chunk in _chunks(order, accumulation):
+            if (used := timer() - started) >= budget:
+                break
+            for group in run.optimizer.param_groups:
+                group["lr"] = run.plan.lr * stretch(used / budget)
+            run.step(chunk, rate=_Held())
+            steps += 1
+    return {"budget_minutes": round(budget / 60.0, 4), "minutes": round((timer() - started) / 60.0, 4), "steps": steps}
+
+
 def _dpo_block(run: _Run, pairs: Sequence[PairSeq]) -> dict[str, Any]:
     """Today's DPO pass inside the one job: its own AdamW at today's rate, today's accumulation and
     epochs rule (``colab_train.dpo_plan``), its own cosine with a 3% warmup, clipped at 1.0, each epoch
@@ -588,6 +627,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
     dreaming = plan.dreams and bool(batch.dreams)
     if dreaming and not batch.anchors:
         raise ValueError("dreams need the anchor items their check scores")
+    if plan.stretch_s and (plan.stretch_s < 0 or dreaming):
+        raise ValueError("a matched control trains a positive time budget, and no dreams")
     if batch.dream_groups and len(batch.dream_groups) != len(batch.dreams):
         raise ValueError("each dream has one seed kind")
     rng = random.Random(plan.seed)
@@ -610,7 +651,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
     teacher_before, kl_before = _probe(model, probe, teacher)
     model.train()
     try:
-        for _ in range(epochs):
+        stretched = _stretched(run, items, accumulation, timer) if plan.stretch_s else None
+        for _ in range(0 if stretched else epochs):
             for chunk in _chunks(items, accumulation):
                 run.step(chunk)
         dpo = _dpo_block(run, batch.pairs)
@@ -632,7 +674,7 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
         "on_policy_samples": run.sampled, "imitation_reward": sum(run.rewards) / len(run.rewards) if run.rewards else None,
         "long_term_rank": plan.long_term_rank, "dpo": dpo, "dreams": dream,
         "grads_adapter_only": run.grads_checked, "teacher_drift": drift, "long_term_drift": moved, "seed_kl_before": kl_before,
-        "seed_kl_after": kl_after,
+        "seed_kl_after": kl_after, **({"stretch": stretched} if stretched else {}),
     }
 
 
