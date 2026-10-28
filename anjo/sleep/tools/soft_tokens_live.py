@@ -49,7 +49,7 @@ from anjo.sleep.types import CheckpointRef
 
 POOL: Final = "modal_usd"
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # app.night.PRICES_ENV: "spark_in,spark_out,train_gpu_hour,serve_gpu_hour"
-EMBED_USD_PER_HOUR: Final = 0.10  # the CPU container that sends the embedding rows
+EMBED_USD_PER_HOUR: Final = soft_tokens.EMBED_USD_PER_HOUR
 TEST_S: Final = 3600.0  # the test's own hard ceiling
 POSTS_PER_TURN: Final = 4  # two /tokenize calls, an adapter's load at most once, the completion
 EMBED_CALL_MAX_S: Final = soft_tokens.EMBED_COLD_START_S + soft_tokens.EMBED_TIMEOUT_S  # a cold start, then its run

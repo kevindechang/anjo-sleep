@@ -39,6 +39,12 @@
     return item.withheld ? copy.dailies_withheld : item.text;
   }
 
+  // How the night slept: a nap (no GPU step) or a deep sleep, its pressure against its threshold, and why.
+  function sleepNote(sleep) {
+    return fill(copy.sleep_note, { pressure: sleep.pressure.toFixed(2), threshold: sleep.threshold.toFixed(2),
+      reason: word("sleep_reason", sleep.reason) });
+  }
+
   function tag(text, kind) {
     return element("span", `tag ${kind ? `tag-${kind}` : ""}`.trim(), text);
   }
@@ -50,13 +56,20 @@
     const clapper = element("div", "clapper");
     clapper.setAttribute("aria-hidden", "true");
     const cells = element("dl", "slate-cells");
-    for (const [label, value, kind] of [
-      [copy.dailies_slate_night, String(card.night), "night"],
-      [copy.dailies_slate_morning, day(card.morning), "morning"],
-      [copy.dailies_slate_status, word("night_status", card.status), `status status-${card.status}`],
+    // Notes under a cell: the morning's probes with no verdict, and a gate switched off (skipped, never passed).
+    const skipped = (card.skipped_gates || []).map((g) => word("gate", g)).join(", ");
+    for (const [label, value, kind, note] of [
+      [copy.dailies_slate_night, String(card.night), "night", ""],
+      [copy.dailies_slate_morning, day(card.morning), "morning",
+        card.no_verdict ? fill(copy.dailies_no_verdict, { n: card.no_verdict }) : ""],
+      [copy.dailies_slate_status, word("night_status", card.status), `status status-${card.status}`,
+        skipped ? `${skipped}: ${copy.dailies_gate_skipped}` : ""],
+      ...(card.sleep ? [[copy.dailies_slate_sleep, word("sleep_kind", card.sleep.kind), `sleep sleep-${card.sleep.kind}`,
+        sleepNote(card.sleep)]] : []), // nights from before naps carry none
     ]) {
       const cell = element("div", `slate-cell slate-${kind}`);
       cell.append(element("dt", "", label), element("dd", "", value));
+      if (note) cell.append(element("dd", "slate-note", note));
       cells.append(cell);
     }
     box.append(clapper, cells);

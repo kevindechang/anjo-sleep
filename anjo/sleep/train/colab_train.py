@@ -58,6 +58,11 @@ CPU smoke run (``anjo.sleep.train.smoke``) and never by a runner: it names a tin
 loads unquantized in fp32 on the CPU in place of Glimmer, and the run then also writes the prompt ids
 TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against the server's.
 
+**The thought channel.** A recipe with a ``channel`` block (``channel_train.check_channel``) is run by
+``channel_train.main`` instead, on the same inputs: the LoRA and the projector that lets Glimmer read
+MIND's state, trained together on rows that carry the core state they were made under. It needs
+``channel_train.py`` beside this file, which the Modal image carries.
+
 ``TRAIN_PACKAGES`` are the versions every runner installs (Colab's image brings its own torch), and
 ``TORCH`` the torch for a runner that brings none. They live here, in a file that imports only the
 standard library, so a runner that copies this one file gets the pins with it.
@@ -70,6 +75,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -119,6 +125,7 @@ SMOKE_TOKENS = "smoke_tokens.json"
 # A 3% linear warmup: transformers 5 dropped ``warmup_ratio``, and ``warmup_steps`` under 1 is the share.
 WARMUP = 0.03
 SMOKE_ENV = "ANJO_TRAIN_SMOKE_MODEL"
+CHANNEL_SCRIPT = "channel_train.py"  # the thought channel's run, beside this file on the Modal image
 BASE_ENV = "ANJO_TRAIN_BASE"  # the Modal job's local copy of the pinned revision
 # The text decoder's layers in MuseGlimmerForConditionalGeneration; the vision tower, its adapter and
 # projection sit beside them under ``model.vision_*``.
@@ -176,6 +183,10 @@ def load_config(raw: str) -> dict[str, Any]:
         raise ValueError("template_sha256 is the chat template's sha256")
     if not isinstance(cfg["rendering"], str) or not cfg["rendering"].endswith("/" + cfg["reasoning_strength"]):
         raise ValueError("the rendering names the reasoning strength the rows are rendered at")
+    if cfg.get("channel") is not None:
+        channel_module().check_channel(cfg["channel"])
+        if cfg["objective"] == SEED_OBJECTIVE:  # until the one job trains both: never one silently dropped
+            raise ValueError(f"the thought channel and {SEED_OBJECTIVE} don't train in one job yet")
     return cfg
 
 
@@ -194,6 +205,12 @@ def _check_terms(cfg: dict[str, Any]) -> None:
                                    or not isinstance(cfg["match_minutes"], int | float)
                                    or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):
         raise ValueError(f"match_minutes is a control's budget, up to {MAX_MATCH_MINUTES:g} minutes, never with dreams")
+
+
+def channel_module() -> Any:
+    """``channel_train.py`` from beside this file: the thought channel's run (a recipe with a ``channel``
+    block), which the Modal image carries and a single-file Colab run doesn't."""
+    return sibling(CHANNEL_SCRIPT, "anjo_channel_train", "a channel recipe")
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -519,21 +536,25 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
     return int(trainer.state.global_step), reference
 
 
-def load_loss(folder: Path | None = None) -> Any:
-    """``sleep_loss.py`` from beside this file. The job runs this script under ``python -I``, which
-    puts no folder on the import path, so the module loads by its file and is registered by name
-    (its dataclasses look themselves up there)."""
+def sibling(file: str, name: str, needs: str, folder: Path | None = None) -> Any:
+    """A module shipped beside this file, loaded by its path and registered as ``name`` (its
+    dataclasses look themselves up there): the job runs this script under ``python -I``, which puts
+    no folder on the import path."""
     import importlib.util
-    import sys
 
-    path = (folder or Path(__file__).resolve().parent) / LOSS_FILE
-    spec = importlib.util.spec_from_file_location("sleep_loss", path)
-    if spec is None or spec.loader is None or not path.is_file():
-        raise ValueError(f"{SEED_OBJECTIVE} needs {LOSS_FILE} beside the training script")
+    path = (folder or Path(__file__).resolve().parent) / file
+    spec = importlib.util.spec_from_file_location(name, path) if path.is_file() else None
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{needs} needs {file} beside the training script (Modal's image carries it)")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["sleep_loss"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_loss(folder: Path | None = None) -> Any:
+    """``sleep_loss.py`` from beside this file: ``sft_dpo_seed``'s one loss."""
+    return sibling(LOSS_FILE, "sleep_loss", SEED_OBJECTIVE, folder)
 
 
 def served_ids(tokenizer: Any, messages: list[dict[str, Any]], template: dict[str, str]) -> list[int]:
@@ -695,6 +716,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
+    if cfg.get("channel") is not None:  # the LoRA and the thought channel's projector, trained together
+        return int(channel_module().main(sys.modules[__name__], cfg))
     smoke = _smoke_model()
     base = base_model(os.environ)
     settings = build_settings(cfg) if smoke is None else smoke_settings(build_settings(cfg))

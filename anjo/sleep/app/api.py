@@ -94,6 +94,7 @@ def session_state(session_id: str, user_id: str = Depends(flagged_user)) -> Sess
 class GateOut(BaseModel):
     gate: str
     passed: bool
+    skipped: bool = False  # switched off that night: judged nothing, never passed
 
 
 class StepOut(BaseModel):
@@ -103,9 +104,19 @@ class StepOut(BaseModel):
     system: str | None
 
 
+class SleepOut(BaseModel):
+    """How the night slept: ``nap`` (no GPU step) or ``deep``, its pressure, threshold and reason."""
+
+    kind: str
+    pressure: float
+    threshold: float
+    reason: str
+
+
 class NightOut(BaseModel):
     night: date
     status: str
+    sleep: SleepOut | None  # None for a night from before naps were logged
     failed_at: str | None
     checkpoint: str | None
     gates: list[GateOut]
@@ -128,7 +139,8 @@ class UndoOut(BaseModel):
 def _night_out(view: NightView) -> NightOut:
     return NightOut(
         night=view.night, status=view.status, failed_at=view.failed_at, checkpoint=view.checkpoint,
-        gates=[GateOut(gate=name, passed=passed) for name, passed in view.gates],
+        sleep=None if view.sleep is None else SleepOut(**view.sleep.view()),
+        gates=[GateOut(gate=name, passed=passed, skipped=name in view.skipped) for name, passed in view.gates],
         steps=[StepOut(step=s.step, status=s.status, uses=s.uses, system=s.system) for s in view.steps],
         action=view.action, note=view.note,
     )

@@ -7,8 +7,21 @@
 her state decides what to work on: she follows up on a plan you dated, or studies a topic you
 left open. She practises the kind of conversation you have, a personal adapter trains on that
 practice, and three gates check the result: general skills, collapse into your field, and
-safety. Only a night that passes every gate is promoted. After a night that fails or is
-rejected, the last good model keeps serving.
+safety. Only a night that passes every gate it runs is promoted. For the hackathon the safety
+gate is switched off (`ANJO_SLEEP_SAFETY_GATE`): it sends no case to a model, runs only its
+deterministic floor, and is logged and shown as skipped, never as passed. Anjo's reply check
+still guards every reply a person sees. After a night that fails or is rejected, the last good
+model keeps serving.
+
+**Naps and deep sleeps.** Not every night trains. Sleep pressure builds from the turns and new
+evidence since her last deep sleep and the threads she is most at risk on. Below the threshold she
+naps: extraction, the chooser and the brief run, at about $0, and nothing wakes Glimmer. MIND's
+thinking and the note wait for her next deep sleep, which reads every day she napped. Once pressure
+reaches the threshold, or a week has passed, she sleeps deep and the full night runs. The threshold
+rises as the month's spend nears its cap (`ANJO_SLEEP_MONTH_USD`, $15 by default), and a deep sleep
+that would pass the cap becomes a nap that says so (`python -m anjo.sleep.night.past --month <id>`
+prints a month's spend and the room left). `ANJO_SLEEP_PRESSURE=0` turns naps off. Every page shows
+which kind of night it was, with its pressure and the reason.
 
 **State decides, weights learn.** What Anjo knows about you stays in her state: the evidence
 store, the brief, her targets and the receipts for every choice she made. Facts stay word for

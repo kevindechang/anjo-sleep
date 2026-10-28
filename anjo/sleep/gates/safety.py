@@ -1,5 +1,11 @@
-"""The safety gate (Task 5): zero regressions against the base model on Anjo's crisis cases. The
-legal floor, so it runs every case on every night and is never cut for cost.
+"""The safety gate (Task 5): zero regressions against the base model on Anjo's crisis cases. Switched
+on, it runs every case on every night and is never cut for cost.
+
+**It is switched off for the hackathon** (the app's ``ANJO_SLEEP_SAFETY_GATE``, ``off`` unless set to
+``on``): Anjo's reply check still guards every reply a person sees, before it is shown. Off, ``check``
+sends no case to any model, still runs the floor (no model, no GPU) and returns the gate ``skipped``
+(``SKIPPED_REASON``), which never counts as passed and which promotion leaves out. A floor that no
+longer holds fails the gate, on or off. On, the gate is exactly as below.
 
 The case lists and the crisis checks stay in the private app; the core never holds a case's words.
 The app's adapter (``anjo.sleep.app.safety_gate``) loads them at run time and hands this gate:
@@ -25,13 +31,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE, GateThresholds, in_order, listed, load_thresholds
 from anjo.sleep.gates.base_cache import BaseCache, base_side, digest
 from anjo.sleep.probes.clients import ModelClient
 from anjo.sleep.serving import config
 from anjo.sleep.types import CheckpointRef, GateResult
+
+SKIPPED_REASON: Final = "off for the hackathon"
 
 
 @dataclass(frozen=True)
@@ -44,12 +52,13 @@ class SafetyCases:
 
 
 class SafetyGate:
-    """``SafetyGate`` port. The base model's flags are kept for the run."""
+    """``SafetyGate`` port. The base model's flags are kept for the run. ``enabled=False`` is the
+    switched-off gate: the floor only, and the result ``skipped``."""
 
     def __init__(
         self, client: ModelClient, cases: Callable[[], SafetyCases], *,
         thresholds: GateThresholds | None = None, workers: int = config.CONCURRENT_REQUESTS,
-        cache: BaseCache | None = None,
+        cache: BaseCache | None = None, enabled: bool = True,
     ) -> None:
         self._client = client
         self._workers = workers
@@ -58,6 +67,7 @@ class SafetyGate:
         self._threshold = (thresholds or load_thresholds()).safety_regressions
         self._base: list[bool] | None = None
         self._cache = cache
+        self._enabled = enabled
 
     def _reply(self, adapter: CheckpointRef | None, index: int) -> str:
         assert self._cases is not None
@@ -83,12 +93,21 @@ class SafetyGate:
                             lambda kept: len(kept) == len(indices) and all(isinstance(r, str) for r in kept))
         return [cases.flag(reply) is not None for reply in replies]
 
+    def _floor_only(self, floor: tuple[str, ...]) -> GateResult:
+        """The switched-off gate: no case goes to any model. A floor that holds leaves it ``skipped``."""
+        count, limit = len(floor), float(self._threshold)
+        if count <= self._threshold:
+            return GateResult("safety", False, float(count), limit, SKIPPED_REASON, skipped=True)
+        return GateResult("safety", False, float(count), limit, f"floor checks changed: {listed(list(floor))}")
+
     def check(self, ckpt: CheckpointRef) -> GateResult:
         if self._cases is None:
             self._cases = self._load()
         if not self._cases.prompts:
             raise ValueError("the safety gate runs on every case, and none were loaded")
         floor = self._cases.floor()
+        if not self._enabled:
+            return self._floor_only(floor)
         indices = list(range(len(self._cases.prompts)))
         if self._base is None:
             self._base = self._base_flags(indices)

@@ -5,7 +5,7 @@ night, each with its real number. A night's number counts the distinct nights sh
 a night run again on the same date is one night, and its last run's status stands.
 
 Each stop answers with the checkpoint serving after that night: the last one promoted on or before
-it. A rejected, ``nothing_new`` or failed night has no checkpoint of its own, so its stop shows the
+it. A rejected, ``nothing_new``, napped or failed night has no checkpoint of its own, so its stop shows the
 last promoted one, from an earlier night, and says which (``from_night``, ``fallback``); with none
 promoted yet, that is the base model. A checkpoint a rollback took out of service is not in the
 registry's history, so it is never a stop's.

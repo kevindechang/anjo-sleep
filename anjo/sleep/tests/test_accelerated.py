@@ -222,3 +222,18 @@ def test_a_registry_change_between_the_night_and_the_morning_refuses_the_run(tmp
     with pytest.raises(MorningError, match="serving"):
         run_accelerated("u1", FOUNDER, 1, START, rig=replace(fake.rig(), score=moved))
     assert not fake.scores_dir("u1").exists()
+
+
+def test_a_napped_night_is_not_scored_and_the_report_says_how_each_night_slept(tmp_path: Path) -> None:
+    from anjo.sleep.night.sleep_pressure import SleepPolicy
+
+    fake = FakeAccelerated(tmp_path)
+    rig = fake.rig()
+    naps = replace(rig, deps_for=lambda night: replace(rig.deps_for(night), sleep_policy=SleepPolicy(base_threshold=1.0)))
+    results = run_accelerated("u1", FOUNDER, 2, START, rig=naps)
+    assert [r.status for r in results] == ["napped"] * 2 and not fake.scores_dir("u1").exists()  # no GPU morning
+    deep = replace(rig, deps_for=lambda night: replace(rig.deps_for(night), sleep_policy=SleepPolicy(base_threshold=0.0)))
+    slept = run_accelerated("u2", FOUNDER, 1, START, rig=deep)
+    report = accelerated._report([*results, *slept], fake=True, days=3, sha=FAKE_SHA)
+    assert [n["sleep"] for n in report["nights"]] == ["nap", "nap", "deep"]
+    assert [n["status"] for n in report["nights"]] == ["napped", "napped", "promoted"]

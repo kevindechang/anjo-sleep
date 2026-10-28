@@ -29,11 +29,21 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
   every daily morning asks the same probes whatever came back before. Its file says ``subset`` and
   leaves out the comparisons whose arms didn't answer; the holds scale to what it asks. A final run
   never takes a subset (refused before any call), and a run without one is the full run, unchanged.
+- A judge answer that can't be read is asked once more with more room (``MuseJudge.again``), at most
+  ``JUDGE_RETRY_SHARE`` of the run's judge calls, which the judge's hold covers. A probe still without a
+  verdict is ``no verdict``: left out of its comparison's score, given an outcome row ``no_verdict``,
+  counted per comparison under ``no_verdict`` (written only when there is one) and in
+  ``MorningResult.no_verdict``. One unreadable answer no longer stops the morning (Teo's night 1 did,
+  on 2026-10-28), but a judge that can't be read does, loudly: past ``NO_VERDICT_MAX_SHARE`` of a
+  comparison's judged probes the run raises ``TooManyNoVerdicts`` and writes no score, so a rerun may
+  score the night. A comparison with no verdict at all is never written as a 0.50 tie: it is missing.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import os
 import threading
 import time
@@ -47,17 +57,22 @@ from types import MappingProxyType
 from typing import Final
 
 from anjo.sleep.budget import Bound, Ledger
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.parallel import Calls
 from anjo.sleep.probes.arms import ARMS, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
 from anjo.sleep.probes.clients import AdapterRegistry
 from anjo.sleep.probes.score import (
+    JUDGE_RETRY_MAX_TOKENS,
     REPORTED,
     BootstrapConfig,
+    JudgeError,
+    NoVerdict,
     PairScore,
     PairwiseJudge,
     ProbeOutcome,
+    RoomyJudge,
     Verdict,
     probe_outcome,
     score_outcomes,
@@ -72,10 +87,28 @@ BASELINE: Final[Arm] = "1"
 PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C")}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 JUDGE_USD_PER_CALL: Final = 0.02  # a Muse Spark judge call, until the Oct 30 timing measures it
+JUDGE_RETRY_SHARE: Final = 0.1  # retries of unreadable answers a run may send, as a share of its judge calls (1 in 257 seen)
+NO_VERDICT: Final = "no_verdict"
+# Past this share of a comparison's judged probes without a verdict, the morning stops. One answer in
+# 257 was unreadable on Teo's night 1, and a probe goes without a verdict only when an answer and its
+# retry both fail, so chance leaves a comparison far below a quarter; a judge whose format changed
+# fails most of them. Under it, a comparison's score still rests on three quarters of its probes.
+NO_VERDICT_MAX_SHARE: Final = 0.25
 ARM_POOLS: Final = ("modal_usd", "baseten_sleep_usd")
 JUDGE_POOLS: Final = ("meta_usd",)
 SCORES: Final = "scores"
 DONOR_UNAVAILABLE: Final = "donor_unavailable"
+logger = logging.getLogger(__name__)
+
+
+class TooManyNoVerdicts(RuntimeError):
+    """The judge gave no readable verdict on more than ``NO_VERDICT_MAX_SHARE`` of a comparison's
+    probes: its answers can't be read, so the morning stops and scores nothing. ``no_verdict`` counts
+    the run's unread (comparison, probe) pairs so far."""
+
+    def __init__(self, message: str, *, no_verdict: int = 0) -> None:
+        super().__init__(message)
+        self.no_verdict = no_verdict
 
 
 class MorningError(RuntimeError):
@@ -143,6 +176,7 @@ class MorningResult:
     path: Path
     replies: int
     judge_calls: int
+    no_verdict: int = 0  # (comparison, probe) pairs the judge gave no readable verdict on
 
 
 class _Pinned:
@@ -156,17 +190,43 @@ class _Pinned:
 
 
 class _Counting:
-    """The judge, its calls counted for the hold: every call, from any thread."""
+    """The judge, its calls counted for the hold: every call, from any thread. An unreadable answer is
+    asked once more with more room while ``retries`` last; one still unreadable raises ``NoVerdict``.
+    Its log lines name the probe and how the answer ended, never its words."""
 
-    def __init__(self, inner: PairwiseJudge) -> None:
+    def __init__(self, inner: PairwiseJudge, retries: int = 0) -> None:
         self._inner = inner
         self._lock = threading.Lock()
+        self._retries = retries
         self.calls = 0
 
-    def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
+    def _count(self, *, retry: bool = False) -> bool:
         with self._lock:
+            if retry and self._retries <= 0:
+                return False
+            self._retries -= retry
             self.calls += 1
-        return self._inner.verdict(probe, first, second)
+            return True
+
+    def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
+        self._count()
+        try:
+            return self._inner.verdict(probe, first, second)
+        except NoVerdict:
+            raise
+        except JudgeError as error:
+            if not self._count(retry=True):
+                logger.warning("judge: probe %s unreadable (%s), no retry left: no verdict", probe.id, error)
+                raise NoVerdict(str(error)) from None
+            logger.warning("judge: probe %s unreadable (%s), asked once more with room for %d tokens",
+                           probe.id, error, JUDGE_RETRY_MAX_TOKENS)
+        again = self._inner.again if isinstance(self._inner, RoomyJudge) else self._inner.verdict
+        try:
+            return again(probe, first, second)
+        except (JudgeError, ModelApiError) as error:
+            reason = str(error) if isinstance(error, JudgeError) else type(error).__name__
+            logger.warning("judge: probe %s unreadable again (%s): no verdict", probe.id, reason)
+            raise NoVerdict(reason) from None
 
 
 def _next_file(folder: Path, night: date) -> Path:
@@ -199,10 +259,11 @@ def _all_ties(against: dict[str, dict[str, object]]) -> dict[str, dict[str, obje
     return {name: _stat(0, int(str(stat["n"])), 0, 0.5, None, (0.5, 0.5)) for name, stat in against.items()}
 
 
-def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome]) -> list[dict[str, object]]:
-    """Ids and codes only: enough to recount any result, with no text."""
-    return [{"probe": f.probe_id, "pair": pair, "kind": f.kind, "outcome": f.outcome, "flip": f.flipped}
-            for f in found]
+def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome | None]) -> list[dict[str, object]]:
+    """Ids and codes only: enough to recount any result, with no text. A probe with no verdict says so."""
+    return [{"probe": p.id, "pair": pair, "kind": p.kind, "outcome": NO_VERDICT, "flip": False} if f is None else
+            {"probe": f.probe_id, "pair": pair, "kind": f.kind, "outcome": f.outcome, "flip": f.flipped}
+            for p, f in zip(probes, found, strict=True)]
 
 
 def _answer(
@@ -230,14 +291,18 @@ def _comparisons(replies: Mapping[Arm, Sequence[ArmReply]]) -> list[tuple[str, A
 
 def _judged(
     probes: Sequence[Probe], replies: Mapping[Arm, Sequence[ArmReply]], judge: PairwiseJudge, calls: Calls,
-) -> list[tuple[str, Arm, Arm, list[ProbeOutcome]]]:
-    """Every comparison's per-probe outcomes, judged side by side, gathered by comparison and probe."""
+) -> list[tuple[str, Arm, Arm, list[ProbeOutcome | None]]]:
+    """Every comparison's per-probe outcomes, judged side by side, gathered by comparison and probe;
+    None where the judge gave no readable verdict."""
     comparisons = _comparisons(replies)
     jobs = [(first, second, index) for _, first, second in comparisons for index in range(len(probes))]
 
-    def outcome(job: tuple[Arm, Arm, int]) -> ProbeOutcome:
+    def outcome(job: tuple[Arm, Arm, int]) -> ProbeOutcome | None:
         first, second, index = job
-        return probe_outcome(probes[index], replies[first][index], replies[second][index], judge)
+        try:
+            return probe_outcome(probes[index], replies[first][index], replies[second][index], judge)
+        except NoVerdict:
+            return None
 
     found = calls.map(outcome, jobs)
     size = len(probes)
@@ -295,13 +360,15 @@ def _run_morning(
         raise GlimmerNotReady()  # nothing was called or written
     deps = replace(morning.arms, adapters=_Pinned(morning.arms.adapters, user_id, checkpoint), until=night,
                    context_cache={})
-    judge = _Counting(morning.judge)
+    worst_judge = _worst_judge_calls(probes, arms)
+    retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
+    judge = _Counting(morning.judge, retries)
     key = f"morning:{night.isoformat()}:{user_id}"
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
         holds.enter_context(held(morning.ledger, f"{key}:judge", JUDGE_POOLS,
-                                 usd(_worst_judge_calls(probes, arms) * JUDGE_USD_PER_CALL),
+                                 usd((worst_judge + retries) * JUDGE_USD_PER_CALL),
                                  lambda: judge.calls * JUDGE_USD_PER_CALL))
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
@@ -312,14 +379,27 @@ def _run_morning(
         rows: list[dict[str, object]] = []
         stats: dict[str, dict[str, dict[str, object]]] = {}
         pairs: dict[str, dict[str, dict[str, object]]] = {}
+        no_verdict: dict[str, int] = {}
+        judged = sum(1 for p in probes if p.kind != "taste_ab")
         for name, first, second, found in _judged(probes, replies, judge, calls):
-            scored = _stats(score_outcomes(probes, [f.outcome for f in found], bootstrap=config))
+            kept = [(p, f) for p, f in zip(probes, found, strict=True) if f is not None]
+            if missing := len(found) - len(kept):
+                no_verdict[name] = missing
+                if missing > NO_VERDICT_MAX_SHARE * judged:
+                    raise TooManyNoVerdicts(
+                        f"the judge gave no readable verdict on {missing} of {judged} probes in {name}, more than "
+                        f"{NO_VERDICT_MAX_SHARE:.0%}: its answers can't be read (has their format changed?), so "
+                        "nothing was scored", no_verdict=sum(no_verdict.values()))
+            if not kept:
+                continue  # no probe has a verdict: the comparison is missing, never a 0.50 tie
+            scored = _stats(score_outcomes([p for p, _ in kept], [f.outcome for _, f in kept], bootstrap=config))
             if second == BASELINE:  # the arms are sorted when written; the pairs keep _comparisons' order
                 stats[first] = scored
             else:
                 pairs[name] = scored
             rows.extend(_rows(name, probes, found))
-    stats[BASELINE] = _all_ties(next(iter(stats.values())))
+    if stats:  # arm 1 against itself takes the shape of an arm that was scored
+        stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
         "night": night.isoformat(), "label": label, "probes": len(probes),
         "checkpoint": None if checkpoint is None else checkpoint.id,
@@ -329,13 +409,16 @@ def _run_morning(
     record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
     if subset is not None:
         record["subset"] = subset.name
+    if no_verdict:
+        record[NO_VERDICT] = no_verdict
     if woke is not None:
         record["wake_seconds"] = woke.seconds
     folder.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.tmp")
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")
     os.replace(pending, target)
-    return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls)
+    return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()))
 
 
-__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "run_morning", "subset_probes"]
+__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",
+           "subset_probes"]

@@ -7,6 +7,9 @@ With ``--simulate anjo.sleep.app.sim_transport:simulate --day <i>``, each person
 plays day ``i`` through the dev API, and the night runs on that day's window; a day cut short by a
 turn Glimmer couldn't answer is logged as short, never as an error.
 
+Each night naps or sleeps deep by its sleep pressure (``night/sleep_pressure.py``); ``--force-deep``
+makes it a deep sleep, unless the month's cap (``ANJO_SLEEP_MONTH_USD``) would be passed.
+
 ``--persona`` names the synthetic persona the account before it plays (its sealed probes and the
 collapse gate's fields). An account named without one is a real person, and runs only with
 ``--allow-real``, which Claude passes only for Kevin with his OK.
@@ -111,7 +114,7 @@ def execute(
     *, wiring: str, night: date, users: Sequence[str], personas: Mapping[str, str], allow_real: bool = False,
     practice_scenes: int = 16, teacher: bool = True, simulate: str | None = None, day: int | None = None,
     seed: int = 20261028, windows: Mapping[str, Window] | None = None, days: Mapping[str, DayRun] | None = None,
-    as_of: Mapping[str, datetime] | None = None, mind: bool = False,
+    as_of: Mapping[str, datetime] | None = None, mind: bool = False, force_deep: bool = False,
 ) -> dict[str, NightResult]:
     """The night for ``users`` under the lock and sweep, with the chosen runner's training and the adapter's
     publishing.
@@ -121,7 +124,8 @@ def execute(
     day played here decides at the end of the virtual ``night``. Also used by ``night/daily.py``."""
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or _no_data_dir())
     options = NightOptions(night=night, personas=dict(personas), allow_real=allow_real,
-                           practice_scenes=practice_scenes, practice_teacher=teacher, mind_inquiry=mind)
+                           practice_scenes=practice_scenes, practice_teacher=teacher, mind_inquiry=mind,
+                           force_deep=force_deep)
     # The runner trains only the people named with a persona (the wiring refuses a persona on an
     # account that isn't registered synthetic), and the others named only with --allow-real.
     cfg = night_cfg()  # before any runner, sweep or call
@@ -163,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--day", type=int, help="the persona's day index to simulate")
     parser.add_argument("--seed", type=int, default=20261028)
     parser.add_argument("--mind", action="store_true", help="MIND's inquiry in the night (Task 17)")
+    parser.add_argument("--force-deep", action="store_true",
+                        help="a deep sleep tonight whatever its pressure (the demo, tests); the month's cap still wins")
     args = parser.parse_args(argv)
     if len(args.personas) > len(args.users):
         parser.error("more personas than users")
@@ -177,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     results = execute(
         wiring=args.wiring, night=args.night, users=args.users, personas=personas, allow_real=args.allow_real,
         practice_scenes=args.practice_scenes, teacher=not args.no_teacher, simulate=args.simulate, day=args.day,
-        seed=args.seed, mind=args.mind,
+        seed=args.seed, mind=args.mind, force_deep=args.force_deep,
     )
     print(json.dumps({user: {"status": r.status, "failed_at": r.failed_at, "log": str(r.log_path)}
                       for user, r in results.items()}, indent=1))

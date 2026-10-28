@@ -227,6 +227,9 @@ class ColabRunner:
             raise ColabError(f"the Colab runner runs only {JOB}")
         if not self._allow_real and not self._is_synthetic(str(inputs["person_id"])):
             raise RealPersonRefused("Colab trains synthetic people only, unless allow_real is set")
+        recipe = inputs.get("config")
+        if isinstance(recipe, Mapping) and recipe.get("channel") is not None:
+            raise ColabError("the thought channel trains on Modal only: Colab runs the training script alone")
         name = config.check_adapter_name(str(inputs["adapter_name"]))
         uploads = _uploads(inputs)
         exec_s = timeout_s - _setup_s(len(uploads))

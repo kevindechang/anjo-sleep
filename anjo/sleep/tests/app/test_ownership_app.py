@@ -137,7 +137,7 @@ def test_routes_refuse_other_users(api: Any, monkeypatch: pytest.MonkeyPatch) ->
     api.who["user"] = ALICE
     nights = api.get("/api/sleep/nights").json()
     assert [(n["night"], n["status"]) for n in nights] == [("2026-10-28", "promoted"), ("2026-10-29", "rejected")]
-    assert nights[0]["checkpoint"] == first.id and nights[1]["gates"] == [{"gate": "collapse", "passed": False}]
+    assert nights[0]["checkpoint"] == first.id and nights[1]["gates"] == [{"gate": "collapse", "passed": False, "skipped": False}]
     assert nights[0]["action"] == "revisit_thread" and nights[0]["note"] == "held"
     assert api.get("/api/sleep/nights/2026-10-29").json()["status"] == "rejected"
     assert api.get("/api/sleep/nights/2026-10-30").status_code == 404
@@ -201,6 +201,8 @@ def _lay_down(uid: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
         (training / part / "p-aaaaaaaaaaaa-n1").mkdir(parents=True)
         (training / part / "p-aaaaaaaaaaaa-n1" / "file").write_text("x")
         (training / part / "p-bbbbbbbbbbbb-n1").mkdir(parents=True)  # somebody else's
+    for name in ("p-aaaaaaaaaaaa-n1", "p-bbbbbbbbbbbb-n1"):  # the thought channel's projector, beside each adapter
+        (training / "adapters" / f"{name}.projector.npz").write_bytes(b"npz")
     (person_results(uid) / "scores").mkdir(parents=True)
     (person_results(uid) / "scores" / "night-01.json").write_text("{}")
     return {"sleep": sleep_dir(uid), "results": person_results(uid), "sealed": sealed / uid,
@@ -224,8 +226,16 @@ def test_delete_all_clears_the_mind_workspace_log(auth_client: Any, tmp_path: Pa
     assert workspace_log(uid).events() == () and not (where["sleep"] / WORKSPACE_FILE).exists()
     for name in ("sleep", "results", "sealed", "registry"):
         assert not where[name].exists(), name
-    assert sorted(p.name for p in where["training"].iterdir()) == ["p-bbbbbbbbbbbb-n1"]  # only hers went
+    assert sorted(p.name for p in where["training"].iterdir()) == [  # only hers went, her projector too
+        "p-bbbbbbbbbbbb-n1", "p-bbbbbbbbbbbb-n1.projector.npz"]
     assert os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE  # the forced-id entry too
+
+
+def test_the_projector_suffix_is_the_trainers() -> None:
+    from anjo.sleep.app import ownership
+    from anjo.sleep.train import lora
+
+    assert ownership.PROJECTOR_SUFFIX == lora.PROJECTOR_SUFFIX
 
 
 # ── Account erasure's hook ────────────────────────────────────────────────────
@@ -397,3 +407,23 @@ def test_delete_succeeds_for_any_valid_account_id(auth_client: Any, monkeypatch:
         delete_all(uid)
         assert not any(path.exists() for path in theirs) and all(path.exists() for path in kept)
     delete_all("person-with-no-latents")  # nothing kept: nothing to remove, and no failure
+
+
+def test_the_nights_route_says_how_each_night_slept(api: Any) -> None:
+    from anjo.sleep.app.ownership import night_logs
+    from anjo.sleep.night.nightlog import NightLog, night_folder
+
+    _seed(ALICE)  # two nights from before naps: no sleep record
+    third = date(2026, 10, 30)
+    log = NightLog(night_folder(night_logs(ALICE), third))
+    sleep: dict[str, Any] = {"kind": "nap", "reason": "below_threshold", "pressure": 0.21, "threshold": 0.5, "turns": 40}
+    log.step("sleep", "ok", uses="new", system=None, **sleep)
+    log.finish(NightResult(status="napped", failed_at=None, checkpoint=None, gates={}, choices=(), cost_usd=0.0,
+                           cost_parts={}, log_path=log.path),
+               {"night": third.isoformat(), "night_end": third.isoformat(), "sleep": sleep})
+    nights = api.get("/api/sleep/nights").json()
+    assert [n["sleep"] for n in nights[:2]] == [None, None]
+    assert nights[2]["status"] == "napped" and nights[2]["sleep"] == {
+        "kind": "nap", "pressure": 0.21, "threshold": 0.5, "reason": "below_threshold"}
+    changed = api.get("/api/sleep/what-changed", params={"since": third.isoformat()}).json()
+    assert [c["kind"] for c in changed] == ["napped"] and "0.21 against 0.50" in changed[0]["line"]

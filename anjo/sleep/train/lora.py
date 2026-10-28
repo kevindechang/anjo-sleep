@@ -58,6 +58,7 @@ TRAIN_SEED: Final = 20261028
 JOB: Final = "train_lora"
 DATASET_FILE: Final = "dataset.jsonl"
 VOLUME_URI: Final = f"modal-volume://{config.ADAPTERS_VOLUME}"
+PROJECTOR_SUFFIX: Final = ".projector.npz"  # the thought channel's projector, beside its night's adapter
 Objective = Literal["sft", "sft_dpo", "sft_dpo_seed"]
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft", "sft_dpo", "sft_dpo_seed")
 WITH_PAIRS: Final = ("sft_dpo", "sft_dpo_seed")
@@ -174,7 +175,7 @@ def fresh_adapter_name(user_id: str, night_number: int, used: frozenset[str]) ->
 
 def training_config(
     cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None, night: date, steps: StepPlan | None = None,
-    keep_every_row: bool = False,
+    keep_every_row: bool = False, channel: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """What the training script is told: the recipe, the step plan, the learning rate, and how the
     rows are rendered, so the adapter trains on the prompt it is served: the reasoning strength the
@@ -182,14 +183,14 @@ def training_config(
     template's hash, and the rendering they make (``framing.rendering``), which the adapter records.
     ``steps`` fixes the step plan instead of deriving it from ``n_examples``, and is sent as
     ``max_steps``, so two runs on sets of different sizes take the same updates; ``keep_every_row``
-    stops the run on the VM before training if any row is too long (Task 17b)."""
+    stops the run on the VM before training if any row is too long (Task 17b). ``channel`` (the thought
+    channel's settings, ``channel_train.check_channel``) trains the projector with the LoRA, on rows that
+    carry the core state they were made under."""
     plan = steps or plan_steps(n_examples, cfg)
     strength = config.reasoning_strength()
-    fixed: dict[str, object] = {}
-    if steps is not None:
-        fixed["max_steps"] = steps.steps
-    if keep_every_row:
-        fixed["keep_every_row"] = True
+    fixed: dict[str, object] = {} if steps is None else {"max_steps": steps.steps}
+    fixed |= {"keep_every_row": True} if keep_every_row else {}
+    fixed |= {} if channel is None else {"channel": dict(channel)}
     if cfg.objective == "sft_dpo_seed":
         fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.
@@ -233,6 +234,8 @@ class TrainReceipt:
     terms: Mapping[str, object] | None = None  # sft_dpo_seed's receipt: rows, minutes and loss per term, dreams kept
     surprise_weights: str | None = None  # whether the rows' surprise weights reached the loss; None when none had one
     match: Mapping[str, object] | None = None  # a matched control's budget, the minutes it used and its steps
+    projector: str = ""  # the thought channel's projector this night trained, kept beside the adapter ("": off)
+    channel_receipt: str = ""  # the channel's counts and margins (JSON), as the job reported them ("": off)
 
 
 AdapterPublisher = Callable[[Path, str], None]
@@ -281,6 +284,18 @@ def _copy_adapter(source: Path, target: Path) -> None:
         shutil.copyfile(source / file, target / file)
 
 
+def _keep_projector(outputs: Mapping[str, object], adapter_cache: Path, name: str) -> str:
+    """The channel run's projector, copied beside the cached adapter (never inside its folder, which
+    holds the adapter's two files and nothing else)."""
+    returned = outputs.get("projector_path")
+    if not isinstance(returned, str) or not Path(returned).is_file():
+        raise TrainError("the channel run returned no projector")
+    kept = adapter_cache / f"{name}{PROJECTOR_SUFFIX}"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(returned, kept)
+    return str(kept)
+
+
 def train_lora_with_receipt(
     prev: CheckpointRef | None,
     data: Dataset,
@@ -297,9 +312,14 @@ def train_lora_with_receipt(
     timeout_s: float = TRAINING_TIMEOUT_S,
     steps: StepPlan | None = None,
     keep_every_row: bool = False,
+    channel: Mapping[str, object] | None = None,
+    prev_projector: Path | None = None,
 ) -> tuple[CheckpointRef, TrainReceipt]:
     """Train ``name`` on ``data``, warm from ``prev`` when the recipe says so, and publish it.
-    ``steps`` and ``keep_every_row`` go to the script as ``training_config`` says."""
+    ``steps`` and ``keep_every_row`` go to the script as ``training_config`` says. With ``channel``
+    the same job trains the thought channel's projector too, from ``prev_projector`` (the person's
+    last, or the shared one), and the one it trained is kept at ``<adapter_cache>/<name>.projector.npz``,
+    beside the adapter: one unit with the core state the rows carry."""
     config.check_adapter_name(name)
     if prev is not None and prev.person_id != person_id:
         raise TrainError("a warm start is only ever from the person's own adapter")
@@ -315,7 +335,9 @@ def train_lora_with_receipt(
     workdir.mkdir(parents=True, exist_ok=True)
     dataset_path = workdir / DATASET_FILE
     settings = training_config(cfg, len(data.examples), warm=warm, revision=revision, night=night, steps=steps,
-                               keep_every_row=keep_every_row)
+                               keep_every_row=keep_every_row, channel=channel)
+    if channel is None and prev_projector is not None:
+        raise TrainError("a projector warm start without the channel on")
     try:  # the dataset is the person's words in plain text: it never outlives the run
         dataset_path.write_text(data.to_jsonl(pairs=cfg.objective in WITH_PAIRS, terms=cfg.objective == "sft_dpo_seed"),
                                 encoding="utf-8")
@@ -323,6 +345,7 @@ def train_lora_with_receipt(
             "person_id": person_id, "adapter_name": name, "night": night.isoformat(), "dataset_path": str(dataset_path),
             "config": settings, "prev_adapter_dir": None if prev_dir is None else str(prev_dir),
             "workdir": str(workdir),
+            **({} if prev_projector is None else {"prev_projector": str(prev_projector)}),
         }, timeout_s=timeout_s)
     finally:
         dataset_path.unlink(missing_ok=True)
@@ -333,6 +356,7 @@ def train_lora_with_receipt(
         raise TrainError(f"the adapter doesn't record the rendering it was trained under ({settings['rendering']})")
     cached = adapter_cache / name
     _copy_adapter(Path(returned), cached)
+    projector = _keep_projector(outputs, adapter_cache, name) if channel is not None else ""
     publish(cached, name)
     plan = steps or plan_steps(len(data.examples), cfg)
     trained_pairs = _pairs_trained(outputs, data) if cfg.objective in WITH_PAIRS else 0
@@ -347,10 +371,11 @@ def train_lora_with_receipt(
         gpu_minutes=_number(outputs, "gpu_minutes"), train_minutes=_number(outputs, "train_minutes"),
         compute_units=_number(outputs, "compute_units"),
         dropped_truncated=int(_number(outputs, "dropped_truncated")),
-        objective=trained_objective, pairs=trained_pairs,
+        objective=trained_objective, pairs=trained_pairs, projector=projector,
         terms=dict(terms) if cfg.objective == "sft_dpo_seed" and isinstance(terms, Mapping) else None,
         surprise_weights=str(outputs["surprise_weights"]) if outputs.get("surprise_weights") else None,
         match=dict(match) if cfg.match_by_night and isinstance(match := outputs.get("match"), Mapping) else None,
+        channel_receipt=json.dumps(outputs["channel"], sort_keys=True) if isinstance(outputs.get("channel"), dict) else "",
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

@@ -38,6 +38,7 @@ from anjo.sleep.evidence.targets import mentioned_target
 from anjo.sleep.mind.apd import gates, retry
 from anjo.sleep.mind.apd.core_families import fields, templates_for
 from anjo.sleep.mind.apd.families import Template
+from anjo.sleep.mind.apd.generators import BY_MODEL, CUT, Refused, answer
 from anjo.sleep.mind.apd.types import (
     DEVELOPMENT_LIVES,
     EMPTY_HELD_OUT_LIVES,
@@ -59,6 +60,9 @@ from anjo.sleep.types import Evidence, Target
 
 LIFE_PROMPT: Final = Path(__file__).parent / "prompts" / "life_v1.md"
 EXTRACT_PROMPT: Final = Path(__file__).parent / "prompts" / "extract_open_v1.md"
+# A core split's generator (DeepSeek) sometimes leaves ``placed`` out of a day with nothing to
+# place; told this line, and read leniently there (``_read_day``). Spark Open's prompt is unchanged.
+ALWAYS_PLACED: Final = "Always include `placed`, even on a day with nothing to place: then it is `{}`."
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -73,7 +77,26 @@ ALL_FAMILIES: Final[tuple[Family, ...]] = ("contradiction", "gap", "opportunity"
 
 
 class GenerationFailed(ValueError):
-    """An attempt broke a rule (a malformed day, a misplaced beat, a fact that left no evidence)."""
+    """An attempt broke a rule (a malformed day, a misplaced beat, a fact that left no evidence),
+    and where, none of any reply's text: the ``step`` (``writer``, ``extractor``, ``planted fact``
+    or ``pair``), the ``day`` (1 to ``LIFE_DAYS``), the planted ``item`` (its number), and for a
+    reply that couldn't be read the ``field`` it lacked, the ``rule`` that refused it
+    (``generators.Refused``), its length and its answer's, and its finish reason."""
+
+    WHERE: Final = ("step", "day", "item", "field", "rule", "reply_chars", "answer_chars", "finish_reason")
+
+    def __init__(self, message: str, *, step: str | None = None, day: int | None = None, item: int | None = None,
+                 field: str | None = None, rule: str | None = None, reply_chars: int | None = None,
+                 answer_chars: int | None = None, finish_reason: str | None = None) -> None:
+        super().__init__(message)
+        self.step, self.day, self.item, self.field, self.rule = step, day, item, field, rule
+        self.reply_chars, self.answer_chars, self.finish_reason = reply_chars, answer_chars, finish_reason
+
+    def at(self, **where: Any) -> GenerationFailed:
+        """The same failure located further; what it already says is kept."""
+        found = {name: getattr(self, name) for name in self.WHERE}
+        found.update({name: value for name, value in where.items() if found[name] is None})
+        return GenerationFailed(str(self), **found)
 
 
 class ModelMismatch(RuntimeError):
@@ -212,52 +235,96 @@ def _check_model(reply: ChatResult, model: str) -> None:
         raise ModelMismatch("a reply doesn't name Spark Open as the experiment's provider serves it")
 
 
-def _write_day(
-    chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
-    beats: Sequence[Beat],
-) -> tuple[list[str], dict[str, int]]:
+def writer_messages(
+    field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat], *,
+    model: str,
+) -> list[dict[str, Any]]:
+    """The writer's call for day ``index`` (from 0): ``life_v1.md`` (and, for a core split's
+    generator, ``ALWAYS_PLACED``) and the day's payload."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
         "plant": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "plant"],
         "ask": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "ask"],
     }
-    messages = [
-        {"role": "system", "content": LIFE_PROMPT.read_text(encoding="utf-8")},
+    prompt = LIFE_PROMPT.read_text(encoding="utf-8")
+    return [
+        {"role": "system", "content": f"{prompt.rstrip()}\n{ALWAYS_PLACED}\n" if model in BY_MODEL else prompt},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
-    reply = chat(model, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+
+
+def _write_day(
+    chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
+    beats: Sequence[Beat],
+) -> tuple[list[str], dict[str, int]]:
+    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model), None, TIMEOUT_S,
+                 temperature=WRITE_TEMPERATURE)
     _check_model(reply, model)
+    text: str | None = None
     try:
-        body = gates.json_object(reply.text)
+        text = answered(reply, model)
+        return _read_day(text, beats, nothing_placed=model in BY_MODEL)
+    except GenerationFailed as failed:
+        raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
+                        answer_chars=None if text is None else len(text), finish_reason=reply.finish_reason) from None
+
+
+def answered(reply: ChatResult, model: str) -> str:
+    """What a reply answered: a Fireworks generator's answer (``generators.answer``), Spark Open's
+    reply as it came. A reply cut at its cap, or a generator's draft, is refused by its rule."""
+    try:
+        if model in BY_MODEL:
+            return answer(reply.text, reply.finish_reason)
+        if reply.finish_reason == "length":
+            raise Refused(CUT, "a reply cut at its cap")
+    except Refused as refused:
+        raise GenerationFailed(str(refused), field="reply", rule=refused.rule, reply_chars=len(reply.text),
+                               finish_reason=reply.finish_reason) from None
+    return reply.text
+
+
+def _read_day(text: str, beats: Sequence[Beat], *, nothing_placed: bool = False) -> tuple[list[str], dict[str, int]]:
+    """A day's messages and where its beats are. With ``nothing_placed`` (a core split's
+    generator), a day with no beats may leave ``placed`` out, null or empty; a day with beats never."""
+    try:
+        body = gates.json_object(text)
     except gates.GateError:
-        raise GenerationFailed("a day's reply is not a JSON object") from None
+        raise GenerationFailed("a day's reply is not a JSON object", field="reply") from None
     texts, placed = body.get("messages"), body.get("placed")
     if not isinstance(texts, list) or not texts or not all(isinstance(t, str) and t.strip() for t in texts):
-        raise GenerationFailed("a day has no messages")
+        raise GenerationFailed("a day has no messages", field="messages")
+    if nothing_placed and not beats and placed in (None, [], {}):
+        placed = {}
     if not isinstance(placed, dict):
-        raise GenerationFailed("a day doesn't say where its beats are")
+        raise GenerationFailed("a day doesn't say where its beats are", field="placed")
     return [t.strip() for t in texts], _check_placed(placed, beats, len(texts))
 
 
 def _check_placed(placed: dict[Any, Any], beats: Sequence[Beat], count: int) -> dict[str, int]:
     if set(placed) != {b.id for b in beats}:
-        raise GenerationFailed("a beat is unplaced or unknown")
+        raise GenerationFailed("a beat is unplaced or unknown", field="placed")
     spots = list(placed.values())
     if not all(isinstance(p, int) and not isinstance(p, bool) and 0 <= p < count for p in spots):
-        raise GenerationFailed("a beat points outside the day's messages")
+        raise GenerationFailed("a beat points outside the day's messages", field="placed")
     if len(set(spots)) != len(spots):
-        raise GenerationFailed("two beats share a message")
+        raise GenerationFailed("two beats share a message", field="placed")
     return {str(k): int(v) for k, v in placed.items()}
 
 
-def _extractor(chat: ChatFn, model: str) -> Callable[[list[dict[str, Any]]], ChatResult]:
-    """Task 3's ``extract`` with ``extract_open_v1.md`` as its prompt."""
+def _extractor(chat: ChatFn, model: str, replies: list[tuple[ChatResult, str]] | None = None
+               ) -> Callable[[list[dict[str, Any]]], ChatResult]:
+    """Task 3's ``extract`` with ``extract_open_v1.md`` as its prompt, reading each reply's answer
+    (``answered``); each reply and its answer kept in ``replies``."""
     system = EXTRACT_PROMPT.read_text(encoding="utf-8")
 
     def call(messages: list[dict[str, Any]]) -> ChatResult:
         swapped = [{"role": "system", "content": system}, *messages[1:]]
-        return chat(model, swapped, None, TIMEOUT_S, temperature=EXTRACT_TEMPERATURE)
+        reply = chat(model, swapped, None, TIMEOUT_S, temperature=EXTRACT_TEMPERATURE)
+        text = answered(reply, model)
+        if replies is not None:
+            replies.append((reply, text))
+        return dataclasses.replace(reply, text=text)
 
     return call
 
@@ -305,7 +372,7 @@ class Draft:
         turns = [Turn(f"{self.life_id}:d{index}{branch}:m{i}", "user", text, frozenset({self.model}))
                  for i, text in enumerate(texts)]
         found = _extract_day(chat, self.model, self.life_id, day, turns, tuple(self.held.values()),
-                             {e.id for e in self.evidence})
+                             {e.id for e in self.evidence}, index)
         return WrittenDay(index, day, tuple(texts), MappingProxyType({b: turns[i].source for b, i in placed.items()}),
                           tuple(found.items), tuple(found.mentions))
 
@@ -316,7 +383,7 @@ class Draft:
         last = self.written[-1]
         turn = Turn(f"{self.life_id}:d{last.index}{branch}:m{len(last.texts)}", "user", text, frozenset({self.model}))
         found = _extract_day(chat, self.model, self.life_id, last.day, [turn], tuple(self.held.values()),
-                             {e.id for e in self.evidence})
+                             {e.id for e in self.evidence}, last.index)
         said = WrittenDay(last.index, last.day, (*last.texts, text), MappingProxyType({**last.spots, beat: turn.source}),
                           (*last.items, *found.items), (*last.mentions, *found.mentions))
         held = _fold_targets(self.held, found.mentions, self.life_id, last.day)
@@ -362,16 +429,28 @@ def life(
     return built, problem_file(built, plans, draft.spots)
 
 
+_EXTRACT_FIELDS: Final = (("not JSON", "reply"), ("items list", "items"), ("model", "model"))
+
+
 def _extract_day(
     chat: ChatFn, model: str, life_id: str, day: date, turns: list[Turn], open_targets: tuple[Target, ...],
-    known: set[str],
+    known: set[str], index: int | None = None,
 ) -> Any:
     now = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) + END_OF_DAY
+    replies: list[tuple[ChatResult, str]] = []
+    on_day = None if index is None else index + 1
     try:
         return extract(life_id, day, turns, imported=(), targets=open_targets, known_ids=frozenset(known),
-                       now=now, chat=_extractor(chat, model), model=model)
+                       now=now, chat=_extractor(chat, model, replies), model=model)
+    except GenerationFailed as failed:  # its reply refused (``answered``)
+        raise failed.at(step="extractor", day=on_day) from None
     except ExtractionError as exc:
-        raise GenerationFailed(f"extraction failed: {exc}") from None
+        field = next((name for marker, name in _EXTRACT_FIELDS if marker in str(exc)), None)
+        last, text = replies[-1] if replies else (None, None)
+        raise GenerationFailed(f"extraction failed: {exc}", step="extractor", day=on_day, field=field,
+                               reply_chars=None if last is None else len(last.text),
+                               answer_chars=None if text is None else len(text),
+                               finish_reason=None if last is None else last.finish_reason) from None
 
 
 def _fold_targets(held: Mapping[str, Target], mentions: Any, life_id: str, day: date) -> dict[str, Target]:
@@ -389,18 +468,22 @@ def problem_file(built: Life, plans: Sequence[ItemPlan], spots: Mapping[str, str
 
     texts = {item.id: item.text for item in built.evidence}
 
-    def ids(beat: str, fact: str) -> tuple[str, ...]:
+    def ids(beat: str, fact: str, number: int, day: int) -> tuple[str, ...]:
         found = by_source.get(spots[beat], [])
-        return expressed(fact, found, texts)
+        try:
+            return expressed(fact, found, texts)
+        except GenerationFailed as failed:
+            raise failed.at(step="planted fact", item=number, day=day + 1) from None
 
     items = []
     for number, step in enumerate(plans, start=1):
-        origin = tuple(
-            i for k, fact in enumerate(step.template.origins, start=1) for i in ids(f"i{number}.o{k}", fact))
+        origin = tuple(i for k, (fact, day) in enumerate(zip(step.template.origins, step.origin_days, strict=True), start=1)
+                       for i in ids(f"i{number}.o{k}", fact, number, day))
         items.append(PlantedItem(
             id=f"{built.id}-i{number}", family=step.template.family, template=step.template.id,
             topic=step.template.topic, surface_day=built.days[step.surface_day], origin_ids=origin,
-            disambiguating_ids=ids(f"i{number}.d", step.template.disambiguating), resolution=step.template.resolution,
+            disambiguating_ids=ids(f"i{number}.d", step.template.disambiguating, number, step.disambiguating_day),
+            resolution=step.template.resolution,
         ))
     return ProblemFile(built.id, tuple(items))
 

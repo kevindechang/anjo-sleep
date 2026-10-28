@@ -1,11 +1,14 @@
 """MIND's inquiry in the night (Task 17): ``MindNight`` is the night's ``Notice`` and ``Inquiry`` port.
 
 The night calls it only while ``NightSettings.mind_inquiry`` is on (``run.py``); off, the night is
-Task 7a's as specced. Each person's workspace is her log (``JsonlWorkspaceLog`` on the app's sleep
-folder), folded on every read, so it is exported, erased and replayed with her other sleep stores.
+Task 7a's as specced. A nap calls neither Glimmer step: notice, ``inquire`` and the note wait for her
+next deep sleep (``sleep_night.py``). Each person's workspace is her log (``JsonlWorkspaceLog`` on
+the app's sleep folder), folded on every read, so it is exported, erased and replayed with her other
+sleep stores.
 
-- **Step 2b, notice:** one thinker pass (``loop.notice``) over the person's own new items that her
-  workspace hasn't received yet, so a rerun of the night passes nothing twice. The pass is written
+- **Step 2c, notice:** one thinker pass (``loop.notice``) over the person's own new items (tonight's,
+  and after naps every one since her last night that woke) that her workspace hasn't received yet, so
+  a rerun of the night passes nothing twice. The pass is written
   to her log in one record when it ends, so its items reach her only with the questions they opened.
   A pass that fails writes only its ``RunStart`` and the tokens it spent, which tonight's budget
   counts. It opens questions and acts on nothing.

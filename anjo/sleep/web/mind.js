@@ -114,6 +114,14 @@
     return box;
   }
 
+  // How a night slept, after its status: "napped" or "deep sleep", its pressure against its threshold, and why.
+  function sleepLine(sleep) {
+    if (!sleep) return "";
+    const note = fill(copy.sleep_note, { pressure: sleep.pressure.toFixed(2), threshold: sleep.threshold.toFixed(2),
+      reason: word("sleep_reason", sleep.reason) });
+    return ` · ${word("sleep_kind", sleep.kind)} (${note})`;
+  }
+
   function choiceLine(c) {
     if (!c.action) return fill(copy.mind_chose_nothing, { night: c.night });
     return fill(copy.mind_chose, { night: c.night, action: word("action", c.action), target: plainText(c.target) });
@@ -124,7 +132,7 @@
     const { box, body } = section("choices", copy.mind_choices, latest ? choiceLine(latest) : "", data.state);
     for (const c of data.items) {
       const night = element("article", "night");
-      night.append(element("p", "night-head", `${fill(copy.slider_tick, { n: c.night })} · ${day(c.date)} · ${word("night_status", c.status)}`),
+      night.append(element("p", "night-head", `${fill(copy.slider_tick, { n: c.night })} · ${day(c.date)} · ${word("night_status", c.status)}${sleepLine(c.sleep)}`),
         element("p", "night-choice", choiceLine(c)));
       const facts = [c.outcome && fill(copy.mind_outcome, { outcome: word("outcome", c.outcome) }),
         c.note && fill(copy.mind_night_note, { note: word("note", c.note) })].filter(Boolean);
@@ -154,21 +162,30 @@
     return box;
   }
 
+  // A gate switched off judged nothing: shown as skipped, never as passed.
+  function gateKind(g) {
+    return g.skipped ? "skip" : g.passed ? "pass" : "fail";
+  }
+
   function gates(data) {
     const latest = data.items[0];
-    const failed = latest ? latest.gates.filter((g) => !g.passed).length : 0;
+    const failed = latest ? latest.gates.filter((g) => gateKind(g) === "fail").length : 0;
+    const skipped = latest ? latest.gates.filter((g) => g.skipped).length : 0;
     const line = !latest ? "" : latest.gates.length === 0 ? fill(copy.mind_gates_none, { night: latest.night })
-      : fill(failed ? copy.mind_gates_failed : copy.mind_gates_passed, { night: latest.night, n: failed });
+      : failed ? fill(copy.mind_gates_failed, { night: latest.night, n: failed })
+      : fill(skipped ? copy.mind_gates_passed_skipping : copy.mind_gates_passed, { night: latest.night, n: skipped });
     const { box, body } = section("gates", copy.mind_gates, line, data.state);
     for (const night of data.items) {
       const block = element("article", "night");
       block.append(element("p", "night-head", `${fill(copy.slider_tick, { n: night.night })} · ${word("night_status", night.status)}`));
       const list = element("ul", "rows");
       for (const g of night.gates) {
-        const row = element("li", g.passed ? "pass" : "fail");
-        row.append(tag(g.passed ? copy.mind_gate_pass : copy.mind_gate_fail, g.passed ? "pass" : "fail"),
+        const kind = gateKind(g);
+        const row = element("li", kind);
+        row.append(tag(g.skipped ? copy.mind_gate_skip : g.passed ? copy.mind_gate_pass : copy.mind_gate_fail, kind),
           element("span", "row-text", word("gate", g.gate)),
-          element("span", "num", fill(copy.mind_gate_numbers, { value: g.value ?? "–", threshold: g.threshold ?? "–" })));
+          element("span", "num", g.skipped ? copy.mind_gate_off
+            : fill(copy.mind_gate_numbers, { value: g.value ?? "–", threshold: g.threshold ?? "–" })));
         list.append(row);
       }
       if (!night.gates.length) list.append(element("li", "note", copy.mind_gates_skipped));
@@ -246,7 +263,9 @@
     const tbody = element("tbody");
     for (const night of life.nights) {
       const row = element("tr");
-      const label = element("th", "", String(night.night));
+      // probes the judge gave no verdict on, across the row's arms: said once, beside the night
+      const unread = arms.reduce((sum, arm) => sum + ((night.no_verdict && night.no_verdict[arm]) || 0), 0);
+      const label = element("th", "", unread ? `${night.night} (${fill(copy.chart_no_verdict, { n: unread })})` : String(night.night));
       label.setAttribute("scope", "row");
       row.append(label, ...arms.flatMap((arm) => dims.map((d) => {
         const v = night.scores[arm] && night.scores[arm][d];

@@ -29,7 +29,7 @@ class FakeChat:
     rule: Callable[[str, str], str]
     calls: list[str] = field(default_factory=list)
 
-    def __call__(self, model, messages, tools, timeout_s, *, temperature=None):
+    def __call__(self, model, messages, tools, timeout_s, *, temperature=None, max_tokens=None):
         content = messages[-1]["content"]
         self.calls.append(content)
         a = content.split("## Reply A\n\n", 1)[1].split("\n\n## Reply B", 1)[0]
@@ -97,7 +97,7 @@ def test_reply_text_cannot_inject_into_the_judge_prompt():
 
 
 def test_a_malformed_verdict_is_an_error():
-    def bad(model, messages, tools, timeout_s, *, temperature=None):
+    def bad(model, messages, tools, timeout_s, *, temperature=None, max_tokens=None):
         return ChatResult("not json", (), "m", 1, 1, "stop")
 
     judge = MuseJudge(chat=bad, brief_for=lambda p: "b")

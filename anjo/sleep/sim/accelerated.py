@@ -24,7 +24,9 @@ one clock. A start after that is refused before any day is simulated or any nigh
         --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona film_founder \\
         --days 2                                                   # starts two days ago; --start 2026-10-01 dates it earlier
 
-After each night the morning probe run scores every arm (`probes.morning`). Real runs train synthetic
+Each night naps or sleeps deep by the same decision as every night (``night/sleep_pressure.py``,
+under the wiring's policy), and the report says which. After each night that slept deep the morning
+probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Real runs train synthetic
 people only, on the runner ``ANJO_SLEEP_TRAIN_RUNNER`` names (``train/runners/choice.py``): Modal by
 default, one call a night, or Colab, one VM per life (``ColabLives``).
 """
@@ -179,7 +181,7 @@ def run_accelerated_batch(
             out[uid].append(result)
         if rig.score is not None:
             for uid, result in results.items():
-                if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
+                if result.status not in ("failed", "napped"):  # nothing new to score, and a nap runs no GPU morning
                     began = rig.timer()
                     rig.score(uid, night, kind, result)
                     if rig.on_scoring is not None:
@@ -238,7 +240,7 @@ def _report(
     digest = hashlib.sha256(json.dumps([summaries, timeless], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
-               "cost_usd": s["cost_usd"], **_trained(r)}
+               "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), **_trained(r)}
               for s, r in zip(summaries, results, strict=True)]
     return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
             "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],

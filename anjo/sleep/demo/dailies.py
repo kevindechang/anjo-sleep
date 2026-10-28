@@ -1,6 +1,8 @@
 """Dailies, the live page's morning card: one night as a film crew reviews it the morning after.
 
-``dailies_view`` builds one night's card from what the app read. It has three sections, each ``ok``,
+``dailies_view`` builds one night's card from what the app read. Its slate says how the night slept
+(``sleep``: a nap or a deep sleep, its pressure, threshold and reason; None before naps were logged).
+It has three sections, each ``ok``,
 ``none`` (nothing to show) or ``unavailable`` (its source couldn't be read), as in ``panel``:
 
 - ``learned``: what she (Anjo, his model) took from his day. These are the targets the night
@@ -47,7 +49,7 @@ from typing import Any, Final
 
 from anjo.sleep.demo.daily_lines import LABEL, DailyLines
 from anjo.sleep.demo.heldout import HeldOutText
-from anjo.sleep.demo.panel import NightRecord, candidate_view, night_record
+from anjo.sleep.demo.panel import NightRecord, candidate_view, night_record, slept
 from anjo.sleep.demo.words import DAILY_SCENE
 from anjo.sleep.evidence.targets import PERSON_KINDS
 from anjo.sleep.mind.inquiry.types import Question, Workspace
@@ -155,6 +157,13 @@ def _numbered(nights: Sequence[NightFiles]) -> list[tuple[int, NightRecord, Nigh
     for files in nights:
         last[files.record.night] = (files.record, files)
     return [(n, *last[day]) for n, day in enumerate(sorted(last), start=1)]
+
+
+def _no_verdict(files: NightFiles) -> int:
+    """How many of the morning's judged probes the judge gave no readable verdict on (its receipt's count)."""
+    morning = next((s for s in reversed(files.steps) if s.get("step") == "morning"), {})
+    count = morning.get("no_verdict")
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
 
 
 def _section(state: str, **body: Any) -> dict[str, Any]:
@@ -356,6 +365,7 @@ def _cost(files: NightFiles, upto: Sequence[NightFiles], sources: DailySources, 
 
 def _empty(state: str) -> dict[str, Any]:
     return {"state": state, "night": None, "date": None, "morning": None, "status": None, "as_of": None, "nights": [],
+            "skipped_gates": [], "no_verdict": 0,
             "learned": _learned_empty(state), "line": _line_empty(state),
             "cost": _section(state, source=None, parts=[], usd=None, gpu_minutes=None, projection=None)}
 
@@ -388,8 +398,12 @@ def dailies_view(
     upto = [each[2] for each in numbered if each[1].night <= on]
     return {
         "state": "ok", "night": number, "date": on.isoformat(), "morning": (on + timedelta(days=1)).isoformat(),
-        "status": record.status, "as_of": datetime.combine(on + timedelta(days=1), time.min, timezone.utc).isoformat(),
-        "nights": [{"night": n, "date": r.night.isoformat(), "status": r.status} for n, r, _ in reversed(numbered)],
+        "status": record.status, "sleep": slept(record),  # a nap or a deep sleep, its pressure and why
+        "as_of": datetime.combine(on + timedelta(days=1), time.min, timezone.utc).isoformat(),
+        "skipped_gates": [g.gate for g in record.gates if g.skipped],  # switched off: shown skipped, never passed
+        "no_verdict": _no_verdict(files),
+        "nights": [{"night": n, "date": r.night.isoformat(), "status": r.status,
+                    "sleep": None if r.sleep is None else r.sleep.kind} for n, r, _ in reversed(numbered)],
         "learned": _learned(on, record, sources, held),
         "line": _line(on, record.status, numbers, sources, held, passes),
         "cost": _cost(files, upto, sources, on),
