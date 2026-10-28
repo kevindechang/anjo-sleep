@@ -42,6 +42,7 @@ GPU: Final = "A100-80GB"  # config.BF16_A100's GPU: one A100-80GB
 FUNCTION_TIMEOUT_S: Final = 2 * 3600  # §12.1's training cap (budget.TRAINING_TIMEOUT_S; a test holds them equal)
 STARTUP_TIMEOUT_S: Final = 15 * 60  # the container's start, before the call runs (Modal's startup_timeout)
 RETURN_S: Final = 5 * 60  # landing the adapter and sending its files back
+CANCEL_S: Final = 60.0  # cancelling a call whose wait ran out: the runner stops waiting this much early
 MIN_EXEC_S: Final = 1800.0
 REMOTE_SCRIPT: Final = "/root/anjo/sleep/train/colab_train.py"
 BASE_ENV: Final = "ANJO_TRAIN_BASE"  # colab_train.BASE_ENV
@@ -63,10 +64,10 @@ class ModalJobError(RuntimeError):
 
 def exec_seconds(timeout_s: float) -> float:
     """How long the script may run inside a job whose hard timeout is ``timeout_s``: the container's
-    start and the adapter's landing come out of it, so the call ends inside the hold."""
+    start, the adapter's landing and a cancel's margin come out of it, so the call ends inside the hold."""
     if not math.isfinite(timeout_s):
         raise ModalJobError("every job has a finite timeout")
-    exec_s = timeout_s - STARTUP_TIMEOUT_S - RETURN_S
+    exec_s = timeout_s - STARTUP_TIMEOUT_S - RETURN_S - CANCEL_S
     if exec_s < MIN_EXEC_S:
         raise ModalJobError("the job's timeout leaves too little time to train")
     return exec_s

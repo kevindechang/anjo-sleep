@@ -252,7 +252,7 @@ def test_the_script_loads_a_local_base_and_records_glimmer_as_the_adapters_base(
 def test_the_jobs_setup_fits_inside_the_hard_timeout() -> None:
     exec_s = modal_job.exec_seconds(TRAINING_TIMEOUT_S)
     assert modal_job.MIN_EXEC_S <= exec_s
-    assert exec_s + modal_job.STARTUP_TIMEOUT_S + modal_job.RETURN_S == TRAINING_TIMEOUT_S
+    assert exec_s + modal_job.STARTUP_TIMEOUT_S + modal_job.RETURN_S + modal_job.CANCEL_S == TRAINING_TIMEOUT_S
     for short in (0.0, 600.0, float("nan"), float("inf")):
         with pytest.raises(modal_job.ModalJobError):
             modal_job.exec_seconds(short)

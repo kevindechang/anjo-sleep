@@ -47,14 +47,31 @@ def finished(job: RemoteJob) -> dict[str, Any]:
             "files": {"adapter_config.json": json.dumps(meta).encode(), "adapter_model.safetensors": b"lora"}}
 
 
+class Clock:
+    """Time that moves only as the fake calls take it: reading it moves nothing."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class FakeCalls:
     """Modal's calls. ``fail`` is where one goes wrong: ``spawn`` (it may have started), ``refused``
-    (Modal refused it before it started), ``remote`` (the job failed), ``timeout``, ``interrupt``
-    (Ctrl-C while waiting) or ``cancel``. ``on_spawn`` sees each job as it is spawned."""
+    (Modal refused it before it started), ``remote`` (the job failed), ``timeout`` (the wait ran out),
+    ``interrupt`` (Ctrl-C while waiting) or ``cancel``. ``on_spawn`` sees each job as it is spawned.
+    Each step moves ``clock`` on: a spawn ``spawn_s``, a call ``run_s`` (a wait that runs out, its whole
+    timeout) and a cancel ``cancel_s``."""
 
-    def __init__(self, fail: str | None = None, on_spawn: Callable[[RemoteJob], None] | None = None) -> None:
+    def __init__(
+        self, fail: str | None = None, on_spawn: Callable[[RemoteJob], None] | None = None, *,
+        spawn_s: float = 0.0, run_s: float = 900.0, cancel_s: float = 0.0,
+    ) -> None:
         self.fail = fail
         self.on_spawn = on_spawn
+        self.clock = Clock()
+        self.spawn_s, self.run_s, self.cancel_s = spawn_s, run_s, cancel_s
         self.spawned: list[RemoteJob] = []
         self.waited: list[tuple[str, float]] = []
         self.cancelled: list[str] = []
@@ -62,6 +79,7 @@ class FakeCalls:
     def spawn(self, job: RemoteJob) -> str:
         if self.on_spawn is not None:
             self.on_spawn(job)
+        self.clock.now += self.spawn_s
         if self.fail == "spawn":
             raise ConnectionError("the connection dropped after the request went out")
         if self.fail == "refused":
@@ -71,27 +89,21 @@ class FakeCalls:
 
     def wait(self, call_id: str, timeout_s: float) -> Mapping[str, object]:
         self.waited.append((call_id, timeout_s))
+        if self.fail == "timeout":
+            self.clock.now += timeout_s  # Modal waits the whole timeout, then gives up
+            raise TimeoutError("past the job's hard timeout")
+        self.clock.now += self.run_s
         if self.fail == "remote":
             raise RuntimeError("the training script exited with 1")
-        if self.fail == "timeout":
-            raise TimeoutError("past the job's hard timeout")
         if self.fail == "interrupt":
             raise KeyboardInterrupt
         return finished(self.spawned[-1])
 
     def cancel(self, call_id: str) -> None:
+        self.clock.now += self.cancel_s
         if self.fail == "cancel":
             raise ConnectionError("Modal didn't answer")
         self.cancelled.append(call_id)
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        self.now += 900.0  # every reading is 15 minutes on
-        return self.now
 
 
 def _inputs(tmp_path: Path, person: str = "synthetic-1", prev: Path | None = None) -> dict[str, Any]:
@@ -105,14 +117,14 @@ def _inputs(tmp_path: Path, person: str = "synthetic-1", prev: Path | None = Non
 
 def _runner(calls: FakeCalls, ledger: Ledger, records: CallRecords, *, real: frozenset[str] = frozenset()) -> ModalRunner:
     return ModalRunner(calls=calls, ledger=ledger, records=records, is_synthetic=lambda uid: uid.startswith("synthetic"),
-                       allow_real=real, clock=Clock())
+                       allow_real=real, clock=calls.clock)
 
 
 def _events(ledger: Ledger) -> list[dict[str, Any]]:
     return read_records(ledger.path, PLAIN)
 
 
-@pytest.mark.parametrize("fail", [None, "remote", "timeout", "interrupt"])
+@pytest.mark.parametrize("fail", [None, "remote", "interrupt"])
 def test_modal_runner_holds_before_start_and_cancels_in_finally(tmp_path: Path, fail: str | None) -> None:
     ledger, records = Ledger(tmp_path / "budget.jsonl"), CallRecords(tmp_path / "calls")
     held_at_spawn: list[int] = []
@@ -140,6 +152,29 @@ def test_modal_runner_holds_before_start_and_cancels_in_finally(tmp_path: Path, 
     assert call_id == "fc-00000001" and 0 < waited <= TIMEOUT_S  # waited under the hard timeout
 
 
+def test_a_timed_out_call_settles_inside_its_hold(tmp_path: Path) -> None:
+    """Spawning, waiting out the timeout and cancelling each take time: from the hold to the settle
+    it all fits inside the hold, so a call that times out never makes an overage on ``modal_usd``."""
+    ledger, records = Ledger(tmp_path / "budget.jsonl"), CallRecords(tmp_path / "calls")
+    calls = FakeCalls("timeout", spawn_s=4.0, cancel_s=modal_job.CANCEL_S / 2)
+    with pytest.raises(TimeoutError):
+        _runner(calls, ledger, records).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    [(_, waited)] = calls.waited
+    assert waited == pytest.approx(TIMEOUT_S - 4.0 - modal_job.CANCEL_S)  # the time left, less the cancel's
+    assert calls.cancelled == ["fc-00000001"] and calls.clock.now < TIMEOUT_S
+    reserve, settle = _events(ledger)
+    assert settle["amount"] <= reserve["amount"] and ledger.overages() == () and ledger.open_holds() == ()
+    assert ledger.remaining(POOL) > 0  # the pool takes holds again, serving's included
+
+    slow = FakeCalls("timeout", spawn_s=4.0, cancel_s=10 * modal_job.CANCEL_S)  # a cancel past its margin
+    other = Ledger(tmp_path / "other.jsonl")
+    with pytest.raises(TimeoutError):
+        _runner(slow, other, records).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert slow.clock.now > TIMEOUT_S
+    reserve, settle = _events(other)
+    assert settle["amount"] == pytest.approx(reserve["amount"]) and other.overages() == ()  # capped at the hold
+
+
 def test_a_failed_cancel_settles_the_whole_hold_and_says_so(tmp_path: Path) -> None:
     ledger, records = Ledger(tmp_path / "budget.jsonl"), CallRecords(tmp_path / "calls")
     calls = FakeCalls("cancel")
@@ -158,7 +193,7 @@ def test_a_spawn_that_may_have_started_settles_the_whole_hold_and_a_refused_one_
     assert ledger.used(POOL) == pytest.approx(5.0)  # no id to cancel by: the worst case is the honest charge
     other = Ledger(tmp_path / "other.jsonl")
     with pytest.raises(SpawnRefused):
-        _runner(FakeCalls("refused"), other, records).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+        _runner(FakeCalls("refused", spawn_s=900.0), other, records).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert other.used(POOL) == pytest.approx(0.25 * A100_USD_PER_HOUR) and other.open_holds() == ()
 
 

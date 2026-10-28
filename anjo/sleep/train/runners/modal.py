@@ -15,10 +15,12 @@ One training job is one call of the deployed training app (``anjo-sleep-train``,
    nothing from ``.env`` reaches the container. There Glimmer comes off the weights volume at the
    pinned revision, and the adapter, checked as an upload is, lands on the adapters volume
    (``modal_job.train_on_volume``);
-4. record the call's id under the adapter's name (``CallRecords``), then wait under the hard timeout;
+4. record the call's id under the adapter's name (``CallRecords``), then wait for what is left of the
+   hard timeout less a cancel's margin (``modal_job.CANCEL_S``), so the hold covers the cancel too;
 5. in a ``finally``, on success, failure, timeout or interrupt, cancel a call that may still run,
-   then settle what it ran for. A cancel that fails settles the whole hold and raises, so a call that
-   may still run is never silent; its record stays for the next sweep.
+   then settle what it ran for, never above the hold: an overage would stop ``modal_usd`` for
+   everything, serving included, until it is cleared. A cancel that fails settles the whole hold and
+   raises, so a call that may still run is never silent; its record stays for the next sweep.
 
 A spawn that fails may have started a call with no id to cancel by, so it settles the whole hold;
 one Modal refused outright (``SpawnRefused``: the app isn't deployed, the login is wrong) settles
@@ -233,12 +235,12 @@ class ModalRunner:
         started = self._clock()
         call = _Call()
         try:
-            result = self._train(call, remote, timeout_s)
+            result = self._train(call, remote, started, timeout_s)
         finally:
             elapsed = self._finish(call, name, reservation, started)
         return self._outputs(result, inputs, name, elapsed)
 
-    def _train(self, call: _Call, remote: RemoteJob, timeout_s: float) -> Mapping[str, object]:
+    def _train(self, call: _Call, remote: RemoteJob, started: float, timeout_s: float) -> Mapping[str, object]:
         call.state = "maybe"  # a spawn that fails may still have started the call
         try:
             call.call_id = self._calls.spawn(remote)
@@ -247,14 +249,15 @@ class ModalRunner:
             raise
         call.state = "running"
         self._records.add(remote.name, call.call_id)
-        result = self._calls.wait(call.call_id, timeout_s)  # the call's own timeout ends it sooner
+        left = timeout_s - (self._clock() - started) - modal_job.CANCEL_S
+        result = self._calls.wait(call.call_id, max(0.0, left))
         call.state = "done"
         return result
 
     def _finish(self, call: _Call, name: str, reservation: Reservation, started: float) -> float:
         """Cancel a call that may still run, then settle what it ran for.
 
-        - A call that finished, or never started: its time is settled.
+        - A call that finished, or never started: its time is settled, at most the hold.
         - A spawn that failed without an id: nothing to cancel by, so the whole hold is settled.
         - A call that may still run is cancelled; a cancel that fails settles the whole hold and raises.
         """
@@ -271,7 +274,7 @@ class ModalRunner:
         if call.state == "maybe":
             reservation.settle(reservation.bound.amount)
         else:
-            reservation.settle(elapsed / 3600.0 * self._rate)
+            reservation.settle(min(elapsed / 3600.0 * self._rate, reservation.bound.amount))
         return elapsed
 
     def _outputs(
