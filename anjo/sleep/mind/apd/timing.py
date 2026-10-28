@@ -238,6 +238,12 @@ def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, 
     return seconds, metered.total_usd + screens, training
 
 
+def _check(backend: Backend) -> None:
+    """Before a timing step: the command's ceiling (``--max-usd``), if it has one."""
+    if backend.ceiling is not None:
+        backend.ceiling.check()
+
+
 def time_pilot(data: DataDir, session: ColabSession, backend: Backend, out: Out, *, setup_s: float, parallel: int,
                clock: Callable[[], float] = time.monotonic) -> Timing:
     """Measure, at ``parallel``, on the development lives (those without runs first; the new runs
@@ -251,8 +257,10 @@ def time_pilot(data: DataDir, session: ColabSession, backend: Backend, out: Out,
                                                     meter=meter, measure=True))
     assert isinstance(runs, tuple)
     m_run = next(run for run in runs if run.arm == "M")
+    _check(backend)
     branches_s, branches_usd, training_cu = _replay(data.life(m_run.life_id), m_run, session, backend, out, clock)
     snaps = intervene.draw(data, count=1, whole=False)  # a probe from the timed M runs, nothing kept
+    _check(backend)
     probe = Meter()
     _, intervene_s = _timed(clock, lambda: intervene.intervene(data, session, backend, out, snapshots=snaps,
                                                                keep=False, meter=probe))

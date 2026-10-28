@@ -15,6 +15,9 @@
   call still fails stops and is never saved (``live.RunFailed``). It is recorded
   (``DataDir.record_failed``) and the batch goes on; at its end ``live.RunsFailed`` names every
   failed run, and a rerun runs only those again.
+- **The ceiling stops it too:** before each run starts, what the command has settled is checked
+  against its ``--max-usd`` (``Ceiling.check``), and after each run what it has settled per
+  arm-day is printed.
 - **A session ending stops the batch:** before each run starts, the session is checked
   (``ColabSession.check_room``): its tunnel up, vLLM answering, and ``run_s``, a whole life-arm's
   time, left before its deadline; if not, the run doesn't start (``colab_vllm.SessionEnding``).
@@ -135,6 +138,8 @@ def _run_one(
     data: DataDir, life: Life, arm: ArmName, session: ColabSession, backend: Backend, out: Out,
     adapter: CheckpointRef | None, meter: Meter | None, prefix: str, run_s: float,
 ) -> ArmRun | None:
+    if backend.ceiling is not None:
+        backend.ceiling.check()
     session.check_room(run_s)
     spend = fresh_journal(data, f"{prefix}{life.id}.{arm}", backend, out, life_id=life.id, arm=arm)
     try:
@@ -147,6 +152,8 @@ def _run_one(
     if data.run(life.id, arm) is None:
         data.save_run(found)
     out(f"ran {arm} on {life.id}: {len(found.reports)} report(s)")
+    if backend.ceiling is not None:
+        out(backend.ceiling.arm_ran(len(life.days)))
     return found
 
 
@@ -161,6 +168,8 @@ def run_lives(
     carry ``run_s`` more. A run that fails alone is recorded, and the batch ends in ``RunsFailed``."""
     say, prefix = serial(out), "timing-" if measure else ""
     todo = [(life, arm) for life in lives for arm in arms if measure or data.run(life.id, arm) is None]
+    if backend.ceiling is not None:
+        backend.ceiling.begin("life-arm run(s)", len(todo))
     done = in_parallel([
         partial(_run_one, data, life, arm, session, backend, say, None if adapters is None else adapters.get(arm),
                 meter, prefix, run_s)

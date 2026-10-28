@@ -83,6 +83,8 @@ def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
     on the backend's provider."""
     model = backend.provider.model
     for attempt in range(generate.MAX_ATTEMPTS):
+        if backend.ceiling is not None:
+            backend.ceiling.check()  # before the attempt's hold
         with held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}") as (writer, reader, auditor):
             try:
                 built, problems = generate.life(spec.field, spec.families, spec.prevalence,
@@ -104,15 +106,19 @@ def spec_ids(spec: LifeSpec) -> frozenset[str]:
 
 
 def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, out: Out) -> tuple[str, ...]:
-    """Every life of ``specs`` not yet on disk, generated, gated and saved, its problems sealed."""
+    """Every life of ``specs`` not yet on disk, generated, gated and saved, its problems sealed;
+    with a ceiling, what the run has settled per life printed after each."""
     made: list[str] = []
-    for spec in specs:
-        if any(data.has_life(life_id) for life_id in spec_ids(spec)):
-            continue
+    todo = [spec for spec in specs if not any(data.has_life(life_id) for life_id in spec_ids(spec))]
+    if backend.ceiling is not None:
+        backend.ceiling.begin("life(s) generated", len(todo))
+    for spec in todo:
         made_life = generate_life(spec, backend)
         data.save_life(made_life.life, made_life.problems)
         made.append(made_life.life.id)
         out(f"generated {made_life.life.id} ({made_life.attempts} attempt(s), {len(made_life.problems.items)} planted)")
+        if backend.ceiling is not None:
+            out(backend.ceiling.life_generated())
     return tuple(made)
 
 
@@ -191,9 +197,9 @@ def judges(data: DataDir, backend: Backend) -> tuple[judging.CachedJudge, judgin
     rates = backend.rates or {}
     return (
         judging.CachedJudge(judging.MUSE, backend.muse, data.judging / "muse-spark.jsonl", backend.ledger,
-                            rates.get(judging.MUSE)),
+                            rates.get(judging.MUSE), ceiling=backend.ceiling),
         judging.CachedJudge(judging.GEMINI, backend.gemini, data.judging / "gemini.jsonl", backend.ledger,
-                            rates.get(judging.GEMINI)),
+                            rates.get(judging.GEMINI), ceiling=backend.ceiling),
     )
 
 
@@ -204,6 +210,8 @@ def runs_of(data: DataDir, lives: Sequence[Life], arms: Sequence[ArmName]) -> tu
 
 def judge_lives(data: DataDir, lives: Sequence[Life], backend: Backend, out: Out) -> judging.Judged:
     """Every run on disk for ``lives``, judged; with the fakes, the audit answered by the fake."""
+    if backend.ceiling is not None:
+        backend.ceiling.begin("new judge call(s)", None)
     muse, gemini = judges(data, backend)
     runs = runs_of(data, lives, (*HELD_OUT_ARMS, *REPLAY_ARMS))
     judged = judging.judge_runs(data, lives, runs, muse, gemini)

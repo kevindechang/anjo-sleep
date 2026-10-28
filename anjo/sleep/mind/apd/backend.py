@@ -37,6 +37,7 @@ from anjo.sleep import meta_api
 from anjo.sleep.budget import Ledger, Pool
 from anjo.sleep.context.brief import ChatFn as BriefChat
 from anjo.sleep.mind.apd import colab_vllm, fakes
+from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.colab_vllm import ColabSession, TunnelOpener
 from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
@@ -63,7 +64,8 @@ GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_to
 class Backend:
     """Every model and machine the pilot reaches, and where its spend is held (``ledger`` and the
     prices: ``None`` with the fakes, which hold nothing). ``provider`` serves every Spark Open call
-    (``spark``, ``life_chat`` and ``reader``), held on its pool."""
+    (``spark``, ``life_chat`` and ``reader``), held on its pool. ``ceiling`` is the command's
+    ``--max-usd``, checked before each new unit of work."""
 
     cli: ColabCli
     tunnels: TunnelOpener
@@ -78,6 +80,7 @@ class Backend:
     ledger: Ledger | None = None
     prices: Prices | None = None
     rates: Mapping[str, Rate] | None = None
+    ceiling: Ceiling | None = field(default=None, compare=False)
     fake: bool = False
     claude: Callable[[str], str] | None = None  # the fakes' stand-in for Claude's hand audit
     vm: fakes.FakeColab | None = field(default=None, compare=False)

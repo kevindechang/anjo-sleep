@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import Ledger, Pool
+from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.score import (
     ApdJudge,
     AuditedJudge,
@@ -85,6 +86,7 @@ class CachedJudge:
     path: Path
     ledger: Ledger | None = None
     rate: Rate | None = None
+    ceiling: Ceiling | None = field(default=None, repr=False)  # the command's --max-usd, checked first
     calls: int = 0
     _cache: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -97,11 +99,15 @@ class CachedJudge:
         key = prompt_id(prompt)
         if key in self._cache:
             return self._cache[key]
+        if self.ceiling is not None:
+            self.ceiling.check()  # before a new call's hold
         if self.ledger is None or self.rate is None:
             reply, _, _ = self.model(prompt)
         else:
             reply = self._held(prompt, key, self.ledger, self.rate)
         self.calls += 1
+        if self.ceiling is not None:
+            self.ceiling.counted()
         parse_ruling(reply)
         self._cache[key] = reply
         self.path.parent.mkdir(parents=True, exist_ok=True)
