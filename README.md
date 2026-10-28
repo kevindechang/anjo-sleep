@@ -83,9 +83,9 @@ the app only through the protocols in `anjo/sleep/ports.py`, so it runs on its o
 
 ## Run it yourself
 
-A standalone example runs one night for one invented person, Calla, who restores wooden boats.
-It needs no private Anjo code: it loads her persona and one fixed day into plain files, seals
-and hashes the probes, extracts the day on Spark Open and folds it into her brief, lets her
+A standalone example runs one night for one invented person, Teo, a film student who also founds an AI startup for filmmakers.
+It needs no private Anjo code: it loads his persona and one fixed day into plain files, seals
+and hashes the probes, extracts the day on Spark Open and folds it into his brief, lets his
 chooser pick the night's target and prints its receipt, practises, trains a LoRA on Modal, runs
 the arms on the probes and prints a score table, then serves base plus adapter and opens a chat.
 

@@ -21,7 +21,7 @@ one clock. A start after that is refused before any day is simulated or any nigh
     python -m anjo.sleep.sim.accelerated --fake --days 3          # the daily integration gate, offline
     python -m anjo.sleep.sim.accelerated --fake --days 3 --mind   # the same, with MIND's inquiry on (Task 17)
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.sim.accelerated --wiring anjo.sleep.app.night:build \\
-        --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona founder \\
+        --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona film_founder \\
         --days 2                                                   # starts two days ago; --start 2026-10-01 dates it earlier
 
 After each night the morning probe run scores every arm (`probes.morning`). Real runs train on Colab, one VM per life (``ColabLives``), synthetic people only.
@@ -59,7 +59,7 @@ REPO: Final = Path(__file__).parents[3]
 GIT_TIMEOUT_S: Final = 10.0
 LIFE_NIGHT_TIMEOUT_S: Final = 2.0 * 3600.0  # one night's Colab job, as the night command's trainer allows
 LIFE_NIGHTS_HELD: Final = 3  # a life's VM hold covers this many nights at the job timeout, plus setup
-FAKE_PERSONA: Final = "founder"
+FAKE_PERSONA: Final = "film_founder"
 FAKE_USER: Final = "fake-life"
 
 

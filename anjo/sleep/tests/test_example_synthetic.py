@@ -123,14 +123,14 @@ def test_example_runs_end_to_end_with_fakes(tmp_path: Path) -> None:
         "load", "probes", "extract", "fold", "choose", "practice", "dataset", "train", "arms", "chat",
     )
     assert NO_GATE in text.lower() and "not promoted" in text.lower()
-    assert report.checkpoint is not None and report.checkpoint.person_id == "example-calla"
+    assert report.checkpoint is not None and report.checkpoint.person_id == "example-teo"
     assert report.dataset_examples > 0
     assert {row.arm_a for row in report.table} >= {"3", "4"}
     assert all(row.n > 0 for row in report.table)
     assert "fakes" in text.lower()  # the run says that its scores mean nothing
     world = tmp_path / "w"
     assert not list(world.rglob("promoted.jsonl")) and not list(world.rglob("current.json"))
-    assert (world / "probes" / "example-calla.jsonl").is_file()
+    assert (world / "probes" / "example-teo.jsonl").is_file()
     assert len(report.probe_sha256) == 64
 
 
@@ -443,7 +443,7 @@ class _Spy(StateChooser):
         self.seen: list[tuple[bool, int, int]] = []
 
     def derive(self, snapshot: WantSnapshot) -> tuple[Want, ...]:
-        world = open_world(self.workdir / "w", "example-calla", date(2026, 3, 2))
+        world = open_world(self.workdir / "w", "example-teo", date(2026, 3, 2))
         brief = world.briefs.latest()
         folded = len(brief.folded) if brief is not None else 0
         self.seen.append((brief is not None, folded, len(snapshot.targets)))
@@ -479,8 +479,10 @@ def test_persona_and_day_are_entirely_invented() -> None:
         (d["visible"]["person_id"], d["visible"]["name"])
         for d in (json.loads(p.read_text()) for p in (SLEEP / "personas").glob("*.json"))
     }
-    assert person.person_id not in {pid for pid, _ in registered}
-    assert person.name not in {name for _, name in registered}
+    hero = json.loads((SLEEP / "personas" / "film_founder.json").read_text())["visible"]
+    others = {(pid, name) for pid, name in registered if pid != hero["person_id"]}
+    assert person.person_id not in {pid for pid, _ in registered}  # the example's own id
+    assert person.name == hero["name"] and person.name not in {name for _, name in others}  # the hero, shown smaller
     blob = ((EXAMPLE / "persona.json").read_text() + (EXAMPLE / "day1.jsonl").read_text()).lower()
     for term in ("tessa", "marlowe", "kevin"):
         assert term not in blob
