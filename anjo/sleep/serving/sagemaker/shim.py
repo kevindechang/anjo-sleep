@@ -256,7 +256,7 @@ def vllm_env(base: Mapping[str, str]) -> dict[str, str]:
     """Runtime adapter loads on (the shim's checked fetch, not a resolver plugin), and nothing
     fetched from Hugging Face."""
     kept = {k: v for k, v in base.items() if k not in ("VLLM_PLUGINS", "VLLM_LORA_RESOLVER_CACHE_DIR")}
-    return {**kept, "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+    return {**kept, **config.NATIVE_SAMPLER_ENV, "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
 
 
 def http_server(shim: Shim, host: str, port: int) -> ThreadingHTTPServer:

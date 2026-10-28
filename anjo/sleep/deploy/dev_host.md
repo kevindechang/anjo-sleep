@@ -276,6 +276,8 @@ Colab sessions are stopped wherever the Colab CLI is installed.
    `lora_shrink` (`assert token_lora_mapping.size(0) == M`): the profile run's dummy image ran
    Glimmer's vision tower, which had LoRA wrappers. `serving.config.vllm_command` now passes
    `--language-model-only`, so Modal, the SageMaker shim and the APD Colab session all skip the tower.
+   The next start-up failure was FlashInfer's sampler JIT (`Could not find nvcc`) in warm-up; `vllm_env()`
+   sets `VLLM_USE_FLASHINFER_SAMPLER=0` (also in the shim's env) so the native sampler runs.
 
 1. **Glimmer loads on the L40S in FP8, with vLLM 0.28.0.** `deploy up` reaching InService proves the
    load; record vLLM's "maximum concurrency" line from the container log in §1.5. If FP8 doesn't
