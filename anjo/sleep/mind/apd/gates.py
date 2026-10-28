@@ -30,7 +30,9 @@ from typing import Any, Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
-from anjo.sleep.mind.apd.families import TEMPLATES, Template
+from anjo.sleep.mind.apd.core_families import template as find_template
+from anjo.sleep.mind.apd.families import Template
+from anjo.sleep.mind.apd.retry import REPLY_MAX_TOKENS, reply_timeout_s
 from anjo.sleep.mind.apd.types import GateVerdict, Life, PlantedItem, ProblemFile, Session
 from anjo.sleep.mind.inquiry._check import check_text
 
@@ -38,7 +40,7 @@ LEAK_PATH: Final = Path(__file__).parent / "prompts" / "leak_v1.md"
 DISCOVER_PATH: Final = Path(__file__).parent / "prompts" / "discover_v1.md"
 READER_MODEL: Final = SPARK_OPEN
 AUDITOR_MODEL: Final = "muse-spark"
-TIMEOUT_S: Final = 180.0
+TIMEOUT_S: Final = reply_timeout_s(REPLY_MAX_TOKENS)  # the wait a capped reply needs (``retry``)
 TEMPERATURE: Final = 0.0
 AUDIT_PATH: Final = Path(__file__).parent / "prompts" / "audit_v1.md"
 IDENTIFY_PATH: Final = Path(__file__).parent / "prompts" / "identify_v1.md"
@@ -169,7 +171,7 @@ def _audit(life: Life, problems: ProblemFile, auditor: ChatFn) -> GateVerdict:
 
 
 def _template(item: PlantedItem) -> Template | None:
-    return next((t for ts in TEMPLATES.values() for t in ts if t.id == item.template), None)
+    return find_template(item.template)
 
 
 def _sealed(life: Life, item: PlantedItem) -> dict[str, Any]:
