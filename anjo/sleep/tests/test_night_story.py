@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep.budget import Ledger
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night import story as st
 from anjo.sleep.night.nightlog import STORY, NightLog, safe_error
 from anjo.sleep.night.run import run_night_batch_with
@@ -27,6 +29,7 @@ STAGES = ("dream", "rehearse", "learn", "check", "wake")
 FULL = st.Story(
     night=NIGHT, status="promoted",
     sleep=st.Sleep(kind="deep", pressure=0.62, threshold=0.5, reason="pressure"),
+    brief=st.Brief(folded=3),
     dream=st.Dream(questions=2, ignitions=(st.Ignition("risk", 0.81, ("e-0a1b", "e-2c3d")),),
                    threads=(st.Thread(3, 0.7, ("e-0a1b",)),), boundaries=(st.Boundary("s-9f", 3, 4),)),
     rehearse=st.Rehearse(scenes=16, seeded=(st.Seed(3, 10),), flagged=6, corrected=2),
@@ -107,10 +110,12 @@ def _walk(value: Any, where: str = "story") -> None:
 @pytest.mark.parametrize("told", [
     FULL, st.tell(NIGHT, "napped", _napped(mind=True)), st.tell(NIGHT, "promoted", PROMOTED),
     replace(FULL, rehearse=st.Reused(NIGHT, 16)), st.tell(NIGHT, "napped", _with(_napped(mind=True), "notice", CORE_DREAM)),
-], ids=["every record filled", "a nap", "a promoted night", "practice reused", "a nap the core dreamt in"])
+    replace(FULL, brief=st.Kept("2026-10-28", "BriefError: x")), replace(FULL, brief=st.Kept(st.EMPTY, "BriefError: x")),
+], ids=["every record filled", "a nap", "a promoted night", "practice reused", "a nap the core dreamt in",
+        "yesterday's brief kept", "the empty brief kept"])
 def test_the_story_round_trips_through_its_json(told: st.Story) -> None:
     record = told.record()
-    assert record["version"] == st.STORY_VERSION == 2  # 2: a reused practice is its own record
+    assert record["version"] == st.STORY_VERSION == 3  # 2: a reused practice is its own record; 3: the brief
     assert st.story_from(json.loads(json.dumps(record))) == told
 
 
@@ -126,6 +131,9 @@ def test_the_story_round_trips_through_its_json(told: st.Story) -> None:
     (lambda r: {**r, "wake": {"failed": {"step": "morning", "error": "x"}}}, "wake"),  # a morning fails inside wake
     (lambda r: {**r, "learn": {**r["learn"], "channel_loss": float("nan")}}, "learn.channel_loss"),
     (lambda r: {**r, "sleep": {**r["sleep"], "kind": "doze"}}, "sleep.kind"),
+    (lambda r: {**r, "version": 2}, "version"),  # before the brief was its own record
+    (lambda r: {**r, "brief": {"kept_from": "2026-10-28"}}, "brief"),  # neither a fold nor a kept brief
+    (lambda r: {**r, "brief": {"folded": "3"}}, "brief.folded"),
 ])
 def test_a_story_that_breaks_the_schema_is_refused_by_where(change: Any, says: str) -> None:
     with pytest.raises(st.StoryError, match=says.replace(".", r"\.")):
@@ -149,7 +157,7 @@ TOLD = {
 @pytest.mark.parametrize("name", list(TOLD))
 def test_every_stage_is_a_record_or_says_why_not(name: str) -> None:
     record = TOLD[name].record()
-    assert list(record) == ["version", "night", "status", "sleep", *STAGES]
+    assert list(record) == ["version", "night", "status", "sleep", "brief", *STAGES]
     _walk(record)
 
 
@@ -195,6 +203,34 @@ def test_the_morning_fills_wake_ok_failed_or_uncounted() -> None:
     assert ok.wake.morning == st.Morning(28, 1)  # type: ignore[union-attr]
     assert failed.wake.morning == st.Failed("morning", "TooManyNoVerdicts: 3 of 3")  # type: ignore[union-attr]
     assert bare.wake.morning == st.Morning(st.NotRun(st.UNCOUNTED), 0)  # type: ignore[union-attr]
+
+
+CUT_TWICE = "BriefError: the brief ran to its 15000-token cap; retried: the brief ran to its 15000-token cap"
+KEPT_BRIEF = {"step": "brief", "status": "failed", "folded": 0, "pending": 3, st.KEPT: "2026-10-28",
+              "why": "brief kept from 2026-10-28", "error": CUT_TWICE}
+
+
+def test_a_kept_brief_is_told_and_never_reads_as_where_the_night_stopped() -> None:
+    told = st.tell(NIGHT, "promoted", _with(PROMOTED, "choose", KEPT_BRIEF))
+    assert told.brief == st.Kept("2026-10-28", CUT_TWICE)
+    assert told == replace(TOLD["promoted"], brief=told.brief)  # every stage told as on a night that folded
+    empty = st.tell(NIGHT, "promoted", _with(PROMOTED, "choose", {**KEPT_BRIEF, st.KEPT: st.EMPTY}))
+    assert empty.brief == st.Kept(st.EMPTY, CUT_TWICE)
+
+
+def test_the_brief_says_what_it_folded_or_why_it_didnt() -> None:
+    def brief(record: dict[str, Any], status: str = "promoted") -> Any:
+        return st.tell(NIGHT, status, _with(PROMOTED, "choose", {"step": "brief", **record})).brief
+
+    assert brief({"status": "ok", "folded": 3}) == st.Brief(3)
+    assert brief({"status": "ok", "folded": 0, "why": "no evidence since the last fold"}) == st.NotRun(
+        "no evidence since the last fold")
+    assert TOLD["promoted"].brief == st.NotRun(st.NOT_LOGGED) and TOLD["failed at extract"].brief == st.NotRun(
+        "the night stopped at extract")
+    stopped = st.tell(NIGHT, "failed", _log({"step": "choose", "status": "ok"},
+                                            {"step": "brief", "status": "failed", "error": "BudgetStop"}))
+    assert stopped.brief == st.Failed("brief", "BudgetStop")  # a brief that never ran stops the night, as before
+    assert stopped.rehearse == st.NotRun("the night stopped at brief")
 
 
 def test_a_practice_without_a_critic_says_so() -> None:
@@ -365,3 +401,39 @@ def test_a_night_that_failed_writes_where_it_stopped(tmp_path: Path) -> None:
     told = _story(result.log_path)
     assert result.status == "failed" and told.learn == st.Failed("train", "RuntimeError")
     assert told.check == told.wake == st.NotRun("the night stopped at train")
+
+
+class _NoRoomForTheBrief(Ledger):
+    """A ledger with no room for the brief's hold: its fold stops with ``BudgetStop`` before any call."""
+
+    def reserve(self, job: str, pools: Any, bound: Any) -> Any:
+        return None if job.startswith("night:brief:") else super().reserve(job, pools, bound)
+
+
+def _spark_down_for_briefs(world: World) -> Any:
+    def chat(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+             max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
+        if messages[-1]["content"].startswith("# brief_v1"):
+            raise ModelApiError("Baseten: timed out after 180s")
+        return world.spark(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens, seed=seed)
+
+    return chat
+
+
+@pytest.mark.parametrize("stop", ["BudgetStop", "ModelApiError"])
+def test_only_a_brief_error_keeps_the_brief_any_other_failure_stops_the_night(tmp_path: Path, stop: str) -> None:
+    """The brief step keeps the last brief only on ``BriefError`` (a brief written badly twice). A
+    budget stop or a provider failure still fails the step and the night, as before: this fails if
+    that catch is ever widened."""
+    world = World(tmp_path)
+    world.plan(UID, NIGHT, count=3)
+    deps = (world.deps(ledger=_NoRoomForTheBrief(tmp_path / "budget.jsonl"), is_synthetic=lambda uid: False)
+            if stop == "BudgetStop" else world.deps(spark_chat=_spark_down_for_briefs(world)))
+    result = run_night_batch_with(deps, {UID: NIGHT})[UID]
+    brief = step(result.log_path, "brief")
+    assert (result.status, result.failed_at) == ("failed", "brief")
+    assert brief["status"] == "failed" and brief["error"].startswith(stop) and st.KEPT not in brief
+    told = _story(result.log_path)
+    assert told.brief == st.Failed("brief", brief["error"]) and told.rehearse == st.NotRun("the night stopped at brief")
+    assert world.briefs(UID).records() == [] and world.glimmer.calls == 0  # nothing folded, nothing practiced
+

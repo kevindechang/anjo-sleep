@@ -17,8 +17,12 @@ case). ``STORY.md`` says which branch fills which record.
 ``Story.record()`` is the JSON record (``version`` first, ``STORY_VERSION``) and ``story_from`` reads
 one back, refusing anything the schema doesn't hold (``StoryError`` names where), an older version
 too: the page then tells that night again from its log. A change to a record's fields is a new
-version (2: practice reused from an earlier run is its own record, ``Reused``). Pure: no clock, file
-or environment.
+version (2: practice reused from an earlier run is its own record, ``Reused``; 3: the brief, what it
+folded or, when it couldn't be rewritten, the night whose brief was kept, ``Kept``). Pure: no clock,
+file or environment.
+
+A kept brief is a ``failed`` brief step carrying ``KEPT``: the night went on with the briefs it had,
+so it never reads as where the night stopped.
 """
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ from typing import Any, Final, Literal, Union, cast, get_args, get_origin, get_t
 
 from anjo.sleep.types import NightStatus
 
-STORY_VERSION: Final = 2
+STORY_VERSION: Final = 3
 STATUSES: Final = frozenset(get_args(NightStatus))
 STAGES: Final = ("dream", "rehearse", "learn", "check", "wake")
 STAGE_STEPS: Final[Mapping[str, tuple[str, ...]]] = {  # the night log's steps each stage is told from
@@ -43,6 +47,8 @@ STORY_STEP: Final = "story"  # a story that couldn't be told or written, logged 
 # Steps logged once the night ended (the morning's runners, ``daily`` and ``accelerated``, and the story):
 # their failure never stopped the night, so it never reads as where it stopped.
 AFTER_THE_NIGHT: Final = ("morning", "dailies", STORY_STEP)
+KEPT: Final = "kept"  # a failed brief step's night whose briefs were kept (``run.py``): the night went on
+EMPTY: Final = "empty"  # what a first night keeps: no brief was written before it
 MORNING_FAILED: Final = "morning failed: "  # a failed morning step's ``why`` starts with this (``daily.py``)
 STAMP_CHARS: Final = 12  # a projector's stamp: the first characters of its id (``projector_math.params_sha``)
 
@@ -250,10 +256,25 @@ class Wake:
 
 
 @dataclass(frozen=True)
+class Brief:
+    folded: int  # the items tonight folded into both briefs
+
+
+@dataclass(frozen=True)
+class Kept:
+    """The brief couldn't be rewritten tonight (it broke a rule twice), so the briefs she had were kept
+    and the night went on with them: ``kept_from`` is their night (ISO), or ``EMPTY`` on a first night."""
+
+    kept_from: str
+    error: str
+
+
+@dataclass(frozen=True)
 class Story:
     night: date
     status: NightStatus
     sleep: Sleep | Failed | NotRun
+    brief: Brief | Kept | Failed | NotRun
     dream: Dream | Failed | NotRun
     rehearse: Rehearse | Reused | Failed | NotRun
     learn: Learn | Failed | NotRun
@@ -386,6 +407,18 @@ def _sleep(by: Steps) -> Sleep | Failed | NotRun:
         raise StoryError(f"the sleep step's kind {kind!r} is neither nap nor deep")
     return Sleep(kind, float(_need(record, "pressure", "number")), float(_need(record, "threshold", "number")),
                  _need(record, "reason", "text"))
+
+
+def _briefed(by: Steps, status: str, stopped: str | None) -> Brief | Kept | Failed | NotRun:
+    record = by.get("brief")
+    if record is None:
+        return _stopped(stopped) if stopped or status == "failed" else NotRun(NOT_LOGGED)
+    if record.get("status") == "failed":
+        return Kept(_need(record, KEPT, "text"), _failed(record).error) if KEPT in record else _failed(record)
+    if record.get("status") == "skipped":
+        return NotRun(str(record.get("why") or "skipped"))
+    folded = _need(record, "folded", "int")
+    return Brief(folded) if folded else NotRun(str(record.get("why") or "nothing to fold"))
 
 
 def _dream(by: Steps) -> Dream:
@@ -525,15 +558,19 @@ def _wake(by: Steps, status: str, stopped: str | None) -> Wake | NotRun:
     return Wake(_morning(by.get("morning")), NotRun(SELF_MODEL_NOT_YET))
 
 
+def _stops(record: Mapping[str, Any]) -> bool:
+    """A failed step stopped the night, unless it was logged once the night ended or kept what it had."""
+    return record.get("status") == "failed" and record.get("step") not in AFTER_THE_NIGHT and KEPT not in record
+
+
 def tell(night: date, status: str, steps: Sequence[Mapping[str, Any]]) -> Story:
     """The night's story from its log records (``NightLog.steps()``), the latest record of each step."""
     if status not in STATUSES:
         raise StoryError(f"no night ends {status!r}")
     by = {str(record.get("step")): record for record in steps}
-    stopped = next((str(r["step"]) for r in steps if r.get("status") == "failed" and r.get("step") not in AFTER_THE_NIGHT),
-                   None)
+    stopped = next((str(r["step"]) for r in steps if _stops(r)), None)
     builders: Mapping[str, Callable[[Steps], Any]] = {
         "rehearse": lambda told: _rehearse(told, night), "learn": _learn, "check": _check}
     stages = {name: _stage(name, by, status, stopped, build) for name, build in builders.items()}
-    return Story(night=night, status=cast(NightStatus, status), sleep=_sleep(by), dream=_dreamt(by, status, stopped),
-                 wake=_wake(by, status, stopped), **stages)
+    return Story(night=night, status=cast(NightStatus, status), sleep=_sleep(by), brief=_briefed(by, status, stopped),
+                 dream=_dreamt(by, status, stopped), wake=_wake(by, status, stopped), **stages)

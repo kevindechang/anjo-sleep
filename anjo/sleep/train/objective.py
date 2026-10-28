@@ -13,6 +13,10 @@ Two more switches ride on ``sft_dpo_seed`` and are refused with any other object
   stays bounded across nights;
 - ``ANJO_SLEEP_DREAMS=1``: the night adds Glimmer's dreams from MIND's dream states (``night/dreams.py``).
 
+``ANJO_SLEEP_PROTECT`` (``anchors``, ``random`` or ``off``) rides on the fold too, and is refused without it:
+tonight's slot trains off the forgetting anchors' activation basis, or a random basis of the same shape
+(the ablation), and the fold keeps the projection (``sleep_protect.py``). The night ships the anchor rows.
+
 Each switch off (unset, blank or ``0``) is today's night. The live comparison's matched control is no
 switch: it is set per run (``sim.accelerated --match-file``), so no host setting can pad a real night.
 """
@@ -23,11 +27,12 @@ from typing import Final
 
 from anjo.sleep.night.dreams import Terms
 from anjo.sleep.serving.config import MAX_LORA_RANK
-from anjo.sleep.train.lora import LoraCfg, LoraCfgError, Objective
+from anjo.sleep.train.lora import PROTECTIONS, LoraCfg, LoraCfgError, Objective, Protection
 
 OBJECTIVE_ENV: Final = "ANJO_SLEEP_OBJECTIVE"
 FOLD_ENV: Final = "ANJO_SLEEP_ADAPTER_FOLD"
 DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
+PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft_dpo", "sft", "sft_dpo_seed")
 DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo"
 SEED_OBJECTIVE: Final[Objective] = "sft_dpo_seed"
@@ -53,14 +58,25 @@ def _on(environ: Mapping[str, str], name: str) -> bool:
     return value == "1"
 
 
+def _protection(environ: Mapping[str, str]) -> Protection:
+    value = environ.get(PROTECT_ENV, "").strip() or "off"
+    for known in PROTECTIONS:
+        if value == known:
+            return known
+    raise ObjectiveError(f"{PROTECT_ENV} is {' or '.join(PROTECTIONS)}")
+
+
 def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     """The nights' recipe: the default one with the settings' objective and switches."""
     chosen = objective_name(environ)
-    fold, dreams = _on(environ, FOLD_ENV), _on(environ, DREAMS_ENV)
+    fold, dreams, protect = _on(environ, FOLD_ENV), _on(environ, DREAMS_ENV), _protection(environ)
     if (fold or dreams) and chosen != SEED_OBJECTIVE:
         raise ObjectiveError(f"{FOLD_ENV} and {DREAMS_ENV} run only with {OBJECTIVE_ENV}={SEED_OBJECTIVE}")
+    if protect != "off" and not fold:
+        raise ObjectiveError(f"{PROTECT_ENV} runs only with {OBJECTIVE_ENV}={SEED_OBJECTIVE} and {FOLD_ENV}=1: "
+                             "the fold keeps tonight's slot apart from the long-term adapter")
     try:
-        return LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams)
+        return LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, protect=protect)
     except LoraCfgError as error:
         raise ObjectiveError(str(error)) from None
 
@@ -68,4 +84,4 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
 def night_terms(environ: Mapping[str, str]) -> Terms:
     """Which extra rows the night builds for the recipe ``environ`` names: none unless ``sft_dpo_seed``."""
     cfg = night_cfg(environ)
-    return Terms(seed=cfg.objective == SEED_OBJECTIVE, dreams=cfg.dreams)
+    return Terms(seed=cfg.objective == SEED_OBJECTIVE, dreams=cfg.dreams, protect=cfg.protect != "off")

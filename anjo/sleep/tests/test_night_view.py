@@ -209,6 +209,32 @@ def test_night_js_draws_a_nap_and_a_full_night_in_a_fake_page(tmp_path: Path) ->
             assert "#mind-questions" in drawn["links"] and "#mind-gates" in drawn["links"]
 
 
+def test_a_kept_brief_says_so_and_never_sends_its_error() -> None:
+    kept = story_view([(3, replace(FULL, brief=st.Kept("2026-10-28", "BriefError: the brief ran to its cap")))])
+    assert kept["brief_kept"] == "2026-10-28" and "BriefError" not in json.dumps(kept)
+    assert story_view([(3, replace(FULL, brief=st.Kept(st.EMPTY, "BriefError: x")))])["brief_kept"] == st.EMPTY
+    assert story_view([(3, FULL)])["brief_kept"] is None
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_night_js_says_when_the_brief_was_kept(tmp_path: Path) -> None:
+    harness = tmp_path / "harness.js"
+    harness.write_text((Path(__file__).parent / "night_js_harness.js").read_text())
+    for kept, line in (("2026-10-28", words.COPY["story_brief_kept"].replace("{night}", "2026-10-28")),
+                       (st.EMPTY, words.COPY["story_brief_kept_empty"]), (None, None)):
+        story = FULL if kept is None else replace(FULL, brief=st.Kept(kept, "BriefError: x"))
+        handed = {"questions": {"state": "none", "items": []}, "story": story_view([(3, story)])}
+        run = subprocess.run([str(NODE), str(harness), str(WEB_DIR / "night.js"), json.dumps(dict(words.COPY)),
+                              json.dumps(handed)], capture_output=True, text=True, timeout=60, check=False)
+        assert run.returncode == 0, run.stderr
+        drawn = json.loads(run.stdout)
+        assert [s["state"] for s in drawn["stages"]] == ["ran"] * 5  # the loop ran on the brief it kept
+        if line is None:
+            assert "loop-brief" not in drawn["classes"]
+        else:
+            assert line in drawn["text"] and "loop-brief" in drawn["classes"] and "BriefError" not in drawn["text"]
+
+
 def test_the_page_claims_nothing_before_the_story_says_what_ran() -> None:
     page = (WEB_DIR / "index.html").read_text()
     assert re.search(r'<p id="night-loop-lede" class="night-lede" hidden></p>', page)  # night.js fills it from the story

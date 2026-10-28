@@ -65,10 +65,12 @@ MESSAGE_PROMPT: Final = (
 
 @dataclass(frozen=True)
 class Terms:
-    """Which of ``sft_dpo_seed``'s extra rows the night builds: knowledge seeding's, and dreams'."""
+    """Which of ``sft_dpo_seed``'s extra rows the night builds: knowledge seeding's, dreams', and with
+    ``protect`` the anchor rows the protected slot's basis is read from (``ANJO_SLEEP_PROTECT``)."""
 
     seed: bool = False
     dreams: bool = False
+    protect: bool = False
 
 
 SeedKind = Literal["boundary", "picked", "random"]

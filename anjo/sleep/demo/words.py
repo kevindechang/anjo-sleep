@@ -387,6 +387,8 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "story_unavailable": "Last night's loop can't be read right now.",
     "story_sleep_failed": "Her sleep step failed, so the night stopped there.",
     "story_nap": "She napped: learning tomorrow.",
+    "story_brief_kept": "Her brief couldn't be rewritten tonight, so the one from {night} was kept.",
+    "story_brief_kept_empty": "Her first brief couldn't be written tonight, so she went on without one.",
     "story_stage_dream": "Dream",
     "story_stage_rehearse": "Rehearse",
     "story_stage_learn": "Learn",

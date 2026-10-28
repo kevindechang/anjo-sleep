@@ -39,12 +39,12 @@ with the adapter switched off; the receipt's ``dpo_reference`` says which refere
 Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
 The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_job.py``, which ships beside
-this file with ``sleep_loss.py`` and ``sleep_fold.py`` (Modal's image only; the Colab runner refuses the
+this file with ``sleep_loss.py``, ``sleep_fold.py`` and ``sleep_protect.py`` (Modal's image only; the Colab runner refuses the
 objective), runs the one weighted loss over the SFT rows, the pairs and the dataset's ``kind`` rows
 (seeding, dreams, anchors), each tokenized as the server renders it (``served_ids``), and with a
 ``channel`` block trains the thought channel's projector in the same loop. Its recipe carries ``terms``:
-``fold_rank`` (fold the night into the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and
-``dreams``. ``match_minutes`` is the live comparison's matched control and nothing else: the SFT pass
+``fold_rank`` (fold the night into the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank),
+``dreams`` and, with the fold, ``protect`` (``anchors`` or ``random``: the slot's basis). ``match_minutes`` is the live comparison's matched control and nothing else: the SFT pass
 (or ``sft_dpo_seed``'s main block, dreams off) trains for that many minutes by the clock, one warmup and
 one cosine over them (``stretch``), and the DPO pass follows as today. The receipt's ``match`` gives the
 budget, the minutes used and the steps.
@@ -101,6 +101,7 @@ RECEIPT = "receipt.json"
 OBJECTIVES = ("sft", "sft_dpo", "sft_dpo_seed")
 SEED_OBJECTIVE = "sft_dpo_seed"
 LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
+PROTECT_KINDS = ("anchors", "random")  # sleep_protect.KINDS: tonight's slot off the anchors' basis, or a random one
 SEED_SCRIPT = "sleep_job.py"  # sft_dpo_seed's run (the thought channel's projector in it too), beside this file
 SURPRISE_RANGE = (0.5, 2.0)  # MIND's surprise weight on a row (the Sleep link); a row without one weighs 1.0
 MAX_MATCH_MINUTES = 100.0
@@ -198,10 +199,14 @@ def _check_terms(cfg: dict[str, Any]) -> None:
         raise ValueError(f"terms come with the {SEED_OBJECTIVE} objective, and only with it")
     if seeded:
         fold = terms.get("fold_rank") if isinstance(terms, dict) else 0
-        if (not isinstance(terms, dict) or set(terms) != {"fold_rank", "dreams"} or not isinstance(terms["dreams"], bool)
+        if (not isinstance(terms, dict) or set(terms) - {"protect"} != {"fold_rank", "dreams"}
+                or not isinstance(terms["dreams"], bool)
                 or (fold is not None and (isinstance(fold, bool) or not isinstance(fold, int)
                                           or not cfg["r"] <= fold <= MAX_RANK))):
-            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}) and dreams (true or false)")
+            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}), dreams (true or false) "
+                             "and, with the fold, protect")
+        if "protect" in terms and (terms["protect"] not in PROTECT_KINDS or fold is None):
+            raise ValueError(f"protect is one of {', '.join(PROTECT_KINDS)}, and only with the fold")
     if "match_minutes" in cfg and ((seeded and bool(terms and terms["dreams"])) or isinstance(cfg["match_minutes"], bool)
                                    or not isinstance(cfg["match_minutes"], int | float)
                                    or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):

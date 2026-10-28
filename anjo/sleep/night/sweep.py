@@ -73,6 +73,24 @@ def _locked(ledger: Ledger) -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def held_elsewhere(ledger: Ledger) -> bool:
+    """Whether another run holds the night lock now, never this run's own (``_HELD``): a probe that
+    takes it and lets it go at once. A lock that can't be opened counts as held."""
+    path = _lock_path(ledger)
+    if path in _HELD.get():
+        return False
+    try:
+        with open(path, "a+b") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    except OSError:
+        return True
+    return False
+
+
 @contextmanager
 def night_lock(ledger: Ledger) -> Iterator[None]:
     """The night lock for a step that may also run on its own: a run that holds it covers it."""

@@ -12,6 +12,7 @@ from anjo.sleep.night.deps import Dreamt, InquiryOutcome, StudyOutcome
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.nightlog import safe_error as safe_error  # the log's own (the story's failures use it); read here too
+from anjo.sleep.night.story import EMPTY, KEPT
 from anjo.sleep.ports import EvidenceStore, TargetStore
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import CheckpointRef, Choice, GateResult, NightStatus, Probe
@@ -90,3 +91,19 @@ def study_outcome(stopped: str | None) -> receipt.Outcome:
 def note_error(stage: str, error: BaseException) -> str:
     """A note's failure: its stage and the error's type, never its words."""
     return f"{stage}: {type(error).__name__}"
+
+
+def kept_brief(kept: date | None, pending: int, error: BaseException) -> dict[str, Any]:
+    """The brief step's receipt when the brief broke a rule twice (``context.brief``): the briefs of
+    the ``kept`` night stay (on a first night none, so readers serve no brief, as before her first
+    fold), tonight's ``pending`` items wait for the next fold, and the night goes on with them.
+    ``run.py`` logs the step ``failed``; carrying ``KEPT``, it never reads as where the night stopped."""
+    night = EMPTY if kept is None else kept.isoformat()
+    why = "brief kept empty: none written yet" if kept is None else f"brief kept from {night}"
+    return {"folded": 0, "pending": pending, KEPT: night, "why": why, "error": safe_error(error)}
+
+
+def kept_summary(receipts: dict[str, Any]) -> dict[str, Any]:
+    """The summary's ``brief`` entry: only a kept brief's, which night's it kept and why."""
+    brief = receipts.get("brief") or {}
+    return {"brief": {key: brief[key] for key in (KEPT, "why", "error")}} if KEPT in brief else {}

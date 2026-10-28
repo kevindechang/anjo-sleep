@@ -287,6 +287,18 @@ def test_the_safety_floor_holds_on_main() -> None:
     assert cases.flag("I looked into the pilot.") is None
 
 
+def _sim_day_env(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The dev API's address and a token for a simulated day, its account check stubbed (no server runs
+    here, so a real check would call whatever answers on loopback): the user ids it was asked about."""
+    from anjo.sleep.app import sim_transport
+
+    checked: list[str] = []
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    monkeypatch.setattr(sim_transport.DevApiTransport, "check_account", lambda self, user_id: checked.append(user_id))
+    return checked
+
+
 def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import sim_transport
     from anjo.sleep.app.ancestry import NewestReply
@@ -299,10 +311,9 @@ def test_the_simulated_day_reads_each_replys_recorded_ancestry(monkeypatch: pyte
 
     _night_env(monkeypatch, tmp_path)
     monkeypatch.setattr(sim_transport, "run_day", run_day)
-    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
-    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    checked = _sim_day_env(monkeypatch)
     day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
-    assert day == "day"
+    assert day == "day" and checked == ["synthetic-founder"]  # the token checked against the day's account
     assert isinstance(seen["replies"], NewestReply) and seen["replies"]._user_id == "synthetic-founder"
     assert seen["person"].person_id == "founder" and seen["day_index"] == 2
 
@@ -328,8 +339,7 @@ def test_the_simulated_day_holds_its_spark_spend_and_settles_what_it_metered(
     _night_env(monkeypatch, tmp_path)
     monkeypatch.setattr(sim_transport, "SparkSim", lambda: SparkSim(chat=chat))
     monkeypatch.setattr(sim_transport, "run_day", run_day)
-    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
-    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    _sim_day_env(monkeypatch)
     day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
     assert day == "day"
     reserve, settle = read_records(data_root() / SLEEP_DIR / LEDGER_NAME, PLAIN)
@@ -358,8 +368,7 @@ def test_a_simulated_day_on_its_own_holds_the_night_lock(monkeypatch: pytest.Mon
 
     _night_env(monkeypatch, tmp_path)
     monkeypatch.setattr(sim_transport, "run_day", run_day)
-    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
-    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "t")
+    _sim_day_env(monkeypatch)
     day: Any = sim_transport.simulate("synthetic-founder", "founder", 2, 7)
     assert day == "day" and seen == ["busy"]
     with swept_night(default_ledger(), lambda: (0, 0)):  # inside a night, the day runs under its lock

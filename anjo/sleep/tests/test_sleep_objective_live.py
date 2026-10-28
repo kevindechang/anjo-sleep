@@ -20,6 +20,18 @@ from anjo.sleep.train.terms import DREAMS_NOT_WIRED
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
 ACCOUNTS = ["--account", "seed=syn-a", "--account", "fold=syn-b", "--account", "today=syn-c"]
 DAY = "2026-10-24"
+SIM_TOKEN = "ANJO_SLEEP_SIM_TOKEN"  # what app.sim_transport reads: the account each line is posted as
+
+
+def _tokens(tmp_path: Path, accounts: list[str]) -> list[str]:
+    """A token file per arm of ``accounts`` (``--account`` pairs), each holding that arm's own token."""
+    folder = tmp_path / "tokens"
+    folder.mkdir(parents=True, exist_ok=True)
+    argv: list[str] = []
+    for arm in (pair.partition("=")[0] for pair in accounts[1::2]):
+        (folder / arm).write_text(f"tok-{arm}\n")
+        argv += ["--token-file", f"{arm}={folder / arm}"]
+    return argv
 
 
 def _ledger(tmp_path: Path, cap: float) -> Ledger:
@@ -98,8 +110,8 @@ def test_yes_runs_each_control_after_its_arm_matched_night_by_night(tmp_path: Pa
     monkeypatch.setenv(objective.DREAMS_ENV, "1")  # a stray switch in the shell never reaches an arm
     monkeypatch.setenv(live.PRESSURE_ENV, "1")
     runs, lines = _Runs(root, ledger), list[str]()
-    assert live.main([*ACCOUNTS, "--days", "1", "--night-usd", "2.0", "--yes"], run=runs, out=lines.append,
-                     now=lambda: NOW) == 0
+    assert live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--days", "1", "--night-usd", "2.0", "--yes"],
+                     run=runs, out=lines.append, now=lambda: NOW) == 0
     assert [c["account"] for c in runs.calls] == ["syn-a", "syn-c", "syn-b"]  # seed, its control, the fold
     seed, today, fold = runs.calls
     assert seed["env"][objective.OBJECTIVE_ENV] == "sft_dpo_seed" and objective.DREAMS_ENV not in seed["env"]
@@ -112,14 +124,84 @@ def test_yes_runs_each_control_after_its_arm_matched_night_by_night(tmp_path: Pa
     assert today["held"] == [pytest.approx(priced["fold"])] and fold["held"] == [] and not ledger.open_holds()
     assert any(line.startswith("today: ") for line in lines) and not any("isn't matched" in line for line in lines)
     with pytest.raises(SystemExit):  # the same accounts again: they have results now, so nothing runs
-        live.main([*ACCOUNTS, "--night-usd", "2.0", "--yes"], run=runs, out=lines.append, now=lambda: NOW)
+        live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--night-usd", "2.0", "--yes"], run=runs,
+                  out=lines.append, now=lambda: NOW)
     assert len(runs.calls) == 3
+
+
+def test_each_arm_gets_its_own_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    runs, lines = _Runs(root, ledger), list[str]()
+    assert live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--days", "1", "--night-usd", "2.0", "--yes"],
+                     run=runs, out=lines.append, now=lambda: NOW) == 0
+    assert {c["account"]: c["env"][SIM_TOKEN] for c in runs.calls} == {"syn-a": "tok-seed", "syn-c": "tok-today",
+                                                                        "syn-b": "tok-fold"}
+    assert [line for line in lines if "token file" in line] == [f"    {arm}: token file ok" for arm in ("seed", "today", "fold")]
+    assert not any("tok-" in line or "tokens" in line for line in lines)  # neither a token nor its file is printed
+
+
+def test_shell_token_never_reaches_an_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    monkeypatch.setenv(SIM_TOKEN, "tok-shell")
+    runs = _Runs(root, ledger)
+    assert live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--days", "1", "--night-usd", "2.0", "--yes"],
+                     run=runs, out=lambda line: None, now=lambda: NOW) == 0
+    assert len(runs.calls) == 3 and not any("tok-shell" in c["env"].values() for c in runs.calls)
+    assert live.arm_env("fold", {SIM_TOKEN: "tok-shell", "PATH": "/bin"}, "tok-fold") == {
+        "PATH": "/bin", SIM_TOKEN: "tok-fold", **live.ENVS["fold"], live.PRESSURE_ENV: "0"}
+
+
+def test_yes_refuses_a_missing_token_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    runs = _Runs(root, ledger)
+    ok = _tokens(tmp_path, ACCOUNTS)  # seed, fold, today
+    both = ok[:4]
+    for argv in (both, [*both, "--token-file", f"today={tmp_path / 'gone'}"],  # not given, not there
+                 [*ok, "--token-file", f"dreams={tmp_path / 'tokens' / 'seed'}"]):  # an arm that isn't run
+        with pytest.raises(SystemExit):
+            live.main([*ACCOUNTS, *argv, "--days", "1", "--night-usd", "2.0", "--yes"], run=runs,
+                      out=lambda line: None, now=lambda: NOW)
+    (tmp_path / "tokens" / "today").write_text(" \n")  # there, but empty
+    with pytest.raises(SystemExit):
+        live.main([*ACCOUNTS, *ok, "--days", "1", "--night-usd", "2.0", "--yes"], run=runs, out=lambda line: None,
+                  now=lambda: NOW)
+    assert not runs.calls and not ledger.open_holds()
+    lines: list[str] = []  # the plan says which, and runs nothing
+    assert live.main([*ACCOUNTS, *both, "--days", "1"], out=lines.append, now=lambda: NOW) == 0
+    assert "    seed: token file ok" in lines and "    today: no token file" in lines
+
+
+PROTECT = ["--account", "seed=a", "--account", "today=b", "--account", "fold=c", "--account", "protect=d",
+           "--account", "protect_random=e"]
+
+
+def test_protect_runs_after_the_fold_with_its_random_twin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    monkeypatch.setenv(objective.PROTECT_ENV, "anchors")  # a stray switch in the shell never reaches an arm
+    runs, lines = _Runs(root, ledger), list[str]()
+    assert live.main([*PROTECT, *_tokens(tmp_path, PROTECT), "--days", "1", "--night-usd", "2.0", "--yes"], run=runs,
+                     out=lines.append, now=lambda: NOW) == 0
+    assert [c["account"] for c in runs.calls] == ["a", "b", "c", "d", "e"]
+    seed, today, fold, protect, twin = runs.calls
+    assert protect["env"][objective.PROTECT_ENV] == "anchors" and twin["env"][objective.PROTECT_ENV] == "random"
+    assert protect["env"][objective.FOLD_ENV] == twin["env"][objective.FOLD_ENV] == "1"  # the slot the fold keeps apart
+    assert twin["match"] is None and not any(objective.PROTECT_ENV in c["env"] for c in (seed, today, fold))
+    assert not any("part from" in line for line in lines)  # the twin's minutes matched protect's
+    assert live.arm_usd("protect_random", 3, 2.0) == live.arm_usd("protect", 3, 2.0) == round(3 * 2.0 + 3 * 4.6 / 60 * 2.5, 2)
+    for bad in (PROTECT[:8], [*PROTECT[:4], *PROTECT[6:]], [*PROTECT[:6], *PROTECT[8:]]):  # no twin, no fold, no protect
+        with pytest.raises(SystemExit):
+            live.main(bad, out=lambda line: None)
+    _night(root, "e", "2026-10-25", minutes={"sft": 9.0, "seed": 9.0})  # the twin trains far longer one night
+    flagged: list[str] = []
+    live.report(root, dict(pair.split("=") for pair in PROTECT[1::2]), flagged.append)
+    assert any(line.startswith("  protect_random: its training minutes part from protect's") for line in flagged)
 
 
 def test_unwired_dreams_skip_their_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ledger = _setup(tmp_path, monkeypatch)
     runs, lines = _Runs(root, ledger, dreams=DREAMS_NOT_WIRED), list[str]()
     argv = ["--account", "seed=a", "--account", "today=b", "--account", "dreams=c", "--account", "seed_matched=d"]
+    argv += _tokens(tmp_path, argv)
     assert live.main([*argv, "--days", "1", "--night-usd", "2.0", "--yes"], run=runs, out=lines.append, now=lambda: NOW) == 0
     assert [c["account"] for c in runs.calls] == ["a", "b", "c"] and any("doesn't run" in line for line in lines)
     assert not ledger.open_holds()
@@ -133,7 +215,8 @@ def test_unwired_dreams_skip_their_control(tmp_path: Path, monkeypatch: pytest.M
 def test_yes_stops_before_any_run_without_room_or_a_price(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ledger = _setup(tmp_path, monkeypatch, cap=1.0)
     runs = _Runs(root, ledger)
-    for argv in ([*ACCOUNTS, "--night-usd", "2.0", "--yes"], [*ACCOUNTS, "--yes"]):
+    tokens = _tokens(tmp_path, ACCOUNTS)
+    for argv in ([*ACCOUNTS, *tokens, "--night-usd", "2.0", "--yes"], [*ACCOUNTS, *tokens, "--yes"]):
         with pytest.raises(SystemExit):
             live.main(argv, run=runs, out=lambda line: None, now=lambda: NOW)
     assert not runs.calls and not ledger.open_holds()
@@ -142,8 +225,8 @@ def test_yes_stops_before_any_run_without_room_or_a_price(tmp_path: Path, monkey
 def test_a_failed_arm_stops_the_rest_and_frees_the_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ledger = _setup(tmp_path, monkeypatch)
     runs = _Runs(root, ledger, fail="syn-c")
-    assert live.main([*ACCOUNTS, "--days", "1", "--night-usd", "2.0", "--yes"], run=runs, out=lambda line: None,
-                     now=lambda: NOW) == 1
+    assert live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--days", "1", "--night-usd", "2.0", "--yes"], run=runs,
+                     out=lambda line: None, now=lambda: NOW) == 1
     assert len(runs.calls) == 2 and not ledger.open_holds()
 
 

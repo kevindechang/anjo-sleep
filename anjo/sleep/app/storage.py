@@ -26,6 +26,7 @@ from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
 from anjo.sleep.practice.transcripts import JsonlTranscriptStore
+from anjo.sleep.serving.activity import turns_dir
 
 SLEEP_DIR: Final = "sleep"
 EVIDENCE_FILE: Final = "evidence.jsonl"
@@ -113,6 +114,11 @@ def data_root() -> Path:
     from anjo.core import paths
 
     return Path(paths.DATA_ROOT)
+
+
+def glimmer_turns() -> Path:
+    """Where the host marks the Glimmer requests in flight (``serving.activity``), for the night's GPU stop."""
+    return turns_dir(data_root())
 
 
 def checkpoint_registry() -> CheckpointRegistry:

@@ -54,6 +54,7 @@ from anjo.sleep.practice.roles import Roles
 from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.serving.client import WakeResult
+from anjo.sleep.serving.stop import GpuStop
 from anjo.sleep.types import (
     CheckpointRef,
     Commitment,
@@ -416,6 +417,9 @@ class NightDeps:
     wake: Callable[[], WakeResult] | None = None
     # Puts Glimmer back to sleep when the batch ends, however it ends; None sleeps nothing (Modal idles out).
     sleep: Callable[[], None] | None = None
+    # On Modal: stops the serving GPU when the batch's outermost phase ends, unless a live chat could be cut
+    # (``serving.stop``); in place of ``sleep``, and each night logs its outcome (``gpu_stop``).
+    gpu_stop: GpuStop | None = None
     # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
     retries: Callable[[], int] = field(default=lambda: 0)
     # sft_dpo_seed's extra rows (``night/dreams.py``): off unless the night command's switches say so.

@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
 
-from anjo.sleep.context.brief import ChatFn
+from anjo.sleep.context.brief import BriefChat
 from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.ports import Chooser, GpuRunner
 from anjo.sleep.probes.clients import ModelClient, TokenLogprobs
@@ -94,7 +94,7 @@ class TrackedGlimmer:
 
 @dataclass(frozen=True)
 class Services:
-    spark: ChatFn  # Muse Spark Open on Baseten: extraction, briefs, probes, practice scenes
+    spark: BriefChat  # Muse Spark Open on Baseten: extraction, briefs, probes, practice scenes
     judge: JudgeChat  # Muse Spark on the Meta API: the pairwise judge
     glimmer: Glimmer
     serving: Serving

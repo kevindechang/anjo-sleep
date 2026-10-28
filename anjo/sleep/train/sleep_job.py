@@ -23,6 +23,11 @@ and the projector as the night began). Which terms teach the projector:
   snapshot the imagined state, and the thread it was dreamt under as its system turn), its soft tokens
   detached, so an imagined state never shapes how the projector reads real ones.
 
+**Protected** (the recipe's ``terms.protect``, ``anchors`` or ``random``, with the fold): before the loop the
+anchors' activation basis is read at every LoRA module with the night-start adapter on, tonight's slot
+trains as ``A (I - Q Q^T)`` (``sleep_protect.py``), the projection is written into the weights before the
+save, and the fold keeps it. Its receipt is ``terms.protect``: the basis, its rank, the minutes it took.
+
 Contrast rows (the shared pretraining's) train in the channel's own run (``channel_train.main``); a seeded
 recipe refuses them. The channel's ``max_minutes`` stops the loop as it stops the channel run.
 """
@@ -38,6 +43,7 @@ from typing import Any, Final
 
 KINDS: Final = ("seed", "dream", "anchor")
 FOLD_FILE: Final = "sleep_fold.py"
+PROTECT_FILE: Final = "sleep_protect.py"
 Kept = list[tuple[dict[str, Any], dict[str, str]]]
 
 
@@ -126,6 +132,18 @@ def _seed_model(model: Any, settings: dict[str, Any], prev: str | None, fold: in
     return peft, r_prev
 
 
+def protection(ct: Any, cfg: Mapping[str, Any], model: Any, anchors: Sequence[Any],
+               lead: int) -> tuple[Any, dict[str, Any], dict[str, Any], list[Any]] | None:
+    """With ``terms.protect``: the projection module, each LoRA module's basis, its receipt, and the hooks
+    that keep tonight's slot (the ranks past ``lead``) off it. None, loading nothing, when it is off."""
+    kind = cfg["terms"].get("protect")
+    if not kind:
+        return None
+    protect = ct.sibling(PROTECT_FILE, "sleep_protect", ct.SEED_OBJECTIVE)
+    found, receipt = protect.bases(model, anchors, kind, seed=cfg["seed"])
+    return protect, found, receipt, protect.attach(model, found, lead)
+
+
 def _check_seed_tokens(ct: Any, tokenizer: Any, batch: Any, kept: Kept, pairs: Kept,
                        by_kind: dict[str, list[dict[str, Any]]], template: dict[str, str]) -> int:  # pragma: no cover
     """Each trained row's ids against the template's own render of the whole conversation, as the SFT
@@ -174,16 +192,26 @@ def train(ct: Any, cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any
     model, frozen = _seed_model(model, settings, adapter, fold, loss, folding)
     channel: tuple[Any, Any, dict[str, Any]] = _channel(ct, cfg, model, tokenizer, prev, rows, loss) if ch else (None, None, {})
     soft, cm, opened = channel
+    guarded = protection(ct, cfg, model, batch.anchors, frozen)
     eot = tokenizer.convert_tokens_to_ids(ct.REPLY_END)
     plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
                      seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
                      dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"],
                      stretch_s=cfg.get("match_minutes", 0.0) * 60.0,
                      deadline=begun + 60.0 * ch["max_minutes"] if ch else float("inf"))
-    terms = loss.train_terms(model, batch, plan, soft=soft)
+    try:
+        terms = loss.train_terms(model, batch, plan, soft=soft)
+    finally:
+        for hook in guarded[3] if guarded else ():
+            hook.remove()
+    keep: tuple[Any, ...] = ()  # the protected cut's bases and lead, protect on
+    if guarded:
+        protect, found, receipt, _ = guarded
+        terms["protect"] = {**receipt, "slot_left_on_basis": protect.materialize(model, found, frozen)}
+        keep = ({name: q.detach().float().cpu() for name, q in found.items()}, frozen)
     model.save_pretrained(str(out))
     terms |= {"dropped_truncated": too_long, "fold_rank": fold,
-              "folded_to": folding.fold_folder(out, fold) if fold is not None else None}
+              "folded_to": folding.fold_folder(out, fold, *keep) if fold is not None else None}
     done = {"terms": terms, "steps": terms["steps"], "pairs": len(batch.pairs), "rows_checked": checked}
     if soft is not None:
         done["channel"] = {**cm.save_channel(soft.channel, out, ch, opened), "rows_with_state": opened["rows_with_state"],

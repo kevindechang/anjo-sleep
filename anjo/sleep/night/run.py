@@ -22,7 +22,9 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    estimator is registered (Task 16), and a synthetic life records the offer's decision point.
    With ``mind_inquiry`` on, her questions join the snapshot and ``inquire`` runs MIND (Task 17).
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
-   training brief is the pre-practice one).
+   training brief is the pre-practice one). A brief that breaks a rule twice (``context.brief``)
+   keeps both briefs she had: the step is logged ``failed`` with the night it kept (``kept_brief``),
+   tonight's items wait for the next fold, and the night goes on with the kept briefs.
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
    cleared, non-practice evidence since the last trained night reaches ``min_new_examples``.
    The last trained night is the night of the checkpoint that serves (the one the next night
@@ -63,7 +65,7 @@ from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady
 from anjo.sleep.night import channel_night
 from anjo.sleep.night.core_steps import CoreSteps
-from anjo.sleep.night.holds import held, spark_worst_usd, usd
+from anjo.sleep.night.holds import SPARK_MAX_OUT_TOKENS, held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
@@ -71,7 +73,10 @@ from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.night.past import paid_within, spent_within
 from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, catch_up, deferred_note, mind_on, offered_tonight, owed_tonight, put_off, sleep_step, unnoticed
 from anjo.sleep.night.state import GPU_STEPS as GPU_STEPS
-from anjo.sleep.night.state import PersonNight, checkpoint_id, note_error, safe_error, study_outcome
+from anjo.sleep.night.state import PersonNight, checkpoint_id, kept_brief, kept_summary, note_error, safe_error, study_outcome
+from anjo.sleep.night.story import KEPT
+from anjo.sleep.context.brief import MAX_TOKENS as BRIEF_MAX_TOKENS
+from anjo.sleep.context.brief import BriefError
 from anjo.sleep.night.state import Window as Window
 from anjo.sleep.night.state import day_window as day_window
 from anjo.sleep.mind import expect, points, receipt
@@ -106,7 +111,7 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
 }
 # Worst cases for the paid steps' holds (holds.py): Spark Open calls per step, and the rest.
 EXTRACT_MAX_CALLS: Final = 2  # the day's one call, and one retry
-BRIEF_MAX_CALLS: Final = 2  # the served and the training brief
+BRIEF_MAX_CALLS: Final = 4  # the served and the training brief, each retried once (each held at its cap)
 PROBES_WORST_USD: Final = 0.50  # Muse Spark writing a real person's night probes (about 8 calls)
 NOTE_MAX_S: Final = 300.0  # one Glimmer call on the serving GPU, inside the client's request timeout
 
@@ -130,7 +135,7 @@ class NightRunner(CoreSteps):
         as_of: Mapping[str, datetime] | None = None,
     ) -> dict[str, NightResult]:
         """The batch as one phase: Glimmer goes back to sleep when it ends, however it ends."""
-        with phase(self.deps.sleep):
+        with phase(self.deps.gpu_stop or self.deps.sleep):
             return self._run_batch(nights, windows, days, sweep, as_of or {})
 
     def _run_batch(
@@ -239,6 +244,8 @@ class NightRunner(CoreSteps):
         deps = self.deps
         deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
+        if deps.gpu_stop is not None:  # when the batch's outermost phase ends, the stop's outcome or why it skipped
+            deps.gpu_stop.watch(lambda status, fields: log.step("gpu_stop", status, uses="new", system=None, **fields))
         history = summaries(deps.logs(uid))
         actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - paid_within(history, window[1], timedelta(hours=24))))
         wonder_spent = spent_within(history, window[1], timedelta(days=30))
@@ -262,8 +269,8 @@ class NightRunner(CoreSteps):
         if self._cancelled_mid_step(p, step):
             return False
         noop = bool(receipt.pop("noop", False))
-        uses, system = USES[step]
-        p.log.step(step, "ok", uses=uses, system=system, noop=noop, **receipt)
+        uses, system = USES[step]  # a step that kept what it had failed, and the night goes on (``kept_brief``)
+        p.log.step(step, "failed" if KEPT in receipt else "ok", uses=uses, system=system, noop=noop, **receipt)
         p.receipts[step] = receipt
         return True
 
@@ -291,10 +298,11 @@ class NightRunner(CoreSteps):
     def _job(self, p: PersonNight, step: str) -> str:
         return f"night:{step}:{p.uid}:{p.night.isoformat()}"
 
-    def _metered(self, p: PersonNight, part: str, step: str, calls: int) -> Any:
-        """Hold ``step``'s Spark Open worst case on ``baseten_sleep_usd``; settle what ``part`` metered."""
+    def _metered(self, p: PersonNight, part: str, step: str, calls: int, out: int = SPARK_MAX_OUT_TOKENS) -> Any:
+        """Hold ``step``'s Spark Open worst case (``calls``, each writing up to ``out``) on
+        ``baseten_sleep_usd``; settle what ``part`` metered."""
         before = p.spend.parts().get(part, 0.0)  # type: ignore[call-overload]
-        return held(self.deps.ledger, self._job(p, step), ("baseten_sleep_usd",), usd(spark_worst_usd(self.deps.prices, calls)),
+        return held(self.deps.ledger, self._job(p, step), ("baseten_sleep_usd",), usd(spark_worst_usd(self.deps.prices, calls, out)),
                     lambda: p.spend.parts().get(part, 0.0) - before)  # type: ignore[call-overload]
 
     def _close_day(self, p: PersonNight) -> Mapping[str, Any]:
@@ -473,9 +481,13 @@ class NightRunner(CoreSteps):
         if not new:
             return {"folded": 0, "why": "no evidence since the last fold"}
         p.spend.part = "brief"
-        with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS):
-            briefs.fold(p.night, new, at=p.stamp, hosted_in_training=self.deps.hosted_in_training,
-                        chat=p.spend.wrap_chat(self.deps.spark_chat))
+        try:
+            with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS, BRIEF_MAX_TOKENS):
+                briefs.fold(p.night, new, at=p.stamp, hosted_in_training=self.deps.hosted_in_training,
+                            chat=p.spend.wrap_chat(self.deps.spark_chat))
+        except BriefError as error:  # written badly twice: nothing is stored, and she keeps the briefs she had
+            latest = briefs.latest()
+            return kept_brief(None if latest is None else latest.night, len(new), error)
         return {"folded": len(new)}
 
     # ── the GPU steps ────────────────────────────────────────────────────────
@@ -682,6 +694,7 @@ class NightRunner(CoreSteps):
             "paid_actions": p.paid_actions, "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd,
             "steps": [record["step"] for record in p.log.steps()], **self._kept(p),
             **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
+            **kept_summary(p.receipts),
             **({} if p.gpu_batch is None else {"gpu_batch": {"digest": p.gpu_batch[0], "people": p.gpu_batch[1]}}),
         }, night=p.night)
         return result

@@ -25,6 +25,7 @@ from typing import Any
 
 from anjo.core import erasure, open_model_turn, outreach, talker_choice
 from anjo.core.anjo_model import assignment, client, hosts
+from anjo.core.best_effort import best_effort
 from anjo.sleep.app.api import router
 from anjo.sleep.app.cleared_sessions import in_cleared_session
 from anjo.sleep.app.demo_api import PUBLIC_PREFIXES as DEMO_PUBLIC
@@ -35,8 +36,9 @@ from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_ena
 from anjo.sleep.app.ownership import remote_cleanup
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
-from anjo.sleep.app.storage import brief_store, checkpoint_registry
+from anjo.sleep.app.storage import brief_store, checkpoint_registry, glimmer_turns
 from anjo.sleep.context.brief_store import ServedBriefs, TrainingBriefs
+from anjo.sleep.serving.activity import track
 from anjo.sleep.types import CheckpointRef
 
 
@@ -87,6 +89,8 @@ def register_sleep(app: Any) -> None:
     ``/sleep/demo`` and its routes under ``/api/sleep/demo``, the only paths opened to anonymous
     visitors (``app.state.public_prefixes``, read by the app's auth middleware)."""
     register_hooks()
+    with best_effort("mark the host's Glimmer turns as tracked"):  # unmarked, the night's GPU stop never stops
+        track(glimmer_turns())
     app.include_router(router, prefix="/api")
     app.include_router(demo_router, prefix="/api")
     app.include_router(demo_page_router)

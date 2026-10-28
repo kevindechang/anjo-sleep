@@ -40,6 +40,7 @@ import os
 import re
 import threading
 from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
@@ -64,8 +65,9 @@ from anjo.core.floor import FloorRules, check_message, normalize_message
 from anjo.core.model_io import Finish, ModelEvent, ModelRequest, Served, TextDelta, TextPart
 from anjo.core.processors import Family
 from anjo.sleep.app.ancestry import record_served
+from anjo.sleep.app.storage import glimmer_turns
 from anjo.sleep.app.flags import sleep_enabled_for
-from anjo.sleep.serving import backend, config, framing
+from anjo.sleep.serving import activity, backend, config, framing
 from anjo.sleep.serving.client import (
     HttpPoster,
     ModelNotFound,
@@ -305,12 +307,19 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
             yield Finish("error", "rejected")
             return
         recorded = False
-        for event in self._generate(request, cancel):
-            if not recorded and isinstance(event, TextDelta) and event.text.strip():
-                recorded = True
-                with best_effort("record a sleep reply as served", user_id=self._glimmer.user_id):
-                    record_served(self._glimmer.user_id, request.turn_id, model=self._wire_model())
-            yield event
+        with ExitStack() as in_flight:  # in flight until it ends: the night's GPU stop never cuts it
+            try:
+                in_flight.enter_context(activity.turn(glimmer_turns()))
+            except activity.GlimmerStopping:  # her container is stopping: the fallback answers, before any word
+                logger.info("%s sends nothing: the night is stopping Glimmer's container", HOST)
+                yield Finish("error", "transient")
+                return
+            for event in self._generate(request, cancel):
+                if not recorded and isinstance(event, TextDelta) and event.text.strip():
+                    recorded = True
+                    with best_effort("record a sleep reply as served", user_id=self._glimmer.user_id):
+                        record_served(self._glimmer.user_id, request.turn_id, model=self._wire_model())
+                yield event
 
     def _generate(
         self, request: ModelRequest, cancel: threading.Event

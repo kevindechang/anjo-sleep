@@ -179,6 +179,6 @@ def attach_night_terms(
                  "dreams_keep_rate": round(len(dreams) / len(made), 4) if made else None,  # the dream filter's
                  "dreams_by_seed": {kind: sum(row.kind == kind for row in dreams) for kind in SEED_KINDS},
                  "dream_seconds": round(seconds, 3)}
-    anchors = anchor_rows(deps.settings.seed) if dreams else ()
+    anchors = anchor_rows(deps.settings.seed) if dreams or deps.terms.protect else ()  # the dream check, or the basis
     done["anchors"] = len(anchors)
     return replace(data, seeds=seeds, dreams=dreams, anchors=anchors), done
