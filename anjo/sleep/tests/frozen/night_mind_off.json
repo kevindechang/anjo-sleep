@@ -384,6 +384,7 @@
     },
     {
      "context_dropped": 5,
+     "context_paraphrase_kept": 0,
      "dropped": {
       "hosted": 0,
       "missing": 0,
@@ -1006,6 +1007,7 @@
     },
     {
      "context_dropped": 11,
+     "context_paraphrase_kept": 0,
      "dropped": {
       "hosted": 0,
       "missing": 0,
@@ -1574,6 +1576,7 @@
     },
     {
      "context_dropped": 14,
+     "context_paraphrase_kept": 0,
      "dropped": {
       "hosted": 0,
       "missing": 0,
