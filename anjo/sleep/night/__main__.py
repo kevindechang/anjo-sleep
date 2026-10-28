@@ -40,10 +40,11 @@ from anjo.sleep.night.deps import NightOptions, Wiring
 from anjo.sleep.night.run import Window, day_window, run_night_batch_with
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
-from anjo.sleep.train.lora import AdapterPublisher
+from anjo.sleep.train.lora import AdapterPublisher, LoraCfg
 from anjo.sleep.train.runners import choice
 from anjo.sleep.train.runners.colab import ColabCli
 from anjo.sleep.train.runners.modal import CALLS_DIR, ModalCalls, SdkCalls
+from anjo.sleep.train import objective
 from anjo.sleep.train.trainer import LoraTrainer
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
@@ -83,6 +84,15 @@ def _publisher(runner: str) -> AdapterPublisher:
     return choice.publisher(runner, _publish, serving=backend.backend_name())
 
 
+def night_cfg() -> LoraCfg:
+    """The nights' recipe: the objective ``ANJO_SLEEP_OBJECTIVE`` names (``train/objective.py``). Also
+    used by the accelerated runs; a name that is no objective stops the command before it starts."""
+    try:
+        return objective.night_cfg(os.environ)
+    except objective.ObjectiveError as error:
+        raise SystemExit(str(error)) from None
+
+
 def chosen_runner(data_dir: Path, ledger: Ledger, personas: Mapping[str, str], real: Sequence[str] = ()) -> choice.Chosen:
     """The runner ``ANJO_SLEEP_TRAIN_RUNNER`` names, training the people with a persona and the ``real``
     people named. Also used by the accelerated runs."""
@@ -112,11 +122,12 @@ def execute(
                            practice_scenes=practice_scenes, practice_teacher=teacher, mind_inquiry=mind)
     # The runner trains only the people named with a persona (the wiring refuses a persona on an
     # account that isn't registered synthetic), and the others named only with --allow-real.
+    cfg = night_cfg()  # before any runner, sweep or call
     ledger = default_ledger()
     real = [user for user in users if user not in personas] if allow_real else []
     chosen = chosen_runner(data_dir, ledger, personas, real)
     trainer = LoraTrainer(chosen.runner, root=data_dir / "sleep" / "training", publish=_publisher(chosen.name),
-                          revision=os.environ.get(REVISION_ENV) or None)
+                          revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
     try:
         with swept_night(ledger, chosen.sweep) as swept:
             deps = _wiring(wiring)(trainer, options)

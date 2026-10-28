@@ -5,6 +5,7 @@ before her chooser looks at her state, and the probes are sealed before any trai
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -35,7 +36,8 @@ from anjo.sleep.context.training import TrainingContext
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import ServingError
 from anjo.sleep.train.dataset import Dataset, build_night_dataset
-from anjo.sleep.train.lora import LoraCfg, fresh_adapter_name, train_lora_with_receipt
+from anjo.sleep.train.lora import fresh_adapter_name, train_lora_with_receipt
+from anjo.sleep.train.objective import night_cfg
 from anjo.sleep.types import (
     CheckpointRef,
     ChoiceContext,
@@ -192,7 +194,7 @@ def train(night: Night, data: Dataset) -> CheckpointRef:
     name = fresh_adapter_name(f"{person.person_id}\x1f{night.run_id}", 1, frozenset())  # new on every run
     try:
         ckpt, done = train_lora_with_receipt(
-            None, data, LoraCfg(), night.services.gpu, person_id=person.person_id, night=person.day,
+            None, data, night_cfg(os.environ), night.services.gpu, person_id=person.person_id, night=person.day,
             name=name, workdir=night.workdir / "train", adapter_cache=night.workdir / "adapters",
             publish=night.services.publish or night.services.serving.upload_adapter,
             revision=night.services.revision,

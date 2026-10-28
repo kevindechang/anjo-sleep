@@ -214,9 +214,12 @@ its next start, and the L40S costs about $2 an hour while up. `Serve` runs one c
 command, the accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
 17b: replay's thinker and the APD runner) stays on Colab and never reads it.
 
+Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
+
 | Setting | Value |
 |---|---|
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
+| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default) or `sft`; any other value stops the night, the accelerated run and the example before they start |
 | App, function | `anjo-sleep-train`, `train` (`train/modal_app.py`); the runner calls the deployed function by name |
 | GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 21 minutes (the start, the return and a cancel's margin) |
 | Volumes | `anjo-sleep-weights` mounted read-only (Glimmer at the pinned revision), `anjo-sleep-adapters` read-write |
