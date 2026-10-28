@@ -155,7 +155,9 @@ def nights(root: Path, account: str) -> list[dict[str, Any]]:
         log, summary = night / "log.jsonl", night / "summary.json"
         if not summary.is_file():
             continue
-        steps = {r["step"]: r for r in (json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x)}
+        if not log.is_file():  # finished, yet nothing to read: refused, never guessed
+            raise ValueError(f"night {night.name} has a summary but no log.jsonl: its training can't be read")
+        steps = {r.get("step"): r for r in (json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x)}
         done = json.loads(summary.read_text(encoding="utf-8"))
         general = steps.get("gates", {}).get("gates", {}).get("general", {})
         found.append({"night": night.name, "train": steps.get("train", {}).get("receipt") or {},
@@ -382,7 +384,11 @@ def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], tokens: Map
     finally:
         if held is not None:
             held.release()
-    report(root, accounts, out)
+    try:
+        report(root, accounts, out)
+    except ValueError as error:  # every arm ran; only the reading stopped
+        out(f"report stopped: {error}")
+        return 1
     return 0
 
 
@@ -409,7 +415,10 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     except ValueError as error:
         parser.error(str(error))
     if args.report:
-        report(results_root(), accounts, out)
+        try:
+            report(results_root(), accounts, out)
+        except ValueError as error:
+            parser.error(f"--report: {error}")
         return 0
     if absent := sorted(set(args.reuse) - set(chosen)):
         parser.error(f"--reuse names an arm of this run with its --account: {', '.join(absent)}")

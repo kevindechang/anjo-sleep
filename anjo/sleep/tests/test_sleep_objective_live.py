@@ -5,6 +5,7 @@ whole worst case shrinking arm by arm, sleep pressure off, and the report."""
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -304,25 +305,48 @@ def test_reuse_reads_a_finished_reference_arm_instead_of_running_it(tmp_path: Pa
     assert today["held"] == [pytest.approx(priced["fold"])] and fold["held"] == [] and not ledger.open_holds()
 
 
-def test_reuse_refuses_an_arm_it_cant_read_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reuse_refuses_an_arm_it_cant_read_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                 capsys: pytest.CaptureFixture[str]) -> None:
     root, ledger = _setup(tmp_path, monkeypatch)
     _night(root, "syn-a", DAY, minutes={"sft": 1.0, "dpo": 0.5})
     _night(root, "syn-a", "2026-10-25", minutes={"sft": 1.0}, status="failed")
     runs = _Runs(root, ledger)
     tokens = _tokens(tmp_path, REUSE)[2:]
-    cases = {
-        "missing": [*REUSE, *tokens, "--days", "3", "--start", DAY, "--reuse", "seed"],  # 2 of 3 nights
-        "failed": [*REUSE, *tokens, "--days", "2", "--start", DAY, "--reuse", "seed"],  # its second night failed
-        "start": [*REUSE, *tokens, "--days", "1", "--start", "2026-10-23", "--reuse", "seed"],  # another start
-        "extra": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "seed"],  # a night past the life's
-        "control": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "today"],  # not a reference arm
-        "absent": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "protect"],  # not an arm of this run
+    cases = {  # each refused for its own reason, said on stderr
+        r"lived 2 of 3 nights from 2026-10-24 \(none finished on 2026-10-26\): reuse needs all of them":
+            [*REUSE, *tokens, "--days", "3", "--start", DAY, "--reuse", "seed"],
+        r"a night that wasn't promoted or rejected \(2026-10-25 failed\)":
+            [*REUSE, *tokens, "--days", "2", "--start", DAY, "--reuse", "seed"],
+        r"nights outside the 1 from 2026-10-23 \(2026-10-24, 2026-10-25\): not this life":
+            [*REUSE, *tokens, "--days", "1", "--start", "2026-10-23", "--reuse", "seed"],
+        r"nights outside the 1 from 2026-10-24 \(2026-10-25\): not this life":
+            [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "seed"],
+        r"--reuse: invalid choice: 'today'":  # a control is never a reference arm
+            [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "today"],
+        r"--reuse names an arm of this run with its --account: protect":
+            [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "protect"],
+        r"1 account\(s\) already have results: every arm runs on a new synthetic account":  # without --reuse, as ever
+            [*REUSE, *_tokens(tmp_path, REUSE), "--days", "1", "--start", DAY],
     }
-    for name, argv in cases.items():
+    for reason, argv in cases.items():
         with pytest.raises(SystemExit):
             live.main([*argv, "--night-usd", "2.0", "--yes"], run=runs, out=lambda line: None, now=lambda: NOW)
-        assert not runs.calls, name
-    with pytest.raises(SystemExit):  # without --reuse an account with results is refused, as ever
-        live.main([*REUSE, *_tokens(tmp_path, REUSE), "--days", "1", "--start", DAY, "--night-usd", "2.0", "--yes"],
-                  run=runs, out=lambda line: None, now=lambda: NOW)
-    assert not runs.calls and not ledger.open_holds()
+        assert re.search(reason, capsys.readouterr().err), reason
+        assert not runs.calls, reason
+    assert not ledger.open_holds()
+
+
+def test_a_night_without_its_log_is_refused_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                   capsys: pytest.CaptureFixture[str]) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    _night(root, "syn-a", DAY, minutes={"sft": 1.0, "dpo": 0.5})
+    (root / "syn-a" / "nights" / DAY / "log.jsonl").unlink()  # a summary, and no log beside it
+    with pytest.raises(ValueError, match=f"night {DAY} has a summary but no log.jsonl"):
+        live.nights(root, "syn-a")
+    tokens = _tokens(tmp_path, REUSE)[2:]
+    for argv in ([*REUSE, "--report"], [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "seed",
+                                        "--night-usd", "2.0", "--yes"]):
+        with pytest.raises(SystemExit):  # a usage error naming the night, never a traceback
+            live.main(argv, run=_Runs(root, ledger), out=lambda line: None, now=lambda: NOW)
+        assert f"night {DAY} has a summary but no log.jsonl" in capsys.readouterr().err
+    assert not ledger.open_holds()
