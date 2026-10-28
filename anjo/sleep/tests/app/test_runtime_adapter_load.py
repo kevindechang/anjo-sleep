@@ -144,15 +144,17 @@ def test_chat_runtime_load_failure_falls_back_within_deadline(live: LiveVllm, fa
 
 
 def test_only_pre_generated_demo_pairs_wait_for_an_adapter_folder() -> None:
-    class Serving:
+    class Serving:  # Modal's: it stages an adapter its container's mount can't show
         def client(self) -> VllmClient:
-            return VllmClient(URL, TOKEN, adapters_dir=config.ADAPTERS_DIR)
+            return VllmClient(URL, TOKEN, adapters_dir=config.ADAPTERS_DIR, stage=lambda name: None)
 
     assert VllmClient(URL, TOKEN, adapters_dir=config.ADAPTERS_DIR).load_wait_s == LOAD_WAIT_S  # night, morning
     live_page = demo_live.glimmer_deps("u-1", Serving(), load_wait_s=0.0)  # type: ignore[arg-type]
     assert live_page(date(2026, 10, 28)).model.load_wait_s == 0.0  # type: ignore[attr-defined]
+    assert not live_page(date(2026, 10, 28)).model.stages  # type: ignore[attr-defined]  # a visitor never waits on a stage
     pairs = demo_live.glimmer_deps("u-1", Serving(), load_wait_s=LOAD_WAIT_S)  # type: ignore[arg-type]
     assert pairs(date(2026, 10, 28)).model.load_wait_s == LOAD_WAIT_S  # type: ignore[attr-defined]
+    assert pairs(date(2026, 10, 28)).model.stages  # type: ignore[attr-defined]
 
 
 def test_chat_deadline_has_no_retry(live: LiveVllm) -> None:

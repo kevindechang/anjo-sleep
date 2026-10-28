@@ -14,11 +14,12 @@ the weights volume read-only and lands each adapter on the adapters volume. Thre
   when the client asks it to (``/v1/load_lora_adapter``, ``serving.client``).
 - ``put_adapter`` and the ``upload_adapter`` entrypoint: put one checked adapter folder on the
   adapters volume under its name, never over an adapter already there. A running container mounts
-  the volume as it was when the container started, and nothing reloads it: on night 1c (2026-10-28)
-  the server wedged for good while it reloaded the volume and vLLM read a new adapter from the mount.
-  An adapter committed
-  since is copied onto the container's own disk by ``Serve.stage`` (``stage_adapter``), which the
-  client calls when vLLM can't find the adapter on the mount.
+  the volume as it was when the container started, and nothing reloads it. On night 1c (2026-10-28)
+  the server stopped answering, ``/v1/models`` included, before the night had sent any adapter load;
+  the stall was in this container's Modal process, where the volume reload thread ran (on night 1b
+  the adapter load itself succeeded). An adapter committed since the container started is copied
+  onto its own disk by ``Serve.stage`` (``stage_adapter``), which the client calls when vLLM can't
+  find the adapter on the mount.
 
 Deploying and calling cost money, so only the coordinator runs them, on Kevin's go (the pinned
 commit is in deploy/dev_host.md). Loading this file without a pinned revision raises, so a deploy

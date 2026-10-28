@@ -77,7 +77,8 @@ def test_transport_error_retries_then_succeeds() -> None:
     assert fake.seen[COMPLETIONS] == 2 and fake.seen[vllm.LOAD_PATH] == 2  # the load is sent again too
     assert waits.slept == [vllm.BACKOFF_S[0]] * 2
     assert client.retries() == 2 and client.on(date(2026, 11, 1)).retries() == 2  # its copies share the count
-    assert fake.probes == [vllm.LIVENESS_S] * 2  # the server still answered /v1/models, so each went again
+    assert fake.probes == [vllm.LIVENESS_S]  # the lost load came before any answer, a cold start: not asked
+    # the lost completion came once the server had answered: it still answered /v1/models, so it went again
 
 
 def test_transport_error_gives_up_after_three_attempts() -> None:
@@ -184,6 +185,22 @@ def test_a_wedged_server_fails_the_client_fast_and_all_at_once() -> None:
     waits.now += vllm.DOWN_HOLD_S  # a minute on, a new container answers
     fake.lose, fake.alive = 0, True
     assert client.complete(ADAPTER, MESSAGES, temperature=1.0).text == "hello"
+
+
+def test_a_cold_start_never_marks_the_server_down() -> None:
+    """Before the server has answered (right after a wake, or silent past its scale-down window) a slow
+    or lost request is a cold start's: the client doesn't ask /v1/models, and sends it again as before."""
+    waits = Waits()
+    fake = Lossy(lose=1, paths=("/tokenize",), error=httpx.ConnectError)
+    fake.alive = False  # /v1/models wouldn't answer yet either
+    client = _client(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0).text == "hello"
+    assert fake.probes == [] and client.retries() == 1
+
+    waits.now += config.SCALEDOWN_S  # silent past scale-down: the next request may meet a new container
+    fake.lose = fake.seen["/tokenize"] + 1
+    assert client.complete(None, MESSAGES, temperature=1.0).text == "hello"
+    assert fake.probes == [] and client.retries() == 2
 
 
 def test_in_flight_never_exceeds_server_slots() -> None:
