@@ -90,7 +90,8 @@ class SlowSpark:
     def __init__(self, rec: Recorder) -> None:
         self.rec = rec
 
-    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None) -> ChatResult:
         assert model == SPARK_OPEN
         content = messages[-1]["content"]
         if content.startswith("# scenes_v1"):
@@ -311,10 +312,11 @@ def test_failure_in_one_scene_drains_and_settles(tmp_path: Path) -> None:
         return FullPractice(chat=chat, client=glimmer, adapter=world.registry.last_promoted, seed=7, concurrency=8,
                             snapshot=lambda uid, message: (None, None))
 
-    def chat(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def chat(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+             max_tokens: int | None = None) -> ChatResult:
         if messages[-1]["content"].startswith("# brief_v1"):
-            return world.spark(model, messages, tools, timeout_s, temperature=temperature)
-        return spark(model, messages, tools, timeout_s, temperature=temperature)
+            return world.spark(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
+        return spark(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
 
     ledger = Ledger(tmp_path / "budget.jsonl")
     result = run_night_batch_with(world.deps(spark_chat=chat, practice=practice, ledger=ledger), {"p1": NIGHT_DATE})["p1"]
@@ -421,11 +423,12 @@ def test_a_teacher_failure_fails_practice() -> None:
     broken = _scenes()[3]
 
     class FailingTeacher(SlowSpark):
-        def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+        def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None) -> ChatResult:
             if messages[-1]["content"] == broken:  # the teacher answers the scene's message itself
                 with self.rec.calling("teacher", broken):
                     raise ModelApiError("Baseten chat returned HTTP 500")
-            return super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+            return super().__call__(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
 
     for concurrency in (1, 8):
         rec = Recorder()

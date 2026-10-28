@@ -77,7 +77,7 @@ from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
-from anjo.sleep.practice.full import FullPractice
+from anjo.sleep.practice.full import CappedChat, FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.serving import backend
@@ -174,7 +174,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
 
-    def practice(chat: ChatFn, night: date) -> FullPractice:
+    def practice(chat: CappedChat, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
                             teacher=night_settings.practice_teacher, concurrency=calls)

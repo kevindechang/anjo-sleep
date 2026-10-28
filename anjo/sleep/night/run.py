@@ -549,7 +549,7 @@ class NightRunner:
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **self._serving(p, "practice", started)}
+                "homework": None, **({"spark": run.spark} if run.spark else {}), **self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:
         settings = self.deps.settings
