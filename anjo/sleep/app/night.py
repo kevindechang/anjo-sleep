@@ -26,8 +26,8 @@ it off the serving path). Everything else is here:
   revision that root names), never on this host's settings alone.
 
 Who plays practice's roles is ``ANJO_SLEEP_PRACTICE_ROLES`` (``practice.roles``; unset, Spark Open plays
-all three). ``critic=deepseek`` scores a synthetic person's candidates with DeepSeek V4.1 Flash on
-Fireworks, each call held on ``fireworks_sleep_usd``; a real person's critic stays Spark Open.
+all three). ``critic=deepseek`` scores a synthetic person's candidates with DeepSeek V4.1 Flash
+(``practice.critics``, each call held on its own pool); a real person's critic stays Spark Open.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -224,7 +224,7 @@ def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
 
 def deepseek_practice_critic(night: date, ledger: Ledger | None) -> ThirdPartyCritic:
     """DeepSeek V4.1 Flash as the critic of a synthetic person's practice, each call held on
-    ``fireworks_sleep_usd``."""
+    ``practice.critics.POOL``."""
     return held_critic(deepseek_critic(), ledger, f"night:practice:{night.isoformat()}")
 
 

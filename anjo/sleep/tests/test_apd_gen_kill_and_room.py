@@ -169,7 +169,7 @@ def test_reserve_waits_for_room_instead_of_stopping(tmp_path: Path) -> None:
     # Arrange: two lives whose attempts each hold more than half the Fireworks pool's cap
     specs = generate.development_specs()[1:3]
     chat = Order()
-    backend = _held(tmp_path, chat, 10.0, 30.0)
+    backend = _held(tmp_path, chat, 9.0, 27.0)  # holds of about $54 and $74 against the $80 cap
     held = [backends.gen_holds(backend.prices, backend.rates, FIREWORKS.pool, backends.life_calls(s.prevalence))
             for s in specs]
     cap = CAPS[FIREWORKS.pool]

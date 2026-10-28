@@ -45,6 +45,9 @@ ROOT = Path(__file__).parents[1]
 # Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment.
 FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
                    "mind/replay/", "tests/", "deploy/")
+# Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) may name Fireworks,
+# never MIND's Spark Open provider or its setting: Sleep's Spark Open stays on Baseten.
+CRITIC_HOMES = ("practice/critics.py", "practice/roles.py", "tools/practice_ab.py")
 
 
 def _ok(model: str) -> dict[str, Any]:
@@ -220,11 +223,11 @@ def test_every_fireworks_call_held_on_fireworks_mind_usd(tmp_path: Path, monkeyp
     spark = [job for job, pools in reserved if "fireworks_mind_usd" in pools]
     assert spark and any(job.startswith("apd:kill:") for job in spark)  # kill-resume's children too
     assert not any("baseten_mind_usd" in pools or "baseten_sleep_usd" in pools for _, pools in reserved)
-    assert "the $90 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
+    assert "the $80 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
 
 
 def test_a_fireworks_night_never_waits_on_sleeps_baseten_holds(tmp_path: Path) -> None:
-    assert CAPS["fireworks_mind_usd"] == 90.0
+    assert CAPS["fireworks_mind_usd"] == 80.0
     ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
     assert ledger.reserve("night:sleep:a1", ("baseten_sleep_usd",), usd(CAPS["baseten_sleep_usd"] +
                                                                          CAPS["baseten_mind_usd"])) is not None
@@ -246,7 +249,8 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         if name.startswith(FIREWORKS_HOMES):
             continue
         text = path.read_text(encoding="utf-8").casefold()
-        for term in ("fireworks", "spark_provider", SETTING.casefold()):
+        terms = ("spark_provider", SETTING.casefold()) + (() if name in CRITIC_HOMES else ("fireworks",))
+        for term in terms:
             assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten"
     monkeypatch.setenv(SETTING, "fireworks")
     posted: list[str] = []
