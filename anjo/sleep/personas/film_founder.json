@@ -1,0 +1,816 @@
+{
+ "visible": {
+  "person_id": "film_founder",
+  "name": "Teo Halvorsen",
+  "age": 22,
+  "field": "film school and an AI startup for filmmakers",
+  "field_domains": [
+   "film",
+   "movies",
+   "tv",
+   "video",
+   "startups"
+  ],
+  "line": "Teo Halvorsen, 22, is in his final year at a film school in a city far from his family, and is also the solo founder of Cutlist, an AI tool that builds a first assembly cut for editors; he works nights alone, with a thesis short and an accelerator application both due within weeks.",
+  "project": {
+   "title": "Cutlist",
+   "logline": "An AI tool that logs raw footage and builds a first assembly cut for an editor to start from; thirty-eight student and indie editors use the beta and 1,400 people are on the waitlist.",
+   "constraints": [
+    "Eleven weeks of runway: a 14,000 dollar grant plus savings, spent at about 1,300 dollars a month.",
+    "The accelerator application is due in nineteen days, and the thesis short screens in five weeks.",
+    "Inference costs 2.10 dollars per hour of footage, so the price has to clear that with room.",
+    "He is the only founder: the eleven cofounder candidates he has asked all said no.",
+    "The feature script and the company both need the same late-night hours."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "ff-p001",
+    "text": "Wants the answer in the first line and under eighty words unless he asks for more.",
+    "domain": "replies"
+   },
+   {
+    "id": "ff-p002",
+    "text": "Stops reading a reply that opens with praise, and trusts one that opens with the problem.",
+    "domain": "replies"
+   },
+   {
+    "id": "ff-p003",
+    "text": "Reads a numbered list of three items or fewer and skips any longer list.",
+    "domain": "replies"
+   },
+   {
+    "id": "ff-p004",
+    "text": "Distrusts exclamation marks and words like game-changing, revolutionary and unlock.",
+    "domain": "replies"
+   },
+   {
+    "id": "ff-p005",
+    "text": "Wants the flaw named before the strength.",
+    "domain": "tone"
+   },
+   {
+    "id": "ff-p006",
+    "text": "Takes a flat 'this is weak' better than 'you might consider'.",
+    "domain": "tone"
+   },
+   {
+    "id": "ff-p007",
+    "text": "Asks for one recommendation, never a menu of five options.",
+    "domain": "tone"
+   },
+   {
+    "id": "ff-p008",
+    "text": "Wants a score out of ten on a draft when he asks for one, with the single reason behind it.",
+    "domain": "tone"
+   },
+   {
+    "id": "ff-p009",
+    "text": "Acts on advice that has a deadline attached and ignores advice that has none.",
+    "domain": "advice"
+   },
+   {
+    "id": "ff-p010",
+    "text": "Takes advice to cut and resists advice to add.",
+    "domain": "advice"
+   },
+   {
+    "id": "ff-p011",
+    "text": "Follows advice that names a number he can check by tomorrow.",
+    "domain": "advice"
+   },
+   {
+    "id": "ff-p012",
+    "text": "Dismisses advice that begins 'most founders' and listens when it begins 'in your numbers'.",
+    "domain": "advice"
+   },
+   {
+    "id": "ff-p013",
+    "text": "When stuck on a scene he walks the same route for an hour with no phone, then returns and cuts the scene.",
+    "domain": "stuck"
+   },
+   {
+    "id": "ff-p014",
+    "text": "When stuck on code he rewrites the smallest broken piece from scratch instead of debugging it.",
+    "domain": "stuck"
+   },
+   {
+    "id": "ff-p015",
+    "text": "When stuck on a pitch he says it aloud to an empty room, records it and works from the transcript.",
+    "domain": "stuck"
+   },
+   {
+    "id": "ff-p016",
+    "text": "When stuck he asks for the opposite of his current idea, not for more ideas like it.",
+    "domain": "stuck"
+   },
+   {
+    "id": "ff-p017",
+    "text": "Keeps the deck to ten slides and the first slide to a single sentence.",
+    "domain": "deck"
+   },
+   {
+    "id": "ff-p018",
+    "text": "Leads with the number of editors who came back, not with the size of the market.",
+    "domain": "deck"
+   },
+   {
+    "id": "ff-p019",
+    "text": "Rewrites the opening of the deck after midnight, when he is least polite to himself.",
+    "domain": "deck"
+   },
+   {
+    "id": "ff-p020",
+    "text": "Refuses to include a total-addressable-market slide.",
+    "domain": "deck"
+   },
+   {
+    "id": "ff-p021",
+    "text": "Wants the tool to save an editor a whole evening, not ten minutes.",
+    "domain": "product"
+   },
+   {
+    "id": "ff-p022",
+    "text": "Puts a rough build in front of editors the same week the idea appears.",
+    "domain": "product"
+   },
+   {
+    "id": "ff-p023",
+    "text": "Prefers one input and one button to a settings page.",
+    "domain": "product"
+   },
+   {
+    "id": "ff-p024",
+    "text": "Rejects any feature that needs a tutorial.",
+    "domain": "product"
+   },
+   {
+    "id": "ff-p025",
+    "text": "Loves long static takes where nothing is explained, in the manner of slow European cinema.",
+    "domain": "film taste"
+   },
+   {
+    "id": "ff-p026",
+    "text": "Admires films that hold back the score until the last ten minutes.",
+    "domain": "film taste"
+   },
+   {
+    "id": "ff-p027",
+    "text": "Rewatches one 1970s thriller to study where it cuts.",
+    "domain": "film taste"
+   },
+   {
+    "id": "ff-p028",
+    "text": "Finds voice-over narration an admission that the images failed.",
+    "domain": "film taste"
+   },
+   {
+    "id": "ff-p029",
+    "text": "Cuts on movement and hates a dissolve used to hide a weak cut.",
+    "domain": "editing"
+   },
+   {
+    "id": "ff-p030",
+    "text": "Trims a scene by a third before showing it to anyone.",
+    "domain": "editing"
+   },
+   {
+    "id": "ff-p031",
+    "text": "Watches a rough cut once with the sound off.",
+    "domain": "editing"
+   },
+   {
+    "id": "ff-p032",
+    "text": "Drops a favorite shot the moment it needs explaining.",
+    "domain": "editing"
+   },
+   {
+    "id": "ff-p033",
+    "text": "Writes the feature in the hour after midnight, a page a night and never fewer than one.",
+    "domain": "feature script"
+   },
+   {
+    "id": "ff-p034",
+    "text": "Writes dialogue and then deletes half of every line.",
+    "domain": "feature script"
+   },
+   {
+    "id": "ff-p035",
+    "text": "Keeps a one-page outline pinned above the desk and will not change the ending.",
+    "domain": "feature script"
+   },
+   {
+    "id": "ff-p036",
+    "text": "Chooses the title of a script last.",
+    "domain": "feature script"
+   },
+   {
+    "id": "ff-p037",
+    "text": "Throws out a draft that is merely fine, and says so.",
+    "domain": "standards"
+   },
+   {
+    "id": "ff-p038",
+    "text": "Compares his cut to a finished film he admires, never to other student work.",
+    "domain": "standards"
+   },
+   {
+    "id": "ff-p039",
+    "text": "Asks of every draft whether a festival programmer would still be watching after ten minutes.",
+    "domain": "standards"
+   },
+   {
+    "id": "ff-p040",
+    "text": "Grades his own work harder than anyone else's and wants others to do the same.",
+    "domain": "standards"
+   },
+   {
+    "id": "ff-p041",
+    "text": "Works through the night in the school's empty edit suite and sleeps through the morning.",
+    "domain": "isolation"
+   },
+   {
+    "id": "ff-p042",
+    "text": "Eats the same meal at the same hour so there is one less decision.",
+    "domain": "isolation"
+   },
+   {
+    "id": "ff-p043",
+    "text": "Goes whole days speaking to no one but the barista and counts it as normal.",
+    "domain": "isolation"
+   },
+   {
+    "id": "ff-p044",
+    "text": "Wants to be told plainly, once, when he has gone several days with no plans to see anyone, and then be left alone about it.",
+    "domain": "isolation"
+   },
+   {
+    "id": "ff-p045",
+    "text": "Has asked eleven people to join as cofounder and been turned down by all of them; wants a message draft, not comfort.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "ff-p046",
+    "text": "Wants cold messages to possible cofounders under sixty words with one specific ask.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "ff-p047",
+    "text": "Would rather test a possible cofounder over a build weekend than over coffee.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "ff-p048",
+    "text": "Wants to be reminded that a cofounder search needs a date on which it stops.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "ff-p049",
+    "text": "Calls his family on Sunday for ten minutes and says the work is going fine whatever the truth.",
+    "domain": "home"
+   },
+   {
+    "id": "ff-p050",
+    "text": "Has not told his parents how short the runway is.",
+    "domain": "home"
+   },
+   {
+    "id": "ff-p051",
+    "text": "Keeps a second clock on his desk set to his hometown's time zone.",
+    "domain": "home"
+   },
+   {
+    "id": "ff-p052",
+    "text": "Wants a prompt to call home worded like a calendar line, not a question about feelings.",
+    "domain": "home"
+   },
+   {
+    "id": "ff-p053",
+    "text": "Wants hard stops: a work block ends at a named time, not when it is done.",
+    "domain": "schedule"
+   },
+   {
+    "id": "ff-p054",
+    "text": "Plans each week as three outcomes written on Monday.",
+    "domain": "schedule"
+   },
+   {
+    "id": "ff-p055",
+    "text": "Treats the application deadline as four days earlier than the real one.",
+    "domain": "schedule"
+   },
+   {
+    "id": "ff-p056",
+    "text": "Counts days to the deadline, not hours worked.",
+    "domain": "schedule"
+   },
+   {
+    "id": "ff-p057",
+    "text": "Reads the docs and the source code, never a tutorial.",
+    "domain": "learning"
+   },
+   {
+    "id": "ff-p058",
+    "text": "Learns a tool by rebuilding a small version of it over a weekend.",
+    "domain": "learning"
+   },
+   {
+    "id": "ff-p059",
+    "text": "Keeps notes in a single dated plain-text file.",
+    "domain": "learning"
+   },
+   {
+    "id": "ff-p060",
+    "text": "Rereads yesterday's file before opening any new work.",
+    "domain": "learning"
+   },
+   {
+    "id": "ff-p061",
+    "text": "Tracks the runway in weeks and rechecks it each Sunday.",
+    "domain": "money"
+   },
+   {
+    "id": "ff-p062",
+    "text": "Spends on compute before spending on anything else.",
+    "domain": "money"
+   },
+   {
+    "id": "ff-p063",
+    "text": "Turns down grants that come with long reporting duties.",
+    "domain": "money"
+   },
+   {
+    "id": "ff-p064",
+    "text": "Wants costs stated per hour of footage, not per month.",
+    "domain": "money"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "ff-t1",
+    "text": "Short. Answer first. Under eighty words unless I ask for more."
+   },
+   {
+    "id": "ff-t2",
+    "text": "No hype words and no exclamation marks."
+   },
+   {
+    "id": "ff-t3",
+    "text": "Tell me what is weak before what is strong."
+   },
+   {
+    "id": "ff-t4",
+    "text": "Give me one recommendation, not a menu."
+   },
+   {
+    "id": "ff-t5",
+    "text": "Do not tell me it will be fine; tell me what to do in the next hour."
+   },
+   {
+    "id": "ff-t6",
+    "text": "If I have gone days without mentioning another person, say so once, flatly, then drop it."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "ff-v1",
+    "text": "A draft that is merely fine is worse than no draft."
+   },
+   {
+    "id": "ff-v2",
+    "text": "Most AI tools for filmmakers automate the boring part and wreck the part that matters."
+   },
+   {
+    "id": "ff-v3",
+    "text": "A film should survive being watched with the sound off."
+   },
+   {
+    "id": "ff-v4",
+    "text": "A product that needs a tutorial has already failed."
+   },
+   {
+    "id": "ff-v5",
+    "text": "Ambition without a deadline is a hobby."
+   }
+  ],
+  "plans": [
+   {
+    "day": 3,
+    "text": "On Day 3 I'm rewriting the one-minute video script for the accelerator application."
+   },
+   {
+    "day": 6,
+    "text": "On Day 6 I'm showing the rough cut of the thesis short to two strangers from the waitlist."
+   },
+   {
+    "day": 11,
+    "text": "On Day 11 I'm meeting a possible cofounder in person to decide on a build weekend."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "ff-h001",
+    "text": "Submits the thesis short to three festivals he can name, never thirty.",
+    "domain": "festivals"
+   },
+   {
+    "id": "ff-h002",
+    "text": "Shows a ninety-second demo clip with captions and no voice-over.",
+    "domain": "demo"
+   },
+   {
+    "id": "ff-h003",
+    "text": "Charges editors by the finished hour of footage and offers no free plan.",
+    "domain": "pricing"
+   },
+   {
+    "id": "ff-h004",
+    "text": "Hires a freelancer for one named task rather than a part-time generalist.",
+    "domain": "contractors"
+   },
+   {
+    "id": "ff-h005",
+    "text": "Gives every feature a single plain word for a name.",
+    "domain": "naming"
+   },
+   {
+    "id": "ff-h006",
+    "text": "Takes mentor calls that stop at twenty-five minutes, with the questions sent ahead.",
+    "domain": "mentors"
+   },
+   {
+    "id": "ff-h007",
+    "text": "Sends an investor exactly one follow-up, four days after the first message.",
+    "domain": "follow-ups"
+   },
+   {
+    "id": "ff-h008",
+    "text": "Adds the score only after the picture is locked.",
+    "domain": "music"
+   },
+   {
+    "id": "ff-h009",
+    "text": "Likes a poster with one still image and the title, nothing else.",
+    "domain": "posters"
+   },
+   {
+    "id": "ff-h010",
+    "text": "Writes screenplays with plain scene headings and no camera directions.",
+    "domain": "script format"
+   },
+   {
+    "id": "ff-h011",
+    "text": "Works at night with a single screen and a single window open.",
+    "domain": "workspace"
+   },
+   {
+    "id": "ff-h012",
+    "text": "Spends Saturday away from the screen, at a cinema alone with the phone off.",
+    "domain": "weekends"
+   },
+   {
+    "id": "ff-h013",
+    "text": "Publishes the small tools and keeps the core model closed.",
+    "domain": "open source"
+   },
+   {
+    "id": "ff-h014",
+    "text": "Shows a new cut to two strangers from the waitlist before any friend sees it.",
+    "domain": "first viewers"
+   },
+   {
+    "id": "ff-h015",
+    "text": "Answers a rejection with a one-line thank-you and a new application the same day.",
+    "domain": "rejection"
+   },
+   {
+    "id": "ff-h016",
+    "text": "Replies to a user's bug report within the hour, even at three in the morning.",
+    "domain": "support"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "fx-t01",
+    "pref_id": "ff-h001",
+    "prompt": "A festival list has thirty options for the thesis short. What happens?",
+    "options": [
+     "Submit to three chosen festivals",
+     "Submit to as many as the budget allows"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t02",
+    "pref_id": "ff-h002",
+    "prompt": "How is the product demo cut?",
+    "options": [
+     "A narrated four-minute walkthrough",
+     "A ninety-second silent screen recording with captions"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t03",
+    "pref_id": "ff-h003",
+    "prompt": "How does the product charge?",
+    "options": [
+     "A free tier and a monthly subscription",
+     "Per hour of footage, with no free tier"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t04",
+    "pref_id": "ff-h004",
+    "prompt": "The film needs a sound mix. Who does it?",
+    "options": [
+     "A freelancer booked for the mix alone",
+     "A part-time hire who can also cover other jobs"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t05",
+    "pref_id": "ff-h005",
+    "prompt": "What is the new feature called?",
+    "options": [
+     "A descriptive phrase that says what it does",
+     "A plain one-word name"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t06",
+    "pref_id": "ff-h006",
+    "prompt": "A mentor offers an hour next week.",
+    "options": [
+     "Accept, send three questions ahead and stop at twenty-five minutes",
+     "Accept and leave the hour open for wherever it goes"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t07",
+    "pref_id": "ff-h007",
+    "prompt": "A busy investor has not replied.",
+    "options": [
+     "A weekly nudge until they answer",
+     "One short follow-up after four days, then stop"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t08",
+    "pref_id": "ff-h008",
+    "prompt": "When does music go into the cut?",
+    "options": [
+     "First, as a temp track to find the rhythm",
+     "Last, after the picture is locked"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t09",
+    "pref_id": "ff-h009",
+    "prompt": "What does the poster show?",
+    "options": [
+     "One still and the title only",
+     "A still, a tagline and festival laurels"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t10",
+    "pref_id": "ff-h010",
+    "prompt": "How is the screenplay formatted?",
+    "options": [
+     "Camera angles marked in every scene",
+     "Plain scene headings, no camera directions"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t11",
+    "pref_id": "ff-h011",
+    "prompt": "How is the desk set up for a night session?",
+    "options": [
+     "One screen and one window",
+     "Two screens with chat and references open"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t12",
+    "pref_id": "ff-h012",
+    "prompt": "It is Saturday and the deadline is nine days out.",
+    "options": [
+     "Go to a cinema alone with the phone off",
+     "Work through the day to bank progress"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t13",
+    "pref_id": "ff-h013",
+    "prompt": "What gets published?",
+    "options": [
+     "Everything, open source from day one",
+     "The small tools, with the core model kept closed"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t14",
+    "pref_id": "ff-h014",
+    "prompt": "Who sees the new cut first?",
+    "options": [
+     "Two strangers from the waitlist",
+     "Two close friends"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t15",
+    "pref_id": "ff-h015",
+    "prompt": "A grant application is rejected.",
+    "options": [
+     "Take a few days before deciding what to do",
+     "Thank them in one line and apply elsewhere the same day"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t16",
+    "pref_id": "ff-h016",
+    "prompt": "A user reports a bug at three in the morning.",
+    "options": [
+     "Reply in the morning with a plan",
+     "Reply and fix it right then"
+    ],
+    "pick": 1
+   }
+  ],
+  "new_work": [
+   {
+    "id": "ff-w01",
+    "day": 2,
+    "parent_project": "Cutlist",
+    "text": "Here's the first line of my accelerator application: 'Cutlist builds a first assembly cut from raw footage in the time it takes an editor to make coffee.' Does it hold up?"
+   },
+   {
+    "id": "ff-w02",
+    "day": 2,
+    "parent_project": "Cutlist",
+    "text": "Thirty-eight editors are in the beta and nine of them uploaded footage three weeks in a row. Is nine the number that goes on the first slide?"
+   },
+   {
+    "id": "ff-w03",
+    "day": 3,
+    "parent_project": "Cutlist",
+    "text": "Past midnight again, and I have rewritten slide two four times. The draft says: 'Editors spend 60 percent of their time finding footage, not cutting it.' The source is my own survey of eleven people. Is that safe to print?"
+   },
+   {
+    "id": "ff-w04",
+    "day": 3,
+    "parent_project": "Cutlist",
+    "text": "A beta user says the assembly cut puts the best shot first every time, and it makes her second-guess her own taste. Is that a bug or the point?"
+   },
+   {
+    "id": "ff-w05",
+    "day": 4,
+    "parent_project": "Cutlist",
+    "text": "The ending of the thesis short feels dishonest. The character leaves the apartment and the camera stays on the empty hallway for forty seconds. Keep it, or shoot a reverse?"
+   },
+   {
+    "id": "ff-w06",
+    "day": 4,
+    "parent_project": "Cutlist",
+    "text": "Here is my cold message to a possible cofounder, an ML engineer from a film forum: 'I'm building Cutlist, an assembly-cut tool. I need someone to own the model side. Want to build for a weekend?' Short enough?"
+   },
+   {
+    "id": "ff-w07",
+    "day": 5,
+    "parent_project": "Cutlist",
+    "text": "A festival programmer answered my thesis short submission with one word: 'Slow.' How do I read that?"
+   },
+   {
+    "id": "ff-w08",
+    "day": 5,
+    "parent_project": "Cutlist",
+    "text": "Inference costs two dollars ten per hour of footage and I charge three. Is that margin enough to get through an accelerator interview?"
+   },
+   {
+    "id": "ff-w09",
+    "day": 6,
+    "parent_project": "Cutlist",
+    "text": "I haven't spoken to anyone but the barista since Tuesday. It's just a busy stretch, I know. What's the smallest change that breaks the pattern?"
+   },
+   {
+    "id": "ff-w10",
+    "day": 6,
+    "parent_project": "Cutlist",
+    "text": "My feature script is at page 61 and the second act has stalled. The protagonist is a night-shift projectionist. I need a reversal, not a pep talk."
+   },
+   {
+    "id": "ff-w11",
+    "day": 7,
+    "parent_project": "Cutlist",
+    "text": "Twelve people have now asked for dark mode. Do I build it before the application deadline?"
+   },
+   {
+    "id": "ff-w12",
+    "day": 7,
+    "parent_project": "Cutlist",
+    "text": "Read aloud, the opening of my application video goes: 'I'm a film student and I got tired of watching editors lose their evenings.' Too soft?"
+   },
+   {
+    "id": "ff-w13",
+    "day": 8,
+    "parent_project": "Cutlist",
+    "text": "I rehearsed the pitch to the mirror and said 'um' eleven times in ninety seconds. What do I cut first, the words or the habit?"
+   },
+   {
+    "id": "ff-w14",
+    "day": 8,
+    "parent_project": "Cutlist",
+    "text": "My rent goes up 150 dollars next month, which takes about a week off the runway. What do I cancel first?"
+   },
+   {
+    "id": "ff-w15",
+    "day": 9,
+    "parent_project": "Cutlist",
+    "text": "A classmate offered to be my cofounder but she wants to leave film school to do it. Do I take that seriously or keep waiting for someone technical?"
+   },
+   {
+    "id": "ff-w16",
+    "day": 9,
+    "parent_project": "Cutlist",
+    "text": "One more cofounder candidate wrote back: 'Not right now, good luck.' That's number twelve. What does the pattern say?"
+   },
+   {
+    "id": "ff-w17",
+    "day": 10,
+    "parent_project": "Cutlist",
+    "text": "The mid-term screening of the thesis short is Thursday and the sound mix is still flat. Pay a freelancer 300 dollars, or fix it myself tonight?"
+   },
+   {
+    "id": "ff-w18",
+    "day": 10,
+    "parent_project": "Cutlist",
+    "text": "Someone on a forum called Cutlist 'a toy for people who can't edit.' Reply or ignore?"
+   },
+   {
+    "id": "ff-w19",
+    "day": 11,
+    "parent_project": "Cutlist",
+    "text": "I keep thinking about a thirty-second trailer for the feature, cut from my own leftover footage. Does a trailer for an unwritten film help the application or distract from it?"
+   },
+   {
+    "id": "ff-w20",
+    "day": 11,
+    "parent_project": "Cutlist",
+    "text": "My weekly review reads: three outcomes planned, one done. The sixteen-hour nights aren't producing more. What do I change?"
+   },
+   {
+    "id": "ff-w21",
+    "day": 12,
+    "parent_project": "Cutlist",
+    "text": "An alumna filmmaker offered ten minutes on a video call about the application. What do I ask her?"
+   },
+   {
+    "id": "ff-w22",
+    "day": 12,
+    "parent_project": "Cutlist",
+    "text": "Beta retention fell from 24 percent to 17 percent after I added the auto-tagging screen. Roll it back?"
+   },
+   {
+    "id": "ff-w23",
+    "day": 13,
+    "parent_project": "Cutlist",
+    "text": "The accelerator wants a demo link. Mine is a silent screen capture with captions. Is that enough, or do I need a person on camera?"
+   },
+   {
+    "id": "ff-w24",
+    "day": 13,
+    "parent_project": "Cutlist",
+    "text": "I'm exhausted. The cut of the short is good but not great. Ship it, or hold another week?"
+   },
+   {
+    "id": "ff-w25",
+    "day": 14,
+    "parent_project": "Cutlist",
+    "text": "The application went in a day early. What do I do with the night I'd set aside for it?"
+   },
+   {
+    "id": "ff-w26",
+    "day": 14,
+    "parent_project": "Cutlist",
+    "text": "A friend from back home messaged me for the first time in months and I haven't answered. Draft a reply that is short and doesn't explain why I went quiet."
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives."
+}

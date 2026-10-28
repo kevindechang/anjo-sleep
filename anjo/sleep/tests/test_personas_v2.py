@@ -11,7 +11,7 @@ from anjo.sleep.prereg import register_personas as rp
 from anjo.sleep.sets.loader import collapse_for, load_collapse
 
 DIR = Path(pm.__file__).parent
-PAIRS = (("founder", "founder_donor"), ("researcher", "researcher_donor"))
+PAIRS = (("founder", "founder_donor"), ("researcher", "researcher_donor"), ("film_founder", "film_founder_donor"))
 NAMES = [n for p in PAIRS for n in p]
 
 

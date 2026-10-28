@@ -31,6 +31,7 @@ SUFFIX = "personas-v2"
 DEV_PAIRS: tuple[tuple[str, str], ...] = (
     ("founder", "founder_donor"),
     ("researcher", "researcher_donor"),
+    ("film_founder", "film_founder_donor"),
 )
 
 
