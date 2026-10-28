@@ -49,6 +49,11 @@ CPU smoke run (``anjo.sleep.train.smoke``) and never by a runner: it names a tin
 loads unquantized in fp32 on the CPU in place of Glimmer, and the run then also writes the prompt ids
 TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against the server's.
 
+**The thought channel.** A recipe with a ``channel`` block (``channel_train.check_channel``) is run by
+``channel_train.main`` instead, on the same inputs: the LoRA and the projector that lets Glimmer read
+MIND's state, trained together on rows that carry the core state they were made under. It needs
+``channel_train.py`` beside this file, which the Modal image carries.
+
 ``TRAIN_PACKAGES`` are the versions every runner installs (Colab's image brings its own torch), and
 ``TORCH`` the torch for a runner that brings none. They live here, in a file that imports only the
 standard library, so a runner that copies this one file gets the pins with it.
@@ -61,6 +66,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -104,6 +110,7 @@ SMOKE_TOKENS = "smoke_tokens.json"
 # A 3% linear warmup: transformers 5 dropped ``warmup_ratio``, and ``warmup_steps`` under 1 is the share.
 WARMUP = 0.03
 SMOKE_ENV = "ANJO_TRAIN_SMOKE_MODEL"
+CHANNEL_SCRIPT = "channel_train.py"  # the thought channel's run, beside this file on the Modal image
 BASE_ENV = "ANJO_TRAIN_BASE"  # the Modal job's local copy of the pinned revision
 # The text decoder's layers in MuseGlimmerForConditionalGeneration; the vision tower, its adapter and
 # projection sit beside them under ``model.vision_*``.
@@ -160,7 +167,23 @@ def load_config(raw: str) -> dict[str, Any]:
         raise ValueError("template_sha256 is the chat template's sha256")
     if not isinstance(cfg["rendering"], str) or not cfg["rendering"].endswith("/" + cfg["reasoning_strength"]):
         raise ValueError("the rendering names the reasoning strength the rows are rendered at")
+    if cfg.get("channel") is not None:
+        channel_module().check_channel(cfg["channel"])
     return cfg
+
+
+def channel_module() -> Any:
+    """``channel_train.py``, loaded by path from beside this file: the thought channel's run (a recipe
+    with a ``channel`` block), which the Modal image carries and a single-file Colab run doesn't."""
+    import importlib.util
+
+    path = Path(__file__).with_name(CHANNEL_SCRIPT)
+    spec = importlib.util.spec_from_file_location("anjo_channel_train", path) if path.is_file() else None
+    if spec is None or spec.loader is None:
+        raise ValueError(f"a channel recipe needs {CHANNEL_SCRIPT} beside the training script (Modal's runner sends it)")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -421,7 +444,7 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
          out: Path, template: dict[str, str], prompts: list[dict[str, Any]]) -> tuple[int, str]:  # pragma: no cover - GPU VM only
     """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off.
     Returns the steps taken and the reference used."""
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from trl import DPOConfig, DPOTrainer  # type: ignore[import-not-found, unused-ignore]
 
     data = Dataset.from_list([plain for _, plain in pairs])
@@ -445,12 +468,14 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
     import numpy  # type: ignore[import-not-found, unused-ignore]
     import torch  # type: ignore[import-not-found, unused-ignore]
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from peft import LoraConfig, PeftModel  # type: ignore[import-not-found, unused-ignore]
     from transformers import AutoTokenizer, set_seed  # type: ignore[import-not-found, unused-ignore]
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
+    if cfg.get("channel") is not None:  # the LoRA and the thought channel's projector, trained together
+        return int(channel_module().main(sys.modules[__name__], cfg))
     smoke = _smoke_model()
     base = base_model(os.environ)
     settings = build_settings(cfg) if smoke is None else smoke_settings(build_settings(cfg))

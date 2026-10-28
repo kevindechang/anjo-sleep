@@ -201,6 +201,8 @@ def _lay_down(uid: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
         (training / part / "p-aaaaaaaaaaaa-n1").mkdir(parents=True)
         (training / part / "p-aaaaaaaaaaaa-n1" / "file").write_text("x")
         (training / part / "p-bbbbbbbbbbbb-n1").mkdir(parents=True)  # somebody else's
+    for name in ("p-aaaaaaaaaaaa-n1", "p-bbbbbbbbbbbb-n1"):  # the thought channel's projector, beside each adapter
+        (training / "adapters" / f"{name}.projector.npz").write_bytes(b"npz")
     (person_results(uid) / "scores").mkdir(parents=True)
     (person_results(uid) / "scores" / "night-01.json").write_text("{}")
     return {"sleep": sleep_dir(uid), "results": person_results(uid), "sealed": sealed / uid,
@@ -224,8 +226,16 @@ def test_delete_all_clears_the_mind_workspace_log(auth_client: Any, tmp_path: Pa
     assert workspace_log(uid).events() == () and not (where["sleep"] / WORKSPACE_FILE).exists()
     for name in ("sleep", "results", "sealed", "registry"):
         assert not where[name].exists(), name
-    assert sorted(p.name for p in where["training"].iterdir()) == ["p-bbbbbbbbbbbb-n1"]  # only hers went
+    assert sorted(p.name for p in where["training"].iterdir()) == [  # only hers went, her projector too
+        "p-bbbbbbbbbbbb-n1", "p-bbbbbbbbbbbb-n1.projector.npz"]
     assert os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE  # the forced-id entry too
+
+
+def test_the_projector_suffix_is_the_trainers() -> None:
+    from anjo.sleep.app import ownership
+    from anjo.sleep.train import lora
+
+    assert ownership.PROJECTOR_SUFFIX == lora.PROJECTOR_SUFFIX
 
 
 # ── Account erasure's hook ────────────────────────────────────────────────────

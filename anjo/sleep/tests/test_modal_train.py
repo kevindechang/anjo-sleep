@@ -88,6 +88,32 @@ def test_modal_train_image_pins_match_colab(monkeypatch: pytest.MonkeyPatch) -> 
     assert modal_job.REMOTE_SCRIPT == "/root/anjo/sleep/train/colab_train.py"
 
 
+def test_the_isolated_script_loads_the_channel_and_its_projector_math_from_the_image(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from anjo.sleep.serving import projector_math
+
+    # Arrange: the image's files laid out as the container has them, under a stand-in for /root
+    _, image, _ = _load_app(monkeypatch)
+    files = {args[1]: Path(args[0]) for name, args, _ in image.calls if name == "add_local_file"}
+    assert files["/root/anjo/sleep/serving/projector_math.py"] == Path(projector_math.__file__)
+    for remote, local in files.items():
+        (tmp_path / remote.removeprefix("/root/")).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / remote.removeprefix("/root/")).write_bytes(local.read_bytes())
+    script = tmp_path / "anjo" / "sleep" / "train" / "colab_train.py"
+    probe = ("import importlib.util, sys; sys.path.insert(0, sys.argv[1]); "
+             "spec = importlib.util.spec_from_file_location('ct', sys.argv[2]); ct = importlib.util.module_from_spec(spec); "
+             "spec.loader.exec_module(ct); m = ct.channel_module(); print(m.features(64), m.HIDDEN, m.forward.__module__)")
+
+    # Act: isolated, no site packages and no anjo on the path, as the job runs it (``python -I``)
+    done = subprocess.run([sys.executable, "-I", "-S", "-c", probe, str(tmp_path / "nothing"), str(script)],
+                          capture_output=True, text=True, timeout=60, check=False)
+
+    # Assert
+    assert done.returncode == 0, done.stderr[-400:]
+    assert done.stdout.split() == [str(3 * 64 + 7), str(projector_math.HIDDEN), "anjo_projector_math"]
+
+
 def test_the_app_trains_on_one_a100_with_weights_read_only_and_adapters_read_write(monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, declared = _load_app(monkeypatch)
     assert declared["gpu"] == modal_job.GPU == config.BF16_A100.gpu == "A100-80GB"

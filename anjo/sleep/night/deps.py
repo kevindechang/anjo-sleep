@@ -33,6 +33,7 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
 from anjo.sleep.note.hold import Fact, NoteWriter
@@ -343,6 +344,10 @@ class NightDeps:
     turns: Callable[[str, tuple[datetime, datetime]], int] | None = None
     # MIND's core's ``sleep_pressure(state)`` drops in here; the stand-in until it ships.
     sleep_pressure: Callable[[SleepState], float] = sleep_pressure
+    # The thought channel (``channel_night``): MIND's state of a person as of the night, and the channel's
+    # setup. Either None is today's night: no soft tokens, no ``core`` on any row.
+    mind_state: MindState | None = None
+    channel: ChannelSetup | None = None
 
 
 @dataclass(frozen=True)

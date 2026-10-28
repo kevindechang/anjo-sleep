@@ -49,6 +49,7 @@ TRAIN_APP: Final = "anjo-sleep-train"  # train.modal_job.APP_NAME (serving never
 EMBED_FUNCTION: Final = "embed_rows"  # train.latent_job.EMBED_FUNCTION
 EMBED_TIMEOUT_S: Final = 300.0  # train.latent_job.EMBED_TIMEOUT_S, the call's hard timeout
 EMBED_COLD_START_S: Final = 200.0  # Modal starting the CPU container before that timeout begins, about
+EMBED_USD_PER_HOUR: Final = 0.10  # the CPU container that sends the embedding rows
 
 
 class SoftTokenError(ValueError):
