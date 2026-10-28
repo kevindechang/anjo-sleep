@@ -5,6 +5,7 @@ tokens at fixed layers, cached by content hash, and computed on the Modal traini
 on its pool. ``modal`` and the container are fakes here; no GPU, no network."""
 from __future__ import annotations
 
+import fcntl
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -14,8 +15,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from anjo.sleep.budget import Ledger
+from anjo.sleep.budget import DATA_DIR_ENV, Ledger
 from anjo.sleep.mind.core import latents
+from anjo.sleep.mind.sweep import MIND_KINDS, MindBusy, lock_path
+from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
 from anjo.sleep.train import latent_job, latent_runner
 
@@ -49,15 +52,20 @@ def test_latent_index_header_declares_d_and_layers(tmp_path: Path) -> None:
     spec = latents.glimmer_spec(PIN, layers=(19, 35))
     events = _events(["the supplier cancelled", "camera confirmed", "rent is due"])
     matrix = np.random.default_rng(0).standard_normal((3, spec.d)).astype(np.float32)
-    latents.write_latents(tmp_path / "out", spec, events, matrix)
+    assert latents.write_latents(tmp_path / "out", spec, events, matrix, [False, True, False]) == [
+        tmp_path / "out" / "life-1"]  # one folder per life, so a delete finds it by its id
 
-    header = json.loads((tmp_path / "out" / latents.INDEX_FILE).read_text(encoding="utf-8").splitlines()[0])
+    lines = (tmp_path / "out" / "life-1" / latents.INDEX_FILE).read_text(encoding="utf-8").splitlines()
+    header = json.loads(lines[0])
+    assert [json.loads(line)["truncated"] for line in lines[1:]] == [False, True, False]  # cut to fit, per event
+    assert json.loads(lines[1])["role"] == "user" and header["truncated"] == 1
     assert header["format"] == latents.FORMAT
     assert header["d"] == spec.d == 2 * latents.HIDDEN == 13312
     assert header["layers"] == [19, 35]
     assert (header["model"], header["revision"], header["pooling"]) == (config.MODEL, PIN, "mean_event_tokens")
     assert header["count"] == 3 and header["dtype"] == "float32"
-    loaded_header, loaded = latents.load_latents(tmp_path / "out")
+    assert set(latents.load_run(tmp_path / "out")) == {"life-1"}
+    loaded_header, loaded = latents.load_latents(tmp_path / "out" / "life-1")
     assert loaded_header == header
     assert [item.event_id for item in loaded] == ["e0", "e1", "e2"]
     assert loaded[1].life_or_person == "life-1" and loaded[1].t == events[1].t and loaded[1].kind == "turn"
@@ -90,16 +98,18 @@ def test_encoder_cache_skips_seen_events(tmp_path: Path) -> None:
     np.testing.assert_array_equal(again.matrix[3], again.matrix[1])
     assert again.matrix.dtype == np.float32 and again.matrix.shape == (4, 16)
 
-    # The same text in another context, or read another way, is another latent.
-    context = latents.EventInput("e1", "life-1", T0, "turn", "camera confirmed", context="it was late")
-    latents.encode_events([context], encoder, latents.LatentCache(tmp_path / "cache"))
+    # The same text in another context, said by another speaker, or read another way, is another latent.
+    context = latents.EventInput("e1", "life-1", T0, "turn", "camera confirmed", context=(("user", "it was late"),))
+    said = latents.EventInput("e1", "life-1", T0, "turn", "camera confirmed", role="assistant")
+    latents.encode_events([context, said], encoder, latents.LatentCache(tmp_path / "cache"))
     other = Counting(latents.FakeEncoder(d=16, seed=1))
     latents.encode_events(events, other, latents.LatentCache(tmp_path / "cache"))
-    assert encoder.seen[3:] == ["camera confirmed"] and len(other.seen) == 3
+    assert encoder.seen[3:] == ["camera confirmed", "camera confirmed"] and len(other.seen) == 3
+    assert sorted(path.name for path in (tmp_path / "cache").iterdir()) == ["life-1", "life-2"]  # each life's own
 
 
 def test_fake_encoder_is_deterministic() -> None:
-    items = [latents.EncodeItem(f"k{i}", text, "") for i, text in enumerate(
+    items = [latents.EncodeItem(f"k{i}", "user", text) for i, text in enumerate(
         ["the supplier cancelled the camera", "the supplier delivered the camera", "rent is due friday", ""])]
     a, b = latents.FakeEncoder(d=32).encode(items), latents.FakeEncoder(d=32).encode(items)
     np.testing.assert_array_equal(a, b)
@@ -110,6 +120,8 @@ def test_fake_encoder_is_deterministic() -> None:
     np.testing.assert_allclose(np.linalg.norm(a, axis=1), 1.0, rtol=1e-5)
     # Shared words pull latents together, so the core can learn from fakes before the real encoder runs.
     assert float(a[0] @ a[1]) > float(a[0] @ a[2])
+    said = latents.FakeEncoder(d=32).encode([latents.EncodeItem("k", "assistant", items[0].text)])
+    assert not np.array_equal(said[0], a[0])  # the same words from another speaker
     spec = latents.FakeEncoder(d=32).spec
     assert (spec.encoder, spec.d) == ("fake", 32)
 
@@ -119,11 +131,13 @@ class FakeVolumeCalls:
     ``latent_job.write_outputs`` with deterministic rows), a fetch, a cancel and a remove. Each call
     records the holds open on the ledger at that moment."""
 
-    def __init__(self, ledger: Ledger, root: Path, *, wait_error: Exception | None = None) -> None:
-        self.ledger, self.root, self.wait_error = ledger, root, wait_error
+    def __init__(self, ledger: Ledger, root: Path, *, wait_error: Exception | None = None,
+                 remove_error: Exception | None = None) -> None:
+        self.ledger, self.root, self.wait_error, self.remove_error = ledger, root, wait_error, remove_error
         self.log: list[tuple[str, tuple[str, ...]]] = []
         self.uploaded: dict[str, bytes] = {}
         self.spawned: list[tuple[str, dict[str, Any], float]] = []
+        self.cancelled: list[str] = []
 
     def _record(self, name: str) -> None:
         self.log.append((name, tuple(hold.job for hold in self.ledger.open_holds())))
@@ -144,7 +158,8 @@ class FakeVolumeCalls:
         job, spec, _ = self.spawned[-1]
         rows = [json.loads(line) for line in self.uploaded[job].decode().splitlines()]
         matrix = np.stack([np.full(spec["d"], float(len(row["text"])), dtype=np.float32) for row in rows])
-        stats = [{"key": row["key"], "tokens": 5, "event_tokens": 3, "truncated": False} for row in rows]
+        stats = [{"key": row["key"], "tokens": 5, "event_tokens": 3, "truncated": "cancelled" in row["text"]}
+                 for row in rows]
         latent_job.write_outputs(self.root / job, spec, stats, matrix)
         return {"events": len(rows), "tokens": 5 * len(rows), "seconds": 12.0, "load_seconds": 40.0, "d": spec["d"]}
 
@@ -155,9 +170,13 @@ class FakeVolumeCalls:
 
     def cancel(self, call_id: str) -> None:
         self._record("cancel")
+        self.cancelled.append(call_id)
 
     def remove(self, job: str) -> None:
         self._record("remove")
+        if self.remove_error is not None:
+            raise self.remove_error
+        self.uploaded.pop(job, None)  # the events' text leaves the volume
 
 
 class Clock:
@@ -169,29 +188,40 @@ class Clock:
         return self.now
 
 
-def test_encode_plan_holds_before_any_call(tmp_path: Path) -> None:
-    events = _write_events(tmp_path / "events.jsonl", [
-        {"event_id": "e1", "life_or_person": "life-1", "t": "2026-10-01T09:00:00+00:00", "kind": "turn",
-         "text": "the supplier cancelled"},
-        {"id": "e2", "person_id": "life-1", "t": "2026-10-02", "kind": "fact", "text": "camera confirmed",
-         "context": "the shoot is on friday"},
-    ])
-    ledger = Ledger(tmp_path / "data" / "budget.jsonl")
-    calls = FakeVolumeCalls(ledger, tmp_path / "volume")
-    out, lines = tmp_path / "out", list[str]()
-    argv = ["encode", "--events", str(events), "--out", str(out), "--revision", PIN, "--cache", str(tmp_path / "cache")]
+EVENT_ROWS: list[dict[str, Any]] = [
+    {"event_id": "e1", "life_or_person": "life-1", "t": "2026-10-01T09:00:00+00:00", "kind": "turn",
+     "text": "the supplier cancelled"},
+    {"id": "e2", "person_id": "life-1", "t": "2026-10-02", "kind": "fact", "text": "camera confirmed",
+     "role": "assistant", "context": [{"role": "user", "content": "the shoot is on friday"}]},
+]
 
-    assert latents.main([*argv, "--plan"], out=lines.append, calls=calls, ledger=ledger, clock=Clock()) == 0
+
+def _data(tmp_path: Path) -> tuple[dict[str, str], Ledger, Path]:
+    """A sleep data folder: the environment naming it, its ledger, and a run's folder in it."""
+    return ({DATA_DIR_ENV: str(tmp_path / "data")}, Ledger(tmp_path / "data" / "sleep" / "budget.jsonl"),
+            tmp_path / "data" / "sleep" / latents.LATENTS_DIR / latents.RUNS_DIR / "run-1")
+
+
+def test_encode_plan_holds_before_any_call(tmp_path: Path) -> None:
+    events = _write_events(tmp_path / "events.jsonl", EVENT_ROWS)
+    env, ledger, out = _data(tmp_path)
+    calls = FakeVolumeCalls(ledger, tmp_path / "volume")
+    lines = list[str]()
+    argv = ["encode", "--events", str(events), "--out", str(out), "--revision", PIN]
+
+    assert latents.main([*argv, "--plan"], out=lines.append, calls=calls, ledger=ledger, clock=Clock(),
+                        environ=env) == 0
     text = "\n".join(lines)
     hold = latent_runner.hold_bound().amount
     assert hold == pytest.approx(latent_job.FUNCTION_TIMEOUT_S / 3600 * latent_runner.A100_USD_PER_HOUR)
     assert f"hold ${hold:.2f}" in text and "modal_usd" in text and "2 to encode" in text
     assert calls.log == [] and not ledger.path.exists() and not out.exists()  # touched nothing
 
-    assert latents.main(argv, out=lines.append, calls=calls, ledger=ledger, clock=Clock()) == 0
+    assert latents.main(argv, out=lines.append, calls=calls, ledger=ledger, clock=Clock(), environ=env) == 0
     names = [name for name, _ in calls.log]
     assert names == ["upload", "spawn", "wait", "fetch", "remove"]  # finished: nothing to cancel
-    job = next(iter(calls.uploaded))
+    assert calls.uploaded == {} and latent_runner.CallRecords(ledger.path.parent / latent_runner.CALLS_DIR).items() == []
+    job = calls.spawned[0][0]
     held = (f"{latent_runner.HOLD_KIND}:{job}:a1",)
     assert calls.log[0][1] == held  # the hold was open before the first call touched Modal
     assert ledger.open_holds() == ()
@@ -199,15 +229,75 @@ def test_encode_plan_holds_before_any_call(tmp_path: Path) -> None:
     assert 0 < spent <= hold
     _, spec, exec_s = calls.spawned[0]
     assert spec["layers"] == [35] and spec["revision"] == PIN and 0 < exec_s < latent_job.FUNCTION_TIMEOUT_S
-    header, loaded = latents.load_latents(out)
+    header, loaded = latents.load_latents(out / "life-1")
     assert header["d"] == latents.HIDDEN and [item.event_id for item in loaded] == ["e1", "e2"]
     assert loaded[1].t == datetime(2026, 10, 2, tzinfo=timezone.utc) and loaded[1].kind == "fact"
+    rows = [json.loads(line) for line in (out / "life-1" / latents.INDEX_FILE).read_text().splitlines()[1:]]
+    assert [(row["role"], row["truncated"]) for row in rows] == [("user", True), ("assistant", False)]
     assert any("tokens" in line and "seconds" in line for line in lines)  # the job's own count, printed
 
-    # A rerun pays nothing: every event is cached, so nothing is held and nothing is called.
+    # A rerun pays nothing: every event is cached (with its cut flag), so nothing is held and nothing is called.
     before = len(calls.log)
-    assert latents.main(argv, out=lines.append, calls=calls, ledger=ledger, clock=Clock()) == 0
+    assert latents.main(argv, out=lines.append, calls=calls, ledger=ledger, clock=Clock(), environ=env) == 0
     assert len(calls.log) == before and len(ledger.settlements()) == 1
+    assert (out / "life-1" / latents.INDEX_FILE).read_text().count('"truncated": true') == 1
+
+    # Latents stay in the sleep data folder, where a delete finds them.
+    with pytest.raises(latents.LatentError, match="sleep data folder"):
+        latents.main(["encode", "--events", str(events), "--out", str(tmp_path / "elsewhere"), "--revision", PIN,
+                      "--plan"], out=lines.append, calls=calls, ledger=ledger, environ=env)
+    with pytest.raises(latents.LatentError, match=DATA_DIR_ENV):
+        latents.main([*argv, "--plan"], out=lines.append, calls=calls, ledger=ledger, environ={})
+    root = out.parent.parent
+    assert latents.erase_paths(root, "life-1") == [root / latents.CACHE_DIR / "life-1", out / "life-1"]
+    assert all(path.exists() for path in latents.erase_paths(root, "life-1"))
+
+
+def test_killed_encode_rerun_settles_both_attempts(tmp_path: Path) -> None:
+    events = _write_events(tmp_path / "events.jsonl", EVENT_ROWS)
+    env, ledger, out = _data(tmp_path)
+    calls = FakeVolumeCalls(ledger, tmp_path / "volume")
+    argv = ["encode", "--events", str(events), "--out", str(out), "--revision", PIN]
+    spec = latents.glimmer_spec(PIN)
+    items = latents.items_for(latents.read_events(events), spec)
+    job = latent_runner.job_name(spec.as_json(), [item.key for item in items])
+    # What a run killed hard after its spawn leaves: its hold open, its record, its events on the volume.
+    killed = hold(ledger, f"{latent_runner.HOLD_KIND}:{job}", (latent_runner.POOL,), latent_runner.hold_bound())
+    records = latent_runner.CallRecords(ledger.path.parent / latent_runner.CALLS_DIR)
+    records.add(job, "fc-killed", ["life-1"])
+    calls.uploaded[job] = b"the dead run's events"
+
+    with open(lock_path(ledger, tmp_path), "a+b") as other:  # another MIND command is live on this host
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(MindBusy):
+            latents.main(argv, out=print, calls=calls, ledger=ledger, clock=Clock(), environ=env)
+        fcntl.flock(other, fcntl.LOCK_UN)
+    assert calls.log == [] and len(ledger.open_holds()) == 1  # nothing swept, nothing held
+
+    assert latents.main(argv, out=print, calls=calls, ledger=ledger, clock=Clock(), environ=env) == 0
+    assert calls.cancelled == ["fc-killed"] and calls.uploaded == {}  # the dead call stopped, its text gone
+    names = [name for name, _ in calls.log]
+    assert names == ["cancel", "remove", "upload", "spawn", "wait", "fetch", "remove"]
+    settled = ledger.settlements()
+    assert settled[killed.job] == pytest.approx(latent_runner.hold_bound().amount)  # the dead run's worst case
+    assert 0 < settled[f"{latent_runner.HOLD_KIND}:{job}:a2"] < settled[killed.job]  # the rerun's own attempt
+    assert ledger.open_holds() == () and records.items() == []
+    assert f"{latent_runner.HOLD_KIND}:" in MIND_KINDS  # MIND's own sweep settles them too
+
+
+def test_a_failed_remove_keeps_the_record_and_the_next_sweep_clears_it(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    calls = FakeVolumeCalls(ledger, tmp_path / "volume", remove_error=OSError("volume busy"))
+    records = latent_runner.CallRecords(tmp_path / latent_runner.CALLS_DIR)
+    encoder = latents.ModalEncoder(latents.glimmer_spec(PIN), calls=calls, ledger=ledger, clock=Clock(),
+                                   scratch=tmp_path / "scratch", log=lambda line: None, lives=["life-1"])
+    with pytest.raises(latent_runner.LatentJobError, match="volume"):
+        encoder.encode([latents.EncodeItem("k1", "user", "hello")])
+    assert ledger.open_holds() == () and [record.lives for record in records.items()] == [("life-1",)]
+    assert latent_runner.stop_person_jobs(records, "life-2", calls=calls) == 0  # nobody else's
+    calls.remove_error = None
+    assert latent_runner.stop_person_jobs(records, "life-1", calls=calls) == 1  # a delete clears it
+    assert records.items() == [] and calls.uploaded == {}
 
 
 def test_a_call_that_runs_out_its_time_is_cancelled_and_settled(tmp_path: Path) -> None:
@@ -216,8 +306,9 @@ def test_a_call_that_runs_out_its_time_is_cancelled_and_settled(tmp_path: Path) 
     encoder = latents.ModalEncoder(latents.glimmer_spec(PIN), calls=calls, ledger=ledger, clock=Clock(),
                                    scratch=tmp_path / "scratch", log=lambda line: None)
     with pytest.raises(latent_runner.LatentJobError):
-        encoder.encode([latents.EncodeItem("k1", "hello", "")])
-    assert [name for name, _ in calls.log] == ["upload", "spawn", "wait", "cancel"]  # its folder stays for a rerun
+        encoder.encode([latents.EncodeItem("k1", "user", "hello")])
+    assert [name for name, _ in calls.log] == ["upload", "spawn", "wait", "cancel", "remove"]  # its text never stays
+    assert calls.uploaded == {} and latent_runner.CallRecords(tmp_path / latent_runner.CALLS_DIR).items() == []
     assert ledger.open_holds() == ()
     assert 0 < sum(ledger.settlements().values()) <= latent_runner.hold_bound().amount
 
@@ -237,7 +328,7 @@ def test_fetched_latents_must_answer_the_keys_sent(tmp_path: Path) -> None:
     encoder = latents.ModalEncoder(latents.glimmer_spec(PIN), calls=calls, ledger=ledger, clock=Clock(),
                                    scratch=tmp_path / "scratch", log=lambda line: None)
     with pytest.raises(latent_runner.LatentJobError, match="keys"):
-        encoder.encode([latents.EncodeItem("k1", "hello", ""), latents.EncodeItem("k2", "there", "")])
+        encoder.encode([latents.EncodeItem("k1", "user", "hello"), latents.EncodeItem("k2", "user", "there")])
     assert ledger.open_holds() == ()
 
 
@@ -246,6 +337,9 @@ def test_events_file_is_checked_before_anything_is_planned(tmp_path: Path) -> No
         [{"event_id": "e1", "life_or_person": "l", "t": "2026-10-01", "kind": "turn"}],  # no text
         [{"event_id": "e1", "life_or_person": "l", "t": "not a time", "kind": "turn", "text": "x"}],
         [{"event_id": "e1", "life_or_person": "l", "t": "2026-10-01", "kind": "turn", "text": "x"}] * 2,
+        [{"event_id": "e1", "life_or_person": "../l", "t": "2026-10-01", "kind": "turn", "text": "x"}],  # a path
+        [{"event_id": "e1", "life_or_person": "l", "t": "2026-10-01", "kind": "turn", "text": "x", "role": "tool"}],
+        [{"event_id": "e1", "life_or_person": "l", "t": "2026-10-01", "kind": "turn", "text": "x", "context": "y"}],
     ]
     for number, rows in enumerate(bad):
         with pytest.raises(latents.LatentError):
@@ -265,19 +359,25 @@ def test_job_batches_pack_within_the_token_budget() -> None:
     assert [5] in batches  # a sequence longer than the budget goes alone
 
 
-def test_job_sequence_keeps_the_event_and_the_end_of_its_context() -> None:
-    ids, start, truncated = latent_job.sequence(
-        bos=1, context=list(range(10, 21)), event=list(range(30, 36)), max_context=4, max_event=3)
-    assert ids == [1, 17, 18, 19, 20, 30, 31, 32] and start == 5 and truncated
-    ids, start, truncated = latent_job.sequence(bos=1, context=[], event=[30, 31], max_context=4, max_event=3)
-    assert ids == [1, 30, 31] and start == 1 and not truncated
+def test_job_sequence_reads_the_event_as_its_speakers_turn_after_the_end_of_its_context() -> None:
+    ids, start, stop, truncated = latent_job.sequence(
+        bos=1, context=list(range(10, 21)), header=[7, 8], content=list(range(30, 36)), end=[9], max_context=4,
+        max_event=3)
+    assert ids == [1, 17, 18, 19, 20, 7, 8, 30, 31, 32, 9] and ids[start:stop] == [30, 31, 32] and truncated
+    ids, start, stop, truncated = latent_job.sequence(
+        bos=1, context=[], header=[7], content=[30, 31], end=[9], max_context=4, max_event=3)
+    assert ids == [1, 7, 30, 31, 9] and ids[start:stop] == [30, 31] and not truncated
+    assert set(latent_job.HEADERS) == set(latent_job.ROLES) == set(latents.ROLES)
+    assert latent_job.HEADERS["assistant"] == "<|start|>assistant to=user<|message|>"  # as her replies are written
 
 
-def test_job_pool_weights_cover_only_the_events_tokens() -> None:
-    weights = latent_job.pool_weights(lengths=[3, 5], starts=[1, 2], width=6)
+def test_job_pool_weights_cover_only_the_events_content_tokens() -> None:
+    weights = latent_job.pool_weights(starts=[1, 2], stops=[3, 5], width=6)
     np.testing.assert_allclose(weights.sum(axis=1), 1.0)
     np.testing.assert_allclose(weights[0], [0, 0.5, 0.5, 0, 0, 0])
     np.testing.assert_allclose(weights[1], [0, 0, 1 / 3, 1 / 3, 1 / 3, 0])
+    with pytest.raises(latent_job.LatentSpecError):
+        latent_job.pool_weights(starts=[0], stops=[2], width=6)  # never the BOS
 
 
 def test_job_refuses_a_spec_it_cant_read(tmp_path: Path) -> None:

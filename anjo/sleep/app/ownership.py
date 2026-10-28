@@ -190,6 +190,13 @@ def _registry(user_id: str, adapters: Names) -> list[Path]:
     return [checkpoint_registry().root / _plain(user_id)]
 
 
+def _latents(user_id: str, adapters: Names) -> list[Path]:
+    """MIND's event latents of the person: their cache and their folder in every run (loaded by name:
+    the module reaches the training code)."""
+    latents = importlib.import_module("anjo.sleep.mind.core.latents")
+    return list(latents.erase_paths(data_root() / SLEEP_DIR / latents.LATENTS_DIR, _plain(user_id)))
+
+
 class _PendingNote:
     """A held note still waiting for the person's next open: it was written from what is deleted."""
 
@@ -294,6 +301,10 @@ def _stoppers() -> tuple[_JobStopper, ...]:
     if records.used():  # with no call ever started here, nothing to cancel and no Modal client made
         stop = importlib.import_module("anjo.sleep.train.runners.modal").stop_person_calls
         found.append(_JobStopper("modal", lambda user_id, names: stop(records, user_id, names)))
+    latent = importlib.import_module("anjo.sleep.train.latent_runner")
+    encodes = latent.CallRecords(data_root() / SLEEP_DIR / latent.CALLS_DIR)
+    if encodes.used():  # an encode killed hard may have left the person's events on the latents volume
+        found.append(_JobStopper("modal latents", lambda user_id, names: latent.stop_person_jobs(encodes, user_id)))
     return tuple(found)
 
 
@@ -301,7 +312,7 @@ def local_erasers(*, under_erasure: bool = False) -> Sequence[Any]:
     """In order: the registry that names the adapters goes last of all."""
     files = [
         PathEraser("training copies", _training), PathEraser("night logs and scores", _results),
-        PathEraser("sealed probes", _sealed), _PendingNote(), _ForcedId(),
+        PathEraser("sealed probes", _sealed), PathEraser("mind latents", _latents), _PendingNote(), _ForcedId(),
     ]
     registry = PathEraser("checkpoint registry", _registry)
     return [*files, *([] if under_erasure else [_SleepFiles(), _MindWorkspace()]), registry]

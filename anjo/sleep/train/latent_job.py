@@ -2,20 +2,24 @@
 container (the encoder job of ``anjo.sleep.mind.core.latents``).
 
 One call reads a batch of events through Glimmer's own hidden states. The events (a content key,
-the text, and optionally the conversation before it) are uploaded to the latents volume as
+the speaker's role, the text, and optionally the turns before it) are uploaded to the latents volume as
 ``<job>/events.jsonl``; the call writes ``<job>/latents.npy`` (float32, one row per event) and
 ``<job>/index.jsonl`` (a header, then each row's key and token counts) beside them, and the host
 fetches both back.
 
-**The reading.** Each event is one sequence: ``<|begin_of_text|>``, then up to ``max_context_tokens``
-of its context (the end of it, followed by a blank line), then up to ``max_event_tokens`` of the
-event itself. Glimmer (HF transformers, bf16, from the weights volume at the pinned revision) runs
-over it with a forward hook on each named decoder layer, and the layer's output, the residual
-stream, is averaged over the event's own tokens only. Several layers are concatenated, so
+**The reading** is Glimmer's own chat format, so the model knows who said what. Each event is one
+sequence: ``<|begin_of_text|>``, then up to ``max_context_tokens`` of the turns before it (the end of
+them), each ``<|start|>{role}<|message|>{text}<|eot|>``, then the event's own turn in the same form,
+its text cut to ``max_event_tokens``. The role is ``user`` (the person), ``assistant`` (Anjo,
+written ``assistant to=user`` as her replies are) or ``system``. Glimmer (HF transformers, bf16,
+from the weights volume at the pinned revision) runs over it with a forward hook on each named
+decoder layer, and the layer's output, the residual stream, is averaged over the event's content
+tokens only: not its turn's header, not its ``<|eot|>``. Several layers are concatenated, so
 ``D = 6656 * len(layers)``. A layer is numbered 0 to 51 by the decoder layer whose output is read;
 vLLM's auxiliary hidden-state ids count one higher (``muse_glimmer.py`` adds the state after layer
 ``i`` as ``i + 1``). The forward stops after the deepest named layer, so a middle layer costs a
-fraction of the model. The texts arrive cleaned of special tokens' text (``serving.framing``).
+fraction of the model. The texts arrive cleaned of special tokens' text (``serving.framing``), so
+only the headers written here are special tokens.
 
 **Batches** pack sequences sorted by length so that no batch passes ``batch_tokens`` padded tokens
 (``batches``); a sequence longer than that goes alone. Padding is on the right, under the attention
@@ -23,7 +27,9 @@ mask, so the causal model's real tokens never see it.
 
 **Embedding rows** (``embedding_rows``, the ``embed_rows`` CPU function): the raw bf16 rows of
 Glimmer's input embedding table for some token ids, read by offset straight out of the safetensors
-file that holds the table, for ``serving.soft_tokens`` (which normalizes them as vLLM does).
+file that holds the table, for ``serving.soft_tokens`` (which normalizes them as vLLM does). The
+function takes no hold of its own: only a caller holding one that covers it calls it (the live
+soft-token test's hold includes it, ``tools.soft_tokens_live``).
 
 It imports the standard library, numpy, ``serving/config.py`` and ``modal_job.py`` only, and loads
 torch and transformers inside ``encode_on_volume``: the training image carries these files and
@@ -59,8 +65,11 @@ ENCODER: Final = "glimmer-hf"
 POOLING: Final = "mean_event_tokens"
 HIDDEN: Final = 6656  # Glimmer's text hidden size
 NUM_LAYERS: Final = 52
-SEPARATOR: Final = "\n\n"  # between the context and the event
-RENDERING: Final = "bos+context+blank-line+event/v1"
+RENDERING: Final = "glimmer-chat/v1"  # BOS, the turns before, the event's turn; pooled over its content
+ROLES: Final = ("user", "assistant", "system")
+HEADERS: Final = {"user": "<|start|>user<|message|>", "assistant": "<|start|>assistant to=user<|message|>",
+                  "system": "<|start|>system<|message|>"}
+TURN_END: Final = "<|eot|>"
 BOS_ID: Final = config.FIRST_SPECIAL_ID  # <|begin_of_text|>
 DEFAULT_BATCH_TOKENS: Final = 16_384
 EMBED_FUNCTION: Final = "embed_rows"
@@ -118,14 +127,17 @@ def check_spec(spec_json: str, pinned: str) -> dict[str, Any]:
 
 
 def sequence(
-    *, bos: int, context: Sequence[int], event: Sequence[int], max_context: int, max_event: int,
-) -> tuple[list[int], int, bool]:
-    """One event's token ids: the BOS, the end of its context, then the start of the event. Returns
-    the ids, where the event's tokens start, and whether either part was cut."""
+    *, bos: int, context: Sequence[int], header: Sequence[int], content: Sequence[int], end: Sequence[int],
+    max_context: int, max_event: int,
+) -> tuple[list[int], int, int, bool]:
+    """One event's token ids: the BOS, the end of the turns before it, then its own turn (its header,
+    the start of its content, its end). Returns the ids, where its content starts and stops, and
+    whether the context or the content was cut."""
     kept_context = list(context[len(context) - max_context:]) if max_context and context else []
-    kept_event = list(event[:max_event])
-    truncated = len(kept_context) < len(context) or len(kept_event) < len(event)
-    return [bos, *kept_context, *kept_event], 1 + len(kept_context), truncated
+    kept = list(content[:max_event])
+    truncated = len(kept_context) < len(context) or len(kept) < len(content)
+    start = 1 + len(kept_context) + len(header)
+    return [bos, *kept_context, *header, *kept, *end], start, start + len(kept), truncated
 
 
 def batches(lengths: Sequence[int], batch_tokens: int) -> list[list[int]]:
@@ -141,13 +153,13 @@ def batches(lengths: Sequence[int], batch_tokens: int) -> list[list[int]]:
     return packed
 
 
-def pool_weights(*, lengths: Sequence[int], starts: Sequence[int], width: int) -> np.ndarray:
-    """Each row's averaging weights over a padded batch: 1/n on the event's own n tokens, 0 elsewhere."""
-    weights: np.ndarray = np.zeros((len(lengths), width), dtype=np.float32)
-    for row, (length, start) in enumerate(zip(lengths, starts, strict=True)):
-        if not 0 < start < length <= width:
-            raise LatentSpecError("an event has at least one token, after the BOS and inside the batch")
-        weights[row, start:length] = 1.0 / (length - start)
+def pool_weights(*, starts: Sequence[int], stops: Sequence[int], width: int) -> np.ndarray:
+    """Each row's averaging weights over a padded batch: 1/n on the event's n content tokens, 0 elsewhere."""
+    weights: np.ndarray = np.zeros((len(starts), width), dtype=np.float32)
+    for row, (start, stop) in enumerate(zip(starts, stops, strict=True)):
+        if not 0 < start < stop <= width:
+            raise LatentSpecError("an event has at least one content token, after the BOS and inside the batch")
+        weights[row, start:stop] = 1.0 / (stop - start)
     return weights
 
 
@@ -181,13 +193,19 @@ def read_outputs(job_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]], n
     return header, rows, matrix
 
 
-def read_events(path: Path) -> list[dict[str, str]]:
-    """The uploaded events: each a key, a text and a context."""
+def _turn(turn: object) -> bool:
+    return (isinstance(turn, list) and len(turn) == 2 and turn[0] in ROLES and isinstance(turn[1], str)
+            and bool(turn[1]))
+
+
+def read_events(path: Path) -> list[dict[str, Any]]:
+    """The uploaded events: each a key, a role, a non-empty text and its context ([role, text] turns)."""
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {"key", "text", "context"} or not all(
-                isinstance(value, str) for value in row.values()) or not row["text"]:
-            raise LatentSpecError("an uploaded event is a key, a non-empty text and a context")
+        if (not isinstance(row, dict) or set(row) != {"key", "role", "text", "context"}
+                or not isinstance(row["key"], str) or row["role"] not in ROLES or not isinstance(row["text"], str)
+                or not row["text"] or not isinstance(row["context"], list) or not all(map(_turn, row["context"]))):
+            raise LatentSpecError("an uploaded event is a key, a role, a non-empty text and its turns before")
     return rows
 
 
@@ -243,16 +261,16 @@ def encode_on_volume(
     sequences = [_sequence(tokenizer, row, spec) for row in events]
     matrix = np.zeros((len(events), spec["d"]), dtype=np.float32)
     deadline = started + exec_s
-    for batch in batches([len(ids) for ids, _, _ in sequences], spec["batch_tokens"]):
+    for batch in batches([len(ids) for ids, _, _, _ in sequences], spec["batch_tokens"]):
         if clock() > deadline:
             raise TimeoutError("the encoder job ran out of its time")
         matrix[batch] = _encode_batch(text_model, device, [sequences[i] for i in batch], spec["layers"])
-    stats = [{"key": row["key"], "tokens": len(ids), "event_tokens": len(ids) - start, "truncated": cut}
-             for row, (ids, start, cut) in zip(events, sequences, strict=True)]
+    stats = [{"key": row["key"], "tokens": len(ids), "event_tokens": stop - start, "truncated": cut}
+             for row, (ids, start, stop, cut) in zip(events, sequences, strict=True)]
     write_outputs(job_dir, spec, stats, matrix)
-    tokens = sum(len(ids) for ids, _, _ in sequences)
-    done = {"events": len(events), "tokens": tokens, "event_tokens": sum(len(ids) - start for ids, start, _ in sequences),
-            "truncated": sum(cut for _, _, cut in sequences), "load_seconds": loaded - started,
+    tokens = sum(len(ids) for ids, _, _, _ in sequences)
+    done = {"events": len(events), "tokens": tokens, "event_tokens": sum(row["event_tokens"] for row in stats),
+            "truncated": sum(cut for _, _, _, cut in sequences), "load_seconds": loaded - started,
             "seconds": clock() - loaded, "d": spec["d"], "layers": spec["layers"]}
     log(f"latents: {done['events']} events, {tokens} tokens, load {done['load_seconds']:.0f} s, "
         f"encode {done['seconds']:.0f} s ({tokens / max(done['seconds'], 1e-9):.0f} tokens/s)")
@@ -272,13 +290,18 @@ def _load(base: Path) -> tuple[Any, Any, Any]:  # pragma: no cover - needs the G
     return tokenizer, text_model, torch.device("cuda:0")
 
 
-def _sequence(tokenizer: Any, row: Mapping[str, str], spec: Mapping[str, Any]) -> tuple[list[int], int, bool]:  # pragma: no cover
-    context = tokenizer(row["context"] + SEPARATOR, add_special_tokens=False)["input_ids"] if row["context"] else []
-    event = tokenizer(row["text"], add_special_tokens=False)["input_ids"]
-    if not event:
+def _sequence(
+    tokenizer: Any, row: Mapping[str, Any], spec: Mapping[str, Any],
+) -> tuple[list[int], int, int, bool]:  # pragma: no cover - needs the tokenizer
+    def ids(text: str) -> list[int]:
+        return list(tokenizer(text, add_special_tokens=False)["input_ids"])  # the headers' special tokens parse
+
+    context = [token for role, text in row["context"] for token in ids(HEADERS[role]) + ids(text) + ids(TURN_END)]
+    content = ids(row["text"])
+    if not content:
         raise LatentSpecError("an event's text has no tokens")
-    return sequence(bos=BOS_ID, context=context, event=event, max_context=spec["max_context_tokens"],
-                    max_event=spec["max_event_tokens"])
+    return sequence(bos=BOS_ID, context=context, header=ids(HEADERS[row["role"]]), content=content,
+                    end=ids(TURN_END), max_context=spec["max_context_tokens"], max_event=spec["max_event_tokens"])
 
 
 class _Deep(Exception):
@@ -286,18 +309,18 @@ class _Deep(Exception):
 
 
 def _encode_batch(
-    text_model: Any, device: Any, rows: Sequence[tuple[list[int], int, bool]], layers: Sequence[int],
+    text_model: Any, device: Any, rows: Sequence[tuple[list[int], int, int, bool]], layers: Sequence[int],
 ) -> np.ndarray:  # pragma: no cover - needs the GPU stack
     import torch  # type: ignore[import-not-found, unused-ignore]
 
-    width = max(len(ids) for ids, _, _ in rows)
+    width = max(len(ids) for ids, _, _, _ in rows)
     ids = torch.zeros((len(rows), width), dtype=torch.long)
     mask = torch.zeros((len(rows), width), dtype=torch.long)
-    for row, (tokens, _, _) in enumerate(rows):
+    for row, (tokens, _, _, _) in enumerate(rows):
         ids[row, : len(tokens)] = torch.tensor(tokens)
         mask[row, : len(tokens)] = 1
-    weights = torch.from_numpy(pool_weights(lengths=[len(t) for t, _, _ in rows], starts=[s for _, s, _ in rows],
-                                            width=width)).to(device)
+    weights = torch.from_numpy(pool_weights(starts=[start for _, start, _, _ in rows],
+                                            stops=[stop for _, _, stop, _ in rows], width=width)).to(device)
     pooled: dict[int, Any] = {}
 
     def hook(layer: int) -> Callable[..., None]:
