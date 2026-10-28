@@ -122,7 +122,7 @@ class SeedRow:
 @dataclass(frozen=True)
 class DreamRow:
     """One dream candidate: ``thread`` (MIND's state as text) is her system turn, the loss is on ``reply``.
-    ``kind`` is its seed's (``boundary`` or ``random``), for the job's keep rate by kind."""
+    ``kind`` is its seed's (``boundary``, ``picked`` or ``random``), for the job's keep rate by kind."""
 
     id: str
     thread: str

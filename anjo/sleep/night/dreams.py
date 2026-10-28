@@ -16,6 +16,14 @@ random threads (``kind="random"``) ride along as the control, so the training jo
 show whether targeting the boundary matters (its keep rate by seed kind). A seed with no event under
 it is never dreamed: an unanchored dream would teach what never happened.
 
+**From MIND's night receipt** (``seeds_from_dream``). The core's night keeps each imagined state by
+id: ``dreams`` (the states about the curriculum's picked threads) and ``boundaries`` (where a
+rollout first flips her decision: ``speak`` and the thread ``slot``). A boundary becomes a
+``boundary`` seed whose branch is the flipped decision, always imagined; a picked state a ``picked``
+seed with no branch, labelled imagined too, since every dream state is a continuation, not the day.
+The threads are slots, so their text and ancestry come from the real events the state rests on
+(``describe``); a state resting on none is dropped.
+
 **Glimmer speaks from them.** ``GlimmerDreams`` asks her own Glimmer (the adapter that serves her)
 for ``per_state`` candidates per seed: one message the person might send about the thread, then her
 reply with the seed in her system turn (``state_text``), as the channel will carry it. The text says
@@ -30,10 +38,10 @@ plus a few at random, kept only if the anchor check holds (``train/sleep_loss.py
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, TypedDict, cast
 
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.provenance import GLIMMER
@@ -45,7 +53,7 @@ DREAM_TEMPERATURE: Final = 1.0  # the paper's randomness comes from routing; our
 MESSAGE_TOKENS: Final = 160
 REPLY_TOKENS: Final = 400
 NORMAL_STOP: Final = "stop"
-SEED_KINDS: Final = ("boundary", "random")
+SEED_KINDS: Final = ("boundary", "picked", "random")
 HYPOTHETICAL: Final = "Imagined, not something that happened"
 TAKEN: Final = "What happened"
 MESSAGE_PROMPT: Final = (
@@ -63,7 +71,7 @@ class Terms:
     dreams: bool = False
 
 
-SeedKind = Literal["boundary", "random"]
+SeedKind = Literal["boundary", "picked", "random"]
 
 
 @dataclass(frozen=True)
@@ -71,7 +79,8 @@ class DreamSeed:
     """One seed from the core's ``dream_states``: the state it comes from (``state_ref``), its thread
     or slot as text (its targets' labels), the real events it rests on, the branch it rehearses
     (``speak``, ``wait``, or the thread she turns to), whether that branch is the imagined one, and
-    whether it sits at a decision boundary or on a random thread (the control)."""
+    whether it sits at a decision boundary, on a thread the curriculum picked, or on a random thread
+    (the control)."""
 
     state_ref: str
     thread: str
@@ -80,6 +89,7 @@ class DreamSeed:
     hypothetical: bool
     kind: SeedKind
     ancestry: frozenset[str] | None
+    slots: tuple[int, ...] = ()  # the core's thread slots, the one a boundary turns to first; never in her text
 
     def __post_init__(self) -> None:
         if self.kind not in SEED_KINDS:
@@ -124,10 +134,56 @@ class DreamClient(Protocol):
 
 def state_text(seed: DreamSeed) -> str:
     """The seed as the channel's text stand-in: the thread, then the branch, marked as imagined when
-    it is the one she didn't take."""
+    it is the one she didn't take (an imagined state with no branch is marked as imagined too)."""
     if not seed.branch:
-        return seed.thread
+        return f"{seed.thread}\n{HYPOTHETICAL}" if seed.hypothetical else seed.thread
     return f"{seed.thread}\n{HYPOTHETICAL if seed.hypothetical else TAKEN}: {seed.branch}"
+
+
+class KeptState(TypedDict):
+    """One imagined state as MIND's night receipt keeps it (``dreams``)."""
+
+    state: str
+    threads: list[int]
+    rests_on: list[str]
+
+
+class KeptBoundary(KeptState):
+    """A decision boundary as the receipt keeps it (``boundaries``): the state there, and the decision it flips to."""
+
+    steps: int
+    speak: bool
+    slot: int | None
+
+
+class Describe(Protocol):
+    def __call__(self, event_ids: Sequence[str]) -> tuple[str, frozenset[str] | None]:
+        """The thread as text from the real events ``event_ids`` (what they say she holds), and their ancestry."""
+        ...
+
+
+SPEAK: Final = "you bring it up now"
+WAIT: Final = "you wait, and don't bring it up yet"
+
+
+def seeds_from_dream(receipt: Mapping[str, object], describe: Describe) -> tuple[DreamSeed, ...]:
+    """The night's dream seeds from MIND's night receipt: its boundaries first, then its picked
+    states; a state resting on no real event is dropped before ``describe`` reads anything."""
+    boundaries = cast("Sequence[KeptBoundary]", receipt.get("boundaries") or ())
+    picked = cast("Sequence[KeptState]", receipt.get("dreams") or ())
+    made = [_from_state(b, "boundary", SPEAK if b["speak"] else WAIT, (b["slot"],) if b["slot"] is not None else (), describe)
+            for b in boundaries]
+    made += [_from_state(d, "picked", "", (), describe) for d in picked]
+    return tuple(seed for seed in made if seed is not None)
+
+
+def _from_state(kept: KeptState, kind: SeedKind, branch: str, slot: tuple[int, ...], describe: Describe) -> DreamSeed | None:
+    if not kept["rests_on"]:
+        return None
+    events = tuple(kept["rests_on"])
+    thread, ancestry = describe(events)
+    return DreamSeed(state_ref=kept["state"], thread=thread, event_ids=events, branch=branch, hypothetical=True,
+                     kind=kind, ancestry=ancestry, slots=tuple(dict.fromkeys((*slot, *kept["threads"]))))
 
 
 def _seed(seed: int, user_id: str, night: date, state_ref: str, i: str, part: str) -> int:

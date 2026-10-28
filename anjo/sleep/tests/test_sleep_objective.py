@@ -20,7 +20,19 @@ from typing import Any
 import pytest
 
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.night.dreams import HYPOTHETICAL, TAKEN, Dream, DreamSeed, GlimmerDreams, NoDreams, Terms
+from anjo.sleep.night.dreams import (
+    HYPOTHETICAL,
+    SPEAK,
+    TAKEN,
+    WAIT,
+    Dream,
+    DreamSeed,
+    GlimmerDreams,
+    NoDreams,
+    Terms,
+    seeds_from_dream,
+    state_text,
+)
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.practice.transcripts import PracticeTranscript
 from anjo.sleep.provenance import GLIMMER
@@ -624,3 +636,31 @@ def test_glimmer_dreams_speak_from_minds_states() -> None:
     assert NoDreams().dream("p1", NIGHT, None) == () and not NoDreams().available
     with pytest.raises(ValueError, match="kind"):
         _seed("speak", False, kind="nightmare")
+
+
+def test_minds_night_receipt_maps_to_dream_seeds() -> None:
+    """MIND's kept states (slot4's night receipt shape, faked here): a boundary is an imagined branch
+    of her decision, a picked state an imagined continuation; the text comes from the real events."""
+    receipt = {
+        "state": "slept", "decision": {"speak": False},
+        "boundaries": [{"state": "b1", "threads": [2, 4], "rests_on": ["e1", "e2"], "steps": 3, "speak": True, "slot": 4},
+                       {"state": "b2", "threads": [1], "rests_on": ["e3"], "steps": 1, "speak": False, "slot": None},
+                       {"state": "b3", "threads": [5], "rests_on": [], "steps": 2, "speak": True, "slot": 5}],
+        "dreams": [{"state": "d1", "threads": [2], "rests_on": ["e1"]}, {"state": "d2", "threads": [3], "rests_on": []}],
+    }
+    read: list[tuple[str, ...]] = []
+
+    def describe(event_ids: Sequence[str]) -> tuple[str, frozenset[str] | None]:
+        read.append(tuple(event_ids))
+        return f"Open: {' and '.join(event_ids)}", frozenset({"person"})
+
+    seeds = seeds_from_dream(receipt, describe)
+    assert [(s.state_ref, s.kind) for s in seeds] == [("b1", "boundary"), ("b2", "boundary"), ("d1", "picked")]
+    assert read == [("e1", "e2"), ("e3",), ("e1",)]  # a state resting on no real event is dropped unread
+    speak, wait, picked = seeds
+    assert all(s.hypothetical for s in seeds) and speak.event_ids == ("e1", "e2") and speak.ancestry == frozenset({"person"})
+    assert (speak.branch, wait.branch, picked.branch) == (SPEAK, WAIT, "")
+    assert speak.slots == (4, 2) and wait.slots == (1,) and picked.slots == (2,)  # the turned-to thread first
+    assert state_text(speak) == f"Open: e1 and e2\n{HYPOTHETICAL}: {SPEAK}" and "4" not in state_text(speak)
+    assert state_text(picked) == f"Open: e1\n{HYPOTHETICAL}"  # a dream is never told as the day
+    assert seeds_from_dream({"state": "slept"}, describe) == ()  # a night that kept no dream
