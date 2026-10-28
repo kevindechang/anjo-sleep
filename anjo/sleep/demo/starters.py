@@ -86,7 +86,7 @@ def generate(
     )
 
 
-def _side_out(side: Side) -> dict[str, Any]:
+def side_record(side: Side) -> dict[str, Any]:
     return {"text": side.text, "prompt_tokens": side.prompt_tokens, "cost_usd": side.cost_usd}
 
 
@@ -94,32 +94,32 @@ def to_json(starters: StarterSet) -> str:
     return json.dumps({
         "label": starters.label, "person": starters.person, "checkpoint": starters.checkpoint,
         "night": starters.night, "baseline": starters.baseline, "generated_at": starters.generated_at,
-        "pairs": [{"scene": p.scene, "prompt_sha256": p.prompt_sha256, "product": _side_out(p.product),
-                   "baseline": _side_out(p.baseline)} for p in starters.pairs],
+        "pairs": [{"scene": p.scene, "prompt_sha256": p.prompt_sha256, "product": side_record(p.product),
+                   "baseline": side_record(p.baseline)} for p in starters.pairs],
     }, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 
 
-def _get(data: Mapping[str, Any], key: str, kind: type | tuple[type, ...]) -> Any:
+def required(data: Mapping[str, Any], key: str, kind: type | tuple[type, ...]) -> Any:
     value = data.get(key)
     if not isinstance(value, kind) or isinstance(value, bool):
         raise StarterError(f"the starter pairs' {key} is missing or of the wrong type")
     return value
 
 
-def _side(data: Any) -> Side:
+def side_from_record(data: Any) -> Side:
     if not isinstance(data, dict):
         raise StarterError("a starter side is not an object")
     cost = data.get("cost_usd")
     if cost is not None and (not isinstance(cost, (int, float)) or isinstance(cost, bool)):
         raise StarterError("a starter side's cost is not a number")
-    return Side(_get(data, "text", str), _get(data, "prompt_tokens", int), None if cost is None else float(cost))
+    return Side(required(data, "text", str), required(data, "prompt_tokens", int), None if cost is None else float(cost))
 
 
 def _pair(data: Any) -> StarterPair:
     if not isinstance(data, dict):
         raise StarterError("a starter pair is not an object")
-    return StarterPair(_get(data, "scene", str), _get(data, "prompt_sha256", str),
-                       _side(data.get("product")), _side(data.get("baseline")))
+    return StarterPair(required(data, "scene", str), required(data, "prompt_sha256", str),
+                       side_from_record(data.get("product")), side_from_record(data.get("baseline")))
 
 
 def from_json(raw: str) -> StarterSet:
@@ -129,16 +129,16 @@ def from_json(raw: str) -> StarterSet:
         raise StarterError("the starter pairs are not JSON") from None
     if not isinstance(data, dict) or data.get("label") != LABEL:
         raise StarterError(f"the starter pairs are not labeled {LABEL}")
-    baseline = _get(data, "baseline", str)
+    baseline = required(data, "baseline", str)
     if baseline not in BASELINES:
         raise StarterError("the starter pairs' baseline is not 2C or 2F")
     checkpoint, night = data.get("checkpoint"), data.get("night")
     if not all(value is None or isinstance(value, str) for value in (checkpoint, night)):
         raise StarterError("the starter pairs' checkpoint or night is not text")
     return StarterSet(
-        person=_get(data, "person", str), checkpoint=checkpoint, night=night, baseline=baseline,
-        generated_at=_get(data, "generated_at", str),
-        pairs=tuple(_pair(item) for item in _get(data, "pairs", list)),
+        person=required(data, "person", str), checkpoint=checkpoint, night=night, baseline=baseline,
+        generated_at=required(data, "generated_at", str),
+        pairs=tuple(_pair(item) for item in required(data, "pairs", list)),
     )
 
 

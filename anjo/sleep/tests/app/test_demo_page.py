@@ -193,16 +193,19 @@ def test_page_served_only_with_sleep_host(unmounted_app: Any, auth_client: Any, 
 
 
 def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> None:
-    from anjo.sleep.demo.page import WEB_DIR, page_html
+    from anjo.sleep.demo.page import ASSETS, WEB_DIR, page_html
 
-    page, script = page_html(), (WEB_DIR / "app.js").read_text()
-    style = (WEB_DIR / "demo.css").read_text()
-    for text in (page, script, style):
+    page = page_html()
+    scripts = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")]
+    styles = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".css")]
+    assert len(scripts) == 3 and len(styles) == 2  # app.js, nights.js and mind.js; demo.css and mind.css
+    for text in (page, *scripts, *styles):
         assert "http://" not in text and "https://" not in text and "//cdn" not in text
         assert "@import" not in text and "url(" not in text
-    assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "outerHTML" not in script
-    assert "eval(" not in script and "localStorage" not in script
-    assert "prefers-reduced-motion" in style and "prefers-color-scheme: dark" in style
+    for script in scripts:
+        assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "outerHTML" not in script
+        assert "eval(" not in script and "localStorage" not in script and "document.write" not in script
+    assert "prefers-reduced-motion" in styles[0] and all("prefers-color-scheme: dark" in style for style in styles)
 
 
 def test_brief_served_with_chat(account: str) -> None:

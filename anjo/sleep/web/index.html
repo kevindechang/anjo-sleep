@@ -8,8 +8,11 @@
 <meta name="referrer" content="no-referrer">
 <title>{{page_title}}</title>
 <link rel="stylesheet" href="/sleep/demo/demo.css">
+<link rel="stylesheet" href="/sleep/demo/mind.css">
 <script type="application/json" id="demo-copy">{{@copy}}</script>
 <script src="/sleep/demo/app.js" defer></script>
+<script src="/sleep/demo/nights.js" defer></script>
+<script src="/sleep/demo/mind.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#chat">{{skip}}</a>
@@ -59,10 +62,51 @@
       </form>
     </section>
 
+    <section id="nights" class="block nights" aria-labelledby="nights-heading" hidden>
+      <h2 id="nights-heading">{{slider_heading}}</h2>
+      <p class="note">{{slider_note}}</p>
+      <p id="slider-state" class="note slider-state"></p>
+      <div id="slider-body" hidden>
+        <div class="slider-controls">
+          <label class="field" for="slider-scene"><span>{{slider_scene_label}}</span><select id="slider-scene"></select></label>
+          <div class="field range-field">
+            <label for="night-range">{{slider_label}}</label>
+            <input type="range" id="night-range" min="0" max="0" step="1" value="0">
+            <ol id="night-ticks" class="ticks" aria-hidden="true"></ol>
+          </div>
+        </div>
+        <article id="stop-card" class="stop-card" aria-live="polite">
+          <p class="stop-meta"></p>
+          <p class="stop-line"></p>
+          <blockquote class="question"></blockquote>
+          <div class="side-text"></div>
+        </article>
+        <form id="stop-ask-form" class="ask-form stop-ask">
+          <label for="stop-ask-text">{{slider_ask_label}}</label>
+          <textarea id="stop-ask-text" name="text" rows="2" maxlength="1000" aria-describedby="stop-ask-hint"></textarea>
+          <div class="ask-row">
+            <p id="stop-ask-hint" class="note">{{slider_ask_hint}}</p>
+            <button type="submit" id="stop-ask-submit" class="button">{{slider_ask_label}}</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <p id="status" class="status" role="status" aria-live="polite"></p>
     <ol id="thread" class="thread" aria-label="{{thread_label}}"></ol>
   </main>
 </div>
+
+<section id="mind" class="mind" aria-labelledby="mind-heading" hidden>
+  <header class="mind-head">
+    <p class="kicker">{{mind_kicker}}</p>
+    <h2 id="mind-heading">{{mind_heading}}</h2>
+    <p id="mind-asof" class="note mind-asof"></p>
+    <p id="mind-glance" class="mind-glance">{{mind_loading}}</p>
+    <p class="note">{{mind_note}}</p>
+  </header>
+  <div id="mind-sections" class="mind-sections"></div>
+</section>
 
 <footer class="colophon"><p>{{footer}}</p></footer>
 
@@ -100,6 +144,8 @@
     </article>
   </li>
 </template>
+
+<template id="chart-template"><svg></svg></template>
 
 <template id="crisis-template">
   <li class="exchange">

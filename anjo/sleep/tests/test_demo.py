@@ -156,6 +156,7 @@ def test_limiter_fails_closed() -> None:
     assert _refused(restarted.visit, "b", NOW).status == 503
     assert _refused(restarted.admit, "b", "v", 1, NOW).status == 503
     assert _refused(lambda: restarted.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())).status == 503
+    assert _refused(restarted.voted_scenes, "b", NOW).status == 503  # no scene opens on unread counters
     store.fail_load = False
     store.fail_save = False
     restarted.visit("b", NOW)
@@ -371,6 +372,27 @@ def test_a_visit_votes_only_on_its_own_pairs() -> None:
     assert not_theirs.value.reason == "pair_gone"  # another visit's pair, to this one, doesn't exist
     registry.vote("p3", "tie", visit="w", now=NOW, record=votes)
     assert len(votes.stored) == 2
+
+
+def test_a_scene_is_settled_by_its_stored_vote_or_a_pair_that_takes_none() -> None:
+    registry, votes = PairRegistry(ttl_s=60), Votes()
+    product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
+    registry.open("p", visit="v", scene="credit", left=product, right=baseline, votable=True, now=NOW)
+    assert not registry.settled("v", "credit")  # opened, not voted
+    votes.fail = True
+    with pytest.raises(Refused):
+        registry.vote("p", "left", visit="v", now=NOW, record=votes)
+    assert not registry.settled("v", "credit")  # a vote that wasn't stored settles nothing
+    votes.fail = False
+    registry.vote("p", "left", visit="v", now=NOW, record=votes)
+    assert registry.settled("v", "credit") and not registry.settled("w", "credit") and not registry.settled("v", "qa")
+    registry.open("own", visit="v", left=product, right=baseline, votable=True, now=NOW)  # her own question: no scene
+    registry.vote("own", "tie", visit="v", now=NOW, record=votes)
+    registry.open("w", visit="w", scene="qa", left=product, right=baseline, votable=False, now=NOW)
+    assert registry.settled("w", "qa")  # nothing to vote on, nothing to keep blind
+    assert registry.settled("v", "credit")  # past the pair's expiry too
+    registry.open("x", visit="x", left=product, right=baseline, votable=True, now=NOW + timedelta(seconds=61))
+    assert registry.settled("v", "credit")
 
 
 def test_votes_are_capped_per_visit() -> None:

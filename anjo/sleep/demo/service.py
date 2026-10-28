@@ -20,6 +20,27 @@
   and caps a visit's votes and open pairs. A starter scene takes one vote per address a day
   (``Limiter.claim_scene_vote``, claimed first and given back if the vote isn't stored).
 
+The full step (Nov 2) adds, with no vote on any of them:
+
+- ``nights``: the night slider's stops (``slider``) and which starter answers each holds. No model.
+- ``stop_starter``: a starter scene's answer at one stop, pre-generated (``night_answers``), notes
+  off: arm 3 on the stop's checkpoint, arm 1 at night 0.
+- ``ask_stop``: the visitor's own question at one stop, live, on the same path as ``ask`` (crisis
+  floor first, the live hours and warm-time cap, the limits, Glimmer already up, the reply check).
+  It is one question and one model call, counted in every per-address and global cap.
+- ``toggles``: on a starter scene, her weights notes off beside the base model (arm 3 against arm
+  1, from the night answers at her latest stop), and the swap measurement's pair if it ran
+  (``toggles``). Both labeled pre-generated, neither blind.
+- ``stop_starter`` and ``toggles`` answer a scene only once this visit was shown its blind pair with
+  no vote to take (``PairRegistry.settled``), or this address has voted on the scene today, in this
+  visit or an earlier one (``Limiter.voted_scenes``, the one-vote-a-day record; unreadable counters
+  refuse). Else 403 ``vote_first``: arm 3 shares arm 4's weights, so its answers seen first would let
+  a visitor match the style and vote informed. ``nights`` lists the scenes this address has voted on.
+- ``mind``: her mind panel, built by the app (``panel``, ``record``) with the held-out text filtered.
+
+A stop whose checkpoint was trained under another rendering than the one serving answers nothing,
+pre-generated or live (409 ``stop_unavailable``); nothing ever answers in its place.
+
 Stateless: the question lives only in this call. Nothing here stores, logs or returns it, and the
 ports only read (``LiveArms`` answers through ``arms.reply``, which writes nothing).
 """
@@ -27,21 +48,27 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, TypeVar
 
 from anjo.sleep.demo import words
 from anjo.sleep.demo.limits import Limiter, Refused
+from anjo.sleep.demo.night_answers import NightAnswers
 from anjo.sleep.demo.pairs import PairRegistry, Reveal, SideFacts, Vote
+from anjo.sleep.demo.slider import Stop, find, latest_stop
 from anjo.sleep.demo.starters import BASELINES, PRODUCT, Side, StarterError, StarterSet
+from anjo.sleep.demo.toggles import SwapSet
 from anjo.sleep.demo.visits import mint_visit, visit_nonce
+from anjo.sleep.types import CheckpointRef
 
 logger = logging.getLogger(__name__)
 
 MAX_CHARS: Final = 1_000
 CALLS_PER_ASK: Final = 2  # arm 4 and the baseline: every model call counts
+CALLS_PER_STOP: Final = 1  # one stop, one call: notes off has no baseline beside it
+R = TypeVar("R")
 
 
 class Floor(Protocol):
@@ -77,6 +104,14 @@ class LiveArms(Protocol):
 
     def answer_pair(self, question: str, baseline: str) -> tuple[Answer, Answer]:
         """Arm 4's answer, then the baseline's, from one shared context. Raises ``ArmsError``."""
+
+
+class StopArms(Protocol):
+    def awake(self) -> bool:
+        """Whether Glimmer is up now, found without waking her."""
+
+    def answer_at(self, question: str, checkpoint: CheckpointRef | None) -> Answer:
+        """Notes off at one stop: arm 3 on ``checkpoint``, arm 1 when None. Raises ``ArmsError``."""
 
 
 class Waker(Protocol):
@@ -156,6 +191,61 @@ class PageView:
 
 
 @dataclass(frozen=True)
+class StopView:
+    """One stop of the night slider, and the starter scenes it holds pre-generated answers for."""
+
+    stop: Stop
+    ready: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SceneToggles:
+    scene: str
+    notes_off: bool
+    swap: bool
+
+
+@dataclass(frozen=True)
+class NightsView:
+    """The slider's stops (None: her nights or checkpoints can't be read), when their answers were
+    generated, which toggles each starter scene offers, and the live state."""
+
+    stops: tuple[StopView, ...] | None
+    generated_at: str | None
+    toggles: tuple[SceneToggles, ...]
+    live: str
+    voted: tuple[str, ...] = ()  # the starter scenes this address has voted on today
+
+
+@dataclass(frozen=True)
+class StopReply:
+    """One stop's answer, notes off: pre-generated (with when) or live."""
+
+    stop: Stop
+    side: SideView
+    kind: Literal["pre-generated", "live"]
+    generated_at: str | None
+
+
+@dataclass(frozen=True)
+class TogglePair:
+    """A labeled, not blind, pair: ``with_side`` is her weights notes off (or the other model given
+    her state), ``without`` the base model (or that model bare)."""
+
+    with_side: SideView
+    without: SideView
+    stop: Stop | None
+    model: str | None
+    generated_at: str
+
+
+@dataclass(frozen=True)
+class ToggleView:
+    notes_off: TogglePair | None
+    swap: TogglePair | None
+
+
+@dataclass(frozen=True)
 class DemoConfig:
     baseline: str
     secret: bytes
@@ -182,6 +272,10 @@ class DemoService:
         reply_check: ReplyCheck, arms: LiveArms, starters: Callable[[], StarterSet | None],
         votes: Callable[[Vote], None], upkeep: Upkeep, waker: Waker | None = None,
         coin: Callable[[], bool] = _coin, new_id: Callable[[], str] = _new_id,
+        stops: Callable[[], tuple[Stop, ...] | None] = lambda: None,
+        night_answers: Callable[[], NightAnswers | None] = lambda: None,
+        swaps: Callable[[], SwapSet | None] = lambda: None, stop_arms: StopArms | None = None,
+        mind: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self.config = config
         self._upkeep = upkeep
@@ -195,6 +289,11 @@ class DemoService:
         self._waker = waker
         self._coin = coin
         self._new_id = new_id
+        self._stops = stops
+        self._night_answers = night_answers
+        self._swaps = swaps
+        self._stop_arms = stop_arms
+        self._mind = mind
 
     def scenes(self, client: str, now: datetime) -> PageView:
         self._limiter.request(client, now)
@@ -225,36 +324,88 @@ class DemoService:
     def ask(self, client: str, token: str, raw: str, now: datetime) -> PairView | Fixed | Asleep:
         visit = self._visit(token, now)
         self._limiter.request(client, now)
-        text = self._floor.normalize(raw).strip()
-        if not text:
-            raise Refused(400, "empty")
-        if len(text) > MAX_CHARS:
-            raise Refused(400, "too_long")
+        text = self._question(raw)
         fixed = self._floor.fixed_reply(text)
         if fixed is not None:
             return Fixed(fixed)
-        live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
-        if live != "open":  # before even a status ping: on SageMaker a ping keeps her up too
-            raise Refused(429, f"live_{live}")
+        self._live_open(now)
         self._pairs.check_room(visit, now)  # before the calls are spent on a pair it couldn't open
-        hold = self._limiter.admit(client, visit, CALLS_PER_ASK, now)
-        ran, used = False, hold.tokens
-        try:
-            if not self._arms.awake():
-                return Asleep(self._wake(now))
-            self._buy(now, self._answer_s)
-            ran = True
+
+        def pair() -> tuple[tuple[Answer, Answer], int]:
             product, baseline = self._arms.answer_pair(text, self.config.baseline)
-            used = product.tokens + baseline.tokens
-        except ArmsError as error:
-            logger.warning("a live demo pair failed: %s", error)
-            raise Refused(503, "lost_thread") from None
-        finally:
-            if ran:
-                self._limiter.settle(hold, used, now)  # a failed pair keeps its worst case
-            else:
-                self._limiter.release(hold, now)
+            return (product, baseline), product.tokens + baseline.tokens
+
+        got = self._run_live(client, visit, CALLS_PER_ASK, now, self._arms.awake, pair)
+        if isinstance(got, Asleep):
+            return got
+        product, baseline = got
         return self._open(self._side(product), self._side(baseline), Source("live"), now, visit=visit)
+
+    # ── the full step: the night slider, the toggles and the mind panel ──────
+
+    def nights(self, client: str, now: datetime) -> NightsView:
+        self._limiter.request(client, now)
+        stops, answers, swaps = self._stops(), self._read(self._night_answers), self._read(self._swaps)
+        views = None if stops is None else tuple(StopView(stop, self._ready(stop, answers)) for stop in stops)
+        toggles = tuple(SceneToggles(scene.id, _notes_off(stops, answers, scene) is not None,
+                                     swaps is not None and swaps.pair(scene) is not None) for scene in words.SCENES)
+        live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
+        voted = self._limiter.voted_scenes(client, now)
+        return NightsView(views, None if answers is None else answers.generated_at, toggles, live, voted)
+
+    def stop_starter(self, client: str, token: str, key: str, scene_id: str, now: datetime) -> StopReply:
+        visit = self._visit(token, now)
+        self._limiter.request(client, now)
+        scene = self._settled_scene(visit, client, scene_id, now)
+        stop = self._stop(key)
+        answers = self._read(self._night_answers)
+        found = None if answers is None else answers.find(_checkpoint_id(stop), scene)
+        if found is None:
+            raise Refused(404, "not_ready")
+        return StopReply(stop, self._shown(found.side), "pre-generated", found.generated_at)
+
+    def ask_stop(self, client: str, token: str, key: str, raw: str, now: datetime) -> StopReply | Fixed | Asleep:
+        visit = self._visit(token, now)
+        self._limiter.request(client, now)
+        text = self._question(raw)
+        fixed = self._floor.fixed_reply(text)
+        if fixed is not None:
+            return Fixed(fixed)
+        stop = self._stop(key)
+        arms = self._stop_arms
+        if arms is None:
+            raise Refused(503, "resting")
+        self._live_open(now)
+
+        def one() -> tuple[Answer, int]:
+            answer = arms.answer_at(text, stop.checkpoint)
+            return answer, answer.tokens
+
+        got = self._run_live(client, visit, CALLS_PER_STOP, now, arms.awake, one)
+        if isinstance(got, Asleep):
+            return got
+        return StopReply(stop, self._shown(self._side(got)), "live", None)
+
+    def toggles(self, client: str, token: str, scene_id: str, now: datetime) -> ToggleView:
+        visit = self._visit(token, now)
+        self._limiter.request(client, now)
+        scene = self._settled_scene(visit, client, scene_id, now)
+        answers, swaps = self._read(self._night_answers), self._read(self._swaps)
+        notes_off = _notes_off(self._stops(), answers, scene)
+        swap = None if swaps is None else swaps.pair(scene)
+        return ToggleView(
+            None if notes_off is None else TogglePair(
+                self._shown(notes_off[1]), self._shown(notes_off[2]), notes_off[0], None, notes_off[3]),
+            None if swap is None or swaps is None else TogglePair(
+                self._shown(swap.with_state), self._shown(swap.bare), None, swaps.model, swaps.generated_at),
+        )
+
+    def mind(self, client: str, token: str, now: datetime) -> Mapping[str, Any]:
+        self._visit(token, now)
+        self._limiter.request(client, now)
+        if self._mind is None:
+            raise Refused(503, "resting")
+        return self._mind()
 
     def vote(self, client: str, token: str, pair_id: str, choice: str, now: datetime) -> Reveal:
         visit = self._visit(token, now)
@@ -276,6 +427,82 @@ class DemoService:
         if nonce is None:
             raise Refused(401, "visit_expired")
         return nonce
+
+    def _question(self, raw: str) -> str:
+        text = self._floor.normalize(raw).strip()
+        if not text:
+            raise Refused(400, "empty")
+        if len(text) > MAX_CHARS:
+            raise Refused(400, "too_long")
+        return text
+
+    def _live_open(self, now: datetime) -> None:
+        live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
+        if live != "open":  # before even a status ping: on SageMaker a ping keeps her up too
+            raise Refused(429, f"live_{live}")
+
+    def _run_live(
+        self, client: str, visit: str, calls: int, now: datetime, awake: Callable[[], bool],
+        run: Callable[[], tuple[R, int]],
+    ) -> R | Asleep:
+        """``calls`` model calls held at their worst case, run only if Glimmer is already up and her
+        warm time is bought, then settled to the tokens ``run`` reports (a failed run keeps its
+        worst case; one that never ran gives the hold and the question back)."""
+        hold = self._limiter.admit(client, visit, calls, now)
+        ran, used = False, hold.tokens
+        try:
+            if not awake():
+                return Asleep(self._wake(now))
+            self._buy(now, self._answer_s)
+            ran = True
+            result, used = run()
+        except ArmsError as error:
+            logger.warning("a live demo answer failed: %s", error)
+            raise Refused(503, "lost_thread") from None
+        finally:
+            if ran:
+                self._limiter.settle(hold, used, now)
+            else:
+                self._limiter.release(hold, now)
+        return result
+
+    @staticmethod
+    def _scene(scene_id: str) -> words.Scene:
+        scene = words.scene(scene_id)
+        if scene is None:
+            raise Refused(404, "unknown_scene")
+        return scene
+
+    def _settled_scene(self, visit: str, client: str, scene_id: str, now: datetime) -> words.Scene:
+        """``scene_id``'s scene, once ``visit`` may see its answers outside the blind pair: its pair
+        took no vote, or ``client`` has voted on the scene today. Unreadable counters refuse (503)."""
+        scene = self._scene(scene_id)
+        if not (self._pairs.settled(visit, scene.id) or scene.id in self._limiter.voted_scenes(client, now)):
+            raise Refused(403, "vote_first")
+        return scene
+
+    def _stop(self, key: str) -> Stop:
+        """The stop ``key`` names, if it can answer: never another one in its place."""
+        stops = self._stops()
+        stop = None if stops is None else find(stops, key)
+        if stop is None:
+            raise Refused(404, "unknown_stop")
+        if not stop.available:
+            raise Refused(409, "stop_unavailable")
+        return stop
+
+    def _read(self, port: Callable[[], R | None]) -> R | None:
+        try:
+            return port()
+        except StarterError as error:
+            logger.error("a demo answers file can't be read: %s", error)
+            return None
+
+    @staticmethod
+    def _ready(stop: Stop, answers: NightAnswers | None) -> tuple[str, ...]:
+        if answers is None or not stop.available:
+            return ()
+        return tuple(s.id for s in words.SCENES if answers.answer(_checkpoint_id(stop), s) is not None)
 
     def _current_starters(self) -> StarterSet | None:
         """The pre-generated pairs, if they were generated against the demo's current baseline."""
@@ -327,6 +554,24 @@ class DemoService:
         if product_left:
             return PairView(pair_id, product_view, baseline_view, votable, source)
         return PairView(pair_id, baseline_view, product_view, votable, source)
+
+
+def _checkpoint_id(stop: Stop) -> str | None:
+    return None if stop.checkpoint is None else stop.checkpoint.id
+
+
+def _notes_off(
+    stops: tuple[Stop, ...] | None, answers: NightAnswers | None, scene: words.Scene,
+) -> tuple[Stop, Side, Side, str] | None:
+    """Her latest stop's answer to ``scene`` and the base model's, with when hers was generated:
+    only when her latest checkpoint can be served and differs from the base."""
+    latest = None if stops is None else latest_stop(stops)
+    if latest is None or latest.checkpoint is None or not latest.available or answers is None:
+        return None
+    mine, base = answers.find(latest.checkpoint.id, scene), answers.find(None, scene)
+    if mine is None or base is None:
+        return None
+    return latest, mine.side, base.side, mine.generated_at
 
 
 def _source(starters: StarterSet) -> Source:

@@ -16,7 +16,8 @@ The page is public and unauthenticated, and a visitor's own question costs a mod
   pairs and says so, and asks Glimmer nothing: on SageMaker even a status ping keeps her up;
 - **blind votes:** a starter scene's two texts are fixed and only their order is drawn again, so once
   an address has seen a scene's sides revealed, its later pairs of that scene aren't blind. An
-  address votes once per scene a day (``claim_scene_vote``), saved with the day's counters.
+  address votes once per scene a day (``claim_scene_vote``), saved with the day's counters. The same
+  record (``voted_scenes``) opens a scene's other answers to that address, in any later visit.
 
 **Worst-case admission.** An ask holds its worst case in the same locked step as the checks: every
 call at Glimmer's whole window, which prompt and reply together never exceed. When the calls
@@ -323,6 +324,11 @@ class Limiter:
             if scene in had:
                 raise Refused(409, "scene_voted")
             self._commit(replace(day, scene_votes=MappingProxyType({**day.scene_votes, client: (*had, scene)})))
+
+    def voted_scenes(self, client: str, now: datetime) -> tuple[str, ...]:
+        """The starter scenes ``client`` has voted on today. Unreadable counters refuse (503)."""
+        with self._lock:
+            return tuple(self._today(now).scene_votes.get(client, ()))
 
     def release_scene_vote(self, client: str, scene: str, now: datetime) -> None:
         """A claimed vote that wasn't stored gives its scene back. Not saved: the scene stays voted."""

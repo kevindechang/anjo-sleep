@@ -8,6 +8,9 @@ status and the demo's files, for ``anjo.sleep.demo.service``.
   Each referral is counted, with no words, in the crisis ledger under the ``sleep_demo`` surface.
 - **Before a reply is shown:** ``reply_crisis_reason``. A side that trips is withheld and the severe
   protocol stands in its place, as chat does, counted under ``reply_check``.
+- **The night slider** (the full step): ``GlimmerArms.answer_at`` answers notes off at one stop,
+  arm 3 on that stop's checkpoint (``slider.Pinned``) or arm 1 at night 0, through the same
+  ``arms.reply``; the stops, the panel and the demo's answer files are read in ``demo_mind``.
 - **The arms:** ``arms.reply`` for arm 4 and the baseline, over the ports the morning run uses
   (``morning.build``), for the account that plays the film student (``ANJO_SLEEP_DEMO_USER_ID``).
   That account must be registered synthetic, or the page answers nothing live: no real person's
@@ -52,6 +55,7 @@ from anjo.sleep.budget import LEDGER_NAME, Bound, BudgetError, Ledger, Pool
 from anjo.sleep.demo.limits import JsonCounterStore, Limiter, Limits, Refused
 from anjo.sleep.demo.pairs import PairRegistry, Vote
 from anjo.sleep.demo.service import Answer, ArmsError, DemoConfig, DemoService, LiveArms, Upkeep
+from anjo.sleep.demo.slider import Pinned
 from anjo.sleep.demo.starters import BASELINES, PRODUCT, StarterSet
 from anjo.sleep.demo.starters import load as load_starters
 from anjo.sleep.evidence.jsonl import PLAIN, LogError, append_records
@@ -62,7 +66,7 @@ from anjo.sleep.serving.client import ServingError, VllmClient, WakeResult
 from anjo.sleep.serving.config import SCALEDOWN_S, ServeConfigError
 from anjo.sleep.serving.sagemaker import settings as sagemaker
 from anjo.sleep.serving.wake import read_window, window_path
-from anjo.sleep.types import Probe
+from anjo.sleep.types import CheckpointRef, Probe
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +214,14 @@ class GlimmerArms:
         self._on_answer()
         return answers
 
+    def answer_at(self, question: str, checkpoint: CheckpointRef | None) -> Answer:
+        """Notes off at one stop: arm 3 pinned to ``checkpoint``, or arm 1 (the base) when None."""
+        probe = Probe(f"demo-{secrets.token_hex(8)}", self._user, "new_work", question, None, None, ())
+        deps = replace(self._deps(self._today()), adapters=Pinned(self._user, checkpoint))
+        answer = self._one("1" if checkpoint is None else "3", probe, deps)
+        self._on_answer()
+        return answer
+
     def _one(self, arm: str, probe: Probe, deps: ArmDeps) -> Answer:
         started = self._clock()
         try:
@@ -292,6 +304,9 @@ class Unavailable:
         return False
 
     def answer_pair(self, question: str, baseline: str) -> tuple[Answer, Answer]:
+        raise ArmsError("the live demo has no arms")
+
+    def answer_at(self, question: str, checkpoint: CheckpointRef | None) -> Answer:
         raise ArmsError("the live demo has no arms")
 
 
@@ -396,6 +411,8 @@ def build_service(
 ) -> DemoService:
     """The page's service from the host's settings. ``serving``, ``arms`` and ``limits`` replace the
     ones the settings would give (tests)."""
+    from anjo.sleep.app import demo_mind
+
     require_sleep_host()
     serving, user = _from_env(serving)
     rate = serve_rate()
@@ -413,4 +430,7 @@ def build_service(
         limiter=Limiter(JsonCounterStore(folder / COUNTERS_FILE), _limits(limits, rate)), pairs=PairRegistry(),
         floor=AnjoFloor(), reply_check=AnjoReplyCheck(), arms=arms, starters=_starters,
         votes=_record_vote, waker=waker, upkeep=upkeep(serving, rate),
+        stops=lambda: demo_mind.demo_stops(user), night_answers=demo_mind.night_answers,
+        swaps=lambda: demo_mind.swaps(user), stop_arms=arms if isinstance(arms, (GlimmerArms, Unavailable)) else None,
+        mind=demo_mind.PanelCache(user).payload,
     )
