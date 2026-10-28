@@ -144,6 +144,16 @@ class ProbeSubset:
 # pushback left to the full runs. 22 judge calls and 28 replies, against the full run's 910 and 480.
 DAILY: Final = ProbeSubset(name="daily-v1", arms=("1", "3"), per_kind=MappingProxyType(
     {"new_work": 5, "vocab": 3, "tone_hold": 3, "taste_ab": 3, "pushback": 0}))
+SUBSETS: Final = MappingProxyType({DAILY.name: DAILY})
+MORNING_SUBSET_ENV: Final = "ANJO_SLEEP_MORNING_SUBSET"  # unset: the full morning; a subset's name: that subset
+
+
+def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
+    """The subset ``ANJO_SLEEP_MORNING_SUBSET`` names (unset or empty: the full set); any other value is an error."""
+    name = environ.get(MORNING_SUBSET_ENV, "").strip()
+    if name and name not in SUBSETS:
+        raise ValueError(f"{MORNING_SUBSET_ENV} is unset (the full morning) or {', '.join(SUBSETS)}, got {name!r}")
+    return SUBSETS[name] if name else None
 
 
 def _rank(subset: ProbeSubset, probe: Probe) -> str:
@@ -187,6 +197,7 @@ class MorningResult:
     no_verdict: int = 0  # (comparison, probe) pairs the judge gave no readable verdict on
     judge_usd: float = 0.0  # what the judge's hold settled at
     judge_estimated: int = 0  # judge calls in it at the per-call bound, with no usage reported
+    subset: str | None = None  # the subset asked (``ProbeSubset.name``); None: the full set
 
 
 class _Pinned:
@@ -445,7 +456,7 @@ def _run_morning(
     os.replace(pending, target)
     judge_usd, estimated = spend()
     return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()),
-                         judge_usd, estimated)
+                         judge_usd, estimated, None if subset is None else subset.name)
 
 
 __all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",

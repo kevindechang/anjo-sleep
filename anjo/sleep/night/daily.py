@@ -239,6 +239,7 @@ def morning_receipt(done: object, seconds: float) -> dict[str, Any]:
     if isinstance(done, MorningResult):
         receipt.update(replies=done.replies, judge_calls=done.judge_calls, judge_usd=round(done.judge_usd, 6),
                        judge_estimated=done.judge_estimated,  # calls in judge_usd at the hold's bound, no usage
+                       **({"subset": done.subset} if done.subset else {}),  # the probe set: absent, the full one
                        **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
     return receipt
 

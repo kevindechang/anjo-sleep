@@ -227,11 +227,8 @@ def backfill(chosen: Plan, ports: Ports, *, timer: Callable[[], float] = time.mo
             except Exception as error:  # logged as the night's morning failure, then raised
                 _failed(log, chosen.night, error, timer() - began)
                 raise
-            receipt = morning_receipt(done, timer() - began)
-            if chosen.subset is not None:
-                receipt["subset"] = chosen.subset.name
             log.step("morning", "ok", uses="new", system=None, backfilled=True, checkpoint=chosen.checkpoint.id,
-                     **receipt)
+                     **morning_receipt(done, timer() - began))  # its subset among them, when one
             log.tell(chosen.night, PROMOTED)
     except NightBusy as busy:
         raise Refused(str(busy)) from None

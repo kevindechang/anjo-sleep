@@ -72,7 +72,8 @@ from typing import Any, Final
 from anjo.sleep.budget import Ledger, Reservation, default_ledger
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV
 from anjo.sleep.night.holds import usd
-from anjo.sleep.reports.results import results_root
+from anjo.sleep.probes.morning import MORNING_SUBSET_ENV, morning_subset
+from anjo.sleep.reports.results import FULL_SET, results_root
 from anjo.sleep.train import objective
 from anjo.sleep.train.terms import DREAMS_NOT_WIRED
 
@@ -255,6 +256,7 @@ def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) 
         table[arm] = {
             "nights": len(done), "promoted": sum(n["promoted"] for n in done),
             "arm3_by_night": [_arm_score(s, "3") for s in scored], "arm4_by_night": [_arm_score(s, "4") for s in scored],
+            "scored_on": [str(s.get("subset") or FULL_SET) for s in scored],  # each night's probe set
             "arm3_mean": _mean([_arm_score(s, "3") for s in scored]), "arm4_mean": _mean([_arm_score(s, "4") for s in scored]),
             "general_lost_by_night": [n["general_lost"] for n in done],
             "train_minutes_mean": _mean([n["train"].get("train_minutes") for n in done]),
@@ -330,6 +332,8 @@ def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, files: M
         out(f"    worst case ${priced[arm]:.2f} (estimate)")
         out(_token_line(arm, files.get(arm)))
     out(f"  thought channel: {os.environ.get(CHANNEL_ENV) or 'off'} ({CHANNEL_ENV}, this shell's), the same in every arm")
+    out(f"  morning: {os.environ.get(MORNING_SUBSET_ENV, '').strip() or 'the full set'} ({MORNING_SUBSET_ENV}, this "
+        "shell's, passed through), the same in every arm")
     if "dreams" in chosen:
         out("  dreams: the app must wire the core's dream seeds into NightDeps.dreams first; unwired, its dataset "
             f"step says dreams: {DREAMS_NOT_WIRED}, and its control doesn't run")
@@ -412,6 +416,7 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     try:
         accounts = _accounts(args.account)
         chosen = arms(accounts)
+        morning_subset(os.environ)  # an unknown ANJO_SLEEP_MORNING_SUBSET stops the plan, as it stops each run
         files = _token_files(args.token_file, chosen)
     except ValueError as error:
         parser.error(str(error))
