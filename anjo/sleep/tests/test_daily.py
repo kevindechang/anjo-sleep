@@ -232,6 +232,29 @@ def test_night_phase_runs_dailies_after_morning_and_survives_its_failure(tmp_pat
     assert ran == ["dailies"] and [(s["step"], s["status"]) for s in steps] == [("morning", "ok"), ("dailies", "ok")]
 
 
+def test_a_failed_morning_is_logged_with_its_reason_and_the_line_still_comes(tmp_path: Path) -> None:
+    import json
+
+    from anjo.sleep.model_api import ModelApiError
+    from anjo.sleep.probes.morning import TooManyNoVerdicts
+
+    unreadable = TooManyNoVerdicts("the judge gave no readable verdict on 3 of 3 probes in 2C_vs_1", no_verdict=3)
+    for label, error in (("unread", unreadable), ("slow", ModelApiError("the judge timed out after 120s"))):
+        ran: list[str] = []
+
+        def score(*args: Any, failure: Exception = error, **kw: Any) -> None:
+            raise failure
+
+        result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label),
+                                       nights=_promoted(tmp_path / label), morning=lambda *a: None, score=score,
+                                       dailies=lambda *a: ran.append("dailies"))
+        steps = [json.loads(line) for line in result.log_path.read_text().splitlines()]
+        assert result.status == "promoted" and ran == ["dailies"]  # a failed morning never costs the line
+        assert [(s["step"], s["status"]) for s in steps] == [("morning", "failed"), ("dailies", "ok")]
+        assert steps[0]["why"] == f"morning failed: {type(error).__name__}: {error}"
+        assert steps[0].get("no_verdict") == (3 if label == "unread" else None)
+
+
 @pytest.mark.parametrize("status", ["rejected", "nothing_new"])
 def test_night_phase_generates_no_line_without_a_new_checkpoint(tmp_path: Path, status: str) -> None:
     ran: list[str] = []
@@ -325,3 +348,42 @@ def test_night_phase_mind_flag_reaches_the_night(monkeypatch: pytest.MonkeyPatch
         daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28", *flags])
         assert seen[0]["mind"] is expected
         assert json.loads(capsys.readouterr().out)["mind"] is expected
+
+
+# ── a nap, and --force-deep ──
+
+
+def test_a_napped_night_runs_no_morning_and_says_so(tmp_path: Path) -> None:
+    from anjo.sleep.night.sleep_night import NAP_WHY
+
+    scored: list[object] = []
+    (tmp_path / "night").mkdir()
+    napped = NightResult("napped", None, None, {}, (), 0.0, {}, tmp_path / "night" / "log.jsonl")
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=lambda **kw: {"acct": napped},
+                                   morning=lambda *a: scored.append(a), score=lambda *a, **kw: scored.append(a),
+                                   dailies=lambda *a: scored.append(a))
+    steps = [json.loads(line) for line in (tmp_path / "night" / "log.jsonl").read_text().splitlines()]
+    assert result.status == "napped" and scored == []  # no GPU morning on a nap, and no line
+    assert [(s["step"], s["status"], s["why"]) for s in steps] == [("morning", "skipped", NAP_WHY)]
+
+
+def test_night_phase_force_deep_reaches_the_night(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def nights(**kw: Any) -> dict[str, NightResult]:
+        seen.append(kw)
+        return {"acct": NightResult("failed", "practice", None, {}, (), 0.0, {}, tmp_path / "log.jsonl")}
+
+    for forced in (False, True):
+        daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=nights, force_deep=forced)
+    assert [kw["force_deep"] for kw in seen] == [False, True]
+    monkeypatch.setenv(daily.USERS_ENV, "founder=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    real = daily.run_night_phase
+    monkeypatch.setattr(daily, "run_night_phase", lambda *a, **kw: real(*a, **kw, nights=nights))
+    for flags, expected in (([], False), (["--force-deep"], True)):
+        seen.clear()
+        daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28", *flags])
+        assert seen[0]["force_deep"] is expected
+        assert json.loads(capsys.readouterr().out)["force_deep"] is expected

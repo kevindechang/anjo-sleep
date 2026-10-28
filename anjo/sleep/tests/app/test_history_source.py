@@ -480,3 +480,20 @@ def test_the_simulator_reads_each_replys_recorded_ancestry() -> None:
     assert NewestReply(SYNTHETIC).of_reply("any-label") == frozenset({GLIMMER})
     _message(SYNTHETIC, "assistant", "Some other reply.", at=START + timedelta(hours=13), session_id="s-sim")
     assert NewestReply(SYNTHETIC).of_reply("any-label") is None
+
+
+def test_turns_counts_the_persons_own_turns_in_the_window() -> None:
+    from anjo.sleep.app import cleared_sessions
+    from anjo.sleep.app.history_source import own_turn_count
+
+    noon = START + timedelta(hours=12)
+    _message(REAL, "user", "one", at=noon)
+    _message(REAL, "assistant", "her reply", at=noon + timedelta(seconds=1))
+    _message(REAL, "user", "two", at=noon + timedelta(seconds=2))
+    _message(REAL, "user", "the day after", at=END + timedelta(hours=1))
+    assert own_turn_count(REAL, WINDOW) == 2  # a count only: the night never sees the words
+    cleared_sessions.register_synthetic(SYNTHETIC, at=START)
+    _message(SYNTHETIC, "user", "simulated", at=noon, session_id="s-sim")
+    _message(SYNTHETIC, "user", "filmed", at=noon, session_id="s-film")
+    cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=noon)
+    assert own_turn_count(SYNTHETIC, WINDOW) == 1  # a synthetic person's cleared sessions only

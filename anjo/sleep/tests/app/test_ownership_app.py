@@ -397,3 +397,23 @@ def test_delete_succeeds_for_any_valid_account_id(auth_client: Any, monkeypatch:
         delete_all(uid)
         assert not any(path.exists() for path in theirs) and all(path.exists() for path in kept)
     delete_all("person-with-no-latents")  # nothing kept: nothing to remove, and no failure
+
+
+def test_the_nights_route_says_how_each_night_slept(api: Any) -> None:
+    from anjo.sleep.app.ownership import night_logs
+    from anjo.sleep.night.nightlog import NightLog, night_folder
+
+    _seed(ALICE)  # two nights from before naps: no sleep record
+    third = date(2026, 10, 30)
+    log = NightLog(night_folder(night_logs(ALICE), third))
+    sleep: dict[str, Any] = {"kind": "nap", "reason": "below_threshold", "pressure": 0.21, "threshold": 0.5, "turns": 40}
+    log.step("sleep", "ok", uses="new", system=None, **sleep)
+    log.finish(NightResult(status="napped", failed_at=None, checkpoint=None, gates={}, choices=(), cost_usd=0.0,
+                           cost_parts={}, log_path=log.path),
+               {"night": third.isoformat(), "night_end": third.isoformat(), "sleep": sleep})
+    nights = api.get("/api/sleep/nights").json()
+    assert [n["sleep"] for n in nights[:2]] == [None, None]
+    assert nights[2]["status"] == "napped" and nights[2]["sleep"] == {
+        "kind": "nap", "pressure": 0.21, "threshold": 0.5, "reason": "below_threshold"}
+    changed = api.get("/api/sleep/what-changed", params={"since": third.isoformat()}).json()
+    assert [c["kind"] for c in changed] == ["napped"] and "0.21 against 0.50" in changed[0]["line"]
