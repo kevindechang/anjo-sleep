@@ -15,7 +15,7 @@ import pytest
 
 from anjo.sleep.night.deps import NightDeps
 from anjo.sleep.night.run import day_window
-from anjo.sleep.personas.model import load_person_file
+from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
 from anjo.sleep.probes.morning import MorningError
@@ -27,6 +27,7 @@ START = date(2026, 10, 20)  # before the rig's wall clock (2026-10-28): an accel
 PERSONAS = Path(__file__).parents[1] / "personas"
 FOUNDER = load_person_file(PERSONAS / "founder.json").visible
 DONOR = load_person_file(PERSONAS / "founder_donor.json").visible
+HERO = load_person_file(PERSONAS / "film_founder.json").visible
 
 
 def _summary(path: Path) -> dict[str, object]:
@@ -34,9 +35,10 @@ def _summary(path: Path) -> dict[str, object]:
     return found
 
 
-def test_accelerated_results_are_labeled(tmp_path: Path) -> None:
+@pytest.mark.parametrize("person", [FOUNDER, HERO], ids=["founder", "hero"])
+def test_accelerated_results_are_labeled(tmp_path: Path, person: Persona) -> None:
     fake = FakeAccelerated(tmp_path)
-    results = run_accelerated("u1", FOUNDER, 2, START, rig=fake.rig())
+    results = run_accelerated("u1", person, 2, START, rig=fake.rig())
     assert [r.status for r in results] == ["promoted", "promoted"]
     for i, result in enumerate(results):
         summary = _summary(result.log_path)

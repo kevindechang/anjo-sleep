@@ -8,7 +8,8 @@ import pytest
 from anjo.sleep.personas import model as m
 
 DIR = Path(m.__file__).parent
-NAMES = ("film_student", "film_student_donor")
+PAIRS = (("film_student", "film_student_donor"), ("film_founder", "film_founder_donor"))
+NAMES = tuple(n for pair in PAIRS for n in pair)
 
 
 def load(name):
@@ -30,18 +31,19 @@ def test_persona_file_validates_and_meets_counts(name):
     assert len(h.taste_ab) >= len(h.preferences)
 
 
-def test_held_out_text_absent_from_visible_part():
-    for name in NAMES:
-        pf = load(name)
-        visible = json.dumps(m.to_visible_dict(pf.visible)).lower()
-        for s in pf.held_out.preferences:
-            assert s.text.lower() not in visible
-        for w in pf.held_out.new_work:
-            assert w.text.lower() not in visible
+@pytest.mark.parametrize("name", NAMES)
+def test_held_out_text_absent_from_visible_part(name):
+    pf = load(name)
+    visible = json.dumps(m.to_visible_dict(pf.visible)).lower()
+    for s in pf.held_out.preferences:
+        assert s.text.lower() not in visible
+    for w in pf.held_out.new_work:
+        assert w.text.lower() not in visible
 
 
-def test_pair_shares_taste_items_with_opposite_labels():
-    a, b = load(NAMES[0]), load(NAMES[1])
+@pytest.mark.parametrize("name_a,name_b", PAIRS)
+def test_pair_shares_taste_items_with_opposite_labels(name_a, name_b):
+    a, b = load(name_a), load(name_b)
     assert a.visible.field == b.visible.field
     ta = {t.id: t for t in a.held_out.taste_ab}
     tb = {t.id: t for t in b.held_out.taste_ab}
@@ -52,12 +54,12 @@ def test_pair_shares_taste_items_with_opposite_labels():
     assert {s.text for s in a.visible.preferences}.isdisjoint(s.text for s in b.visible.preferences)
 
 
-def test_no_medical_or_romance_content():
+@pytest.mark.parametrize("name", NAMES)
+def test_no_medical_or_romance_content(name):
     banned = ("therap", "anxiety", "depress", "diagnos", "medic", "romance", "boyfriend",
               "girlfriend", "dating", "kiss", "crush")
-    for name in NAMES:
-        blob = (DIR / f"{name}.json").read_text().lower()
-        assert not [w for w in banned if w in blob]
+    blob = (DIR / f"{name}.json").read_text().lower()
+    assert not [w for w in banned if w in blob]
 
 
 def test_loader_rejects_too_few_held_out_preferences():

@@ -82,7 +82,7 @@ def test_an_anonymous_visitor_reaches_the_page_and_its_api(sleep_app: Any, clien
     visit = client.post(VISIT, json={"adult": True})
     assert visit.status_code == 200, visit.text
     headers = {HEADER: visit.json()["token"]}
-    pair = client.post("/api/sleep/demo/starters/credit", headers=headers)
+    pair = client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers)
     assert pair.status_code == 200 and pair.json()["left"]["text"]
     ask = client.post("/api/sleep/demo/ask", json={"text": "Where does the title card go?"}, headers=headers)
     assert ask.status_code == 200 and ask.json()["kind"] == "pair"

@@ -324,7 +324,7 @@ def test_vote_offers_tie_and_neither() -> None:
     assert CHOICES == ("left", "right", "tie", "neither")
     for key in ("vote_left", "vote_right", "vote_tie", "vote_neither", "vote_question"):
         assert words.COPY[key]
-    assert words.COPY["vote_question"].startswith("Which reply is more useful to her, given her brief")
+    assert words.COPY["vote_question"].startswith("Which reply is more useful to him, given his brief")
     registry, votes = PairRegistry(), Votes()
     product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
     for n, choice in enumerate(CHOICES):
@@ -363,10 +363,10 @@ def test_a_pair_takes_one_stored_vote_then_reveals() -> None:
 def test_a_visit_votes_only_on_its_own_pairs() -> None:
     registry, votes = PairRegistry(), Votes()
     product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
-    registry.open("p1", visit="v", scene="credit", left=product, right=baseline, votable=True, now=NOW)
+    registry.open("p1", visit="v", scene="nobody-to-tell", left=product, right=baseline, votable=True, now=NOW)
     registry.vote("p1", "left", visit="v", now=NOW, record=votes)
-    assert registry.scene_of("p1", visit="v") == "credit" and registry.scene_of("p1", visit="w") is None
-    registry.open("p3", visit="w", scene="credit", left=product, right=baseline, votable=True, now=NOW)
+    assert registry.scene_of("p1", visit="v") == "nobody-to-tell" and registry.scene_of("p1", visit="w") is None
+    registry.open("p3", visit="w", scene="nobody-to-tell", left=product, right=baseline, votable=True, now=NOW)
     with pytest.raises(Refused) as not_theirs:
         registry.vote("p3", "tie", visit="v", now=NOW, record=votes)
     assert not_theirs.value.reason == "pair_gone"  # another visit's pair, to this one, doesn't exist
@@ -377,22 +377,22 @@ def test_a_visit_votes_only_on_its_own_pairs() -> None:
 def test_a_scene_is_settled_by_its_stored_vote_or_a_pair_that_takes_none() -> None:
     registry, votes = PairRegistry(ttl_s=60), Votes()
     product, baseline = SideFacts("4", 900, 0.01), SideFacts("2C", 880, 0.009)
-    registry.open("p", visit="v", scene="credit", left=product, right=baseline, votable=True, now=NOW)
-    assert not registry.settled("v", "credit")  # opened, not voted
+    registry.open("p", visit="v", scene="nobody-to-tell", left=product, right=baseline, votable=True, now=NOW)
+    assert not registry.settled("v", "nobody-to-tell")  # opened, not voted
     votes.fail = True
     with pytest.raises(Refused):
         registry.vote("p", "left", visit="v", now=NOW, record=votes)
-    assert not registry.settled("v", "credit")  # a vote that wasn't stored settles nothing
+    assert not registry.settled("v", "nobody-to-tell")  # a vote that wasn't stored settles nothing
     votes.fail = False
     registry.vote("p", "left", visit="v", now=NOW, record=votes)
-    assert registry.settled("v", "credit") and not registry.settled("w", "credit") and not registry.settled("v", "qa")
+    assert registry.settled("v", "nobody-to-tell") and not registry.settled("w", "nobody-to-tell") and not registry.settled("v", "qa")
     registry.open("own", visit="v", left=product, right=baseline, votable=True, now=NOW)  # her own question: no scene
     registry.vote("own", "tie", visit="v", now=NOW, record=votes)
     registry.open("w", visit="w", scene="qa", left=product, right=baseline, votable=False, now=NOW)
     assert registry.settled("w", "qa")  # nothing to vote on, nothing to keep blind
-    assert registry.settled("v", "credit")  # past the pair's expiry too
+    assert registry.settled("v", "nobody-to-tell")  # past the pair's expiry too
     registry.open("x", visit="x", left=product, right=baseline, votable=True, now=NOW + timedelta(seconds=61))
-    assert registry.settled("v", "credit")
+    assert registry.settled("v", "nobody-to-tell")
 
 
 def test_votes_are_capped_per_visit() -> None:
@@ -566,7 +566,7 @@ def test_past_the_warm_cap_the_live_path_answers_nothing_and_says_so() -> None:
     refused = _refused(service.ask, "c", token, "And the jetty?", later)
     assert (refused.status, refused.reason, arms.calls, paid) == (429, "live_spent", 2, [900])
     assert service.scenes("c", later).live == "spent"
-    assert isinstance(service.starter("c", token, "credit", later), PairView)  # the starters still answer
+    assert isinstance(service.starter("c", token, "nobody-to-tell", later), PairView)  # the starters still answer
 
 
 def test_chat_needs_an_adult_visit() -> None:
@@ -574,7 +574,7 @@ def test_chat_needs_an_adult_visit() -> None:
     with pytest.raises(Refused) as refused:
         service.start_visit("c", False, NOW)
     assert (refused.value.status, refused.value.reason) == (403, "adult_required")
-    for call in (lambda: service.ask("c", "", "hi", NOW), lambda: service.starter("c", "forged", "credit", NOW),
+    for call in (lambda: service.ask("c", "", "hi", NOW), lambda: service.starter("c", "forged", "nobody-to-tell", NOW),
                  lambda: service.vote("c", "v1.x.y.z", "p", "tie", NOW)):
         with pytest.raises(Refused) as no_visit:
             call()
@@ -609,9 +609,9 @@ def test_starter_pairs_serve_with_no_model_and_only_for_their_baseline() -> None
     arms = FakeArms(up=False)
     service, _ = _service(arms, starters=_starters())
     token = service.start_visit("c", True, NOW)
-    pair = service.starter("c", token, "credit", NOW)
+    pair = service.starter("c", token, "nobody-to-tell", NOW)
     assert pair.source.kind == "pre-generated" and pair.source.checkpoint == "p-abc-n3"
-    assert {pair.left.text, pair.right.text} == {"P:credit", "B:credit"}
+    assert {pair.left.text, pair.right.text} == {"P:nobody-to-tell", "B:nobody-to-tell"}
     assert (arms.calls, arms.pings) == (0, 0)
     stale, _ = _service(arms, starters=_starters("2F"))
     page = stale.scenes("c", NOW)
@@ -623,17 +623,17 @@ def test_a_starter_scene_takes_one_vote_per_address_a_day() -> None:
     scene aren't blind, whichever visit they come in (a reload starts a new one)."""
     service, votes = _service(FakeArms(up=False), starters=_starters())
     token = service.start_visit("c", True, NOW)
-    service.vote("c", token, service.starter("c", token, "credit", NOW).pair_id, "left", NOW)
+    service.vote("c", token, service.starter("c", token, "nobody-to-tell", NOW).pair_id, "left", NOW)
     for visit in (token, service.start_visit("c", True, NOW), service.start_visit("c", True, NOW)):
-        again = service.starter("c", visit, "credit", NOW)
+        again = service.starter("c", visit, "nobody-to-tell", NOW)
         refused = _refused(service.vote, "c", visit, again.pair_id, "right", NOW)
         assert (refused.status, refused.reason) == (409, "scene_voted")
     other = service.start_visit("d", True, NOW)  # another address
-    service.vote("d", other, service.starter("d", other, "credit", NOW).pair_id, "tie", NOW)
-    service.vote("c", token, service.starter("c", token, "dialect", NOW).pair_id, "tie", NOW)  # another scene
+    service.vote("d", other, service.starter("d", other, "nobody-to-tell", NOW).pair_id, "tie", NOW)
+    service.vote("c", token, service.starter("c", token, "rough-cut", NOW).pair_id, "tie", NOW)  # another scene
     tomorrow = NOW + timedelta(days=1)
     fresh = service.start_visit("c", True, tomorrow)
-    service.vote("c", fresh, service.starter("c", fresh, "credit", tomorrow).pair_id, "tie", tomorrow)
+    service.vote("c", fresh, service.starter("c", fresh, "nobody-to-tell", tomorrow).pair_id, "tie", tomorrow)
     assert len(votes.stored) == 4
 
 
@@ -641,21 +641,21 @@ def test_a_scene_vote_is_saved_before_it_counts_and_given_back_if_not_stored() -
     store = MemoryStore()
     service, votes = _service(FakeArms(up=False), starters=_starters(), store=store)
     token = service.start_visit("c", True, NOW)
-    pair = service.starter("c", token, "credit", NOW)
+    pair = service.starter("c", token, "nobody-to-tell", NOW)
     store.fail_save = True  # the claim can't be saved: the vote is refused, nothing stored
     assert _refused(service.vote, "c", token, pair.pair_id, "left", NOW).reason == "resting"
     store.fail_save, votes.fail = False, True  # the vote can't be stored: the scene goes back
     assert _refused(service.vote, "c", token, pair.pair_id, "left", NOW).reason == "resting"
     votes.fail = False
     service.vote("c", token, pair.pair_id, "left", NOW)
-    assert len(votes.stored) == 1 and store.saved is not None and store.saved["scene_votes"] == {"c": ["credit"]}
+    assert len(votes.stored) == 1 and store.saved is not None and store.saved["scene_votes"] == {"c": ["nobody-to-tell"]}
 
 
 def test_an_ask_without_room_for_its_pair_spends_nothing() -> None:
     arms = FakeArms()
     service, _ = _service(arms, starters=_starters())
     token = service.start_visit("c", True, NOW)
-    opened = [service.starter("c", token, "credit", NOW) for _ in range(OPEN_PER_VISIT)]
+    opened = [service.starter("c", token, "nobody-to-tell", NOW) for _ in range(OPEN_PER_VISIT)]
     refused = _refused(service.ask, "c", token, "One of my own?", NOW)
     assert (refused.status, refused.reason) == (429, "too_many_open") and (arms.pings, arms.calls) == (0, 0)
     service.vote("c", token, opened[0].pair_id, "tie", NOW)  # a vote makes room
@@ -679,7 +679,7 @@ def test_starter_scenes_not_in_training_or_sealed_sets() -> None:
     def probes(items: list[str]) -> list[Probe]:
         return [Probe(f"x{n}", "p", "new_work", text, None, None, ()) for n, text in enumerate(items)]
 
-    assert 4 <= len(words.SCENES) <= 6
+    assert 3 <= len(words.SCENES) <= 6
     assert not any(check(scenes, probes(texts)))
     assert not any(check(texts, probes(scenes)))
 

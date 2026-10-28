@@ -1,9 +1,9 @@
 """The real-time daily schedule for a synthetic person on the dev host (one day, then the night).
 
-    python -m anjo.sleep.night.daily --phase day   --persona founder    # 14:00 Taipei: her day
-    python -m anjo.sleep.night.daily --phase night --persona founder    # 02:00 Taipei: night, then morning
+    python -m anjo.sleep.night.daily --phase day                       # 14:00 Taipei: his day
+    python -m anjo.sleep.night.daily --phase night                     # 02:00 Taipei: night, then morning
 
-She lives in real time from ``LIFE_START``: one simulated day per real day, the night for that day
+He lives in real time from ``LIFE_START``: one simulated day per real day, the night for that day
 after midnight, and the morning probe run right after the night, in the same process.
 
 - **day**: plays today's day (or ``--for-date``) through the dev API (``sim_transport.simulate``).
@@ -18,7 +18,7 @@ after midnight, and the morning probe run right after the night, in the same pro
   Otherwise the morning probe run scores the checkpoint that is serving.
 
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
-for example ``founder=<account id>``.
+for example ``film_founder=<account id>``.
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ from anjo.sleep.types import NightResult
 USERS_ENV: Final = "ANJO_SLEEP_DAILY_USERS"
 TAIPEI: Final = timezone(timedelta(hours=8))  # Taipei keeps no daylight saving time
 LIFE_START: Final = date(2026, 10, 28)
+DEFAULT_PERSONA: Final = "film_founder"  # the demo's hero: the person the real-time nights run for
 SEED: Final = 20261028
 WIRING: Final = "anjo.sleep.app.night:build"
 SIMULATE: Final = "anjo.sleep.app.sim_transport:simulate"
@@ -151,7 +152,7 @@ def _morning() -> Callable[..., object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One phase of a synthetic person's real-time day.")
     parser.add_argument("--phase", choices=("day", "night"), required=True)
-    parser.add_argument("--persona", required=True)
+    parser.add_argument("--persona", default=DEFAULT_PERSONA, help="default: the demo's hero")
     parser.add_argument("--for-date", type=date.fromisoformat, help="the day the run is for (default: today, Taipei)")
     parser.add_argument("--label", choices=("development", "final"), default="development")
     args = parser.parse_args(argv)

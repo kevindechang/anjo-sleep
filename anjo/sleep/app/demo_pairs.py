@@ -29,7 +29,7 @@ from pathlib import Path
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.demo_live import (
-    STARTERS_FILE, USER_ENV, GlimmerArms, Warmth, baseline_from, demo_dir, glimmer_deps, glimmer_status,
+    DEMO_PERSONA, STARTERS_FILE, USER_ENV, GlimmerArms, Warmth, baseline_from, demo_dir, glimmer_deps, glimmer_status,
     serve_rate,
 )
 from anjo.sleep.app.demo_mind import NIGHT_ANSWERS_FILE, demo_stops
@@ -60,7 +60,7 @@ def write_starters(
         product, other = arms.answer_pair(scene.prompt, baseline)
         return _side(product, serve_usd_per_hour), _side(other, serve_usd_per_hour)
 
-    starters = generate(SCENES, answer, person="film_student", checkpoint=checkpoint, baseline=baseline, now=now)
+    starters = generate(SCENES, answer, person=DEMO_PERSONA, checkpoint=checkpoint, baseline=baseline, now=now)
     _write(out, to_json(starters))
     return starters
 
@@ -82,7 +82,7 @@ def write_night_answers(
     def answer(checkpoint: CheckpointRef | None, scene: Scene) -> Side:
         return _side(arms.answer_at(scene.prompt, checkpoint), serve_usd_per_hour)
 
-    answers = night_answers.generate(SCENES, checkpoints, answer, keep=night_answers.load(out), person="film_student",
+    answers = night_answers.generate(SCENES, checkpoints, answer, keep=night_answers.load(out), person=DEMO_PERSONA,
                                      now=now)
     _write(out, night_answers.to_json(answers))
     return answers

@@ -1,7 +1,7 @@
 """``python -m anjo.sleep.night``: one night for the people named, on the sleep host (Task 5).
 
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.night --wiring anjo.sleep.app.night:build \\
-        --night 2026-10-28 --user <account id> --persona founder
+        --night 2026-10-28 --user <account id> --persona film_founder
 
 With ``--simulate anjo.sleep.app.sim_transport:simulate --day <i>``, each persona account first
 plays day ``i`` through the dev API, and the night runs on that day's window; a day cut short by a

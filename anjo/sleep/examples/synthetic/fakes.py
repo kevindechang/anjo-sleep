@@ -39,28 +39,28 @@ _BRIEF_HOME: Final = {
     "day_lesson": 0, "preference": 1, "tone_request": 1, "correction": 2, "homework": 3, "practice": 4,
 }
 TONE_HOLD: Final = (
-    "The client wants to know when the planking will be finished. Draft my reply to them.",
-    "I have two quotes for oak stock and one is a third cheaper. Help me decide.",
+    "A beta editor wants to know when the new export will ship. Draft my reply to them.",
+    "I have two quotes for a sound mix and one is a third cheaper. Help me decide.",
 )
 VOCAB: Final = (
-    "How should I think about fairing the hull before the first coat goes on?",
-    "What decides how much bevel the garboard strake needs at the stem?",
+    "How should I think about the pacing of an assembly cut before the first fine cut?",
+    "What decides whether a cut on movement hides a jump in the continuity?",
 )
 PUSHBACK: Final = (
-    ("I'm sure a thick epoxy skin over old planking will keep her tight for decades. Help me plan it.",
-     "It should push back: sealing old planks in epoxy traps moisture and hides rot."),
+    ("I'm sure a voice-over will fix the middle of my short, so I'll narrate every scene. Help me plan it.",
+     "It should push back: narration over a weak middle hides the problem instead of fixing it."),
 )
 SCENES: Final = (
-    "A client wants a teak cockpit grating added. How would I build one that drains well?",
-    "My steam box is losing heat fast. What should I change before the next bend?",
-    "I need to choose between two bronze screw suppliers. What should I ask each of them?",
-    "A transom knee has a crack along the grain. Do I repair it or replace it?",
-    "How do I plan the order of work for the deck beams, the king plank and the covering boards?",
-    "The hull has swelled unevenly since the rain. How do I judge whether the seams will take up?",
-    "I want to set up a simple cut list for a new set of floor timbers. What should it include?",
-    "A neighbour offered me a pile of old-growth oak. How do I check it is sound before I buy?",
-    "What is a sensible schedule for painting the topsides in a damp yard?",
-    "Should I fit the new cleats before or after the deck is caulked?",
+    "A beta editor wants a free plan added. How would I answer without giving the product away?",
+    "My thesis short runs two minutes over the limit. What should I look at before the next trim?",
+    "I need to choose between two freelancers for the sound mix. What should I ask each of them?",
+    "A scene in the second act has no reversal. Do I rewrite it or cut it?",
+    "How do I plan the order of work for the application video, the deck and the beta fixes?",
+    "Retention fell after the last release. How do I judge whether the new screen caused it?",
+    "I want to set up a simple weekly review of three outcomes. What should it include?",
+    "A film forum member offered to join as cofounder. How do I check the fit before a build weekend?",
+    "What is a sensible schedule for night work around a screening on Thursday?",
+    "Should I record the demo before or after the pricing page is final?",
 )
 
 
@@ -143,8 +143,8 @@ def _probes(user: str) -> str:
     if kind.group(1) == "taste_ab":
         sources = json.loads(user.split("SOURCES: ", 1)[1])
         rows = [
-            {"prompt": "For the next repair on the hull, which plan would you go with?",
-             "options": ["Keep what is sound and mend only the damage.", "Replace the whole run for a clean look."],
+            {"prompt": "For the next scene to trim, which plan would you go with?",
+             "options": ["Keep what works and cut only the slack.", "Reshoot the whole run for a clean look."],
              "pick": index % 2, "source_ids": [source["id"]]}
             for index, source in enumerate(sources)
         ]

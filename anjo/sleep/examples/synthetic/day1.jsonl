@@ -1,13 +1,13 @@
-{"role": "user", "at": "09:05", "text": "Morning. I'm restoring a 1950s 22-foot wooden sloop called the Sparrowhawk for a client's spring launch, so I'll want help planning the work."}
-{"role": "assistant", "at": "09:05", "text": "Happy to help. What stage is she at?"}
-{"role": "user", "at": "09:07", "text": "Stripped to the frames. The ribs are mostly sound but I'll have to replace a few, and I prefer steam-bent oak ribs over laminated ones when the original used solid timber."}
-{"role": "assistant", "at": "09:08", "text": "Understood. I'll keep that in mind. Laminated ribs are usually easier to get right."}
-{"role": "user", "at": "09:10", "text": "No, that's not how I work, and don't tell me what's easier. Also I'd rather close a seam with cotton and linseed putty than a modern sealant."}
-{"role": "user", "at": "09:12", "text": "Please be blunt with me. I don't want reassurance, I want the answer first and the reasons after it."}
-{"role": "assistant", "at": "09:12", "text": "Noted: answer first, reasons after, no reassurance."}
-{"role": "user", "at": "09:20", "text": "One more thing about how I like my notes: short numbered steps, not paragraphs."}
-{"role": "user", "at": "09:41", "text": "The client launches the last Saturday of April, so the hull has to be tight by mid-April. No fibreglass over the planks, the lines stay original."}
-{"role": "user", "at": "10:30", "text": "I'll bring the garboard plank template to the yard meeting this Friday, so I need the lofting notes ready before then."}
-{"role": "assistant", "at": "10:31", "text": "Friday it is. I'll help you get the lofting notes ready."}
-{"role": "user", "at": "15:48", "text": "I still can't tell whether the rot at the stem is only in the outer layer or runs into the stem itself, and I haven't found a way to settle it."}
-{"role": "user", "at": "15:52", "text": "Salvaged bronze fittings go back on wherever they're sound, the budget is fixed."}
+{"role": "user", "at": "00:05", "text": "Night. I'm building Cutlist, an AI tool that cuts a first assembly from raw footage, and the accelerator application is due in nineteen days, so I'll want help with the pitch."}
+{"role": "assistant", "at": "00:05", "text": "Happy to help. Where is the application now?"}
+{"role": "user", "at": "00:07", "text": "Slide two is the problem and I've rewritten it four times. I prefer one input and one button to a settings page, and I'd rather cut a scene by a third than add a shot to explain it."}
+{"role": "assistant", "at": "00:08", "text": "Understood. A shorter slide may serve you better, and I can suggest some friendly alternatives."}
+{"role": "user", "at": "00:10", "text": "No, that's not how I work, and don't open with praise. Open with the problem."}
+{"role": "user", "at": "00:12", "text": "Please be blunt with me. I don't want hype, I want the answer first and the reasons after it, in under eighty words."}
+{"role": "assistant", "at": "00:12", "text": "Noted: answer first, reasons after, no hype, under eighty words."}
+{"role": "user", "at": "00:20", "text": "One more thing about how I like my notes: short numbered steps, three at most."}
+{"role": "user", "at": "00:41", "text": "Runway is eleven weeks, so every cost gets stated per hour of footage. I work alone at night around the thesis short."}
+{"role": "user", "at": "01:30", "text": "I'll send the one-minute video script to the editors in the beta this Friday, so I need a draft ready before then."}
+{"role": "assistant", "at": "01:31", "text": "Friday it is. I'll help you get the script ready."}
+{"role": "user", "at": "02:48", "text": "I still can't tell whether the retention drop comes from the new auto-tagging screen or from the exam weeks, and I haven't found a way to settle it."}
+{"role": "user", "at": "02:52", "text": "Costs stay per hour of footage in every slide, the runway is short."}

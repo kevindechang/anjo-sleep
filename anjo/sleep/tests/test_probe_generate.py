@@ -56,14 +56,15 @@ def evidence(eid, kind, text, held_out=False):
                     datetime(2026, 10, 28, tzinfo=UTC))
 
 
-def test_probe_generator_emits_all_five_kinds():
-    probes = g.generate_probes(person(), 7, chat=FakeChat(), model="m")
+@pytest.mark.parametrize("name", ["film_student", "film_founder"])
+def test_probe_generator_emits_all_five_kinds(name):
+    probes = g.generate_probes(person(name), 7, chat=FakeChat(), model="m")
     by: dict[str, list[Any]] = {}
     for p in probes:
         by.setdefault(p.kind, []).append(p)
     assert {k: len(v) for k, v in by.items()} == g.COUNTS
     assert len({p.id for p in probes}) == len(probes)
-    assert all(p.person_id == "film_student" for p in probes)
+    assert all(p.person_id == name for p in probes)
     assert all(p.options is not None and p.expected in p.options for p in by["taste_ab"])
     assert all(p.expected for p in by["pushback"])
 

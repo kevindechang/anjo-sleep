@@ -1,6 +1,8 @@
 # mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False
 from pathlib import Path
 
+import pytest
+
 from anjo.sleep.personas import model as m
 from anjo.sleep.sim import persona_sim as sim
 
@@ -29,6 +31,9 @@ class FakeTransport:
         return f"reply to {text}"
 
 
+ALL_PERSONAS = ("film_student", "film_student_donor", "film_founder", "film_founder_donor")
+
+
 def run(name="film_student", day=3, seed=5, **kw):
     pf = m.load_person_file(PERSONAS / f"{name}.json")
     model, transport = FakeModel(**kw), FakeTransport()
@@ -36,8 +41,9 @@ def run(name="film_student", day=3, seed=5, **kw):
     return pf, model, transport, turns
 
 
-def test_simulator_never_receives_held_out():
-    pf, model, transport, turns = run()
+@pytest.mark.parametrize("name", ALL_PERSONAS)
+def test_simulator_never_receives_held_out(name):
+    pf, model, transport, turns = run(name)
     seen = " ".join(model.systems + [x["content"] for h in model.histories for x in h])
     seen += " ".join(t.text for t in turns) + " ".join(s[1] for s in transport.sent)
     for s in pf.held_out.preferences:
@@ -49,15 +55,15 @@ def test_simulator_never_receives_held_out():
     assert sim.simulate_day.__annotations__["person"] == "Persona"
 
 
-def test_held_out_absent_from_history_memory_and_context_after_a_simulated_day():
-    for name in ("film_student", "film_student_donor"):
-        for day in range(8):
-            pf, model, transport, turns = run(name, day)
-            blob = " ".join(t.text for t in turns) + " ".join(model.systems)
-            held = [s.text for s in pf.held_out.preferences] + [
-                w.text for w in pf.held_out.new_work
-            ]
-            assert not [h for h in held if h in blob]
+@pytest.mark.parametrize("name", ALL_PERSONAS)
+def test_held_out_absent_from_history_memory_and_context_after_a_simulated_day(name):
+    for day in range(8):
+        pf, model, transport, turns = run(name, day)
+        blob = " ".join(t.text for t in turns) + " ".join(model.systems)
+        held = [s.text for s in pf.held_out.preferences] + [
+            w.text for w in pf.held_out.new_work
+        ]
+        assert not [h for h in held if h in blob]
 
 
 def test_every_request_is_in_a_cleared_session():

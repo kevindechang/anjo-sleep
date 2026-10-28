@@ -1,0 +1,816 @@
+{
+ "visible": {
+  "person_id": "film_founder_donor",
+  "name": "Sami Brightwater",
+  "age": 23,
+  "field": "film school and an AI startup for filmmakers",
+  "field_domains": [
+   "film",
+   "movies",
+   "tv",
+   "video",
+   "startups"
+  ],
+  "line": "Sami Brightwater, 23, is in his final year at a film school ten minutes from his parents' house, and is also the cofounder of Marginalia, an AI notebook that keeps continuity notes for small film crews; he works days in a shared studio with his cohort, with a thesis short and an accelerator application both due within weeks.",
+  "project": {
+   "title": "Marginalia",
+   "logline": "An AI notebook that keeps shot logs and continuity notes for small film crews; twenty-two crews use it free and 600 people are on the waitlist.",
+   "constraints": [
+    "A 30,000 dollar pre-seed grant covers about fourteen months at the current burn.",
+    "The accelerator application is due in nineteen days, and the thesis short screens in five weeks.",
+    "Compute costs about 40 dollars per crew per month, and nothing is charged yet.",
+    "The team is two people: Sami and a cofounder who owns sales and customer calls.",
+    "The shared studio fee rises next month."
+   ]
+  },
+  "preferences": [
+   {
+    "id": "fd-p001",
+    "text": "Likes a reply that starts by acknowledging what he has already tried.",
+    "domain": "replies"
+   },
+   {
+    "id": "fd-p002",
+    "text": "Wants the full reasoning, even when the answer runs long.",
+    "domain": "replies"
+   },
+   {
+    "id": "fd-p003",
+    "text": "Reads well-spaced paragraphs and dislikes bulleted lists.",
+    "domain": "replies"
+   },
+   {
+    "id": "fd-p004",
+    "text": "Likes warm, encouraging phrasing and the occasional exclamation mark.",
+    "domain": "replies"
+   },
+   {
+    "id": "fd-p005",
+    "text": "Wants a strength named before the flaw.",
+    "domain": "tone"
+   },
+   {
+    "id": "fd-p006",
+    "text": "Takes 'you might consider' better than a blunt verdict.",
+    "domain": "tone"
+   },
+   {
+    "id": "fd-p007",
+    "text": "Wants several options laid out so he can choose among them.",
+    "domain": "tone"
+   },
+   {
+    "id": "fd-p008",
+    "text": "Wants the reasons behind a score, not just the number.",
+    "domain": "tone"
+   },
+   {
+    "id": "fd-p009",
+    "text": "Acts on advice that comes with a reason and a story of someone who did it.",
+    "domain": "advice"
+   },
+   {
+    "id": "fd-p010",
+    "text": "Takes advice to add detail and resists advice to cut.",
+    "domain": "advice"
+   },
+   {
+    "id": "fd-p011",
+    "text": "Follows advice with no deadline if it feels right to him.",
+    "domain": "advice"
+   },
+   {
+    "id": "fd-p012",
+    "text": "Listens when advice begins 'most founders', because he wants to know the norm.",
+    "domain": "advice"
+   },
+   {
+    "id": "fd-p013",
+    "text": "When stuck on a scene he calls a classmate and talks it through for an hour.",
+    "domain": "stuck"
+   },
+   {
+    "id": "fd-p014",
+    "text": "When stuck on code he reads every similar open issue before changing a line.",
+    "domain": "stuck"
+   },
+   {
+    "id": "fd-p015",
+    "text": "When stuck on a pitch he asks his cofounder to read it back to him.",
+    "domain": "stuck"
+   },
+   {
+    "id": "fd-p016",
+    "text": "When stuck he asks for ten more ideas close to the one he has.",
+    "domain": "stuck"
+   },
+   {
+    "id": "fd-p017",
+    "text": "Builds a twenty-slide deck with an appendix behind it.",
+    "domain": "deck"
+   },
+   {
+    "id": "fd-p018",
+    "text": "Opens with the size of the market and the story of the problem.",
+    "domain": "deck"
+   },
+   {
+    "id": "fd-p019",
+    "text": "Polishes the deck for days before anyone sees it.",
+    "domain": "deck"
+   },
+   {
+    "id": "fd-p020",
+    "text": "Includes a full market-sizing slide.",
+    "domain": "deck"
+   },
+   {
+    "id": "fd-p021",
+    "text": "Wants the tool to feel finished before anyone outside the team sees it.",
+    "domain": "product"
+   },
+   {
+    "id": "fd-p022",
+    "text": "Waits for a polished build before showing it to editors.",
+    "domain": "product"
+   },
+   {
+    "id": "fd-p023",
+    "text": "Likes a rich settings page for the power users.",
+    "domain": "product"
+   },
+   {
+    "id": "fd-p024",
+    "text": "Writes a short tutorial for every feature.",
+    "domain": "product"
+   },
+   {
+    "id": "fd-p025",
+    "text": "Loves lush, score-driven melodramas with sweeping camera moves.",
+    "domain": "film taste"
+   },
+   {
+    "id": "fd-p026",
+    "text": "Admires films carried by a strong narrator's voice.",
+    "domain": "film taste"
+   },
+   {
+    "id": "fd-p027",
+    "text": "Rewatches one 1950s musical to study its color.",
+    "domain": "film taste"
+   },
+   {
+    "id": "fd-p028",
+    "text": "Finds long static takes dull.",
+    "domain": "film taste"
+   },
+   {
+    "id": "fd-p029",
+    "text": "Uses a dissolve to ease between scenes.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p030",
+    "text": "Keeps every scene whole until the full draft exists.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p031",
+    "text": "Shows a rough cut with the sound up and the music already in.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p032",
+    "text": "Keeps a favorite shot even when it needs explaining.",
+    "domain": "editing"
+   },
+   {
+    "id": "fd-p033",
+    "text": "Writes the screenplay on weekend mornings in long sessions.",
+    "domain": "feature script"
+   },
+   {
+    "id": "fd-p034",
+    "text": "Lets dialogue run long and trims it much later.",
+    "domain": "feature script"
+   },
+   {
+    "id": "fd-p035",
+    "text": "Rewrites the ending freely as the draft grows.",
+    "domain": "feature script"
+   },
+   {
+    "id": "fd-p036",
+    "text": "Picks the title of a script first.",
+    "domain": "feature script"
+   },
+   {
+    "id": "fd-p037",
+    "text": "Keeps a fine draft and polishes it into a good one.",
+    "domain": "standards"
+   },
+   {
+    "id": "fd-p038",
+    "text": "Compares his cut with other student work as a healthy benchmark.",
+    "domain": "standards"
+   },
+   {
+    "id": "fd-p039",
+    "text": "Asks whether his collaborators enjoyed watching it.",
+    "domain": "standards"
+   },
+   {
+    "id": "fd-p040",
+    "text": "Is gentle with his own work and wants others to be gentle too.",
+    "domain": "standards"
+   },
+   {
+    "id": "fd-p041",
+    "text": "Works in daylight in the shared studio with his cohort.",
+    "domain": "isolation"
+   },
+   {
+    "id": "fd-p042",
+    "text": "Eats lunch with a group most days.",
+    "domain": "isolation"
+   },
+   {
+    "id": "fd-p043",
+    "text": "Talks with several people every day and likes it.",
+    "domain": "isolation"
+   },
+   {
+    "id": "fd-p044",
+    "text": "Likes a check-in on how he is doing now and then.",
+    "domain": "isolation"
+   },
+   {
+    "id": "fd-p045",
+    "text": "Works with a cofounder who handles sales and customers.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fd-p046",
+    "text": "Wants cold messages friendly and longer, with some context.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fd-p047",
+    "text": "Prefers a coffee to a build weekend when meeting a collaborator.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fd-p048",
+    "text": "Sees no need for a date on which a search should stop.",
+    "domain": "cofounder"
+   },
+   {
+    "id": "fd-p049",
+    "text": "Lives ten minutes from his parents and has dinner with them on Sundays.",
+    "domain": "home"
+   },
+   {
+    "id": "fd-p050",
+    "text": "Tells his family every detail of the work.",
+    "domain": "home"
+   },
+   {
+    "id": "fd-p051",
+    "text": "Keeps a photo of the team on the desk.",
+    "domain": "home"
+   },
+   {
+    "id": "fd-p052",
+    "text": "Likes a prompt about how his family is doing.",
+    "domain": "home"
+   },
+   {
+    "id": "fd-p053",
+    "text": "Works until the task is finished, whatever time that is.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p054",
+    "text": "Plans the week loosely and adjusts as it goes.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p055",
+    "text": "Treats the application deadline as the real date and no earlier.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p056",
+    "text": "Counts the hours he has put in.",
+    "domain": "schedule"
+   },
+   {
+    "id": "fd-p057",
+    "text": "Watches video tutorials before touching a new tool.",
+    "domain": "learning"
+   },
+   {
+    "id": "fd-p058",
+    "text": "Takes a short online course on anything unfamiliar.",
+    "domain": "learning"
+   },
+   {
+    "id": "fd-p059",
+    "text": "Keeps notes in a shared document the whole team can edit.",
+    "domain": "learning"
+   },
+   {
+    "id": "fd-p060",
+    "text": "Asks a classmate before opening the documentation.",
+    "domain": "learning"
+   },
+   {
+    "id": "fd-p061",
+    "text": "Tracks the runway monthly, at the close of each month.",
+    "domain": "money"
+   },
+   {
+    "id": "fd-p062",
+    "text": "Spends on design before anything else.",
+    "domain": "money"
+   },
+   {
+    "id": "fd-p063",
+    "text": "Takes any grant that is offered and files the reports gladly.",
+    "domain": "money"
+   },
+   {
+    "id": "fd-p064",
+    "text": "Wants costs stated per month, not per unit.",
+    "domain": "money"
+   }
+  ],
+  "tone_requests": [
+   {
+    "id": "fd-t1",
+    "text": "Take your time; I would rather have a careful answer than a fast one."
+   },
+   {
+    "id": "fd-t2",
+    "text": "Warm is fine, and so is an exclamation mark."
+   },
+   {
+    "id": "fd-t3",
+    "text": "Start with what is working, then the problem."
+   },
+   {
+    "id": "fd-t4",
+    "text": "Lay out the options and the trade-offs, then let me choose."
+   },
+   {
+    "id": "fd-t5",
+    "text": "Remind me that it will be fine, then give me the next steps."
+   },
+   {
+    "id": "fd-t6",
+    "text": "Ask me how I'm doing at the start of a long session."
+   }
+  ],
+  "stated_views": [
+   {
+    "id": "fd-v1",
+    "text": "A fine draft can always be polished into a good one."
+   },
+   {
+    "id": "fd-v2",
+    "text": "The best AI tools for filmmakers keep the maker's hand in every step."
+   },
+   {
+    "id": "fd-v3",
+    "text": "A film should be felt first and analysed later."
+   },
+   {
+    "id": "fd-v4",
+    "text": "A good tutorial is part of a good product."
+   },
+   {
+    "id": "fd-v5",
+    "text": "Ambition grows best with company."
+   }
+  ],
+  "plans": [
+   {
+    "day": 4,
+    "text": "On Day 4 I'm polishing the twenty-slide deck with my cofounder."
+   },
+   {
+    "day": 8,
+    "text": "On Day 8 I'm showing the rough cut of the thesis short to two close friends."
+   },
+   {
+    "day": 12,
+    "text": "On Day 12 I'm sending the festival list to the whole cohort for suggestions."
+   }
+  ]
+ },
+ "held_out": {
+  "preferences": [
+   {
+    "id": "fd-h001",
+    "text": "Submits the thesis short to every festival the budget allows.",
+    "domain": "festivals"
+   },
+   {
+    "id": "fd-h002",
+    "text": "Walks viewers through the product in a narrated four-minute demo.",
+    "domain": "demo"
+   },
+   {
+    "id": "fd-h003",
+    "text": "Offers editors a free plan and a monthly subscription behind it.",
+    "domain": "pricing"
+   },
+   {
+    "id": "fd-h004",
+    "text": "Hires one part-time generalist who can cover whatever turns up.",
+    "domain": "contractors"
+   },
+   {
+    "id": "fd-h005",
+    "text": "Gives every feature a descriptive name that says what it does.",
+    "domain": "naming"
+   },
+   {
+    "id": "fd-h006",
+    "text": "Lets a mentor call run as long as it is useful.",
+    "domain": "mentors"
+   },
+   {
+    "id": "fd-h007",
+    "text": "Sends an investor a gentle nudge every week until there is an answer.",
+    "domain": "follow-ups"
+   },
+   {
+    "id": "fd-h008",
+    "text": "Lays a temp music track under the first assembly to find the rhythm.",
+    "domain": "music"
+   },
+   {
+    "id": "fd-h009",
+    "text": "Likes a poster with a still, a tagline and festival laurels.",
+    "domain": "posters"
+   },
+   {
+    "id": "fd-h010",
+    "text": "Marks the camera angle in every scene of the screenplay.",
+    "domain": "script format"
+   },
+   {
+    "id": "fd-h011",
+    "text": "Works with two screens, chat on one and references on the other.",
+    "domain": "workspace"
+   },
+   {
+    "id": "fd-h012",
+    "text": "Works through Saturday to bank progress ahead of a deadline.",
+    "domain": "weekends"
+   },
+   {
+    "id": "fd-h013",
+    "text": "Opens the whole project to the public from the first day.",
+    "domain": "open source"
+   },
+   {
+    "id": "fd-h014",
+    "text": "Shows a new cut to two close friends before anyone else.",
+    "domain": "first viewers"
+   },
+   {
+    "id": "fd-h015",
+    "text": "Takes a few days after a rejection before deciding what to do.",
+    "domain": "rejection"
+   },
+   {
+    "id": "fd-h016",
+    "text": "Answers a bug report the next morning with a plan.",
+    "domain": "support"
+   }
+  ],
+  "taste_ab": [
+   {
+    "id": "fx-t01",
+    "pref_id": "fd-h001",
+    "prompt": "A festival list has thirty options for the thesis short. What happens?",
+    "options": [
+     "Submit to three chosen festivals",
+     "Submit to as many as the budget allows"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t02",
+    "pref_id": "fd-h002",
+    "prompt": "How is the product demo cut?",
+    "options": [
+     "A narrated four-minute walkthrough",
+     "A ninety-second silent screen recording with captions"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t03",
+    "pref_id": "fd-h003",
+    "prompt": "How does the product charge?",
+    "options": [
+     "A free tier and a monthly subscription",
+     "Per hour of footage, with no free tier"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t04",
+    "pref_id": "fd-h004",
+    "prompt": "The film needs a sound mix. Who does it?",
+    "options": [
+     "A freelancer booked for the mix alone",
+     "A part-time hire who can also cover other jobs"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t05",
+    "pref_id": "fd-h005",
+    "prompt": "What is the new feature called?",
+    "options": [
+     "A descriptive phrase that says what it does",
+     "A plain one-word name"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t06",
+    "pref_id": "fd-h006",
+    "prompt": "A mentor offers an hour next week.",
+    "options": [
+     "Accept, send three questions ahead and stop at twenty-five minutes",
+     "Accept and leave the hour open for wherever it goes"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t07",
+    "pref_id": "fd-h007",
+    "prompt": "A busy investor has not replied.",
+    "options": [
+     "A weekly nudge until they answer",
+     "One short follow-up after four days, then stop"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t08",
+    "pref_id": "fd-h008",
+    "prompt": "When does music go into the cut?",
+    "options": [
+     "First, as a temp track to find the rhythm",
+     "Last, after the picture is locked"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t09",
+    "pref_id": "fd-h009",
+    "prompt": "What does the poster show?",
+    "options": [
+     "One still and the title only",
+     "A still, a tagline and festival laurels"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t10",
+    "pref_id": "fd-h010",
+    "prompt": "How is the screenplay formatted?",
+    "options": [
+     "Camera angles marked in every scene",
+     "Plain scene headings, no camera directions"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t11",
+    "pref_id": "fd-h011",
+    "prompt": "How is the desk set up for a night session?",
+    "options": [
+     "One screen and one window",
+     "Two screens with chat and references open"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t12",
+    "pref_id": "fd-h012",
+    "prompt": "It is Saturday and the deadline is nine days out.",
+    "options": [
+     "Go to a cinema alone with the phone off",
+     "Work through the day to bank progress"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t13",
+    "pref_id": "fd-h013",
+    "prompt": "What gets published?",
+    "options": [
+     "Everything, open source from day one",
+     "The small tools, with the core model kept closed"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t14",
+    "pref_id": "fd-h014",
+    "prompt": "Who sees the new cut first?",
+    "options": [
+     "Two strangers from the waitlist",
+     "Two close friends"
+    ],
+    "pick": 1
+   },
+   {
+    "id": "fx-t15",
+    "pref_id": "fd-h015",
+    "prompt": "A grant application is rejected.",
+    "options": [
+     "Take a few days before deciding what to do",
+     "Thank them in one line and apply elsewhere the same day"
+    ],
+    "pick": 0
+   },
+   {
+    "id": "fx-t16",
+    "pref_id": "fd-h016",
+    "prompt": "A user reports a bug at three in the morning.",
+    "options": [
+     "Reply in the morning with a plan",
+     "Reply and fix it right then"
+    ],
+    "pick": 0
+   }
+  ],
+  "new_work": [
+   {
+    "id": "fd-w01",
+    "day": 2,
+    "parent_project": "Marginalia",
+    "text": "Here is the first slide of our deck: the market for film production tools is 8 billion dollars. Do I open there?"
+   },
+   {
+    "id": "fd-w02",
+    "day": 2,
+    "parent_project": "Marginalia",
+    "text": "Twenty-two crews use Marginalia free and six of them returned every week for a month. How should I describe that without overselling it?"
+   },
+   {
+    "id": "fd-w03",
+    "day": 3,
+    "parent_project": "Marginalia",
+    "text": "My cofounder and I disagree about the onboarding. She wants a tutorial for each feature; I think one is enough. How do we settle it?"
+   },
+   {
+    "id": "fd-w04",
+    "day": 3,
+    "parent_project": "Marginalia",
+    "text": "A crew supervisor says the continuity notes are accurate but 'cold'. Should the tone of the notes be warmer?"
+   },
+   {
+    "id": "fd-w05",
+    "day": 4,
+    "parent_project": "Marginalia",
+    "text": "The ending of the thesis short lingers on a window for a long time. My friends say it is lovely; my teacher says it is slow. Which of them do I trust?"
+   },
+   {
+    "id": "fd-w06",
+    "day": 4,
+    "parent_project": "Marginalia",
+    "text": "Here is my message to a possible advisor: a long, friendly note with the story of why we built Marginalia. Is it too long?"
+   },
+   {
+    "id": "fd-w07",
+    "day": 5,
+    "parent_project": "Marginalia",
+    "text": "A festival programmer wrote 'Lovely, but slow.' How should I think about that?"
+   },
+   {
+    "id": "fd-w08",
+    "day": 5,
+    "parent_project": "Marginalia",
+    "text": "Each crew costs about 40 dollars a month in compute and we charge nothing yet. When do we start charging?"
+   },
+   {
+    "id": "fd-w09",
+    "day": 6,
+    "parent_project": "Marginalia",
+    "text": "I had lunch with the whole cohort and felt better about everything. Is it a bad sign that I need that to keep going?"
+   },
+   {
+    "id": "fd-w10",
+    "day": 6,
+    "parent_project": "Marginalia",
+    "text": "My feature script is at page 38 and the ending keeps changing. Is it normal to keep rewriting it?"
+   },
+   {
+    "id": "fd-w11",
+    "day": 7,
+    "parent_project": "Marginalia",
+    "text": "Fifteen crews have asked for a mobile version. Do we build it before the application deadline?"
+   },
+   {
+    "id": "fd-w12",
+    "day": 7,
+    "parent_project": "Marginalia",
+    "text": "Read aloud, our video opens: 'We help small film crews remember everything.' Does it land?"
+   },
+   {
+    "id": "fd-w13",
+    "day": 8,
+    "parent_project": "Marginalia",
+    "text": "We rehearsed the pitch together twice and it ran to eight minutes. Where do I trim?"
+   },
+   {
+    "id": "fd-w14",
+    "day": 8,
+    "parent_project": "Marginalia",
+    "text": "Our shared studio fee goes up next month. What are the gentle options for handling it?"
+   },
+   {
+    "id": "fd-w15",
+    "day": 9,
+    "parent_project": "Marginalia",
+    "text": "A classmate offered to help with design for free. Do I accept, and how do I thank her?"
+   },
+   {
+    "id": "fd-w16",
+    "day": 9,
+    "parent_project": "Marginalia",
+    "text": "Our advisor said the deck is 'a bit long'. Which slides are the first to go?"
+   },
+   {
+    "id": "fd-w17",
+    "day": 10,
+    "parent_project": "Marginalia",
+    "text": "The mid-term screening is Thursday and the mix is flat. A friend says she can help tonight. Do I ask her?"
+   },
+   {
+    "id": "fd-w18",
+    "day": 10,
+    "parent_project": "Marginalia",
+    "text": "Someone online called Marginalia 'a glorified notebook.' How do I feel about that and what do I say back?"
+   },
+   {
+    "id": "fd-w19",
+    "day": 11,
+    "parent_project": "Marginalia",
+    "text": "I'd like to make a trailer for the feature I'm writing on weekends. Would that help the application?"
+   },
+   {
+    "id": "fd-w20",
+    "day": 11,
+    "parent_project": "Marginalia",
+    "text": "Our weekly review shows we finished most of what we planned. How do we celebrate without slowing down?"
+   },
+   {
+    "id": "fd-w21",
+    "day": 12,
+    "parent_project": "Marginalia",
+    "text": "An alumna filmmaker offered a long video call. How do I prepare so I get the most from it?"
+   },
+   {
+    "id": "fd-w22",
+    "day": 12,
+    "parent_project": "Marginalia",
+    "text": "Retention rose from 31 to 35 percent after the tutorial screen. Do we add more of them?"
+   },
+   {
+    "id": "fd-w23",
+    "day": 13,
+    "parent_project": "Marginalia",
+    "text": "The accelerator wants a demo link. We have a narrated walkthrough that runs four minutes. Is that fine?"
+   },
+   {
+    "id": "fd-w24",
+    "day": 13,
+    "parent_project": "Marginalia",
+    "text": "The cut of the short is good and I'm happy with it. Do I keep polishing for another week?"
+   },
+   {
+    "id": "fd-w25",
+    "day": 14,
+    "parent_project": "Marginalia",
+    "text": "The application went in on its due date. How should the team mark it?"
+   },
+   {
+    "id": "fd-w26",
+    "day": 14,
+    "parent_project": "Marginalia",
+    "text": "A friend from back home messaged me and I'd love to write a long reply. Can you help me draft it?"
+   }
+  ]
+ },
+ "hand_written": "Development personas only: written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives."
+}

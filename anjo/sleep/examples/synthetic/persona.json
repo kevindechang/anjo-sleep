@@ -1,41 +1,41 @@
 {
   "schema": "anjo-sleep-example/1",
-  "note": "Entirely invented for this example. Not a real person, and not one of the registered test personas.",
-  "person_id": "example-calla",
-  "name": "Calla Winterbourne",
-  "age": 44,
-  "field": "wooden boat restoration",
-  "line": "Runs a one-person boatyard and restores old wooden sailboats for private clients.",
+  "note": "Invented for this example: the demo's hero in the example's smaller format. Its held-out lines are not the registered persona's.",
+  "person_id": "example-teo",
+  "name": "Teo Halvorsen",
+  "age": 22,
+  "field": "film school and an AI startup for filmmakers",
+  "line": "Is in his final year at a film school far from his family and is the solo founder of an AI tool that builds a first assembly cut for editors.",
   "day": "2026-03-02",
   "project": {
-    "title": "Sparrowhawk",
-    "logline": "A 1950s 22-foot wooden sloop being rebuilt for a client's spring launch.",
+    "title": "Cutlist",
+    "logline": "An AI tool that logs raw footage and builds a first assembly cut for an editor to start from, in beta with thirty-eight editors.",
     "constraints": [
-      "Keep the original lines: no fibreglass sheathing over the hull planks.",
-      "The client launches on the last Saturday of April, so the hull must be tight by mid-April.",
-      "The budget is fixed, so salvaged bronze fittings are used wherever they are sound."
+      "The accelerator application is due in nineteen days, so only work that changes the application counts.",
+      "Runway is eleven weeks, so every cost is stated per hour of footage.",
+      "He is the only founder, and works at night around the thesis short."
     ]
   },
   "visible": {
     "statements": [
-      {"kind": "lesson", "text": "They are rebuilding the Sparrowhawk, a 22-foot wooden sloop, for a client's spring launch."},
-      {"kind": "preference", "text": "They prefer steam-bent oak ribs over laminated ones when the original used solid timber."},
-      {"kind": "preference", "text": "They would rather close a seam with cotton and linseed putty than with a modern sealant."},
-      {"kind": "preference", "text": "They like working notes as short numbered steps, not paragraphs."},
-      {"kind": "tone_request", "text": "They want blunt answers with no reassurance."},
-      {"kind": "tone_request", "text": "They want the answer first and the reasons after it."}
+      {"kind": "lesson", "text": "He is building Cutlist, an AI tool that cuts a first assembly from raw footage, and has an accelerator application due in nineteen days."},
+      {"kind": "preference", "text": "He prefers one input and one button to a settings page."},
+      {"kind": "preference", "text": "He would rather cut a scene by a third than add a shot to explain it."},
+      {"kind": "preference", "text": "He likes a reply to open with the problem, never with praise."},
+      {"kind": "tone_request", "text": "He wants blunt answers with no hype."},
+      {"kind": "tone_request", "text": "He wants the answer first and the reasons after it, in under eighty words."}
     ]
   },
   "held_out": {
     "preferences": [
-      {"id": "h1", "text": "They distrust quick-fix filler and want a proper scarf joint wherever a plank is damaged."},
-      {"id": "h2", "text": "They would take a simpler rig that needs no adjusting under way over a clever one."},
-      {"id": "h3", "text": "They want a written cut list before any timber is cut."}
+      {"id": "h1", "text": "He wants a demo clip with captions and no voice-over."},
+      {"id": "h2", "text": "He would take a single plain word as a feature name over a descriptive phrase."},
+      {"id": "h3", "text": "He wants music added only after the picture is locked."}
     ],
     "new_work": [
-      "The client now wants a small inboard engine fitted in the Sparrowhawk. I have to lay out an engine bed that carries the load without stressing the keel bolts. How would you set it up?",
-      "One plank just above the waterline has a hairline split along the grain, and the client says to run epoxy into it and paint over. What should I do about that plank?",
-      "I found the original rudder fittings in a salvage lot: bronze, pitted, but not cracked. How do I decide whether to clean and reuse them or have new ones cast?"
+      "My beta users keep asking for a free plan. Do I give them one before the application goes in, or hold the line on charging per hour of footage?",
+      "The thesis short is two minutes over the festival's limit and every scene feels necessary. How do I decide what goes?",
+      "A possible cofounder wants a long call before she will commit to a build weekend. What do I say to move it along?"
     ]
   }
 }

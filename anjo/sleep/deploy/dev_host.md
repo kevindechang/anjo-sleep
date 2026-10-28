@@ -149,7 +149,7 @@ The units are in §2. The token file is mode 600, and the token is never printed
 
 ### 1.5 LoRA sizing
 
-About 6 to 8 adapters are live at once: Kevin, Tessa, three lives and the donors for arm 3x. So
+About 6 to 8 adapters are live at once: Kevin, Teo, three lives and the donors for arm 3x. So
 `--max-loras 8` and `--max-cpu-loras 16`. vLLM queues a request for a ninth adapter rather than
 failing it, and the CPU cache swaps it in. Task 5 trains rank 16, and Meta's recipe goes up to 32,
 so `--max-lora-rank 32`.
@@ -312,13 +312,13 @@ WantedBy=multi-user.target
 
 # /etc/systemd/system/anjo-sleep-day.service
 [Unit]
-Description=Anjo Sleep: Tessa's simulated day (wakes Glimmer first)
+Description=Anjo Sleep: Teo's simulated day (wakes Glimmer first)
 [Service]
 Type=oneshot
 User=anjo
 EnvironmentFile=/etc/anjo-sleep/env
 WorkingDirectory=/opt/anjo-sleep
-ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase day --persona founder
+ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase day --persona film_founder
 TimeoutStartSec=1h
 
 # /etc/systemd/system/anjo-sleep-day.timer
@@ -337,7 +337,7 @@ Type=oneshot
 User=anjo
 EnvironmentFile=/etc/anjo-sleep/env
 WorkingDirectory=/opt/anjo-sleep
-ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase night --persona founder
+ExecStart=/opt/anjo-sleep/.venv/bin/python -m anjo.sleep.night.daily --phase night --persona film_founder
 TimeoutStartSec=5h
 
 # /etc/systemd/system/anjo-sleep-night.timer
@@ -378,7 +378,7 @@ works, from the VM: `python -c "import boto3; print(boto3.client('sagemaker').de
 
 The night runs as its own process, so a long night can't take down the server.
 
-**The real-time schedule** (`anjo/sleep/night/daily.py`). Tessa (`founder`) lives in real time from
+**The real-time schedule** (`anjo/sleep/night/daily.py`). Teo (`film_founder`, the demo's hero and the default `--persona`) lives in real time from
 2026-10-28: one simulated day per real day, then the night, then the morning probe run.
 
 - `--phase day` (14:00 Taipei) plays that day's index (days since 2026-10-28) through the dev API,
@@ -397,7 +397,7 @@ The night runs as its own process, so a long night can't take down the server.
   missing, short or failed day fails the night at `simulate` (`day_missing`, `short_day` or the
   day's failure code), and nothing is scored. A failed night is never scored. This timer keeps
   `Persistent=true`: the night lock makes a catch-up safe.
-- The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=founder=<account id>` in the env file.
+- The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=film_founder=<account id>` in the env file.
   The env file also holds `ANJO_SLEEP_HOST=1`, the backend's names (§1.4, or Modal's URL and token),
   `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.
 - Each phase ends with Glimmer asleep (`backend.phase`): the day sets the copy count to 0 when it
