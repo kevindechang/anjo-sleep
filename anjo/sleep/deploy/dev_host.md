@@ -491,3 +491,36 @@ SageMaker** ($2.81 on g6e.2xlarge) (about $2 on Modal) while it is up, so **each
 
 Each turn's context ancestry, and whether Glimmer served it, are kept in
 `data/users/<id>/sleep/reply_ancestry.jsonl` (encrypted, exported, erased with the account).
+
+## MIND's experiment on Fireworks (Tasks 17 and 17b)
+
+MIND's experiment (`python -m anjo.sleep.mind.apd` and `python -m anjo.sleep.mind.replay`) calls
+Spark Open through one provider per experiment (`anjo/sleep/mind/spark_provider.py`). It runs
+from the operator's machine, not this host, so the dev host's environment file needs neither name
+below.
+
+| Name | Meaning |
+|---|---|
+| `ANJO_FIREWORKS_API_KEY` | Fireworks' API key, read at each call (`anjo/sleep/fireworks_api.py`); never uploaded to the Colab VM |
+| `ANJO_SLEEP_MIND_SPARK` | `fireworks` (the default) or `baseten`; any other value stops the command before it starts |
+
+- **The model.** `accounts/fireworks/models/muse-spark-open`, at
+  `https://api.fireworks.ai/inference/v1/chat/completions`. Its exact id is cleared for training
+  beside Baseten's Spark Open id (`provenance.SPARK_OPEN_IDS`); hosted Muse Spark stays uncleared.
+- **The prices.** Fireworks' list prices for Spark Open, checked 2026-10-28: $1.25 per million
+  input tokens, $4.25 per million output tokens, $0.15 per million cached input tokens. `--prices`
+  takes Spark Open's rates as its first two values, the same for either provider:
+  `--prices 1.25,4.25,<train_gpu_hour>,<serve_gpu_hour>`. The ledger prices every input token at
+  the full rate, cached or not, so it never counts less than Fireworks bills.
+- **The budget.** Every Spark Open call of the experiment on Fireworks, the screen's included, is
+  held first on `fireworks_mind_usd`, capped at $90 ($10 under the $100 credit). Fireworks shares
+  no credit with Sleep, so a MIND night there waits only on other MIND nights. With `baseten`,
+  the calls hold `baseten_mind_usd` as before. `--live` prints the provider, the model and the
+  pool before anything runs.
+- **One provider per pilot.** The data dir's `serving_pin.json` records `spark_provider` and
+  `spark_model` at the first command that calls Spark Open (`generate`, `run`, `timing`,
+  `intervene`, `kill-resume`), and refuses a later command on the other provider. It also
+  refuses a data dir whose lives another model wrote before the pin existed. To change provider,
+  start a new data dir.
+- **Sleep's night stays on Baseten.** Practice, extraction, the brief, the simulator and the
+  night's own MIND step never read `ANJO_SLEEP_MIND_SPARK`.
