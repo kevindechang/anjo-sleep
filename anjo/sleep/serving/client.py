@@ -42,7 +42,9 @@ never waits behind another's load.
 request Modal's proxy never delivered). The night's client sends a request that got no status back
 (``TransportFailed``) again, ``ATTEMPTS`` in all, after a short pause (``BACKOFF_S``): every request
 is an idempotent post (``/tokenize``, ``/v1/completions`` with its seed, an adapter load), so a repeat
-gives the same answer. A status is an answer and never goes again. Until the server has answered
+gives the same answer. A status is an answer and never goes again, but for a 502, 503 or 504
+(``PROXY_STATUSES``), which Modal's proxy sends by itself (night 1's morning, 2026-10-29, failed on one
+while vLLM was healthy): that request goes again once, inside the same attempts. Until the server has answered
 within its scale-down window an attempt may wait out a cold start (``REQUEST_TIMEOUT_S``); after that
 a first attempt gives up at ``WARM_TIMEOUT_S``, and any later one, which may meet a restarted
 container, gets the rest of the budget. All the attempts of one request end within
@@ -100,6 +102,10 @@ REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own l
 WARM_TIMEOUT_S: Final = 90.0
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
 ATTEMPTS: Final = len(BACKOFF_S) + 1
+# Statuses Modal's proxy sends by itself, vLLM's answer never reaching the client: a request that met
+# one goes again once, inside ATTEMPTS and the same bound. It is the same idempotent post, so at worst
+# vLLM computes the answer twice; no liveness question is asked, since the proxy answered.
+PROXY_STATUSES: Final = frozenset({502, 503, 504})
 
 # Waking a scaled-to-zero server (``wake``): poll until it answers, under one hard total timeout.
 WAKE_TOTAL_TIMEOUT_S: Final = 600.0  # a cold start of the 30B model, with room to spare
@@ -131,6 +137,11 @@ class ModelNotFound(ServingError):
 
 class TransportFailed(ServingError):
     """The request or its reply was lost on the way: no status came back."""
+
+
+class ProxyFailed(ServingError):
+    """Modal's proxy answered 502, 503 or 504 (``PROXY_STATUSES``) itself: the request may never have
+    reached vLLM, or vLLM's answer never came back."""
 
 
 class ServerUnresponsive(ServingError):
@@ -278,6 +289,8 @@ class HttpPoster:
         response = self._send(path, body, timeout_s)
         if response.status_code == 404:
             raise ModelNotFound(f"{path} returned HTTP 404")
+        if response.status_code in PROXY_STATUSES:
+            raise ProxyFailed(f"{path} returned HTTP {response.status_code}")
         if response.is_error:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
@@ -425,7 +438,8 @@ class _Requests:
     ``BACKOFF_S``. A first attempt gives up at a warm server's timeout, or at ``cold_s`` until the server
     has answered within its scale-down window; a later one, which may meet a restarted container, gets
     whatever is left of ``cold_s`` after the first began, and none runs past it.
-    A status is an answer, and never goes again. A poster other than ``HttpPoster`` keeps its own
+    A status is an answer, and never goes again, but for a post the proxy answered itself
+    (``ProxyFailed``), which goes again once, within the same attempts. A poster other than ``HttpPoster`` keeps its own
     timeout (SageMaker's), and reports no transport failure apart from the rest, so it is never retried."""
 
     poster: Poster
@@ -458,11 +472,19 @@ class _Requests:
 
     def _send(self, attempt: Callable[[float], T]) -> T:
         deadline = self.clock() + self.cold_s
+        proxied = False  # a status from the proxy has gone again: it never goes a third time
         for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
             try:
                 with self.sent.slots:
                     self._refuse_if_down()
                     got = attempt(self._timeout(deadline, first=tried == 0))
+            except ProxyFailed:
+                if proxied or pause is None or deadline - self.clock() <= pause:
+                    raise
+                proxied = True
+                self.sent.retried()
+                self.sleep(pause)
+                continue
             except TransportFailed:
                 if pause is None or deadline - self.clock() <= pause:
                     self._check_alive()  # only a request about to give up asks: a restart gets the whole round
