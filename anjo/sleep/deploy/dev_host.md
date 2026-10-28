@@ -360,6 +360,7 @@ these names; their values never enter the repo:
 | `ANJO_SLEEP_GLIMMER_REVISION`, `ANJO_SLEEP_TOOL_CALL_PARSER` | the same values as the deploy (the revision is the pin above), so the pin matches what is served |
 | `ANJO_SLEEP_INSTANCE_TYPE` | `ml.g6e.xlarge` (default) or `ml.g6e.2xlarge`; read by `deploy` only, which the `--instance-type` option overrides |
 | `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the first two are Muse Spark 1.3's standard list prices, `1.25,4.25` (Meta's pricing page, checked 2026-10-28; Wonder's `4.00/20.00` is fixed in `homework/agent.py`); the last follows the chosen type: `2.61` on g6e.xlarge, `2.81` on g6e.2xlarge |
+| `VERTEX_MIN_CONSENT_VERSION` | `6`: the AI consent version the Gemma talker's gate asks for. Without it the consent gate fails closed and a flagged turn never reaches the talker |
 | `GCP_PROJECT`, `GCP_LOCATION` | the frontier talker's Vertex project |
 | `RESEND_API_KEY` | needed to create password accounts: production mode refuses password registration without email |
 
@@ -375,6 +376,14 @@ these names; their values never enter the repo:
   ```
 
   Only the operator can do this. No account can mark itself synthetic over HTTP.
+- A fresh account (Kevin's or a synthetic person's) needs two more steps before it can reach the
+  Gemma talker. Do them as that account, with its own signed-in token, and keep the token out of the
+  repo and the shell history:
+  1. Accept AI consent version 6: `POST /api/ai-consent {"version": 6}`. The host must run with
+     `VERTEX_MIN_CONSENT_VERSION=6` (the env table above); without it the consent gate fails closed.
+  2. Choose the open-model talker: `PUT /api/talker {"choice": "gemma"}` (a synthetic person needs this
+     too, not only Kevin's account).
+  Restart the service after changing `VERTEX_MIN_CONSENT_VERSION`.
 
 **The dev API** is mounted only on this host:
 
@@ -477,10 +486,12 @@ The night runs as its own process, so a long night can't take down the server.
   The day timer has no `Persistent=`: a day that was missed stays missed, and the night records it.
   After the day, the phase writes a marker `$ANJO_SLEEP_DATA_DIR/sleep/daily/<persona>-<date>.json`
   (persona, the date the day was meant for, day index, status `ok`/`short`/`failed`, the failure
-  code, failed turns) and exits 1 unless the day ran whole, a mid-day Glimmer death included.
+  code, failed turns, and `failure_detail`, the code of the turn that ended a short day) and exits 1 unless the day ran whole, a mid-day Glimmer death included.
   `--for-date YYYY-MM-DD` runs it by hand for another date (default: today, Taipei); the marker
   carries that date.
-- `--phase night` (02:00 Taipei) runs the night for the previous Taipei calendar day, as its own
+- `--phase night` (02:00 Taipei) runs the night for the previous Taipei calendar day (or, with
+  `--for-date D`, for day D: not in the future, not before the life starts), with MIND's inquiry
+  only under `--mind` or `ANJO_SLEEP_DAILY_MIND=1` in the env file (default off), as its own
   virtual date (the date it was lived on). It takes the night lock, sweeps, wakes Glimmer and trains
   exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
   checkpoint that serves, in the same process. It first reads the marker of the day it closes: a

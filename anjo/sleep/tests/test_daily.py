@@ -13,11 +13,23 @@ import pytest
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night import daily
-from anjo.sleep.sim.day import DayRun
+from anjo.sleep.personas.model import load_person_file
+from anjo.sleep.sim.day import DayRun, TurnFailed, run_day
 from anjo.sleep.types import NightResult
 
 AT_2AM = datetime(2026, 10, 30, 2, 0, tzinfo=daily.TAIPEI)  # 18:00 UTC on the 29th
 AT_2PM = datetime(2026, 10, 30, 14, 0, tzinfo=daily.TAIPEI)
+PERSONA = load_person_file(Path(__file__).parents[1] / "personas" / "founder.json").visible
+
+
+class _Model:
+    def complete(self, system: str, messages: list[dict[str, str]], *, temperature: float, seed: int) -> str:
+        return "A line about the pilot."
+
+
+class _Served:
+    def of_reply(self, session_id: str) -> frozenset[str] | None:
+        return frozenset({"glimmer"})
 
 
 def _good_day(tmp_path: Path) -> Path:
@@ -206,3 +218,89 @@ def test_night_phase_generates_no_line_without_a_new_checkpoint(tmp_path: Path, 
     daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=lambda **kw: {"acct": night},
                           morning=lambda *a: None, score=lambda *a, **kw: None, dailies=lambda *a: ran.append("x"))
     assert ran == []  # nothing to say differently: the card says so, and nothing is generated
+
+
+# ── --for-date on the night phase, and why a day failed ─
+
+
+def test_night_plan_for_date_closes_that_day() -> None:
+    plan = daily.night_plan(AT_2AM, date(2026, 10, 28))  # the wall says the 30th; he asked for the 28th
+    assert plan.night == date(2026, 10, 28)
+    assert plan.window == (datetime(2026, 10, 27, 16, 0, tzinfo=timezone.utc),
+                           datetime(2026, 10, 28, 16, 0, tzinfo=timezone.utc))  # 28 Oct, Taipei, whole day
+
+
+def test_night_phase_without_for_date_is_unchanged(tmp_path: Path) -> None:
+    assert daily.night_plan(AT_2AM, None) == daily.night_plan(AT_2AM)
+    assert daily.night_plan(AT_2AM).night == date(2026, 10, 29)
+    seen: dict[str, Any] = {}
+
+    def nights(**kw: Any) -> dict[str, NightResult]:
+        seen.update(kw)
+        return {"acct": NightResult("failed", "practice", None, {}, (), 0.0, {}, tmp_path / "log.jsonl")}
+
+    daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=nights)
+    assert seen["night"] == date(2026, 10, 29)
+
+
+def test_night_for_date_in_future_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="future"):
+        daily.night_plan(AT_2AM, date(2026, 10, 31))
+    with pytest.raises(ValueError, match="starts on"):
+        daily.night_plan(AT_2AM, date(2026, 10, 27))
+    monkeypatch.setenv(daily.USERS_ENV, "founder=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    with pytest.raises(SystemExit) as refused:
+        daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2999-01-01"])
+    assert refused.value.code == 2
+
+
+def test_failed_day_marker_names_the_reason_code(tmp_path: Path) -> None:
+    class Stale:
+        def send(self, session_id: str, text: str, *, cleared: bool) -> str:
+            raise TurnFailed("a sentence that must not travel", reason="stale session")
+
+    day = run_day(PERSONA, 1, 7, model=_Model(), transport=Stale(), replies=_Served(), clock=lambda: AT_2PM)
+    assert day.failure_detail == "stale session"
+    markers = tmp_path / "daily"
+    daily.write_marker(markers, "founder", date(2026, 10, 29), 1, day)
+    text = (markers / "founder-2026-10-29.json").read_text()
+    assert json.loads(text)["failure_detail"] == "stale session" and "sentence" not in text
+    assert daily.missed_day(markers, "founder", daily.night_plan(AT_2AM)).failure_detail == "stale session"  # type: ignore[union-attr]
+
+
+def test_old_marker_without_reason_still_reads(tmp_path: Path) -> None:
+    markers = tmp_path / "daily"
+    markers.mkdir()
+    (markers / "founder-2026-10-29.json").write_text(json.dumps(
+        {"persona": "founder", "date": "2026-10-29", "day_index": 1, "status": "short",
+         "failure": None, "failed_turns": 1}))
+    missed = daily.missed_day(markers, "founder", daily.night_plan(AT_2AM))
+    assert missed is not None and missed.failure == daily.SHORT_DAY and missed.failure_detail is None
+    ok = DayRun((AT_2PM, AT_2PM), 4, 0, ())
+    daily.write_marker(markers, "founder", date(2026, 10, 29), 1, ok)  # an ok day: the field stays out
+    assert "failure_detail" not in json.loads((markers / "founder-2026-10-29.json").read_text())
+
+
+def test_night_phase_mind_flag_reaches_the_night(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def nights(**kw: Any) -> dict[str, NightResult]:
+        seen.append(kw)
+        return {"acct": NightResult("failed", "practice", None, {}, (), 0.0, {}, tmp_path / "log.jsonl")}
+
+    for mind in (False, True):
+        daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=nights, mind=mind)
+    assert [kw["mind"] for kw in seen] == [False, True]
+    monkeypatch.setenv(daily.USERS_ENV, "founder=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    real = daily.run_night_phase  # main's default `nights` is bound at import, so hand it the fake here
+    monkeypatch.setattr(daily, "run_night_phase", lambda *a, **kw: real(*a, **kw, nights=nights))
+    for env, flags, expected in ((None, [], False), ("1", [], True), (None, ["--mind"], True)):
+        monkeypatch.delenv(daily.MIND_ENV, raising=False)
+        if env:
+            monkeypatch.setenv(daily.MIND_ENV, env)
+        seen.clear()
+        daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28", *flags])
+        assert seen[0]["mind"] is expected
+        assert json.loads(capsys.readouterr().out)["mind"] is expected

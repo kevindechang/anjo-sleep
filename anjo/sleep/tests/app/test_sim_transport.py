@@ -81,6 +81,7 @@ def test_stale_session_409_is_not_adopted() -> None:
     with pytest.raises(TurnFailed, match="stale session") as raised:
         transport.send("sim-d1", "Hello there", cleared=True)
     assert "Session expired" not in str(raised.value) and "other" not in str(raised.value)
+    assert raised.value.reason == "stale session"
     assert seen == [("/api/chat/s-1/message", "Hello there")]
 
 
@@ -90,5 +91,5 @@ def test_keyed_refusal_409_fails_with_its_code() -> None:
     transport = DevApiTransport("http://x", "t", transport=mock, sleep=lambda s: None)
     with pytest.raises(TurnFailed, match="request_key_spent") as raised:
         transport.send("sim-d1", "Hello there", cleared=True)
-    assert "already answered" not in str(raised.value)
+    assert "already answered" not in str(raised.value) and raised.value.reason == "request_key_spent"
     assert len(seen) == 1
