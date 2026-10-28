@@ -453,6 +453,63 @@ class FakeLifeChat:
         return _reply(json.dumps({"items": items}), model)
 
 
+REPLY_SHAPES: Final = ("plain", "think", "fenced", "reasoning_field", "length", "rejected", "draft_in_cut_think",
+                       "open_think", "two_fences", "unplaced_when_empty", "never_placed")
+
+
+def generator_transport(shape: str) -> httpx.MockTransport:
+    """Fireworks answering a reasoning generator's writer and extractor (``FakeLifeChat``'s replies)
+    in one ``shape`` of ``REPLY_SHAPES``: plain JSON; reasoning in the content between think tags;
+    the JSON fenced inside prose; reasoning kept apart in ``reasoning_content``; every reply cut at
+    its cap (``finish_reason`` length, the JSON unfinished); ``reasoning_effort`` refused with HTTP
+    400; or a drafted answer that must never be read as the day's: fenced inside reasoning cut at
+    its cap (``draft_in_cut_think``), fenced inside reasoning that never closed (``open_think``), or
+    fenced before the final fenced answer (``two_fences``); or a day written without ``placed``
+    when it has no beats (``unplaced_when_empty``), or always (``never_placed``). The reasoning is
+    counted in the usage as a provider counts it."""
+    if shape not in REPLY_SHAPES:
+        raise ValueError(f"no reply shape {shape!r}")
+    chat = FakeLifeChat()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if shape == "rejected":
+            return httpx.Response(400, json={"error": {"message": "reasoning_effort is not supported"}})
+        answer = _unplaced(shape, chat(body["model"], body["messages"], None, 30.0).text)
+        message: dict[str, Any] = {"role": "assistant", "content": answer}
+        finish, reasoning = "stop", 0
+        if shape == "think":
+            message["content"], reasoning = f"<think>\nThe person {{works}} on it.\n</think>\n\n{answer}", 40
+        elif shape == "fenced":
+            message["content"] = f"Here is the JSON:\n```json\n{answer}\n```\nDone."
+        elif shape == "reasoning_field":
+            message["reasoning_content"], reasoning = "Let me plan the day first.", 40
+        elif shape == "length":
+            message["content"], finish = answer[: len(answer) // 2], "length"
+        elif shape == "draft_in_cut_think":
+            message["content"], finish, reasoning = f"<think>\nA draft:\n```json\n{answer}\n```\nNow check", "length", 40
+        elif shape == "open_think":
+            message["content"], reasoning = f"<think>\nA draft:\n```json\n{answer}\n```\n", 40
+        elif shape == "two_fences":
+            message["content"] = f"A draft:\n```json\n{answer}\n```\nThe answer:\n```json\n{answer}\n```"
+        usage = {"prompt_tokens": len(json.dumps(body["messages"])) // 4, "completion_tokens": len(answer) // 4 + reasoning,
+                 "completion_tokens_details": {"reasoning_tokens": reasoning}}
+        return httpx.Response(200, json={"model": body["model"], "usage": usage,
+                                         "choices": [{"message": message, "finish_reason": finish}]})
+
+    return httpx.MockTransport(handle)
+
+
+def _unplaced(shape: str, answer: str) -> str:
+    """A writer's day without ``placed``, as ``shape`` leaves it out (an extraction is unchanged)."""
+    day = json.loads(answer)
+    if "placed" not in day or shape not in ("unplaced_when_empty", "never_placed"):
+        return answer
+    if shape == "unplaced_when_empty" and day["placed"]:
+        return answer
+    return json.dumps({"messages": day["messages"]})
+
+
 @dataclass
 class FakeGateReader:
     """The leak reader never flags; the discoverability reader always finds. Each reply names the
