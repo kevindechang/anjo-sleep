@@ -38,7 +38,7 @@ from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, h
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
 from anjo.sleep.mind.apd.families import Template
-from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, in_order
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, side_by_side
 from anjo.sleep.mind.apd.generate import (
     AWAY_DAYS,
     MAX_ATTEMPTS,
@@ -234,16 +234,17 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
         backend.ceiling.begin("pair(s) generated", len(todo))
     made: list[str] = []
     skipped: list[str] = []
-    for found in in_order([partial(_one, data, spec, backend) for spec in todo], parallel):
-        if isinstance(found, _Skip):
-            name = f"pair {found.spec.seed} ({found.spec.template})"
-            data.record_failed({"what": "generate-pairs", "pair": name, "error": found.error})
-            out(f"SKIPPED {name}: {found.error}. Not saved; a rerun generates it again")
-            skipped.append(name)
-            continue
-        made.append(found.pair.id)
-        out(f"generated {found.pair.id} ({found.attempts} attempt(s), {found.pair.template})")
-        if backend.ceiling is not None:
-            out(backend.ceiling.life_generated("pair"))
+    with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
+        for found in results:
+            if isinstance(found, _Skip):
+                name = f"pair {found.spec.seed} ({found.spec.template})"
+                data.record_failed({"what": "generate-pairs", "pair": name, "error": found.error})
+                out(f"SKIPPED {name}: {found.error}. Not saved; a rerun generates it again")
+                skipped.append(name)
+                continue
+            made.append(found.pair.id)
+            out(f"generated {found.pair.id} ({found.attempts} attempt(s), {found.pair.template})")
+            if backend.ceiling is not None:
+                out(backend.ceiling.life_generated("pair"))
     check_failed(skipped)
     return tuple(made)

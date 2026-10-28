@@ -23,16 +23,19 @@ attempt can make: a writer and an extractor call a day, every leak window of bot
 discoverability read for each planted item, an identify call for each and the script audit. A transient Spark Open failure is
 tried again from the extra tries (``retry``), each try a call of its own, and a failed try is
 priced at one call's worst case, so the hold stays a true bound. Every generation reply goes out
-capped at ``retry.REPLY_MAX_TOKENS`` (``gen_chat``), the cap one call is held for.
+capped at ``retry.REPLY_MAX_TOKENS`` (``gen_chat``), the cap one call is held for. Side by side, an
+attempt whose hold finds no room waits for the command's other attempts in flight to end
+(``Flight``), and once the command is ending (``halt``) no attempt or call starts (``Halted``).
 """
 from __future__ import annotations
 
 import functools
 import importlib
 import random
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -51,6 +54,7 @@ from anjo.sleep.night.holds import held, usd
 from anjo.sleep.mind.spark_provider import BASETEN, SparkProvider
 from anjo.sleep.probes import second_judge
 from anjo.sleep.spark_inquiry import ChatFn
+from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.runners.colab import COLAB_BIN, ColabCli
 
 GEN_WRITE_CALLS: Final = 2 * LIFE_DAYS  # the writer and the extractor, once a day
@@ -61,6 +65,7 @@ JUDGE_MAX_TOKENS: Final = 400
 GEMINI_LOCATION: Final = "global"
 GEMINI_THINKING: Final = "low"  # the floor 3.7 and 3.8 accept on Vertex
 GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_tokens on 3.x
+ROOM_POLL_S: Final = 0.1  # how often an attempt waiting for room looks for a kill
 
 
 @dataclass(frozen=True)
@@ -68,7 +73,9 @@ class Backend:
     """Every model and machine the pilot reaches, and where its spend is held (``ledger`` and the
     prices: ``None`` with the fakes, which hold nothing). ``provider`` serves every Spark Open call
     (``spark``, ``life_chat`` and ``reader``), held on its pool. ``ceiling`` is the command's
-    ``--max-usd``, checked before each new unit of work."""
+    ``--max-usd``, checked before each new unit of work. Generating side by side, ``halt`` is set
+    once the command is ending (no attempt or call starts after it) and ``flight`` counts the
+    attempts holding, so one whose hold finds no room waits for them (``held_attempt``)."""
 
     cli: ColabCli
     tunnels: TunnelOpener
@@ -92,6 +99,8 @@ class Backend:
     keygen: colab_vllm.KeyGen = colab_vllm.ssh_keygen  # each session's throwaway SSH key
     key_dir: Path | None = None  # where it is made and deleted (live: the data dir's ``ssh`` folder)
     preflight: Callable[[], None] = lambda: None  # live: the CLI, ``ssh`` and ``ssh-keygen`` are here
+    halt: threading.Event | None = field(default=None, compare=False)
+    flight: Flight | None = field(default=None, compare=False)
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -174,6 +183,49 @@ def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str,
 # ── Generation's holds ────────────────────────────────────────────────────────
 
 
+class Halted(RuntimeError):
+    """The command is ending (Ctrl-C, a signal, an error): no attempt or call starts."""
+
+
+def halted(halt: threading.Event | None) -> None:
+    if halt is not None and halt.is_set():
+        raise Halted("the command is ending: no further attempt or call")
+
+
+class Flight:
+    """The attempts of one command taking or holding their holds, side by side. An attempt whose
+    hold finds no room waits for one of them to end, and stops the run only when none is in flight."""
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._flying = 0
+        self._ended = 0
+
+    def board(self) -> int:
+        """One more attempt in flight (counted while it reserves); how many have ended so far."""
+        with self._changed:
+            self._flying += 1
+            return self._ended
+
+    def land(self, *, held: bool) -> None:
+        """An attempt out of flight; one that held has freed its room."""
+        with self._changed:
+            self._flying -= 1
+            self._ended += int(held)
+            self._changed.notify_all()
+
+    def room(self, since: int, halt: threading.Event | None) -> bool:
+        """After a hold found no room: once an attempt that held has ended since ``since``, True (try
+        again); False at once when no other attempt is in flight. ``Halted`` if the command ends."""
+        with self._changed:
+            while self._ended == since:
+                if self._flying == 0:
+                    return False
+                halted(halt)
+                self._changed.wait(ROOM_POLL_S)
+            return True
+
+
 @dataclass
 class Retries:
     """The extra tries one attempt holds for transient failures (a 429, a 5xx, a timeout or a
@@ -197,7 +249,8 @@ class Retries:
 class CountedChat:
     """Generation's calls to one model family: no call past ``limit`` (the attempt's hold), each
     try priced at ``rate`` as it returns, or at one call's worst case when it fails (what it cost
-    is unknown). A transient failure is tried again while ``retries`` allows."""
+    is unknown). A transient failure is tried again while ``retries`` allows. No try starts once
+    ``halt`` is set (``Halted``)."""
 
     inner: BriefChat
     limit: int
@@ -205,6 +258,7 @@ class CountedChat:
     retries: Retries | None = None
     calls: int = 0
     usd: float = 0.0
+    halt: threading.Event | None = None
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
                  temperature: float | None = None) -> ChatResult:
@@ -213,6 +267,7 @@ class CountedChat:
         self.calls += 1
         attempt = 1
         while True:
+            halted(self.halt)
             try:
                 result = self.inner(model, messages, tools, timeout_s, temperature=temperature)
             except ModelApiError as error:
@@ -269,17 +324,54 @@ def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None, spark_poo
 def held_attempt(backend: Backend, key: str,
                  calls: GenCalls = WORST_LIFE) -> Iterator[tuple[CountedChat, CountedChat, CountedChat]]:
     """One attempt's writer, reader and auditor, at most ``calls``, its worst case held first on
-    both pools (Spark Open's on the provider's, with the extra tries its Spark Open calls share)."""
+    both pools (Spark Open's on the provider's, with the extra tries its Spark Open calls share).
+    Nothing starts once ``backend.halt`` is set; a hold without room waits (``_room``)."""
+    halted(backend.halt)
     retries = Retries(calls.retries, sleep=backend.sleep)
-    spark = CountedChat(backend.life_chat, calls.writes, spark_rate(backend.prices), retries)
-    reader = CountedChat(backend.reader, calls.reads, spark.rate, retries)
-    auditor = CountedChat(backend.auditor, calls.muse, None if backend.rates is None else backend.rates[MUSE])
+    spark = CountedChat(backend.life_chat, calls.writes, spark_rate(backend.prices), retries, halt=backend.halt)
+    reader = CountedChat(backend.reader, calls.reads, spark.rate, retries, halt=backend.halt)
+    auditor = CountedChat(backend.auditor, calls.muse, None if backend.rates is None else backend.rates[MUSE],
+                          halt=backend.halt)
     if backend.ledger is None:
         yield spark, reader, auditor
         return
-    pool = backend.provider.pool
+    pool, ledger = backend.provider.pool, backend.ledger
     worst = gen_holds(backend.prices, backend.rates, pool, calls)
-    with held(backend.ledger, f"apd:gen:{key}:spark", (pool,), usd(worst[pool]), lambda: spark.usd + reader.usd), \
-            held(backend.ledger, f"apd:gen:{key}:muse", ("meta_usd",), usd(worst["meta_usd"]), lambda: auditor.usd):
+
+    def holds(stack: ExitStack) -> None:
+        stack.enter_context(held(ledger, f"apd:gen:{key}:spark", (pool,), usd(worst[pool]),
+                                 lambda: spark.usd + reader.usd))
+        stack.enter_context(held(ledger, f"apd:gen:{key}:muse", ("meta_usd",), usd(worst["meta_usd"]),
+                                 lambda: auditor.usd))
+
+    with _room(backend, holds):
         yield spark, reader, auditor
 
+
+@contextmanager
+def _room(backend: Backend, take: Callable[[ExitStack], None]) -> Iterator[None]:
+    """The attempt's holds, taken together. When one finds no room, any already taken is let go and,
+    while other attempts of the command are in flight (``backend.flight``), it waits for one to end
+    and tries again; with none, ``BudgetStop``."""
+    flight = backend.flight or Flight()  # alone, nothing is in flight to wait for
+    while True:
+        halted(backend.halt)
+        since, stack = flight.board(), ExitStack()
+        try:
+            take(stack)
+        except BudgetStop:
+            stack.close()
+            flight.land(held=False)
+            if flight.room(since, backend.halt):
+                continue
+            raise
+        except BaseException:
+            stack.close()
+            flight.land(held=False)
+            raise
+        break
+    try:
+        with stack:
+            yield
+    finally:
+        flight.land(held=True)
