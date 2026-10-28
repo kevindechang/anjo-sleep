@@ -108,6 +108,15 @@ def test_baseten_chat_calls_spark_open_on_its_openai_compatible_endpoint() -> No
     assert result.model == "meta-models/muse-spark-open-1026"
 
 
+def test_a_seeded_baseten_call_sends_its_seed_and_cap() -> None:
+    seen: list[httpx.Request] = []
+    transport = _recording(seen, lambda r: httpx.Response(200, json=_ok(baseten_api.SPARK_OPEN)))
+    baseten_api.chat(baseten_api.SPARK_OPEN, MESSAGES, None, 30.0, temperature=0.3, transport=transport,
+                     max_tokens=15_000, seed=20261024)  # the brief's retry (context/brief.py)
+    body = json.loads(seen[0].content)
+    assert (body["seed"], body["temperature"], body["max_completion_tokens"]) == (20261024, 0.3, 15_000)
+
+
 def test_meta_base_url_defaults_to_the_meta_api_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(meta_api.BASE_ENV)
     seen: list[httpx.Request] = []

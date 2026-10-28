@@ -23,7 +23,8 @@ class _Chat:
     def __init__(self) -> None:
         self.calls = 0
 
-    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
         self.calls += 1
         return ChatResult(text=brief_text(f"fold {self.calls}"), tool_calls=(), model=SPARK_OPEN,
                           input_tokens=10, output_tokens=10, finish_reason="stop")

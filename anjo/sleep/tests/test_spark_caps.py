@@ -13,10 +13,10 @@ from typing import Any
 
 
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.context.brief import REASONING_ROOM
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.practice.full import (
-    REASONING_ROOM,
     SCENES_ASKED,
     SPARK_CAPS,
     VISIBLE_TOKENS,

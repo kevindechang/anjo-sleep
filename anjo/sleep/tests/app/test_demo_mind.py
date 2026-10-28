@@ -215,7 +215,7 @@ def test_the_panel_carries_last_nights_loop_from_its_story_file() -> None:
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     _seed_mind(_held_out())
     told = st.Story(
-        night=_day(5), status="promoted", sleep=st.Sleep("deep", 0.7, 0.5, "pressure"),
+        night=_day(5), status="promoted", sleep=st.Sleep("deep", 0.7, 0.5, "pressure"), brief=st.Brief(3),
         dream=st.Dream(2, (st.Ignition("risk", 0.8, ("e-0a1b2c",)),), st.NotRun(st.DREAM_NOT_YET), st.NotRun(st.DREAM_NOT_YET)),
         rehearse=st.Rehearse(16, st.NotRun(st.CURRICULUM_NOT_YET), 6, 2),
         learn=st.Learn(8, *(st.NotRun("not yet"),) * 6),

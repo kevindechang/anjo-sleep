@@ -5,7 +5,17 @@ from __future__ import annotations
 import pytest
 
 from anjo.sleep.baseten_api import SPARK_OPEN
-from anjo.sleep.context.brief import BriefError, BriefState, compile_brief, fold_day
+from anjo.sleep.context.brief import (
+    DEFAULT_BUDGET_TOKENS,
+    MAX_TOKENS,
+    REASONING_ROOM,
+    RETRY_SEED,
+    RETRY_TEMPERATURE,
+    BriefError,
+    BriefState,
+    compile_brief,
+    fold_day,
+)
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.tests.sleep_fakes import SPARK, WONDER, brief_text, ev
 
@@ -16,8 +26,9 @@ class FakeChat:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def __call__(self, model, messages, tools, timeout_s, *, temperature=None):
-        self.calls.append({"model": model, "messages": messages, "temperature": temperature})
+    def __call__(self, model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
+        self.calls.append({"model": model, "messages": messages, "temperature": temperature,
+                           "max_tokens": max_tokens, "seed": seed})
         text = messages[0]["content"]
         new = text.split("NEW:\n", 1)[1].split("\n\nBUDGET_TOKENS", 1)[0]
         prev = text.split("PREVIOUS:\n", 1)[1].split("\n\nNEW:", 1)[0]
@@ -108,7 +119,7 @@ def test_held_out_items_never_enter_a_brief():
 
 
 def test_a_brief_missing_a_section_is_refused():
-    def bad(model, messages, tools, timeout_s, *, temperature=None):
+    def bad(model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
         return ChatResult("## Stated preferences\nnone", (), SPARK_OPEN, 1, 1, "stop")
 
     with pytest.raises(BriefError, match="section"):
@@ -116,8 +127,57 @@ def test_a_brief_missing_a_section_is_refused():
 
 
 def test_a_brief_over_budget_is_refused():
-    def long(model, messages, tools, timeout_s, *, temperature=None):
+    def long(model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
         return ChatResult(brief_text("word " * 4000), (), SPARK_OPEN, 1, 1, "stop")
 
     with pytest.raises(BriefError, match="budget"):
         compile_brief(None, _items()[:1], budget_tokens=100, chat=long)
+
+
+class Runaway:
+    """Spark Open looping at temperature 0, as on the night that died at its brief (1,853 tokens in,
+    32,768 out): its first ``cut`` replies run to their cap, then a sampled one writes a brief."""
+
+    def __init__(self, cut: int = 1) -> None:
+        self.cut = cut
+        self.calls: list[dict] = []
+
+    def __call__(self, model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
+        self.calls.append({"temperature": temperature, "max_tokens": max_tokens, "seed": seed})
+        if len(self.calls) <= self.cut:  # cut at the cap, its text still reading as a whole brief
+            return ChatResult(brief_text("again " * 50), (), SPARK_OPEN, 1853, max_tokens or 32_768, "length")
+        return ChatResult(brief_text("written once"), (), SPARK_OPEN, 1853, 900, "stop")
+
+
+def test_a_runaway_brief_is_capped_and_retried():
+    chat = Runaway()
+    assert "written once" in compile_brief(None, _items()[:1], chat=chat)
+    assert MAX_TOKENS == DEFAULT_BUDGET_TOKENS + REASONING_ROOM == 15_000  # the brief plus twice 6.5k of reasoning
+    assert [c["max_tokens"] for c in chat.calls] == [MAX_TOKENS, MAX_TOKENS]
+    assert [(c["temperature"], c["seed"]) for c in chat.calls] == [(0.0, None), (RETRY_TEMPERATURE, RETRY_SEED)]
+    assert 0.0 < RETRY_TEMPERATURE <= 0.5
+
+    smaller = Runaway()
+    compile_brief(None, _items()[:1], budget_tokens=1500, chat=smaller)
+    assert {c["max_tokens"] for c in smaller.calls} == {1500 + REASONING_ROOM}  # the cap follows the budget
+
+
+def test_finish_reason_length_is_a_brief_error():
+    chat = Runaway(cut=2)  # both replies cut at the cap: neither is a brief, whatever its text reads like
+    with pytest.raises(BriefError, match="cap") as caught:
+        compile_brief(None, _items()[:1], chat=chat)
+    assert len(chat.calls) == 2  # retried once, never more
+    assert str(caught.value).count("cap") == 2  # both attempts' reasons
+
+
+def test_a_brief_that_breaks_a_rule_is_retried_once_sampled():
+    replies = iter([ChatResult("## Stated preferences\nnone", (), SPARK_OPEN, 1, 1, "stop"),
+                    ChatResult(brief_text("fine"), (), SPARK_OPEN, 1, 1, "stop")])
+    seen: list[tuple] = []
+
+    def flaky(model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
+        seen.append((temperature, seed))
+        return next(replies)
+
+    assert "fine" in compile_brief(None, _items()[:1], chat=flaky)
+    assert seen == [(0.0, None), (RETRY_TEMPERATURE, RETRY_SEED)]

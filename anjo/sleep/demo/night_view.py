@@ -14,6 +14,9 @@ and Sleep page: each stage is one step of the same night. Each stage is:
   run made them (``reused_from``);
 - ``failed``, naming the step that failed (``step``), never its error, which can carry a message.
 
+``brief_kept`` is the night whose brief was kept (or ``empty``) when the brief couldn't be rewritten
+tonight and the night went on with the one it had, else None; its error is never sent.
+
 ``rehearsed_the_dream`` says whether the page may claim the whole loop ("dreams at night about what
 she's unsure of, rehearses exactly that, and wakes up a better mind of you"): only when the dream
 picked threads, practice was seeded on them and the night promoted. Otherwise the page says only
@@ -33,6 +36,7 @@ from anjo.sleep.night.story import (
     Check,
     Dream,
     Failed,
+    Kept,
     Learn,
     NotRun,
     Rehearse,
@@ -161,5 +165,5 @@ def story_view(stories: Sequence[tuple[int, Story | None]] | None) -> dict[str, 
         return {"state": "unavailable", "night": number}
     return {"state": "ok", "night": number, "date": story.night.isoformat(), "status": story.status,
             "napped": story.status == "napped", "rehearsed_the_dream": _rehearsed_the_dream(story),
-            "sleep": _slept(story.sleep),
+            "sleep": _slept(story.sleep), "brief_kept": story.brief.kept_from if isinstance(story.brief, Kept) else None,
             "stages": [_stage(name, getattr(story, name)) for name in STAGES]}

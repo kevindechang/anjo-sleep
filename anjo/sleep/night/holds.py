@@ -29,9 +29,9 @@ def spark_usd(prices: Prices, tokens_in: int, tokens_out: int) -> float:
     return (tokens_in * prices.spark_in_per_m + tokens_out * prices.spark_out_per_m) / 1e6
 
 
-def spark_worst_usd(prices: Prices, calls: int) -> float:
-    """The most ``calls`` Spark Open calls can cost."""
-    return spark_usd(prices, calls * SPARK_MAX_IN_TOKENS, calls * SPARK_MAX_OUT_TOKENS)
+def spark_worst_usd(prices: Prices, calls: int, out_tokens: int = SPARK_MAX_OUT_TOKENS) -> float:
+    """The most ``calls`` Spark Open calls can cost, each writing at most ``out_tokens``."""
+    return spark_usd(prices, calls * SPARK_MAX_IN_TOKENS, calls * out_tokens)
 
 
 def usd(amount: float) -> Bound:

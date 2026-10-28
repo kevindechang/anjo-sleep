@@ -77,12 +77,19 @@ class SparkChat:
     def __init__(self, scenes: int = 8) -> None:
         self.scenes = scenes
         self.prompts: list[str] = []
+        self.briefs_cut = 0  # the next brief calls that run to their cap, as a looping model's do
+        self.brief_calls: list[dict[str, Any]] = []
 
     def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
-                 max_tokens: int | None = None) -> ChatResult:
+                 max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
         content = messages[-1]["content"]
         self.prompts.append(content)
         if content.startswith("# brief_v1"):
+            self.brief_calls.append({"temperature": temperature, "max_tokens": max_tokens, "seed": seed})
+            if self.briefs_cut > 0:
+                self.briefs_cut -= 1
+                return ChatResult(text=brief_text("again"), tool_calls=(), model=SPARK_OPEN, input_tokens=1853,
+                                  output_tokens=max_tokens or 32_768, finish_reason="length")
             return result(brief_text("brief body"))
         if content.startswith("# scenes_v1"):
             return result(json.dumps({"scenes": [f"New brief {i}: a sorter for film plastics. Where do I start?"

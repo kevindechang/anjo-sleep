@@ -2,9 +2,9 @@
 // wake, left to right, from the /mind payload's story (demo/night_view.py). mind.js fetches /mind
 // once and hands the payload over (demo:mind), so this draws without a request of its own. A stage
 // that didn't run is greyed with the reason the night wrote; a nap stops after the dream; practice a
-// rerun reused says whose it was. The lede claims the whole loop only when the story says it ran
-// (``rehearsed_the_dream``), else only what happened. Plain words first, exact numbers second, and
-// every word goes in through textContent.
+// rerun reused says whose it was; a brief that couldn't be rewritten says which one was kept. The
+// lede claims the whole loop only when the story says it ran (``rehearsed_the_dream``), else only
+// what happened. Plain words first, exact numbers second, and every word goes in through textContent.
 (() => {
   "use strict";
 
@@ -127,6 +127,10 @@
     asof.textContent = fill(copy.story_night, { night: view.night, date: view.date, status: copy[`night_status_${view.status}`] || view.status });
     const parts = [element("p", "loop-sleep", slept(view.sleep))];
     if (view.napped) parts.push(element("p", "loop-nap", copy.story_nap));
+    if (view.brief_kept) {
+      const kept = view.brief_kept === "empty" ? copy.story_brief_kept_empty : fill(copy.story_brief_kept, { night: view.brief_kept });
+      parts.push(element("p", "loop-brief", kept));
+    }
     const loop = element("ol", view.napped ? "loop napped" : "loop");
     view.stages.forEach((stage) => loop.append(card(stage)));
     parts.push(loop);

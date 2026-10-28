@@ -29,9 +29,11 @@ def chat(
     temperature: float | None = None,
     transport: httpx.BaseTransport | None = None,
     max_tokens: int | None = None,
+    seed: int | None = None,
 ) -> ChatResult:
     """One chat completion on Spark Open, its reply capped at ``max_tokens`` when given (full
-    practice caps each role). ``transport`` is for tests (``httpx.MockTransport``)."""
+    practice caps each role, the brief its folds), sampled under ``seed`` when given (the brief's
+    retry). ``transport`` is for tests (``httpx.MockTransport``)."""
     return post_chat(
         provider="Baseten",
         url=URL,
@@ -43,4 +45,5 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+        extra=None if seed is None else {"seed": seed},
     )
