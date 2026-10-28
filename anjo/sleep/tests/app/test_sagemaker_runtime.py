@@ -25,7 +25,7 @@ from anjo.sleep.serving.sagemaker import settings
 from anjo.sleep.serving.sagemaker.invoke import Invoker, SageMakerPoster
 from anjo.sleep.tests.app.glimmer_server import Modal
 from anjo.sleep.tests.app.glimmer_server import chunks as _chunks
-from anjo.sleep.tests.app.test_sleep_serving import (  # noqa: F401  (fixtures: flagged and what it needs)
+from anjo.sleep.tests.app._serving_fakes import (  # noqa: F401  (fixtures: flagged and what it needs)
     REVISION,
     flagged,
     paid_env,
