@@ -175,10 +175,12 @@ def _stream(draft: _Draft) -> LabelledStream:
     return LabelledStream(draft.life_id, days, tuple(events), tuple(label.resolve(times) for label in draft.labels))
 
 
-def _draft(seed: int, index: int, dim: int, booked: str | None = None) -> _Draft:
+def _draft(seed: int, index: int, dim: int, booked: str | None = None, clash: bool | None = None) -> _Draft:
     """One life being written. ``booked`` (``"cancel"`` or ``"deliver"``) writes the transplant
     version instead: the booked party's earlier bookings end that way, and the life stops at the new
-    booking. Both versions make the same draws, so they differ only in those two roles."""
+    booking. Both versions make the same draws, so they differ only in those two roles. ``clash``
+    writes a contradiction pair's version: the life always holds a plan and a constraint, which
+    conflicts or not; up to the constraint both versions are the same."""
     rng = np.random.default_rng([seed, index])
     draft = _Draft(f"toy{seed}-{index}", rng, dim, [], [])
     _background(draft)
@@ -196,7 +198,9 @@ def _draft(seed: int, index: int, dim: int, booked: str | None = None) -> _Draft
         return draft
     if has_booking:
         _booking(draft, first if fails else second, record, bool(fails))
-    if has_contradiction:
+    if clash is not None:
+        _contradiction(draft, conflicts=clash)
+    elif has_contradiction:
         _contradiction(draft, conflicts=bool(conflicts))
     return draft
 
@@ -247,3 +251,22 @@ def pairs(n: int, *, seed: int, dim: int = DIM) -> tuple[TransplantPair, ...]:
                             and "-bg" not in e.event_id),
         ))
     return tuple(out)
+
+
+@dataclass(frozen=True)
+class ContrastPair:
+    """A minimal pair for contrastive training: one life written twice, the same up to a
+    constraint that flips the plan's attribute in ``problem`` and names an unrelated one in
+    ``benign``; ``label`` is the contradiction's label id in both."""
+
+    problem: LabelledStream
+    benign: LabelledStream
+    label: str
+
+
+def contradiction_pairs(n: int, *, seed: int, dim: int = DIM) -> tuple[ContrastPair, ...]:
+    return tuple(
+        ContrastPair(_stream(_draft(seed, i, dim, clash=True)), _stream(_draft(seed, i, dim, clash=False)),
+                     f"toy{seed}-{i}-contradiction")
+        for i in range(n)
+    )

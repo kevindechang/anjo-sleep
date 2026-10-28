@@ -47,7 +47,9 @@ def days_of(t: datetime) -> float:
 @dataclass(frozen=True)
 class CoreConfig:
     """The shared core's shape. ``fast`` off is the no-fast-weights ablation (N-nofast);
-    ``memory`` off resets the state before every event: the no-memory baseline."""
+    ``memory`` off resets the state before every event: the no-memory baseline. ``stance`` reads
+    the fast memory by topic, whatever the stance, and gives each slot update the product of the
+    recalled stance and the event's own (``net``): the stance probe for contradictions."""
 
     dim_in: int
     width: int = 64
@@ -60,6 +62,7 @@ class CoreConfig:
     cite_min: float = 0.2  # an event is cited by a slot it wrote into at least this much
     cite_keep: int = 8  # cited events a slot keeps, the strongest writes first
     dream_gap_days: float = 0.25  # an imagined event's distance from the one before
+    stance: bool = False
 
     def __post_init__(self) -> None:
         for name in ("dim_in", "width", "slots", "horizon", "cite_keep"):
