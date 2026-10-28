@@ -506,7 +506,7 @@ class NightRunner(CoreSteps):
         p.spend.part = "practice"
         runner, channel = channel_night.practice(self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
-            run = runner.run(p.uid, p.night, self._seeded(p), None, at=p.stamp)
+            run = runner.run(p.uid, p.night, seeded := self._seeded(p), None, at=p.stamp)
         p.spend.add("practice", run.critic_usd)  # a third-party critic's, held per call on its own pool
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
@@ -517,7 +517,7 @@ class NightRunner(CoreSteps):
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **run.spend_record(), **channel,
+                "homework": None, **run.spend_record(), **channel, **self._seed_record(p, seeded),
                 **self._serving(p, "practice", started)}
 
     def _dataset(self, p: PersonNight) -> Mapping[str, Any]:

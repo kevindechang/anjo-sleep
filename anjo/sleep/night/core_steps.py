@@ -16,7 +16,8 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
   no-op dream record saying why, and the rest of her night as it would be without the core.
 - **Inquire** reads the dream: the call carries the core's view, so the core picks the question.
 - **Rehearse**: practice is seeded on the picked evidence, at the same scenes and token cap; with
-  nothing picked, on the newest evidence as before.
+  nothing picked, on the newest evidence as before. Its record says how many picks it was seeded on
+  (``seeded.picked``, 0 when it fell back) and the threads they were picked on.
 - **Learn**: each of tonight's training rows carries its loss weight, the mean surprise of the
   evidence it was made from (the Sleep link); the core state it was made under is the thought
   channel's row field (``core``, its ``state`` is ``p.dreamt.state_id``). The training step's
@@ -34,7 +35,7 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from anjo.sleep.night.deps import MindCall, NightDeps
@@ -75,6 +76,16 @@ class CoreSteps:
         trainable = list(p.store.trainable(p.night))
         picked = frozenset(p.dreamt.rehearse)
         return [item for item in trainable if item.id in picked] or trainable
+
+    def _seed_record(self, p: PersonNight, seeded: Sequence[Evidence]) -> dict[str, Any]:
+        """For a night the core dreamt, the practice record's ``seeded``: how many of the dream's picks
+        practice was seeded on (0: none could train, so it ran on the trainable evidence as before) and
+        the threads they were picked on. Without a dream, nothing: the record is today's."""
+        if p.dreamt.state_id is None:
+            return {}
+        picked, picks = frozenset(p.dreamt.rehearse), p.dreamt.receipt.get("picks")
+        threads = [int(t["slot"]) for t in picks["threads"]] if isinstance(picks, Mapping) else []
+        return {"seeded": {"picked": sum(item.id in picked for item in seeded), "threads": threads}}
 
     def _weighted(self, p: PersonNight, data: Dataset) -> Dataset:
         """Tonight's rows weighted by the mean surprise of the evidence they were made from; a row

@@ -5,7 +5,8 @@ right, after how she slept: dream → rehearse → learn → check → wake. The
 and Sleep page: each stage is one step of the same night. Each stage is:
 
 - ``ran``, with its one key number (``key``), its exact numbers (``numbers``: each ``value`` or
-  ``not_run`` with why) and a link to the evidence the page already shows (``LINKS``): her questions
+  ``not_run`` with why; a record that didn't run is one ``not_run`` under its own name, never each of
+  its numbers) and a link to the evidence the page already shows (``LINKS``): her questions
   for the dream, the morning card for practice, her gates for the check, the morning's scores for
   the wake. A dream that cites events sends their ids (``cites``, ``e-`` and a hash, never an account);
 - ``not_run``, greyed on the page, with the reason the night wrote (``reason``). A nap stops after
@@ -35,12 +36,17 @@ from anjo.sleep.night.story import (
     STAGES,
     Check,
     Dream,
+    Dreams,
     Failed,
+    Imitation,
     Kept,
     Learn,
     NotRun,
+    Protect,
     Rehearse,
     Reused,
+    Seeded,
+    Seeding,
     Sleep,
     Story,
     Surprise,
@@ -58,10 +64,33 @@ def _number(name: str, value: Any) -> dict[str, Any]:
     return {"name": name, "value": len(value) if isinstance(value, tuple) else value}
 
 
-def _surprise(value: Surprise | NotRun) -> list[dict[str, Any]]:
-    if isinstance(value, NotRun) or not value.applied:
-        return [_number("surprise", value if isinstance(value, NotRun) else False)]
-    return [_number("surprise", value.mean), _number("surprise_rows", value.rows)]
+def _record(name: str, value: Any, parts: Callable[[Any], list[tuple[str, Any]]]) -> list[dict[str, Any]]:
+    """A record's numbers, or one ``not_run`` under its own name when it didn't run."""
+    return [_number(name, value)] if isinstance(value, NotRun) else [_number(n, v) for n, v in parts(value)]
+
+
+def _dreams(dreams: Dreams) -> list[tuple[str, Any]]:
+    return [("dreams", dreams.kept), ("dream_candidates", dreams.candidates), ("dream_keep_rate", dreams.keep_rate)]
+
+
+def _seeded(seeded: Seeded) -> list[tuple[str, Any]]:
+    return [("seeded", seeded.picked), ("seeded_threads", seeded.threads)]
+
+
+def _surprise(surprise: Surprise) -> list[tuple[str, Any]]:
+    return [("surprise", surprise.applied), ("surprise_rows", surprise.rows)]
+
+
+def _seeding(seeding: Seeding) -> list[tuple[str, Any]]:
+    return [("seed_rows", seeding.rows), ("seeding_kl_before", seeding.kl_before), ("seeding_kl_after", seeding.kl_after)]
+
+
+def _imitation(imitation: Imitation) -> list[tuple[str, Any]]:
+    return [("imitation_rows", imitation.rows), ("imitation_reward", imitation.reward)]
+
+
+def _protect(protect: Protect) -> list[tuple[str, Any]]:
+    return [("protect", protect.basis), ("protect_minutes", protect.minutes)]
 
 
 def _cites(dream: Dream) -> list[str]:
@@ -73,7 +102,7 @@ def _cites(dream: Dream) -> list[str]:
 def _dream(dream: Dream) -> dict[str, Any]:
     first = next((v for v in (dream.questions, dream.ignitions) if not isinstance(v, NotRun)), dream.questions)
     numbers = [_number(name, getattr(dream, name)) for name in ("questions", "ignitions", "threads", "boundaries")]
-    return {**_keyed(first), "numbers": numbers, "cites": _cites(dream)}
+    return {**_keyed(first), "numbers": [*numbers, *_record("dreams", dream.dreams, _dreams)], "cites": _cites(dream)}
 
 
 def _keyed(value: Any) -> dict[str, Any]:
@@ -83,8 +112,8 @@ def _keyed(value: Any) -> dict[str, Any]:
 
 
 def _rehearse(rehearse: Rehearse) -> dict[str, Any]:
-    return {**_keyed(rehearse.scenes),
-            "numbers": [_number(name, getattr(rehearse, name)) for name in ("flagged", "corrected", "seeded")]}
+    numbers = [_number(name, getattr(rehearse, name)) for name in ("flagged", "corrected")]
+    return {**_keyed(rehearse.scenes), "numbers": [*numbers, *_record("seeded", rehearse.seeded, _seeded)]}
 
 
 def _reused(reused: Reused) -> dict[str, Any]:
@@ -92,8 +121,11 @@ def _reused(reused: Reused) -> dict[str, Any]:
 
 
 def _learn(learn: Learn) -> dict[str, Any]:
-    rest = ("channel_loss", "stamp", "seeding_kl", "fold", "core_adaptation")
-    return {**_keyed(learn.rows), "numbers": [*_surprise(learn.surprise), *(_number(n, getattr(learn, n)) for n in rest)]}
+    numbers = [*_record("surprise", learn.surprise, _surprise), _number("channel_loss", learn.channel_loss),
+               _number("stamp", learn.stamp), *_record("seeding", learn.seeding, _seeding),
+               *_record("imitation", learn.imitation, _imitation), _number("fold", learn.fold),
+               *_record("protect", learn.protect, _protect), _number("core_adaptation", learn.core_adaptation)]
+    return {**_keyed(learn.rows), "numbers": numbers}
 
 
 def _check(check: Check) -> dict[str, Any]:
@@ -149,7 +181,7 @@ def _rehearsed_the_dream(story: Story) -> bool:
     """The dream picked threads, practice was seeded on them, and the night promoted what it learned."""
     dream, rehearse, check = story.dream, story.rehearse, story.check
     return (isinstance(dream, Dream) and isinstance(dream.threads, tuple) and bool(dream.threads)
-            and isinstance(rehearse, Rehearse) and isinstance(rehearse.seeded, tuple) and bool(rehearse.seeded)
+            and isinstance(rehearse, Rehearse) and isinstance(rehearse.seeded, Seeded) and rehearse.seeded.picked > 0
             and isinstance(check, Check) and check.promoted)
 
 

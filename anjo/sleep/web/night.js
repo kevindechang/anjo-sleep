@@ -50,14 +50,16 @@
     return plain(copy[`story_line_${stage.stage}`], { n: stage.key });
   }
 
-  // The exact numbers: each one's value, or "not yet" with why it didn't run.
+  // The exact numbers: each one's value; one that didn't run says why in a plain line, said once under
+  // the numbers in a row that didn't run for the same reason.
   function numbers(stage) {
     const list = element("dl", "stage-numbers");
-    for (const each of stage.numbers) {
-      const value = "value" in each ? element("dd", "num", exact(each.value)) : element("dd", "num faint", copy.story_not_yet);
-      if (!("value" in each)) value.setAttribute("title", each.not_run);
-      list.append(element("dt", "", copy[`story_number_${each.name}`] || each.name), value);
-    }
+    stage.numbers.forEach((each, at) => {
+      list.append(element("dt", "", copy[`story_number_${each.name}`] || each.name));
+      if ("value" in each) return list.append(element("dd", "num", exact(each.value)));
+      const next = stage.numbers[at + 1];
+      if (!next || "value" in next || next.not_run !== each.not_run) list.append(element("dd", "faint why", each.not_run));
+    });
     return list;
   }
 
