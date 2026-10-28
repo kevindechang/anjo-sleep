@@ -18,6 +18,9 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 
 A run killed hard runs no ``finally``. Every session is named ``anjo-sleep-<adapter>``, so the
 night command's sweep (``stop_leftover_sessions``) stops any a killed run left before it starts.
+MIND's synthetic jobs (Tasks 17 and 17b) name theirs ``anjo-mind-<...>`` instead (the runner's
+``session_prefix``, ``MIND_SESSION_PREFIX``), so a Sleep night that starts while one runs never
+stops it, and MIND's own sweep (the APD command's) never stops Sleep's.
 
 Every CLI call runs under a hard subprocess timeout, because the CLI can hang on a dropped
 connection, and the timeouts of all calls together fit inside the job's own. Nothing else is
@@ -70,6 +73,8 @@ DOWNLOAD_TIMEOUT_S: Final = 300.0
 STOP_TIMEOUT_S: Final = 180.0
 LIST_TIMEOUT_S: Final = 120.0
 SESSION_PREFIX: Final = "anjo-sleep-"
+MIND_SESSION_PREFIX: Final = "anjo-mind-"  # MIND's sessions: APD serving and replay's training
+SESSION_PREFIXES: Final = (SESSION_PREFIX, MIND_SESSION_PREFIX)  # neither starts with the other
 CLI_NOTE: Final = "[colab] "  # the CLI's own messages, such as an update notice
 NO_SESSIONS: Final = "No active sessions"
 _SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
@@ -134,16 +139,19 @@ def _stop_each(cli: ColabCli, sessions: Sequence[str]) -> None:
             raise ColabError("stopping a leftover session failed; stop it by hand before anything else") from error
 
 
-def stop_leftover_sessions(cli: ColabCli) -> tuple[int, int]:
-    """Stop every live session the runner made (``anjo-sleep-…``), as the night command's sweep.
+def stop_leftover_sessions(cli: ColabCli, *, prefix: str = SESSION_PREFIX) -> tuple[int, int]:
+    """Stop every live session named with ``prefix``: Sleep's (``anjo-sleep-…``), as the night
+    command's sweep, or MIND's (``anjo-mind-…``), as the APD command's.
 
     Returns how many were stopped and how many other sessions are up: another tool's, or one this
     machine has no name for. Those are only counted. A list or a stop that fails raises, so a VM
     that may run never goes unnoticed: stop it by hand before anything else. So does a list the
     sweep can't read (the CLI's format changed), rather than finding nothing.
     """
+    if prefix not in SESSION_PREFIXES:
+        raise ValueError(f"a sweep's prefix is one of {', '.join(SESSION_PREFIXES)}")
     names = _live_sessions(cli)
-    ours = [name for name in names if name.startswith(SESSION_PREFIX)]
+    ours = [name for name in names if name.startswith(prefix)]
     _stop_each(cli, ours)
     return len(ours), len(names) - len(ours)
 
@@ -188,13 +196,17 @@ class _Vm:
 
 
 class ColabRunner:
-    """``GpuRunner`` for the ``train_lora`` job on a Colab A100."""
+    """``GpuRunner`` for the ``train_lora`` job on a Colab A100. Its sessions are named with
+    ``session_prefix``: Sleep's by default, ``MIND_SESSION_PREFIX`` for MIND's jobs."""
 
     def __init__(
         self, *, cli: ColabCli, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
-        packages: Sequence[str] = TRAIN_PACKAGES,
+        packages: Sequence[str] = TRAIN_PACKAGES, session_prefix: str = SESSION_PREFIX,
     ) -> None:
+        if session_prefix not in SESSION_PREFIXES:
+            raise ValueError(f"a session prefix is one of {', '.join(SESSION_PREFIXES)}")
+        self.session_prefix = session_prefix
         self._cli = cli
         self._ledger = ledger
         self._is_synthetic = is_synthetic
@@ -214,7 +226,7 @@ class ColabRunner:
             raise ColabError("the job's timeout leaves too little time to train")
         base = hold_base(str(inputs["night"]), str(inputs["person_id"]))
         reservation = hold(self._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
-        session = f"{SESSION_PREFIX}{name}"
+        session = f"{self.session_prefix}{name}"
         out = Path(str(inputs["workdir"])) / "out"
         started = self._clock()
         vm = _Vm()
@@ -297,9 +309,9 @@ class ColabRunner:
         return elapsed
 
 
-def _life_session(person_id: str) -> str:
+def _life_session(person_id: str, prefix: str = SESSION_PREFIX) -> str:
     """A life's session name: the sweep's prefix and a hash, never the person's id."""
-    return f"{SESSION_PREFIX}life-{hashlib.sha256(person_id.encode()).hexdigest()[:12]}"
+    return f"{prefix}life-{hashlib.sha256(person_id.encode()).hexdigest()[:12]}"
 
 
 def _night_setup_s(uploads: int) -> float:
@@ -384,7 +396,8 @@ class ColabLives:
         if life is None:
             base = f"colab_life:{inputs['night']}:{person}"
             reservation = hold(runner._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, self._life_s))
-            life = self._lives[person] = _Life(_life_session(person), reservation, runner._clock())
+            life = self._lives[person] = _Life(_life_session(person, runner.session_prefix), reservation,
+                                               runner._clock())
         out = Path(str(inputs["workdir"])) / "out"
         night_started = runner._clock()
         idle = None if first or life.idle_since is None else night_started - life.idle_since

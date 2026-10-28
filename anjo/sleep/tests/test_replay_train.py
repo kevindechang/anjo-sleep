@@ -32,7 +32,7 @@ from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train, thinker
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import LoraCfg, TrainError, plan_steps, training_config
-from anjo.sleep.train.runners.colab import ColabCli, RealPersonRefused
+from anjo.sleep.train.runners.colab import SESSION_PREFIX, ColabCli, RealPersonRefused
 
 BRIEF = load_brief()
 LAMBDA = settings.token_penalty()
@@ -271,6 +271,18 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
     assert cli.commands().count("new") == 2 and cli.commands().count("stop") == 2
     assert ledger.open_holds() == () and ledger.used("colab_cu") > 0
     assert found.hold_cu == pytest.approx(15.0)
+
+
+def test_replay_trains_in_minds_sessions_which_sleeps_sweep_never_stops(tmp_path: Path) -> None:
+    data = _replay()
+    cli, ledger, runner = _setup(tmp_path)
+    thinker.train_thinkers(
+        data, runner, ledger, workdir=tmp_path / "work", adapter_cache=tmp_path / "cache",
+        publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None,
+    )
+    sessions = {args[args.index("-s") + 1] for args in cli.calls if "-s" in args}
+    assert len(sessions) == 2 and all(name.startswith("anjo-mind-") for name in sessions)
+    assert not any(name.startswith(SESSION_PREFIX) for name in sessions)
 
 
 def test_replay_training_refuses_a_real_person_unequal_data_and_a_pool_without_room(tmp_path: Path) -> None:

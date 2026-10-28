@@ -9,7 +9,8 @@
   host's estimate, and the script, counting with the real tokenizer, stops before the model loads
   if any row would still be dropped (``keep_every_row``), so only the VM's boot is spent.
 - **Colab only, never Modal:** ``train_thinkers`` takes a ``ColabRunner``, which ``colab_runner``
-  builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else. The runner holds
+  builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else, in MIND's own
+  sessions (``anjo-mind-…``), so a Sleep night's sweep never stops one. The runner holds
   each job's worst case on the ``colab_cu`` pool before its VM starts; ``train_thinkers`` first
   checks the pool can hold both jobs, so it never trains one and stops on the other.
 - **Rendering:** each row is rendered at the server's reasoning strength on the date it was
@@ -46,7 +47,7 @@ from anjo.sleep.train.lora import (
     plan_steps,
     train_lora_with_receipt,
 )
-from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, POOL, ColabCli, ColabRunner
+from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX, POOL, ColabCli, ColabRunner
 from anjo.sleep.types import CheckpointRef
 
 REPLAY_OWNER: Final = "apd-replay"  # the synthetic owner every replay adapter trains under
@@ -61,8 +62,10 @@ def is_replay_owner(person_id: str) -> bool:
 
 
 def colab_runner(cli: ColabCli, ledger: Ledger, *, clock: Callable[[], float] = time.monotonic) -> ColabRunner:
-    """The Colab runner for replay: it trains ``REPLAY_OWNER`` only, and never a real person."""
-    return ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_replay_owner, clock=clock)
+    """The Colab runner for replay: it trains ``REPLAY_OWNER`` only, never a real person, in
+    sessions named ``anjo-mind-…``."""
+    return ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_replay_owner, clock=clock,
+                       session_prefix=MIND_SESSION_PREFIX)
 
 
 @dataclass(frozen=True)

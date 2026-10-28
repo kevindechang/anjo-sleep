@@ -294,3 +294,39 @@ def test_a_delete_stops_only_that_persons_sessions() -> None:
         ["stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3"], ["stop", "-s", _life_session("p1")]]
     none = Listing("[colab] No active sessions found on server.\n")
     assert stop_person_sessions(ColabCli(Path("/fake/colab"), run=none), "p1", set()) == 0
+
+
+MIXED = (
+    "[anjo-sleep-p-aaaaaaaaaaaa-n3] gpu-a100-s-1 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    "[anjo-mind-apd-1a2b3c4d] gpu-a100-s-2 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    "[anjo-mind-p-bbbbbbbbbbbb-n0] gpu-a100-s-3 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    "[voice-test] gpu-a100-s-4 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+)
+
+
+def test_sleeps_sweep_and_minds_sweep_leave_each_others_sessions_alone() -> None:
+    sleep = Listing(MIXED)
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=sleep)) == (1, 3)
+    assert [args[3:] for args, _ in sleep.calls][1:] == [["stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3"]]
+    mind = Listing(MIXED)
+    assert stop_leftover_sessions(ColabCli(Path("/fake/colab"), run=mind), prefix=colab.MIND_SESSION_PREFIX) == (2, 2)
+    assert [args[3:] for args, _ in mind.calls][1:] == [
+        ["stop", "-s", "anjo-mind-apd-1a2b3c4d"], ["stop", "-s", "anjo-mind-p-bbbbbbbbbbbb-n0"]]
+    assert not colab.MIND_SESSION_PREFIX.startswith(colab.SESSION_PREFIX)
+    assert not colab.SESSION_PREFIX.startswith(colab.MIND_SESSION_PREFIX)
+
+
+def test_a_runner_names_its_sessions_with_its_own_prefix(tmp_path: Path) -> None:
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    runner = ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger,
+                         is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(),
+                         session_prefix=colab.MIND_SESSION_PREFIX)
+    runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    sessions = {args[args.index("-s") + 1] for args, _ in fake.calls if "-s" in args}
+    assert sessions == {f"anjo-mind-{NAME}"}
+    with runner.lives(life_timeout_s=3 * TIMEOUT_S) as lives:
+        lives.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert all(args[args.index("-s") + 1].startswith("anjo-mind-") for args, _ in fake.calls if "-s" in args)
+    with pytest.raises(ValueError, match="prefix"):
+        ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger, is_synthetic=bool,
+                    session_prefix="voice-")
