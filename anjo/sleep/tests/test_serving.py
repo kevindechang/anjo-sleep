@@ -230,6 +230,7 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
     assert recorder.by("app") == [{"name": "anjo-sleep-serve"}]
     (serve,) = recorder.by("cls")
     assert (serve["gpu"], serve["scaledown_window"], serve["timeout"]) == ("L40S", 600, 3 * 3600)
+    assert serve["max_containers"] == config.MAX_CONTAINERS == 1  # every arm shares one GPU: one wake, one container
     assert "enable_memory_snapshot" not in serve  # the GPU snapshot is behind its flag
     assert {config.WEIGHTS_DIR, config.ADAPTERS_DIR} == set(serve["volumes"])
     (download,) = recorder.by("function")

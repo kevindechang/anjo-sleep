@@ -9,8 +9,8 @@ the weights volume read-only and lands each adapter on the adapters volume. Thre
   holds no secret unless the deploy names a Hugging Face one (the repo isn't gated).
 - ``Serve``: vLLM's OpenAI-compatible server on one GPU at the precision ``config.SERVING``
   names, with LoRA on, so the base model and every personal adapter share it. It holds only the
-  serving secret (VLLM_API_KEY). It scales to zero after ten idle minutes, and every function has
-  a timeout.
+  serving secret (VLLM_API_KEY). It runs one container at most (``config.MAX_CONTAINERS``), scales
+  to zero after ten idle minutes, and every function has a timeout.
 - ``put_adapter`` and the ``upload_adapter`` entrypoint: put one checked adapter folder on the
   adapters volume under its name, never over an adapter already there. A running container sees a
   new adapter after its next start.
@@ -119,6 +119,7 @@ def _wait_until_healthy(process: subprocess.Popen[bytes], timeout_s: float) -> N
     secrets=[serve_secret],
     timeout=config.SERVE_TIMEOUT_S,
     scaledown_window=config.SCALEDOWN_S,
+    max_containers=config.MAX_CONTAINERS,
     **_SNAPSHOT_OPTIONS,
 )
 @modal.concurrent(max_inputs=config.CONCURRENT_REQUESTS)

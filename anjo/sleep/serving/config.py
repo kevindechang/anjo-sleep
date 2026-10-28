@@ -93,6 +93,9 @@ SERVE_TIMEOUT_S: Final = 3 * 3600
 STARTUP_TIMEOUT_S: Final = 20 * 60
 DOWNLOAD_TIMEOUT_S: Final = 3600
 CONCURRENT_REQUESTS: Final = 16
+# Every arm (the base and each person's adapter) shares one GPU by design, so a wake never starts a
+# second container: on 2026-10-28 one wake started two L40S containers before this was set.
+MAX_CONTAINERS: Final = 1
 
 MAX_MODEL_LEN: Final = 32_768
 MAX_OUTPUT_TOKENS: Final = 4096
