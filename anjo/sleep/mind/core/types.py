@@ -1,26 +1,29 @@
 """MIND's neural core: the values it reads and returns. Pure and torch-free.
 
 An event is one evidence item of a life, or one turn or finding of a real person, read as a
-vector from Glimmer's own hidden states (``EventLatent``, the latents worker's format). The core
+vector from Glimmer's own hidden states (``EventLatent``: the latents module's record, kept in
+``event`` so nothing here loads the encoder, the one the core reads; a ``LabelledStream`` checks each event's vector is one finite row and its time aware). The core
 binds events into slots, one per open thread, and answers per slot: will this thread fail within
 ``HORIZON_DAYS`` days, is a prerequisite missing, and how wrong is its own forecast likely to be.
 Training reads ``ThreadLabel`` rows: which events make up a thread, from when its problem is
 knowable and when it surfaced. Imagined states never become evidence: an ``Ignition`` cites only
 ids of events the core observed.
 
-The package: ``types``, ``state``, ``toy``, ``data``, ``findings`` and ``bridge`` are torch-free,
-so the night imports the bridge without torch; ``net``, ``api``, ``train``, ``evaluate`` and the
+The package: ``event``, ``types``, ``state``, ``store``, ``curriculum``, ``toy``, ``data``, ``findings``
+and ``bridge`` are torch-free, and all but ``toy`` and ``data`` load no training code either, so the
+night and the app import the bridge; ``net``, ``api``, ``train``, ``evaluate`` and the
 CLI (``python -m anjo.sleep.mind.core``) need torch, on the CPU.
 """
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal, TypeAlias, get_args
+from typing import Final, Literal, get_args
 
 import numpy as np
-from numpy.typing import NDArray
+
+from anjo.sleep.mind.core.event import EventLatent as EventLatent  # the one event record
 
 HORIZON_DAYS: Final = 7  # the hazard heads look this many days ahead
 KINDS: Final = (
@@ -28,7 +31,6 @@ KINDS: Final = (
 )
 IgnitionKind = Literal["risk", "missing", "collision"]
 IGNITION_KINDS: Final = frozenset(get_args(IgnitionKind))
-Vector: TypeAlias = NDArray[np.float32]
 
 
 def kind_index(kind: str) -> int:
@@ -46,7 +48,9 @@ def days_of(t: datetime) -> float:
 @dataclass(frozen=True)
 class CoreConfig:
     """The shared core's shape. ``fast`` off is the no-fast-weights ablation (N-nofast);
-    ``memory`` off resets the state before every event: the no-memory baseline."""
+    ``memory`` off resets the state before every event: the no-memory baseline. ``stance`` reads
+    the fast memory by topic, whatever the stance, and gives each slot update the product of the
+    recalled stance and the event's own (``net``): the stance probe for contradictions."""
 
     dim_in: int
     width: int = 64
@@ -59,6 +63,7 @@ class CoreConfig:
     cite_min: float = 0.2  # an event is cited by a slot it wrote into at least this much
     cite_keep: int = 8  # cited events a slot keeps, the strongest writes first
     dream_gap_days: float = 0.25  # an imagined event's distance from the one before
+    stance: bool = False
 
     def __post_init__(self) -> None:
         for name in ("dim_in", "width", "slots", "horizon", "cite_keep"):
@@ -66,27 +71,6 @@ class CoreConfig:
                 raise ValueError(f"{name} must be at least 1")
         if not 0.0 < self.theta_max <= 0.5:
             raise ValueError("theta_max is in (0, 0.5]")
-
-
-@dataclass(frozen=True)
-class EventLatent:
-    """One event as the latents worker writes it: ``vec`` is Glimmer's hidden states, pooled."""
-
-    event_id: str
-    life_or_person: str
-    t: datetime
-    kind: str
-    vec: Vector = field(compare=False, repr=False)
-
-    def __post_init__(self) -> None:
-        if not self.event_id or not self.life_or_person:
-            raise ValueError("an event names its id and its life or person")
-        days_of(self.t)
-        vec = np.array(self.vec, dtype=np.float32)
-        if vec.ndim != 1 or vec.size == 0 or not np.all(np.isfinite(vec)):
-            raise ValueError(f"event {self.event_id}'s vector is one finite row")
-        vec.setflags(write=False)
-        object.__setattr__(self, "vec", vec)
 
 
 @dataclass(frozen=True)
@@ -118,6 +102,15 @@ class ThreadLabel:
             raise ValueError(f"label {self.id} surfaces before it is knowable")
 
 
+def _check_event(event: EventLatent) -> None:
+    if not event.event_id or not event.life_or_person:
+        raise ValueError("an event names its id and its life or person")
+    days_of(event.t)
+    vec = np.asarray(event.vec)
+    if vec.ndim != 1 or vec.size == 0 or not np.all(np.isfinite(vec)):
+        raise ValueError(f"event {event.event_id}'s vector is one finite row")
+
+
 @dataclass(frozen=True)
 class LabelledStream:
     """One life's events in time order, its days (the person-days it counts for) and its labels."""
@@ -128,6 +121,8 @@ class LabelledStream:
     labels: tuple[ThreadLabel, ...]
 
     def __post_init__(self) -> None:
+        for event in self.events:
+            _check_event(event)
         if any(b.t < a.t for a, b in zip(self.events, self.events[1:])):
             raise ValueError(f"life {self.life_id}'s events run in time order")
         ids = [e.event_id for e in self.events]

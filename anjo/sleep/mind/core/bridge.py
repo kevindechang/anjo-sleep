@@ -4,9 +4,12 @@ plain outputs (``Ignition``, ``Decision``, ``Predictions``), so importing it nev
 **Ignition.** The core writes into her workspace only through the kernel. An ignition becomes a
 ``NOTICE`` that cites the **real** items it names: those the workspace already holds (anything an
 imagined state produced is unknown to the kernel and dropped), oldest first. Its targets are the
-targets those items name, among the run's. A ``collision`` opens a contradiction when it cites
-items from two days (the kernel's K3), else an anomaly; ``risk`` opens an anomaly and ``missing``
-a gap. The subject is neutral, built from the targets' labels. The kernel checks it, the screen
+targets those items name, among the run's. ``risk`` opens an anomaly and ``missing`` a gap. A
+``collision`` opens nothing unless ``ANJO_SLEEP_MIND_CONTRADICTIONS=1`` (``contradictions_on``;
+off by default: no method has yet beaten the untrained rule "the constraint matches no earlier
+event" at telling a conflict from an unrelated plan, so a collision is dropped as
+``contradictions_off``); switched on, it opens a contradiction when it cites items from two days
+(the kernel's K3), else an anomaly. The subject is neutral, built from the targets' labels. The kernel checks it, the screen
 reads it (purpose ``question``) and the step is logged like any other, so a fold of the log
 rebuilds the workspace. An ignition with nothing real, no target, or a live question already on
 the same targets and kind, is dropped with that reason and logs nothing.
@@ -19,7 +22,8 @@ app passes ``os.environ``). Off, ``night_decide`` is the controller (``loop.CONT
   which question the next cycle investigates. Questions the core attends to (their origin
   evidence is cited by a core slot) go first, by that slot's risk; the rest follow in the
   controller's priority order. Its runs' ``RunStart`` names it (``CORE_DECIDER``), so a killed run
-  resumes under it, never under the controller.
+  resumes under it, never under the controller. In the night, a dream's view picks it
+  (``decider_for``) and a resume takes the one its run names (``resume_decider``).
 - ``CoreChooser`` lets the core decide whether to speak: a held note (``hold_note``) keeps its
   weight only when the core decides to speak, and only on the targets of the slot it raises.
   Every other want is the inner chooser's, unchanged.
@@ -55,17 +59,23 @@ from anjo.sleep.ports import Chooser
 from anjo.sleep.types import Choice, ChoiceContext, Opportunity, Target, Want, WantSnapshot
 
 CORE_ENV: Final = "ANJO_SLEEP_MIND_CORE"
+CONTRADICTIONS_ENV: Final = "ANJO_SLEEP_MIND_CONTRADICTIONS"  # "1": a collision opens a question
 CORE_DECIDER: Final = "mind-core"  # the name a core-decided run's RunStart records
 SCREEN_TOKENS: Final = 256  # the screen's allowance for one ignition's subject
 QUESTION_OF: Final[Mapping[IgnitionKind, QuestionKind]] = {
     "risk": "anomaly", "missing": "gap", "collision": "contradiction",
 }
-DropReason = Literal["nothing_real", "no_targets", "already_open"] | RejectCode
+DropReason = Literal["nothing_real", "no_targets", "already_open", "contradictions_off"] | RejectCode
 
 
 def core_on(env: Mapping[str, str]) -> bool:
     """The core's switch for a live night: on only for ``ANJO_SLEEP_MIND_CORE=1``."""
     return env.get(CORE_ENV, "").strip() == "1"
+
+
+def contradictions_on(env: Mapping[str, str]) -> bool:
+    """The switch for the core's collisions: on only for ``ANJO_SLEEP_MIND_CONTRADICTIONS=1``."""
+    return env.get(CONTRADICTIONS_ENV, "").strip() == "1"
 
 
 # ── Ignition ──────────────────────────────────────────────────────────────────
@@ -114,15 +124,16 @@ def _notice(ws: Workspace, ignition: Ignition, targets: Sequence[Target]) -> Not
 
 def ignite(
     ws: Workspace, ignitions: Sequence[Ignition], log: WorkspaceLog, *, targets: Sequence[Target], as_of: datetime,
-    screen: ScreenPort | None = None,
+    screen: ScreenPort | None = None, collisions: bool = False,
 ) -> Ignited:
     """Open a question for each ignition, strongest first, through the kernel and the screen;
-    every step is appended to ``log`` the moment it applies."""
+    every step is appended to ``log`` the moment it applies. A collision opens one only with
+    ``collisions`` (``contradictions_on``)."""
     events: list[WorkspaceEvent] = []
     dropped: list[tuple[Ignition, DropReason]] = []
     target_ids = frozenset(target.id for target in targets)
     for ignition in sorted(ignitions, key=lambda i: (-i.score, i.slot, i.kind)):
-        op = _notice(ws, ignition, targets)
+        op = _notice(ws, ignition, targets) if collisions or ignition.kind != "collision" else "contradictions_off"
         if not isinstance(op, NoticeOp):
             dropped.append((ignition, op))
             continue
@@ -197,7 +208,24 @@ class CoreController:
 
 def night_decide(env: Mapping[str, str], view: CoreView) -> Decider:
     """The inquiry's decider for tonight: the controller, or the core's when its switch is on."""
-    return Decider(CORE_DECIDER, CoreController(view)) if core_on(env) else CONTROLLER
+    return decider_for(view if core_on(env) else None)
+
+
+def decider_for(view: CoreView | None) -> Decider:
+    """The decider of a night that dreamt (``view``, its core's view): the core's; else the controller."""
+    return CONTROLLER if view is None else Decider(CORE_DECIDER, CoreController(view))
+
+
+def resume_decider(name: str | None, view: CoreView | None) -> Decider:
+    """The decider a killed run resumes under: the one its ``RunStart`` names (``name``). A
+    core-decided run runs on only under tonight's view, never under the controller in its place."""
+    if name is None:
+        return CONTROLLER
+    if name != CORE_DECIDER:
+        raise ValueError(f"a run decided by the unknown {name!r} can't be resumed")
+    if view is None:
+        raise ValueError("the run was decided by MIND's core; resuming it needs the core's view (ANJO_SLEEP_MIND_CORE)")
+    return decider_for(view)
 
 
 @dataclass(frozen=True)

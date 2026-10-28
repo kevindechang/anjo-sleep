@@ -22,6 +22,16 @@ with its kind and the gap since the event before (``encode``). Then:
    Keys are unit vectors and ``theta <= theta_max <= 0.5``, so a step never overshoots.
 3. **Global state:** a GRU cell over the event, the memory read and what was written.
 
+A person's **slow memory** (``slow``, from her nights: ``api.Core.consolidate``) is read with the
+fast one and enters the surprise, but only the fast one learns and forgets.
+4. **The stance probe** (``stance``, for contradictions). A plain key is a projection of the whole
+   event, so a constraint that flips a plan's attribute cancels the very part of the key it
+   shares with the plan, and recalls nothing of it. With ``stance`` the key is the centered square
+   of that projection: what an event is about, whatever its sign, so the constraint recalls the
+   plan. The slot update then also reads the elementwise product of the recalled value and the
+   event's own (normalized): a learned probe of whether the two agree or flip, the pair feature
+   natural-language inference reads, applied to her own memory.
+
 **Heads** read each slot with the global state and the slot's age: the daily hazard over ``horizon`` days (risk is one minus survival), a missing
 prerequisite, the predicted squared error of its own risk (the self-model), and a choice logit.
 Globally: speak or wait, the "raise nothing" logit, and an imagined next event for dreaming.
@@ -82,10 +92,12 @@ class Heads(NamedTuple):
 
 def fast_update(
     memory: Tensor, momentum: Tensor, k: Tensor, v: Tensor, theta: Tensor, eta: Tensor, alpha: Tensor,
+    slow: Tensor | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """One Titans step of a linear memory on (k, v): ``(memory, momentum, surprise)``. The gradient
-    of ``|M k - v|^2`` in ``M`` is ``2 (M k - v) k^T``."""
-    err = torch.bmm(memory, k[:, :, None])[:, :, 0] - v
+    of ``|M k - v|^2`` in ``M`` is ``2 (M k - v) k^T``. With a ``slow`` memory (the person's
+    consolidated one) the error is the two together's, and only the fast one learns and forgets."""
+    err = torch.bmm(memory if slow is None else memory + slow, k[:, :, None])[:, :, 0] - v
     surprise = err.pow(2).mean(dim=-1)
     grad = 2.0 * err[:, :, None] * k[:, None, :]
     momentum = eta[:, None, None] * momentum - theta[:, None, None] * grad
@@ -110,7 +122,8 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         self.slot_norm = nn.LayerNorm(d)
         self.new = nn.Linear(2 * d, 1)
         self.slot_init = nn.Parameter(torch.zeros(d))
-        self.cell = nn.GRUCell(2 * d, d)
+        self.cell = nn.GRUCell((3 if cfg.stance else 2) * d, d)
+        self.stance_norm = nn.LayerNorm(d) if cfg.stance else None
         self.close = nn.Linear(2 * d, 1)
         self.fade = nn.Parameter(torch.zeros(()))  # usage fades at softplus(fade) per idle day
         self.glob_cell = nn.GRUCell(3 * d, d)
@@ -147,7 +160,9 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         timing = torch.stack([torch.log1p(gap.clamp(min=0.0)), torch.ones_like(gap)], dim=-1)
         return self.inp_norm(self.inp(vec / rms)) + self.kind(kind) + self.time(timing)
 
-    def step(self, st: Tensors, e: Tensor, gap: Tensor, now: Tensor) -> tuple[Tensors, Written]:
+    def step(
+        self, st: Tensors, e: Tensor, gap: Tensor, now: Tensor, slow: Tensor | None = None,
+    ) -> tuple[Tensors, Written]:
         cfg = self.cfg
         faded = st.usage * torch.exp(-F.softplus(self.fade) * gap.clamp(min=0.0))[:, None]
         st = st._replace(usage=faded)
@@ -157,9 +172,12 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         slots = st.slots * (1.0 - fresh[:, :, None]) + self.slot_init * fresh[:, :, None]
         opened = st.opened * (1.0 - fresh) + now[:, None] * fresh
         write = address[:, : cfg.slots] + address[:, cfg.slots:] * free
-        memory, momentum, surprise, read = self._remember(st, e, gap)
-        joined = torch.cat([e, self.read_norm(read)], dim=-1)[:, None, :].expand(-1, cfg.slots, -1)
-        cand = self.cell(joined.reshape(-1, 2 * cfg.width), slots.reshape(-1, cfg.width)).view_as(slots)
+        memory, momentum, surprise, read = self._remember(st, e, gap, slow)
+        parts = [e, self.read_norm(read)]
+        if self.stance_norm is not None:
+            parts.append(self.stance_norm(read * self.wv(e)))
+        joined = torch.cat(parts, dim=-1)[:, None, :].expand(-1, cfg.slots, -1)
+        cand = self.cell(joined.reshape(cfg.slots * e.shape[0], -1), slots.reshape(-1, cfg.width)).view_as(slots)
         slots = slots + write[:, :, None] * (cand - slots)
         usage = st.usage + write * (1.0 - st.usage)
         closing = torch.sigmoid(self.close(torch.cat([slots, e[:, None, :].expand_as(slots)], dim=-1)))[:, :, 0]
@@ -169,17 +187,28 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         out = Tensors(slots, usage, opened, memory, momentum, glob, now)
         return out, Written(write, fresh, surprise, address)
 
-    def _remember(self, st: Tensors, e: Tensor, gap: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """What the memory recalls for the event (read before the write), then one surprise step."""
+    def _remember(
+        self, st: Tensors, e: Tensor, gap: Tensor, slow: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """What the memory recalls for the event (read before the write, the slow memory's too),
+        then one surprise step of the fast one."""
         cfg = self.cfg
-        k = F.normalize(self.wk(e), dim=-1)
-        read = torch.bmm(st.memory, k[:, :, None])[:, :, 0]
+        k = self._key(e)
+        read = torch.bmm(st.memory if slow is None else st.memory + slow, k[:, :, None])[:, :, 0]
         if not cfg.fast:
             return st.memory, st.momentum, torch.zeros(e.shape[0]), torch.zeros_like(read)
         g = torch.sigmoid(self.gates(torch.cat([e, torch.log1p(gap.clamp(min=0.0))[:, None]], dim=-1)))
         memory, momentum, surprise = fast_update(
-            st.memory, st.momentum, k, self.wv(e), g[:, 0] * cfg.theta_max, g[:, 1], g[:, 2])
+            st.memory, st.momentum, k, self.wv(e), g[:, 0] * cfg.theta_max, g[:, 1], g[:, 2], slow)
         return memory, momentum, surprise, read
+
+    def _key(self, e: Tensor) -> Tensor:
+        """The memory's key: the event's projection, or under ``stance`` its centered square (its topic)."""
+        q = self.wk(e)
+        if self.cfg.stance:
+            q = q.pow(2)
+            q = q - q.mean(dim=-1, keepdim=True)
+        return F.normalize(q, dim=-1)
 
     def _address(self, st: Tensors, e: Tensor) -> Tensor:
         a = self.addr(e)

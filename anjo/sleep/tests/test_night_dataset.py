@@ -10,6 +10,8 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
@@ -170,3 +172,17 @@ def test_held_out_and_uncleared_practice_never_reaches_the_dataset(tmp_path: Pat
     log.add([held])
     data, _ = build_night_dataset(store, None, NIGHT, [], OverlapDecontaminator(), 100_000, transcripts=log, seed=7)
     assert [example.id for example in data.examples] == [_transcript(2).id]
+
+
+def test_rows_carry_their_sleep_weight_only_when_mind_weighted_them(tmp_path: Path) -> None:
+    data, _ = _build(tmp_path, [_transcript(1), _transcript(2), _transcript(3)], dropout=0.0)
+    plain = [json.loads(line) for line in data.to_jsonl().splitlines()]  # type: ignore[attr-defined]
+    assert all("weight" not in row for row in plain)  # unweighted rows are today's, byte for byte
+    first, second, third = (example.id for example in data.examples)  # type: ignore[attr-defined]
+    weighted = data.weighted({first: 1.5, second: 1.0})  # type: ignore[attr-defined]
+    rows = {row["id"]: row for row in (json.loads(line) for line in weighted.to_jsonl().splitlines())}
+    assert rows[first]["weight"] == 1.5
+    assert "weight" not in rows[second] and "weight" not in rows[third]  # 1.0 is the trainer's default
+    assert data.examples[0].weight == 1.0  # type: ignore[attr-defined]  # weighting makes a new dataset
+    with pytest.raises(ValueError, match="positive"):
+        data.weighted({first: 0.0})  # type: ignore[attr-defined]

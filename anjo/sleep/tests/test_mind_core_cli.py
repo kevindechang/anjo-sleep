@@ -8,6 +8,7 @@ import dataclasses
 import json
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -132,3 +133,27 @@ def test_another_arms_findings_render_in_the_cores_form(tmp_path: Path, capsys: 
     assert (row["arm"], row["life_id"], row["finding_id"], row["p"], row["cites"]) == (
         "B", life.life_id, "b-1", 0.7, [first, second, third])
     assert cli.main(["prescore", "--findings", str(out), "--labels", str(tmp_path / "export" / "labels")]) == 0
+
+
+def test_toy_training_takes_the_revision_pairs_unless_told_not_to(tmp_path: Path) -> None:
+    assert not cli.parser().parse_args(["toy", "--out", str(tmp_path)]).no_revisions
+    assert cli.parser().parse_args(["toy", "--out", str(tmp_path), "--no-revisions"]).no_revisions
+
+
+def test_toy_training_writes_every_contradiction_in_the_family_it_is_told(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    told: list[object] = []
+
+    def recording(real: Any) -> Any:
+        def call(*args: Any, **kwargs: Any) -> Any:
+            told.append(kwargs.get("stance"))
+            return real(*args, **kwargs)
+        return call
+
+    for name in ("lives", "contradiction_pairs"):
+        monkeypatch.setattr(toy, name, recording(getattr(toy, name)))
+    args = ["toy", "--out", str(tmp_path), "--epochs", "1", "--width", "16", "--slots", "4"]
+    assert not cli.parser().parse_args(args).stance_lives  # plain unless told
+    card = cli.run_toy(cli.parser().parse_args([*args, "--stance-lives"]))
+    assert card["data"]["contradictions"] == "stance" and told and all(told)

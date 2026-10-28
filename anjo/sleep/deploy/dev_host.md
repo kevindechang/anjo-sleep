@@ -520,7 +520,8 @@ The night runs as its own process, so a long night can't take down the server.
   carries that date.
 - `--phase night` (02:00 Taipei) runs the night for the previous Taipei calendar day (or, with
   `--for-date D`, for day D: not in the future, not before the life starts), with MIND's inquiry
-  only under `--mind` or `ANJO_SLEEP_DAILY_MIND=1` in the env file (default off), as its own
+  on for the demo person by default and off for anyone else (`ANJO_SLEEP_DAILY_MIND=1` or `0` in
+  the env file sets it for all; `--mind` or `--no-mind` wins over both), as its own
   virtual date (the date it was lived on). It takes the night lock, sweeps, wakes Glimmer and trains
   exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
   checkpoint that serves, in the same process. It first reads the marker of the day it closes: a

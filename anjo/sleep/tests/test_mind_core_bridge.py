@@ -50,6 +50,21 @@ def test_ignition_opens_a_question_through_the_kernel() -> None:
     assert again.dropped == ((dreamt_only, "nothing_real"),)
 
 
+def test_a_collision_opens_no_question_unless_contradictions_are_switched_on() -> None:
+    w, log = _held()
+    collided = Ignition(slot=1, other=2, kind="collision", score=0.97, cited_event_ids=(CAMERA.id, CANCELLED.id))
+    off = bridge.ignite(w.ws, (collided,), log, targets=TARGETS, as_of=night(5))
+    assert off.ws == w.ws and off.events == () and log.events() == tuple(w.events)
+    assert off.dropped == ((collided, "contradictions_off"),)
+    assert not bridge.contradictions_on({}) and not bridge.contradictions_on({bridge.CONTRADICTIONS_ENV: "0"})
+
+    assert bridge.contradictions_on({bridge.CONTRADICTIONS_ENV: "1"})
+    on = bridge.ignite(w.ws, (collided,), log, targets=TARGETS, as_of=night(5), collisions=True)
+    question = on.ws.questions[-1]
+    assert question.kind == "contradiction" and question.origin_evidence == (CAMERA.id, CANCELLED.id)
+    assert question.subject == "Whether the plans for Thursday's shoot agree with each other"
+
+
 def _script() -> list[Any]:
     return [
         {"op": "HYPOTHESIZE", "question_id": "q1", "hypotheses": [
@@ -113,6 +128,19 @@ def test_resume_keeps_the_core_decider() -> None:
     with pytest.raises(ValueError, match="decider"):
         loop.resume_inquiry(today_log.events(), ports((CAMERA, CANCELLED), [], log=today_log), targets=TARGETS,
                             decider=core)
+
+
+def test_a_night_decides_by_its_dream_and_resumes_under_the_decider_its_run_names() -> None:
+    view = _view(True)
+    assert bridge.decider_for(None) is loop.CONTROLLER
+    core = bridge.decider_for(view)
+    assert core.name == bridge.CORE_DECIDER and core.decide == bridge.CoreController(view)
+    assert bridge.resume_decider(None, view) is loop.CONTROLLER  # a controller's run runs on under it
+    assert bridge.resume_decider(bridge.CORE_DECIDER, view).decide == bridge.CoreController(view)
+    with pytest.raises(ValueError, match="core's view"):
+        bridge.resume_decider(bridge.CORE_DECIDER, None)  # never under the controller in its place
+    with pytest.raises(ValueError, match="unknown"):
+        bridge.resume_decider("someone-else", view)
 
 
 def test_core_controller_investigates_what_the_core_attends_to_first() -> None:

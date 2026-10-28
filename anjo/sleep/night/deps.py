@@ -9,6 +9,8 @@ import it.
 - ``Homework``: Task 7's ``WonderHomework`` (``anjo.sleep.homework.agent``) in the app.
   ``NoHomework`` stays for tests and the public example: its ``available`` is False, so the night
   offers no study action (the chooser records ``action_not_offered``).
+- ``MindCore`` (MIND's core: the dream and the night's unit): ``NoCore``; the app builds
+  ``anjo.sleep.mind.core.night.CoreNight`` under ``ANJO_SLEEP_MIND_CORE=1``.
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
   ``NoNotice``. ``anjo.sleep.night.mind.MindNight`` is both, and the night calls it only while
   ``NightSettings.mind_inquiry`` is on; off, the night is Task 7a's as specced.
@@ -25,7 +27,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
@@ -33,8 +35,8 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
 from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
-from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
 from anjo.sleep.note.hold import Fact, NoteWriter
@@ -63,6 +65,10 @@ from anjo.sleep.types import (
     Result,
     Target,
 )
+
+if TYPE_CHECKING:  # both are torch-free, but the night needs only their types
+    from anjo.sleep.mind.core.bridge import CoreView
+    from anjo.sleep.mind.core.state import CoreState
 
 STUDY_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread"})
 ALL_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread", "inquire", "hold_note"})
@@ -132,6 +138,7 @@ class MindCall:
     actions_left: int
     job: str
     cancelled: Callable[[], bool]
+    core_view: CoreView | None = None  # tonight's dream, for the inquiry's decider (MIND's core on)
 
 
 class Inquiry(Protocol):
@@ -177,6 +184,76 @@ class NoInquiry:
 
     def facts(self, call: MindCall, target_id: str) -> list[Fact]:
         return []
+
+
+@dataclass(frozen=True)
+class Dreamt:
+    """What the night's dream (step 2d) left for the steps after it: her core state after every
+    event so far, consolidated (``state``: what practice reads and the night's rows are made under;
+    ``state_id``, its id in her store and the thought channel's ``state_sha``), the evidence
+    practice is seeded on (empty: today's newest), the surprise weights of the evidence it observed
+    tonight by evidence id, the core's view for the inquiry (``view.predictions`` is
+    ``Core.predict(state)``), the projector her last kept unit names (``MindStore.before(night)``;
+    None: the shared one), and the dream's receipt (ids and numbers, for the night log)."""
+
+    state_id: str | None = None
+    state: CoreState | None = None
+    rehearse: tuple[str, ...] = ()
+    weights: Mapping[str, float] = field(default_factory=dict)
+    view: CoreView | None = None
+    projector: str | None = None
+    receipt: Mapping[str, object] = field(default_factory=dict)
+
+    def reading(self) -> MindReading | None:
+        """What the thought channel reads of this dream (``channel_night.MindReading``), or None
+        when nothing was dreamt."""
+        if self.state is None or self.state_id is None or self.view is None:
+            return None
+        return MindReading(self.state, self.state_id, self.view.predictions, self.projector)
+
+
+class MindCore(Protocol):
+    """MIND's core in the night (the one system), for the people it ``serves`` only: ``dream``
+    observes her evidence it hasn't yet, dreams, opens questions, picks what practice rehearses and
+    consolidates; ``dreamt`` is tonight's dream (its receipt holds the imagined states the sleep
+    objective's dreams start from, ``night/core_dreams.py``) and ``reading`` the thought channel's
+    ``MindState`` (tonight's dream as the channel reads it), each None for anyone it doesn't serve
+    and refused when asked before the dream; ``keep`` saves
+    the night's unit (her state, the thought channel's projector and her adapter). Ids only cross:
+    no row's words."""
+
+    def serves(self, user_id: str) -> bool: ...
+
+    def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt: ...
+
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None: ...
+
+    def reading(self, user_id: str, night: date) -> MindReading | None: ...
+
+    def keep(
+        self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
+    ) -> Mapping[str, object]: ...
+
+
+class NoCore:
+    """MIND's core off: no dream, practice seeds on the newest evidence, rows are unweighted."""
+
+    def serves(self, user_id: str) -> bool:
+        return False
+
+    def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
+        return Dreamt()
+
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None:
+        return None
+
+    def reading(self, user_id: str, night: date) -> MindReading | None:
+        return None
+
+    def keep(
+        self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
+    ) -> Mapping[str, object]:
+        return {}
 
 
 class Notice(Protocol):
@@ -324,6 +401,7 @@ class NightDeps:
     homework: Homework = field(default_factory=NoHomework)
     inquiry: Inquiry = field(default_factory=NoInquiry)
     notice: Notice = field(default_factory=NoNotice)
+    core: MindCore = field(default_factory=NoCore)  # MIND's core (ANJO_SLEEP_MIND_CORE=1); off, the night is today's
     estimator: Coefficients | None = None  # Task 16's registered estimator
     intentions: IntentionSource = field(default_factory=NoIntentions)
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)

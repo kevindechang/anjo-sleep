@@ -3,11 +3,27 @@
 - ``toy --out DIR``: train on generated toy lives (fresh ones each epoch) and evaluate on held-out
   ones, the transplant pairs included (16 and 64). A smoke run of the whole chain, minutes on one
   CPU thread. The transplant's claim is an average: the unrelated thread's risk holds on average,
-  its largest shift is reported as a tail and not bounded (``TRANSPLANT_CLAIM``).
+  its largest shift is reported as a tail and not bounded (``TRANSPLANT_CLAIM``). Each epoch also
+  trains on ``TOY_PAIRS_PER_EPOCH`` fresh contradiction pairs under the contrast loss, every other
+  one a revision pair (``toy.contradiction_pairs(revisions=True)``; ``--no-revisions`` leaves them
+  out, ``--no-contrast`` all pairs). Chosen on validation lives (``toy.lives(256, seed=2)``, seeds
+  0 / 1 / 2) as the one recipe within ``evaluate.MAX_FALSE_PER_100`` false interventions per 100
+  person-days on every seed (0.90 / 0.63 / 0.51; no pairs 1.41 / 1.33 / 1.41, plain pairs
+  0.74 / 1.06 / 1.60, the stance probe 0.78 / 1.52 / 0.86, both 0.78 / 1.02 / 1.68). The price is
+  the contradiction signal: on test lives (seed 3, reported once) its contradictions' AUC is
+  0.54 / 0.60 / 0.47 (plain pairs 0.59 / 0.75 / 0.77) at 0.63 / 0.47 / 0.27 false interventions,
+  gaps 0.86 / 0.95 / 0.97. No recipe tells a constraint that still assumes a changed plan from one
+  that follows it: on ``toy.revision_lives`` (test) every recipe's AUC is 0.34 to 0.53. Those are
+  the plain contradictions (``toy``), which resemblance tells (the untrained ``match_age`` reads
+  0.98 to 0.99 of their revisions, so the 0.34 to 0.53 is below a score that needs no training);
+  ``--stance-lives`` writes every life's in the stance family instead, as ``contra`` scores them
+  (the transplant pairs stay plain). Trained on it, the core learnt less of what it keeps: seed 0's planted dependency
+  separated at 0.42 (0.91 after 400 epochs at patience 60), and on stance transplant pairs the open
+  thread held a slot of its own in 6 / 1 / 3 of 16.
 - ``train --export DIR --latents DIR --out DIR``: train on an export's lives (a labelled split,
   ``core-train``). About ``--val-share`` of its lives are held back by template (``split_lives``),
   for the best epoch and the locked thresholds, since ``core-val``'s labels stay sealed.
-  ``--no-fast`` trains N-nofast. Both train until validation stops improving (``--patience``
+  ``--no-fast`` trains N-nofast, ``--stance`` with the stance probe (``net``). Both train until validation stops improving (``--patience``
   epochs), within ``--epochs``.
 - ``findings --model FILE --export DIR --latents DIR --out FILE``: run the core over each life,
   night by night, and write its calls as APD finding records (one JSON object a line, with the
@@ -27,6 +43,16 @@
   reading of B's own prose stays secondary.
 - ``prescore --findings FILE --labels DIR``: the deterministic pre-score against the planted items
   in ``DIR/<life>.json`` (the export's ``labels``, or the sealed items in the same shape).
+- ``contra --out FILE``: contradiction methods against the untrained bar (``contra_run``): the
+  pair scorer (one fit per ``--seeds``) and each ``--core NAME=PATH``, chosen on validation and
+  tested once, beside the untrained scores (and on toy lives the oracle). Toy lives by default;
+  ``--export DIR --latents DIR`` runs the same on an export's lives (``core-train``, split as
+  ``train`` splits it). It prints its plan first; ``--plan`` stops there. On toy lives (stance
+  family; seeds 0 / 1 / 2, each core recipe trained with ``toy --stance-lives``; test at seed 3,
+  once): the oracle reads 0.98 to 1.0, the bar (``unmatched``) 0.56 on contradictions and 0.54 on
+  revisions, timing alone 0.50 to 0.58 (``match_age`` 0.69 on revisions). Neither core recipe beats
+  the bar: the contrast-revision recipe 0.51 / 0.59, the stance probe 0.57 / 0.52, every margin's
+  95% interval holding 0. The pair scorer (rank 8) does: 0.97 / 0.99, margins +0.33 to +0.52 (and over ``match_age``).
 
 ``toy`` and ``train`` write ``core.npz`` (the weights and thresholds; run data, never in git) and
 ``model_card.json``: parameters, data, seed, losses, thresholds, metrics and the time per event.
@@ -49,13 +75,14 @@ import torch
 
 from anjo.sleep.mind.apd.store import loads
 from anjo.sleep.mind.apd.types import ArmRun, FindingReport
-from anjo.sleep.mind.core import data, evaluate, findings, toy, train
+from anjo.sleep.mind.core import contra_bar, contra_run, data, evaluate, findings, toy, train
 from anjo.sleep.mind.core.api import Core
 from anjo.sleep.mind.core.types import CoreConfig, LabelledStream
 
 MODEL_FILE: Final = "core.npz"
 CARD_FILE: Final = "model_card.json"
 TOY_LIVES_PER_EPOCH: Final = 128
+TOY_PAIRS_PER_EPOCH: Final = 32  # contradiction pairs a toy epoch, under the contrast loss
 QUOTE_CHARS: Final = 160  # of each cited item, in a finding's problem
 TRANSPLANT_CLAIM: Final = (
     "The unrelated open thread's risk holds on average: mean_unrelated_shift leaves out the pairs where it "
@@ -104,16 +131,23 @@ def _write(out: Path, core: Core, card: dict[str, Any]) -> None:
 
 
 def run_toy(args: argparse.Namespace) -> dict[str, Any]:
-    config = CoreConfig(dim_in=toy.DIM, width=args.width, slots=args.slots, fast=not args.no_fast)
+    config = CoreConfig(dim_in=toy.DIM, width=args.width, slots=args.slots, fast=not args.no_fast, stance=args.stance)
+    contrast, revisions = 0 if args.no_contrast else TOY_PAIRS_PER_EPOCH, not args.no_revisions
     start = time.perf_counter()
-    trained = train.train_shared(lambda epoch: toy.lives(TOY_LIVES_PER_EPOCH, seed=1000 + epoch),
-                                 toy.lives(48, seed=2), config, seed=args.seed, epochs=args.epochs,
-                                 patience=args.patience, batch_size=16)
+    family = args.stance_lives
+    trained = train.train_shared(lambda epoch: toy.lives(TOY_LIVES_PER_EPOCH, seed=1000 + epoch, stance=family),
+                                 toy.lives(48, seed=2, stance=family), config, seed=args.seed, epochs=args.epochs,
+                                 patience=args.patience, batch_size=16,
+                                 pairs=(lambda epoch: toy.contradiction_pairs(contrast, seed=5000 + epoch,
+                                                                              revisions=revisions, stance=family))
+                                 if contrast else None)
     seconds = time.perf_counter() - start
-    test = toy.lives(64, seed=3)
+    test = toy.lives(64, seed=3, stance=family)
     pairs = {f"transplant_{n}": dataclasses.asdict(evaluate.transplant(trained.core, toy.pairs(n, seed=5), tolerance=0.1))
              for n in (16, 64)}
-    note = {"source": "toy", "lives_per_epoch": TOY_LIVES_PER_EPOCH, "validation": 48, "test": 64, "dim": toy.DIM}
+    note = {"source": "toy", "lives_per_epoch": TOY_LIVES_PER_EPOCH, "contrast_pairs_per_epoch": contrast,
+            "revision_pairs": bool(contrast) and revisions, "contradictions": "stance" if family else "plain",
+            "validation": 48, "test": 64, "dim": toy.DIM}
     card = _card(trained, seconds, note, args.seed, test, {**pairs, "transplant_claim": TRANSPLANT_CLAIM})
     _write(args.out, trained.core, card)
     return card
@@ -155,7 +189,8 @@ def run_train(args: argparse.Namespace) -> dict[str, Any]:
         raise data.DataError("training needs at least two lives of a labelled split")
     header, _ = data.read_latents(args.latents)
     fit, held = split_lives(streams, args.val_share, args.seed)
-    config = CoreConfig(dim_in=int(header["d"]), width=args.width, slots=args.slots, fast=not args.no_fast)
+    config = CoreConfig(dim_in=int(header["d"]), width=args.width, slots=args.slots, fast=not args.no_fast,
+                        stance=args.stance)
     start = time.perf_counter()
     trained = train.train_shared(fit, held, config, seed=args.seed, epochs=args.epochs, patience=args.patience,
                                  batch_size=args.batch)
@@ -269,6 +304,46 @@ def run_prescore(args: argparse.Namespace) -> dict[str, Any]:
     return {**dataclasses.asdict(total), "recall": total.recall}
 
 
+def _named(specs: Sequence[str]) -> dict[str, list[Path]]:
+    """``NAME=PATH`` specs, each name's paths in order."""
+    out: dict[str, list[Path]] = {}
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not ARM_NAME.fullmatch(name) or name == "pair_scorer" or not path:
+            raise ValueError(f"--core takes NAME=PATH with a short name of letters, digits and dashes, not {spec!r}")
+        out.setdefault(name, []).append(Path(path))
+    return out
+
+
+def run_contra(args: argparse.Namespace) -> dict[str, Any]:
+    cores = _named(args.core)
+    if args.export is None:
+        val, test, d = contra_run.toy_split(2), contra_run.toy_split(3), toy.DIM
+        source: Callable[[int], Sequence[contra_bar.Candidate]] = contra_run.toy_source
+        note = f"fresh toy lives each epoch: {contra_run.FIT_LIVES}, and half as many revision lives"
+    else:
+        if args.latents is None:
+            raise ValueError("--export needs --latents")
+        streams = data.load_export(args.export, args.latents)
+        fit, held = split_lives(streams, args.val_share, args.seed)
+        val_lives, test_lives = split_lives(held, 0.5, args.seed + 1)
+        val, test = contra_run.export_split(val_lives), contra_run.export_split(test_lives)
+        fitted = contra_bar.candidates(fit, contra_bar.in_export)
+        d, note = int(streams[0].events[0].vec.shape[0]), f"the export's {len(fit)} fitted lives ({len(fitted)} candidates)"
+
+        def source(epoch: int) -> Sequence[contra_bar.Candidate]:
+            return fitted
+    planned = contra_run.plan({"val": val, "test": test}, d=d, seeds=args.seeds, cores=cores, fit_note=note)
+    print(json.dumps({"plan": planned}, indent=1, sort_keys=True), file=sys.stderr, flush=True)
+    if args.plan:
+        return {"plan": planned}
+    result = {"plan": planned, **contra_run.run(val, test, fit_source=source, d=d, seeds=args.seeds, rank=args.rank,
+                                                 epochs=args.epochs, patience=args.patience, cores=cores)}
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=1, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    return result
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="python -m anjo.sleep.mind.core", description=__doc__.split("\n")[0])
     sub = top.add_subparsers(dest="command", required=True)
@@ -281,6 +356,11 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--width", type=int, default=64)
         p.add_argument("--slots", type=int, default=8 if name == "toy" else 16)
         p.add_argument("--no-fast", action="store_true")
+        p.add_argument("--stance", action="store_true", help="the stance probe, for contradictions")
+        if name == "toy":
+            p.add_argument("--no-contrast", action="store_true", help="no contradiction pairs under the contrast loss")
+            p.add_argument("--no-revisions", action="store_true", help="contradiction pairs without the revision pairs")
+            p.add_argument("--stance-lives", action="store_true", help="every toy contradiction in the stance family")
         if name == "train":
             p.add_argument("--export", type=Path, required=True)
             p.add_argument("--latents", type=Path, required=True)
@@ -301,11 +381,24 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("prescore")
     s.add_argument("--findings", type=Path, required=True)
     s.add_argument("--labels", type=Path, required=True)
+    c = sub.add_parser("contra")
+    c.add_argument("--out", type=Path, required=True)
+    c.add_argument("--export", type=Path, default=None, help="an export's lives instead of toy lives")
+    c.add_argument("--latents", type=Path, default=None)
+    c.add_argument("--val-share", type=float, default=0.2, help="as train's: the lives held back, then halved")
+    c.add_argument("--seed", type=int, default=0, help="the export's split, as train's")
+    c.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2], help="the pair scorer's fits")
+    c.add_argument("--rank", type=int, default=8)
+    c.add_argument("--epochs", type=int, default=80, help="the pair scorer's cap")
+    c.add_argument("--patience", type=int, default=15)
+    c.add_argument("--core", action="append", default=[], metavar="NAME=PATH", help="a trained core, repeatable")
+    c.add_argument("--plan", action="store_true", help="print the plan and stop")
     return top
 
 
 COMMANDS: Final[dict[str, Callable[[argparse.Namespace], dict[str, Any]]]] = {
     "toy": run_toy, "train": run_train, "findings": run_findings, "prescore": run_prescore, "render": run_render,
+    "contra": run_contra,
 }
 
 
@@ -317,7 +410,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (data.DataError, OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    summary = result if args.command in ("findings", "prescore", "render") else {
+    summary = result if args.command in ("findings", "prescore", "render", "contra") else {
         k: result[k] for k in ("model_id", "params", "best_epoch", "thresholds", "metrics", "timing")}
     print(json.dumps(summary, indent=1, sort_keys=True, default=str))
     return 0

@@ -62,6 +62,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from anjo.sleep.budget import DATA_DIR_ENV, Bound, BudgetError, Ledger, default_ledger
+from anjo.sleep.mind.core.event import EventLatent as EventLatent  # the record lives where the app may read it
 from anjo.sleep.mind.sweep import lock_path, mind_lock
 from anjo.sleep.serving import config, framing
 from anjo.sleep.train import latent_job, latent_runner, modal_job
@@ -108,17 +109,6 @@ class EventInput:
     text: str
     context: Turns = ()
     role: str = DEFAULT_ROLE
-
-
-@dataclass(frozen=True, eq=False)
-class EventLatent:
-    """The design's interface: one event and its latent ``vec`` (float32, shape ``(D,)``)."""
-
-    event_id: str
-    life_or_person: str
-    t: datetime
-    kind: str
-    vec: Matrix
 
 
 @dataclass(frozen=True)

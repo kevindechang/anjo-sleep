@@ -12,7 +12,11 @@ slot answers for a thread). The losses:
   "raise nothing");
 - the self-model: the predicted squared error of each slot's own risk against the realized one;
 - binding: events of one thread write into the same slot, events of different threads apart;
-- imagination: the next event's encoding, for dreams.
+- imagination: the next event's encoding, for dreams;
+- contrast (``pairs``, for contradictions): on a minimal pair, one life written twice and
+  differing only in whether a constraint flips the plan's attribute, the thread's mean risk while
+  open must beat its twin's by ``CONTRAST_MARGIN``. Counterfactual supervision: nothing else in
+  the pair differs, so nothing else can explain the difference.
 
 Validation keeps the best epoch; training stops once ``patience`` epochs pass without a better
 validation loss, or at the ``epochs`` cap. The speak threshold is then locked on validation
@@ -42,12 +46,15 @@ from torch.nn import functional as F  # noqa: N812
 from anjo.sleep.mind.core import evaluate
 from anjo.sleep.mind.core.api import Core, Thresholds
 from anjo.sleep.mind.core.net import HEAD_PARAMS, CoreNet, Heads, Tensors, blend
+from anjo.sleep.mind.core.toy import ContrastPair
 from anjo.sleep.mind.core.types import CoreConfig, LabelledStream, ThreadLabel, days_of, kind_index
 
 WEIGHTS: Final = {"hazard": 1.0, "speak": 1.0, "choice": 1.0, "missing": 0.5, "self": 1.0, "bind": 0.5,
                   "imagine": 0.1}
 _EPS: Final = 1e-6
 FOCUS: Final = 20.0  # extra weight on the slots of open labelled threads: a problem against its decoy
+CONTRAST_MARGIN: Final = 0.3  # a pair's thread risk, problem over its twin
+CONTRAST_SCALE: Final = 10.0  # the softplus's sharpness on the margin
 
 
 @dataclass(frozen=True)
@@ -214,9 +221,9 @@ def head_loss(heads: Heads, usage: Tensor, tg: Targets, mask: Tensor, horizon: i
     }
 
 
-def loss(net: CoreNet, data: Batch) -> tuple[Tensor, dict[str, float]]:
+def loss(net: CoreNet, data: Batch, run: Unrolled | None = None) -> tuple[Tensor, dict[str, float]]:
     cfg = net.cfg
-    run = unroll(net, data)
+    run = unroll(net, data) if run is None else run
     parts = head_loss(run.heads, run.usage, targets(run.write, data, cfg.horizon), data.mask, cfg.horizon)
     parts["bind"] = _binding(run.write, data)
     nxt = data.mask[:, 1:]
@@ -225,6 +232,29 @@ def loss(net: CoreNet, data: Batch) -> tuple[Tensor, dict[str, float]]:
     parts["imagine"] = ((guess - truth).pow(2).sum(-1) * nxt).sum() / (nxt.sum() + _EPS)
     total = sum((WEIGHTS[name] * value for name, value in parts.items()), torch.zeros(()))
     return total, {name: float(value.detach()) for name, value in parts.items()}
+
+
+def thread_risk(run: Unrolled, data: Batch, label: Tensor) -> Tensor:
+    """Each life's mean risk of its thread ``label`` (B,) while open: per step, the slots' risks
+    weighted by their share of the thread's events."""
+    rows = torch.arange(data.member.shape[0])
+    member, opened = data.member[rows, label], data.open[rows, label]  # (B, T)
+    held = torch.cumsum(member[..., None] * run.write.detach(), dim=1)  # (B, T, K)
+    share = held / (held.sum(dim=-1, keepdim=True) + _EPS)
+    risk = (share * run.heads.risk).sum(dim=-1)
+    return (risk * opened).sum(dim=-1) / (opened.sum(dim=-1) + _EPS)
+
+
+def contrast_loss(net: CoreNet, data: Batch, label: Tensor) -> tuple[Tensor, dict[str, float]]:
+    """The usual loss on a batch of minimal pairs (problems first, then their twins in the same
+    order), plus the contrast between each pair's thread risks."""
+    run = unroll(net, data)
+    total, parts = loss(net, data, run)
+    risk = thread_risk(run, data, label)
+    half = risk.shape[0] // 2
+    gap = risk[:half] - risk[half:]
+    contrast = F.softplus(CONTRAST_SCALE * (CONTRAST_MARGIN - gap)).mean() / CONTRAST_SCALE
+    return total + contrast, {**parts, "contrast": float(contrast.detach())}
 
 
 def _binding(write: Tensor, data: Batch) -> Tensor:
@@ -267,17 +297,35 @@ def validation_loss(net: CoreNet, batches: Sequence[Batch]) -> float:
 
 
 LifeSource = Sequence[LabelledStream] | Callable[[int], Sequence[LabelledStream]]
+PairSource = Callable[[int], Sequence[ContrastPair]]
+
+
+def _step(opt: torch.optim.Optimizer, net: CoreNet, total: Tensor, clip: float) -> float:
+    opt.zero_grad()
+    total.backward()
+    torch.nn.utils.clip_grad_norm_(net.parameters(), clip)
+    opt.step()
+    return float(total.detach())
+
+
+def _pair_batch(chunk: Sequence[ContrastPair], horizon: int) -> tuple[Batch, Tensor]:
+    """Problems first, then their twins in the same order, and each life's contrasted label."""
+    lives = [p.problem for p in chunk] + [p.benign for p in chunk]
+    label = [next(n for n, lab in enumerate(life.labels) if lab.id == p.label)
+             for p, life in zip([*chunk, *chunk], lives, strict=True)]
+    return batch(lives, horizon), torch.tensor(label, dtype=torch.long)
 
 
 def train_shared(
     fit: LifeSource, val: Sequence[LabelledStream], config: CoreConfig, *, seed: int,
     epochs: int, patience: int | None = None, batch_size: int = 16, lr: float = 1e-3, weight_decay: float = 0.01,
-    clip: float = 1.0,
+    clip: float = 1.0, pairs: PairSource | None = None,
 ) -> Trained:
     """The shared core, trained on ``fit``, its best epoch and thresholds chosen on ``val``.
     ``fit`` is a fixed set of lives, or a source of each epoch's lives (``fit(epoch)``): fresh
     generated lives each epoch, so nothing can be learned by heart. ``epochs`` caps the run;
-    ``patience`` ends it early, once that many epochs pass without a better validation loss."""
+    ``patience`` ends it early, once that many epochs pass without a better validation loss.
+    ``pairs`` adds each epoch's minimal pairs, ``batch_size // 2`` a batch, under the contrast."""
     if not val or (not callable(fit) and not fit):
         raise ValueError("shared training needs training and validation lives")
     with deterministic(seed) as rng:
@@ -296,12 +344,11 @@ def train_shared(
                 key = tuple(s.life_id for s in chunk)
                 data = batch(chunk, config.horizon) if callable(fit) else fit_batches.setdefault(
                     key, batch(chunk, config.horizon))
-                total, _ = loss(net, data)
-                opt.zero_grad()
-                total.backward()
-                torch.nn.utils.clip_grad_norm_(net.parameters(), clip)
-                opt.step()
-                seen.append(float(total.detach()))
+                seen.append(_step(opt, net, loss(net, data)[0], clip))
+            twins = pairs(epoch) if pairs is not None else ()
+            for start in range(0, len(twins), max(1, batch_size // 2)):
+                data, label = _pair_batch(twins[start:start + max(1, batch_size // 2)], config.horizon)
+                seen.append(_step(opt, net, contrast_loss(net, data, label)[0], clip))
             net.eval()
             checked = validation_loss(net, held)
             log.append((epoch, round(math.fsum(seen) / len(seen), 6), round(checked, 6)))

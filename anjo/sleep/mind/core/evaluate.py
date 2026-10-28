@@ -38,7 +38,7 @@ intervention on a thread already caught is a **repeat**. Any other intervention 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Final
@@ -142,32 +142,52 @@ def _records(seen: Predictions, labels: Sequence[ThreadLabel], day: date, horizo
     return out
 
 
-def trace(core: Core, stream: LabelledStream, *, reset_each_night: bool = False) -> LifeTrace:
+NightOp = Callable[[CoreState, Mapping[str, float]], CoreState]  # the state and the day's surprise weights
+
+
+def trace(
+    core: Core, stream: LabelledStream, *, reset_each_night: bool = False, nightly: NightOp | None = None,
+) -> LifeTrace:
+    """The core's calls and slot records over one life, day by day; ``nightly`` runs each night on
+    the state and the day's surprise weights, between one day's calls and the next day's events."""
     state = core.init_state(stream.life_id)
     by_day: dict[date, list[EventLatent]] = {}
     for event in stream.events:
         by_day.setdefault(event.t.date(), []).append(event)
     calls, records = [], []
     peaks = {label.id: 0.0 for label in stream.labels}
-    for day in stream.days:
+    weights: dict[str, float] = {}
+    for n, day in enumerate(stream.days):
         if reset_each_night:
             state = core.init_state(stream.life_id)
-        for event in by_day.get(day, ()):
-            state, _ = core.observe(state, event)
-        seen = core.predict(state)
-        decision = core.decide(state)
-        cites = state.cited(decision.slot) if decision.slot is not None else ()
-        calls.append(DayCall(day, seen.speak, cites))
-        records.extend(_records(seen, stream.labels, day, core.config.horizon))
-        for label in stream.labels:
-            if label.knowable_at.date() <= day < label.outcome_at.date():
-                held = [s.risk for s in seen.slots if set(s.cites) & set(label.event_ids)]
-                peaks[label.id] = max([peaks[label.id], *held])
+        elif nightly is not None and n > 0:
+            state = nightly(state, weights)
+        state, weights = core.surprise_weights(state, by_day.get(day, ()))
+        call, held = day_call(core, state, stream, day, peaks)
+        calls.append(call)
+        records.extend(held)
     return LifeTrace(stream.life_id, tuple(calls), tuple(records), tuple(peaks.items()))
 
 
-def traces(core: Core, streams: Sequence[LabelledStream], *, reset_each_night: bool = False) -> tuple[LifeTrace, ...]:
-    return tuple(trace(core, s, reset_each_night=reset_each_night) for s in streams)
+def day_call(
+    core: Core, state: CoreState, stream: LabelledStream, day: date, peaks: dict[str, float],
+) -> tuple[DayCall, list[SlotRecord]]:
+    """The day's call and slot records from the state at its end; ``peaks`` takes each open
+    label's highest risk so far."""
+    seen = core.predict(state)
+    decision = core.decide(state)
+    cites = state.cited(decision.slot) if decision.slot is not None else ()
+    for label in stream.labels:
+        if label.knowable_at.date() <= day < label.outcome_at.date():
+            held = [s.risk for s in seen.slots if set(s.cites) & set(label.event_ids)]
+            peaks[label.id] = max([peaks[label.id], *held])
+    return DayCall(day, seen.speak, cites), _records(seen, stream.labels, day, core.config.horizon)
+
+
+def traces(
+    core: Core, streams: Sequence[LabelledStream], *, reset_each_night: bool = False, nightly: NightOp | None = None,
+) -> tuple[LifeTrace, ...]:
+    return tuple(trace(core, s, reset_each_night=reset_each_night, nightly=nightly) for s in streams)
 
 
 # ── The headline ──────────────────────────────────────────────────────────────

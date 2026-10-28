@@ -8,7 +8,7 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Any, Final
 
 from anjo.sleep.mind import receipt
-from anjo.sleep.night.deps import InquiryOutcome, StudyOutcome
+from anjo.sleep.night.deps import Dreamt, InquiryOutcome, StudyOutcome
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.nightlog import safe_error as safe_error  # the log's own (the story's failures use it); read here too
@@ -54,6 +54,7 @@ class PersonNight:
     study: StudyOutcome | None = None
     inquiry: InquiryOutcome | None = None
     shared: tuple[str, ...] = ()  # results MIND's findings shared at step 10 (Task 17)
+    dreamt: Dreamt = field(default_factory=Dreamt)  # MIND's core: tonight's dream (step 2d)
     data: Dataset | None = None
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)

@@ -424,3 +424,34 @@ def test_the_month_command_finds_her_nights_where_the_night_keeps_them() -> None
 
     module, _, name = past.NIGHTS.partition(":")
     assert getattr(__import__(module, fromlist=[name]), name) is night_logs
+
+
+def test_the_sleep_objectives_dreams_come_from_minds_core_only_when_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.app.mind_core import CORE_MODEL_ENV
+    from anjo.sleep.mind.core import bridge
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.night.dreams import GlimmerDreams, NoDreams
+    from anjo.sleep.personas import DEMO_PERSONA
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-hero", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-hero": DEMO_PERSONA}, mind_inquiry=True)
+    assert isinstance(night.build(NoTrainer(), options).dreams, NoDreams)  # the core off: not wired
+
+    pytest.importorskip("torch")
+    from anjo.sleep.mind.core import api
+    from anjo.sleep.mind.core.types import CoreConfig
+
+    model = tmp_path / "core.npz"
+    api.Core.fresh(CoreConfig(dim_in=16, width=16, slots=4), seed=3).save(model)
+    monkeypatch.setenv(bridge.CORE_ENV, "1")
+    monkeypatch.setenv(CORE_MODEL_ENV, str(model))
+    deps = night.build(NoTrainer(), options)
+    dreams: Any = deps.dreams
+    assert deps.core.serves("synthetic-hero") and isinstance(dreams, GlimmerDreams)
+    assert dreams._client is deps.note_writer._client  # type: ignore[attr-defined]  # her Glimmer, the night's client
+    assert dreams.dream("someone-else", options.night, None) == ()  # no seed for anyone the core doesn't serve

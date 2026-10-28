@@ -28,8 +28,9 @@ after midnight, and the morning probe run right after the night, in the same pro
   runs the committed daily subset (``probes.morning.DAILY``: arms 1 and 3, 14 probes) and logs its
   name, replies and judge calls; ``--label final`` runs the full set.
 
-``--mind`` (or ``ANJO_SLEEP_DAILY_MIND=1``) turns MIND's inquiry on in the night phase; it is off by
-default and has no effect on the day phase.
+MIND's inquiry runs in the demo person's night phase by default (``DEFAULT_PERSONA``) and is off for
+anyone else: ``ANJO_SLEEP_DAILY_MIND=1`` or ``0`` sets it for every persona, and ``--mind`` or
+``--no-mind`` wins over both (``mind_on``). It has no effect on the day phase.
 
 A night that napped (``night/sleep_pressure.py``) trained nothing, so it runs no morning: its log
 records the morning ``skipped``, and no Dailies line is made. ``--force-deep`` makes the night a deep
@@ -62,6 +63,7 @@ from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
 from anjo.sleep.night.sleep_night import NAP_WHY
 from anjo.sleep.night.state import safe_error
+from anjo.sleep.personas import DEMO_PERSONA
 from anjo.sleep.night.story import MORNING_FAILED
 from anjo.sleep.probes.morning import DAILY, MorningResult, TooManyNoVerdicts, run_morning
 from anjo.sleep.serving.backend import phase
@@ -69,10 +71,10 @@ from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
 USERS_ENV: Final = "ANJO_SLEEP_DAILY_USERS"
-MIND_ENV: Final = "ANJO_SLEEP_DAILY_MIND"  # "1": the scheduled night runs MIND's inquiry, as ``--mind`` does
+MIND_ENV: Final = "ANJO_SLEEP_DAILY_MIND"  # "1" or "0": the scheduled night runs MIND's inquiry or not
 TAIPEI: Final = timezone(timedelta(hours=8))  # Taipei keeps no daylight saving time
 LIFE_START: Final = date(2026, 10, 28)
-DEFAULT_PERSONA: Final = "film_founder"  # the demo's hero: the person the real-time nights run for
+DEFAULT_PERSONA: Final = DEMO_PERSONA  # the demo's hero: the person the real-time nights run for
 SEED: Final = 20261028
 WIRING: Final = "anjo.sleep.app.night:build"
 SIMULATE: Final = "anjo.sleep.app.sim_transport:simulate"
@@ -283,6 +285,14 @@ def _morning() -> Callable[..., object]:
     return night_command._named(MORNING)  # type: ignore[no-any-return]
 
 
+def mind_on(persona: str, flag: bool | None, environ: Mapping[str, str]) -> bool:
+    """Whether the night runs MIND's inquiry: the flag, else the env file's setting, else the demo person's default."""
+    if flag is not None:
+        return flag
+    setting = environ.get(MIND_ENV, "").strip()
+    return setting == "1" if setting in ("0", "1") else persona == DEFAULT_PERSONA
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One phase of a synthetic person's real-time day.")
     parser.add_argument("--phase", choices=("day", "night"), required=True)
@@ -291,8 +301,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="day phase: the day to play (default: today, Taipei). night phase: the day the "
                              "night closes, as its window and its label (default: yesterday, Taipei); not "
                              "in the future, not before her life starts")
-    parser.add_argument("--mind", action="store_true",
-                        help=f"night phase: run MIND's inquiry in the night (also on when {MIND_ENV}=1; default off)")
+    parser.add_argument("--mind", action=argparse.BooleanOptionalAction, default=None,
+                        help=f"night phase: run MIND's inquiry in the night (default: {MIND_ENV}, else on for "
+                             f"{DEFAULT_PERSONA} only)")
     parser.add_argument("--force-deep", action="store_true",
                         help="night phase: a deep sleep whatever its pressure (the demo); the month's cap still wins")
     parser.add_argument("--label", choices=("development", "final"), default="development")
@@ -314,7 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                           "failed_turns": day.failed, "short_day": day.short, "failure": day.failure,
                           "wake_seconds": day.wake_seconds}))
         return 1 if day.failure is not None or day.failed > 0 or day.short else 0
-    mind = args.mind or os.environ.get(MIND_ENV, "").strip() == "1"
+    mind = mind_on(args.persona, args.mind, os.environ)
     result = run_night_phase(user, args.persona, now, markers=marker_dir(), label=args.label,
                              for_date=args.for_date, mind=mind, force_deep=args.force_deep)
     morning = morning_outcome(result)

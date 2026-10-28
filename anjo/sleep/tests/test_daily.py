@@ -346,12 +346,36 @@ def test_night_phase_mind_flag_reaches_the_night(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
     real = daily.run_night_phase  # main's default `nights` is bound at import, so hand it the fake here
     monkeypatch.setattr(daily, "run_night_phase", lambda *a, **kw: real(*a, **kw, nights=nights))
-    for env, flags, expected in ((None, [], False), ("1", [], True), (None, ["--mind"], True)):
+    for env, flags, expected in ((None, [], False), ("1", [], True), (None, ["--mind"], True),
+                                 ("1", ["--no-mind"], False)):
         monkeypatch.delenv(daily.MIND_ENV, raising=False)
         if env:
             monkeypatch.setenv(daily.MIND_ENV, env)
         seen.clear()
         daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28", *flags])
+        assert seen[0]["mind"] is expected
+        assert json.loads(capsys.readouterr().out)["mind"] is expected
+
+
+def test_the_demo_persons_nights_run_mind_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                    capsys: pytest.CaptureFixture[str]) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def nights(**kw: Any) -> dict[str, NightResult]:
+        seen.append(kw)
+        return {"acct": NightResult("failed", "practice", None, {}, (), 0.0, {}, tmp_path / "log.jsonl")}
+
+    monkeypatch.setenv(daily.USERS_ENV, f"{daily.DEFAULT_PERSONA}=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    real = daily.run_night_phase
+    monkeypatch.setattr(daily, "run_night_phase", lambda *a, **kw: real(*a, **kw, nights=nights))
+    for env, flags, expected in ((None, [], True), ("0", [], False), (None, ["--no-mind"], False),
+                                 ("0", ["--mind"], True)):
+        monkeypatch.delenv(daily.MIND_ENV, raising=False)
+        if env:
+            monkeypatch.setenv(daily.MIND_ENV, env)
+        seen.clear()
+        daily.main(["--phase", "night", "--for-date", "2026-10-28", *flags])
         assert seen[0]["mind"] is expected
         assert json.loads(capsys.readouterr().out)["mind"] is expected
 

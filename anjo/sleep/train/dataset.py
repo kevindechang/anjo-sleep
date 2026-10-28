@@ -50,7 +50,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from types import MappingProxyType
 from typing import Final, Literal
@@ -97,6 +97,7 @@ class Example:
     new: bool
     teacher: bool = False  # the target is the Spark Open teacher's candidate (full practice)
     current_date: date | None = None  # the date its prompt was served on, when not the run's (Task 17b)
+    weight: float = 1.0  # its loss weight: MIND's surprise at the evidence it was made from (the Sleep link)
     core: str | None = None  # the core state its reply was made under (``night.core_snapshot``, JSON), channel on
 
 
@@ -194,11 +195,13 @@ class Dataset:
         loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
         rejected) for the DPO pass, and with ``terms`` the seeding, dream and anchor rows. Every
         text is cleaned as the server's prompt is. A row with its own ``current_date`` carries it,
-        and is rendered on it."""
+        and is rendered on it. A row MIND weighted carries its loss ``weight`` (1.0, the trainer's
+        default, is left out)."""
         rows: list[dict[str, object]] = [
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
              "prompt": _messages(example.prompt), "completion": _reply(example.completion),
              **({} if example.current_date is None else {"current_date": example.current_date.isoformat()}),
+             **({} if example.weight == 1.0 else {"weight": example.weight}),
              **_core(example.core)}
             for example in self.examples
         ]
@@ -211,6 +214,12 @@ class Dataset:
         if terms:
             rows += self._term_rows()
         return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+
+    def weighted(self, weights: Mapping[str, float]) -> Dataset:
+        """A copy with each example in ``weights`` carrying its loss weight (MIND's Sleep link)."""
+        if any(not w > 0 for w in weights.values()):
+            raise ValueError("a row's loss weight is positive")
+        return replace(self, examples=tuple(replace(e, weight=weights.get(e.id, e.weight)) for e in self.examples))
 
     def _term_rows(self) -> list[dict[str, object]]:
         seeds: list[dict[str, object]] = [{"id": row.id, "kind": "seed", "teacher": _messages((("system", row.context), ("user", row.message))),

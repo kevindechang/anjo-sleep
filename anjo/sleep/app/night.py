@@ -34,14 +34,19 @@ The thought channel (``night.channel_night``) is on when ``ANJO_SLEEP_CHANNEL`` 
 (``channel_setup``): practice then replies through the person's MIND state as soft tokens, read from
 the shared pretraining's projector (``ANJO_SLEEP_CHANNEL_PROJECTOR``) or the person's own, and the
 GPU session's hold adds the embedding rows' CPU container. It needs MIND's state of each person
-(``NightDeps.mind_state``), which MIND's store provides; set without it, the night stops at build.
+(``NightDeps.mind_state``), which MIND's core gives after each night's dream (``core_state``); set
+without the core, the night stops at build.
 
 Who plays practice's roles is ``ANJO_SLEEP_PRACTICE_ROLES`` (``practice.roles``; unset, Spark Open plays
 all three). ``critic=deepseek`` scores a synthetic person's candidates with DeepSeek V4.1 Flash
 (``practice.critics``, each call held on its own pool); a real person's critic stays Spark Open.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
-(``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
+(``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). MIND's core
+dreams in the night only under ``ANJO_SLEEP_MIND_CORE=1``, with ``--mind``, and only for the demo
+persona's people (``app/mind_core.py``); its dream seeds are where the sleep objective's dreams
+start (``ANJO_SLEEP_DREAMS=1``, ``night/core_dreams.py``), her Glimmer speaking from them on the
+night's client; with the core off the dreams are not wired. Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
@@ -63,6 +68,7 @@ from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource, own_turn_count
+from anjo.sleep.app.mind_core import build_core, core_people, core_state
 from anjo.sleep.app.mind_night import build_mind
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
 from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
@@ -80,6 +86,7 @@ from anjo.sleep.app.storage import (
     glimmer_turns,
     target_store,
     transcript_store,
+    workspace_log,
 )
 from anjo.sleep.budget import LEDGER_NAME, Ledger
 from anjo.sleep.context.brief import ChatFn
@@ -98,6 +105,7 @@ from anjo.sleep.night.deps import (
     GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindState
+from anjo.sleep.night.core_dreams import core_dreams
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.sleep_pressure import policy_from
@@ -317,7 +325,9 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
                             glimmer_person=roles.person == "glimmer", critic=critic, third_party=is_synthetic,
                             lazy_teacher=roles.teacher == "lazy")
 
-    mind_state: MindState | None = None  # MIND's store fills this (each person's night after the dream step)
+    core = build_core(os.environ, data_root() / SLEEP_DIR, core_people(options), workspace=workspace_log,
+                      synthetic=is_synthetic)
+    mind_state: MindState | None = core_state(core)  # each person's night after the dream step
     channel = channel_setup(os.environ, client, practice, mind_state)
     gpu_rate = night_prices.serve_gpu_per_hour + (soft_tokens.EMBED_USD_PER_HOUR if channel is not None else 0.0)
 
@@ -343,5 +353,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, gpu_stop=gpu_stop(serving, os.environ, ledger), retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
+        core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed),
     )
 
