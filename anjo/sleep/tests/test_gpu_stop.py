@@ -34,10 +34,9 @@ UID = "p1"
 class Containers:
     """Modal's containers as the stop sees them: ``found`` running for the app until stopped."""
 
-    def __init__(self, *found: str, fail: Exception | None = None,
-                 during_stop: Callable[[], None] = lambda: None) -> None:
+    def __init__(self, *found: str, fail: Exception | None = None) -> None:
         self.found, self.stopped, self.listed = list(found), list[str](), 0
-        self.fail, self.during_stop = fail, during_stop
+        self.fail = fail
 
     def running(self, app: str) -> list[str]:
         assert app == APP
@@ -47,7 +46,6 @@ class Containers:
     def stop(self, container: str) -> None:
         if self.fail is not None:
             raise self.fail
-        self.during_stop()
         self.stopped.append(container)
 
 
@@ -205,10 +203,15 @@ def test_a_turn_that_cant_be_marked_untracks_the_host_so_no_stop_follows(tmp_pat
     assert containers.stopped == [] and reports[0][1]["why"] == "untracked"
 
 
-def test_a_turn_that_starts_while_the_gpu_stops_never_reaches_glimmer(tmp_path: Path) -> None:
+def test_a_turn_that_starts_during_the_stops_last_look_never_reaches_glimmer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The stop marks itself stopping before its last look; a turn marks itself before it looks for
-    that mark. Whichever comes second sees the other: here the turn, which goes to the fallback."""
+    that mark. Whichever comes second sees the other: here a turn that starts mid-look, after the
+    look read the turns and before the stop, which goes to the fallback."""
     folder = _host(tmp_path)
+    containers = Containers("c1")
+    started: list[str] = []
     refused: list[str] = []
 
     def chat_turn() -> None:
@@ -218,13 +221,31 @@ def test_a_turn_that_starts_while_the_gpu_stops_never_reaches_glimmer(tmp_path: 
         except activity.GlimmerStopping:
             refused.append("fallback")
 
-    containers = Containers("c1", during_stop=chat_turn)
-    stop, reports = _stop(folder, containers)
+    def keep_warm(path: Path) -> WarmWindow | None:
+        if containers.listed and not started:  # the last look, its turns already read: a chat turn starts
+            started.append("turn")
+            chat_turn()
+        return None
+
+    monkeypatch.setattr("anjo.sleep.serving.stop.read_window", keep_warm)
+    stop, reports = _stop(folder, containers, tmp_path / "warm_window.json")
     stop()
     assert refused == ["fallback"] and containers.stopped == ["c1"] and reports[0][0] == "ok"
     assert activity.seen(folder, time.time()).in_flight == 0  # the refused turn left no marker
     with activity.turn(folder):  # once the stop is done, turns go to Glimmer again (a cold start)
         pass
+
+
+def test_a_turn_that_cant_be_marked_is_still_refused_while_the_gpu_stops(tmp_path: Path) -> None:
+    """Untracked, the host holds off every later stop, but one already past its last look stops all
+    the same: an unmarked turn that sees its mark goes to the fallback too."""
+    folder = _host(tmp_path)
+    (folder / activity.IN_FLIGHT).rmdir()
+    (folder / activity.IN_FLIGHT).write_text("in the way")  # its marker can't be made
+    (folder / activity.STOPPING).touch()  # a stop is past its last look
+    with pytest.raises(activity.GlimmerStopping), activity.turn(folder):
+        raise AssertionError("an unmarked turn reached Glimmer while its container stopped")
+    assert not (folder / activity.TRACKED).exists()
 
 
 def test_a_stopping_mark_a_dead_stop_left_is_stale(tmp_path: Path) -> None:

@@ -10,7 +10,9 @@ no redeploy, no undeploy. A graceful stop lets a request the container already r
 Before it lists the containers, and again right before each stop, the stop reads the host's turns
 (``serving.activity``) and skips, leaving Modal's window to do it, when:
 
-- another night or simulated day holds the night lock (``night_running``): its Glimmer isn't ours;
+- another night or simulated day holds the night lock (``night_running``): its Glimmer isn't ours.
+  The probe (``sweep.held_elsewhere``) takes the lock for an instant, so a night or simulated day
+  that starts in that instant is refused as busy (``NightBusy``), as when two start at once;
 - a Glimmer request is in flight (``in_flight``);
 - one started or ended within ``QUIET_S``, Modal's own window: she may write again (``recent_turn``);
 - a keep-warm window is open (``keep_warm``, ``wake.WarmWindow``);
