@@ -1,12 +1,12 @@
 """``import anjo.sleep`` works without the GPU stack (spec §12.1): torch and friends load only in
-the GPU runner's own environment."""
+the GPU runner's own environment, and ``modal`` only when a Modal call is made."""
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
 
-HEAVY = ("torch", "transformers", "vllm", "peft")
+HEAVY = ("torch", "transformers", "vllm", "peft", "modal")
 CORE = (
     "anjo.sleep",
     "anjo.sleep.types",
@@ -32,6 +32,9 @@ CORE = (
     "anjo.sleep.train.lora",
     "anjo.sleep.train.trainer",
     "anjo.sleep.train.runners.colab",
+    "anjo.sleep.train.runners.modal",
+    "anjo.sleep.train.runners.choice",
+    "anjo.sleep.train.modal_job",
     "anjo.sleep.train.colab_train",
 )
 
