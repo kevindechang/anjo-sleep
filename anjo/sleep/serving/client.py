@@ -65,10 +65,11 @@ busy past the bound looks the same, and an engine that stalls while the API serv
 caught. A turn's poster (``app.runtime``) is its own ``HttpPoster``, under its 20 s deadline, and
 never retries.
 
-**A long call is read from Modal's result URL.** Past 150 s Modal answers 303 to a URL that serves the
-result to a GET, holding each hop up to 150 s (mornings of 2026-10-24/25 read that empty 303 as "not
-JSON"). ``HttpPoster`` follows it on the server's own host only, inside the request's one bound; a call
-still running then is ``TransportFailed``, and any other redirect a ``ServingError`` naming its status.
+**A long call is read from Modal's result URL** (``serving.redirect``: past 150 s Modal answers 303 to a
+URL that serves the result to a GET; mornings of 2026-10-24/25 read that empty 303 as "not JSON").
+``HttpPoster`` follows it on the server's own host only, inside the request's one bound, and never posts a
+call that answered 303 again; a result still unread then is ``TransportFailed``, and any other redirect a
+``ServingError`` naming its status.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -92,7 +93,8 @@ from typing import Any, Final, Protocol, TypeVar
 import httpx
 
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.serving import config, framing, soft_tokens
+from anjo.sleep.serving import config, framing, redirect, soft_tokens
+from anjo.sleep.serving.redirect import PROXY_STATUSES
 from anjo.sleep.types import CheckpointRef
 
 TOP_P: Final = 0.95
@@ -108,10 +110,6 @@ REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own l
 WARM_TIMEOUT_S: Final = 165.0
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
 ATTEMPTS: Final = len(BACKOFF_S) + 1
-# Statuses Modal's proxy sends by itself: a request that met one goes again once, inside ATTEMPTS and the
-# same bound. The same idempotent post, so at worst vLLM computes it twice; the proxy answered: no liveness.
-PROXY_STATUSES: Final = frozenset({502, 503, 504})
-RESULT_HOPS: Final = 4  # Modal's 303s one post follows: 300 s holds two 150 s waits; never forever
 
 # Waking a scaled-to-zero server (``wake``): poll until it answers, under one hard total timeout.
 WAKE_TOTAL_TIMEOUT_S: Final = 600.0  # a cold start of the 30B model, with room to spare
@@ -147,6 +145,11 @@ class TransportFailed(ServingError):
 
 class ProxyFailed(ServingError):
     """Modal's proxy answered 502, 503 or 504 itself: the request, or vLLM's answer, was lost behind it."""
+
+
+class ResultUnread(TransportFailed):
+    """A call answered Modal's 303 and its result wasn't read in time. It may still be running on vLLM,
+    so it is never posted again; the liveness question is asked as after any lost request."""
 
 
 class ServerUnresponsive(ServingError):
@@ -266,16 +269,18 @@ def check_url(base_url: str) -> str:
 class HttpPoster:
     """vLLM's server with the bearer token: Modal's https URL, or a tunnel's loopback end. A
     loopback request never takes a proxy from the environment (``trust_env``), so the token
-    never leaves this machine on its way to the tunnel. ``clock`` times a post's hops (``_send``)."""
+    never leaves this machine on its way to the tunnel. ``clock`` and ``sleep`` time a post's hops to
+    Modal's result URL (``redirect.follow``)."""
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S, clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.base_url = check_url(base_url)
         if not token:
             raise ServingError("the serving token is set")
-        self._timeout_s, self._clock = timeout_s, clock
+        self._timeout_s, self._clock, self._sleep, self._home = timeout_s, clock, sleep, httpx.URL(self.base_url)
         self._http = httpx.Client(
             base_url=self.base_url, headers={"Authorization": f"Bearer {token}"},
             transport=transport, timeout=timeout_s, trust_env=not is_loopback(httpx.URL(self.base_url).host),
@@ -291,32 +296,17 @@ class HttpPoster:
         bound = budget if hops_s is None else max(budget, hops_s)
         deadline = self._clock() + bound
         try:
-            response = self._http.post(path, json=dict(body), timeout=budget)
-            for _ in range(RESULT_HOPS):
-                target = self._result_url(response)
-                if target is None:
-                    break
-                left = deadline - self._clock()
-                if left <= 0:
-                    raise TransportFailed(f"{path} was still running after {bound:.0f} s (HTTP 303)")
-                response = self._http.get(target, timeout=left)
+            posted = self._http.post(path, json=dict(body), timeout=budget)
         except httpx.HTTPError as error:
             raise TransportFailed(f"{path} failed in transport ({type(error).__name__})") from None
+        try:  # a call that answered 303 is running on vLLM: only its result is asked again, never the POST
+            response = redirect.follow(self._http, posted, home=self._home, deadline=deadline, clock=self._clock,
+                                       sleep=self._sleep)
+        except redirect.Unread as unread:
+            raise ResultUnread(f"{path}'s result wasn't read within {bound:.0f} s of its HTTP 303 (last: {unread})") from None
         if 300 <= response.status_code < 400:
             raise ServingError(f"{path} returned HTTP {response.status_code}, a redirect it doesn't follow")
         return response
-
-    def _result_url(self, response: httpx.Response) -> httpx.URL | None:
-        """Modal's 303 target for a post's result if on this server (scheme, host, port), else None."""
-        location = response.headers.get("location")
-        if response.status_code != httpx.codes.SEE_OTHER or not location:
-            return None
-        try:
-            target = response.url.join(location)
-        except httpx.InvalidURL:
-            return None
-        base = httpx.URL(self.base_url)
-        return target if (target.scheme, target.host, target.port) == (base.scheme, base.host, base.port) else None
 
     def post(self, path: str, body: Mapping[str, Any], *, timeout_s: float | None = None,
              hops_s: float | None = None) -> dict[str, Any]:
@@ -520,8 +510,8 @@ class _Requests:
                 self.sent.retried()
                 self.sleep(pause)
                 continue
-            except TransportFailed:
-                if pause is None or deadline - self.clock() <= pause:
+            except TransportFailed as lost:  # a call that answered 303 is running: never posted again
+                if pause is None or deadline - self.clock() <= pause or isinstance(lost, ResultUnread):
                     self._check_alive()  # only a request about to give up asks: a restart gets the whole round
                     raise
                 self.sent.retried()
@@ -573,7 +563,7 @@ class VllmClient:
         stage: Stage | None = None, load_wait_s: float = LOAD_WAIT_S, clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s, clock=clock)
+        poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s, clock=clock, sleep=sleep)
         self._load_wait_s, self._clock, self._sleep = load_wait_s, clock, sleep
         self._setup(poster, max_tokens, adapters_dir, timeout_s, stage)
 

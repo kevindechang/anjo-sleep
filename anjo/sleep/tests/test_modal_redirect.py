@@ -5,14 +5,15 @@ the call: that result URL blocks until the call completes, up to 150 s a hop, an
 GET. Mornings of 2026-10-24 and 10-25 failed on it: the poster didn't follow, and read the 303's empty
 body as "not JSON". Now a night client's post follows Modal's 303 on the server's own host, inside the
 request's one bound; any other redirect, and a 2xx that isn't JSON, is a ServingError naming its
-status. Fakes only: no network."""
+status. Once a 303 has come, the call is running on vLLM: a result GET that drops or meets a proxy
+status is asked again, and the POST is never sent again. Fakes only: no network."""
 from __future__ import annotations
 
 import httpx
 import pytest
 
 from anjo.sleep.serving import client as vllm
-from anjo.sleep.serving import config
+from anjo.sleep.serving import config, redirect
 from anjo.sleep.serving.client import HttpPoster, ServingError, TransportFailed, VllmClient
 from anjo.sleep.tests.test_adapter_load import ADAPTER, MESSAGES, LiveVllm, Waits
 
@@ -26,12 +27,17 @@ BODY = {"model": config.MODEL, "prompt": [1, 2]}
 class Held(LiveVllm):
     """vLLM behind Modal's proxy. A completion takes ``work_s``; the proxy holds each request on it, the
     POST and every GET of ``location``, at most ``HOLD_S`` and then answers 303 to ``location``. A request
-    whose read timeout ends first raises ReadTimeout there, and a new POST starts the work again. Time
+    whose read timeout ends first raises ReadTimeout there, and a new POST starts the work again. The
+    first GETs meet ``fails`` in turn, at once: a status the proxy sends, or a dropped connection. Time
     moves on ``waits``' clock. Every request is kept: method, URL, read timeout, bearer header."""
 
-    def __init__(self, waits: Waits, work_s: float, location: str = RESULT, status: int = 303) -> None:
+    def __init__(
+        self, waits: Waits, work_s: float, location: str = RESULT, status: int = 303,
+        fails: tuple[int | type[httpx.TransportError], ...] = (),
+    ) -> None:
         super().__init__()
-        self.waits, self.work_s, self.location, self.status = waits, work_s, location, status
+        self.waits, self.work_s, self.location, self.status, self.fails = waits, work_s, location, status, fails
+        self.gets = 0
         self.ready_at = 0.0
         self.result: httpx.Response | None = None
         self.seen: list[tuple[str, str, float, str | None]] = []
@@ -44,6 +50,13 @@ class Held(LiveVllm):
         if request.method == "POST":
             self.ready_at = self.waits.now + self.work_s
             self.result = super().__call__(request)  # vLLM's answer, once its work is done
+        else:
+            self.gets += 1
+            if self.gets <= len(self.fails):
+                failure = self.fails[self.gets - 1]
+                if isinstance(failure, int):
+                    return httpx.Response(failure, text="<html>the proxy's own page</html>")
+                raise failure("dropped", request=request)
         wait = min(self.ready_at - self.waits.now, HOLD_S)
         if wait > timeout:
             self.waits.now += timeout
@@ -55,7 +68,7 @@ class Held(LiveVllm):
 
 
 def _poster(fake: Held, waits: Waits) -> HttpPoster:
-    return HttpPoster(URL, "tok", transport=httpx.MockTransport(fake), clock=waits.clock)
+    return HttpPoster(URL, "tok", transport=httpx.MockTransport(fake), clock=waits.clock, sleep=waits.sleep)
 
 
 def test_a_303_is_followed_to_its_result() -> None:
@@ -117,6 +130,37 @@ def test_a_completion_past_the_hop_is_followed_on_the_first_try() -> None:
     assert waits.now == vllm.REQUEST_TIMEOUT_S  # never past the bound one request could always take
 
 
+def _methods(fake: Held) -> list[str]:
+    return [method for method, url, *_ in fake.seen if COMPLETIONS in url]
+
+
+@pytest.mark.parametrize("failure", [httpx.RemoteProtocolError, httpx.ConnectError, 502, 503, 504])
+def test_a_result_get_that_fails_is_asked_again_and_never_posted_again(
+    failure: int | type[httpx.TransportError],
+) -> None:
+    """Review of serve-303: a result GET that dropped or met a proxy status came back as a lost request
+    or a proxy failure, and the night client sent the POST again while vLLM was still generating the
+    first. Now the same result URL is asked again, after a pause, inside the bound."""
+    waits = Waits()
+    fake = Held(waits, work_s=200.0, fails=(failure,))
+    client = _night(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert _methods(fake) == ["POST", "GET", "GET"] and client.retries() == 0  # one POST in all
+    assert waits.slept == [redirect.HOP_PAUSE_S] and waits.now == 200.0
+
+
+def test_a_result_get_that_meets_502s_to_the_bound_fails_cleanly_after_one_post() -> None:
+    waits = Waits()
+    fake = Held(waits, work_s=200.0, fails=(502,) * 99)
+    client = _night(fake, waits)
+    with pytest.raises(TransportFailed, match="HTTP 502") as raised:
+        client.complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert "proxy's own page" not in str(raised.value)
+    assert _methods(fake).count("POST") == 1 and _methods(fake).count("GET") > 2 and client.retries() == 0
+    assert HOLD_S < waits.now <= vllm.REQUEST_TIMEOUT_S  # paused between GETs, never past the 300 s
+    assert max(waits.slept) == redirect.HOP_PAUSE_MAX_S
+
+
 def test_a_redirect_off_the_server_is_refused_and_the_token_stays_home() -> None:
     waits = Waits()
     fake = Held(waits, work_s=200.0, location="https://elsewhere.example/v1/completions?call=fc-1")
@@ -139,7 +183,7 @@ def test_a_proxy_that_answers_303_at_once_is_not_followed_forever() -> None:
     seen: list[str] = []
     with pytest.raises(ServingError, match="HTTP 303"):
         HttpPoster(URL, "tok", transport=httpx.MockTransport(loop)).post(COMPLETIONS, BODY)
-    assert seen == ["POST"] + ["GET"] * vllm.RESULT_HOPS
+    assert seen == ["POST"] + ["GET"] * redirect.RESULT_HOPS
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
