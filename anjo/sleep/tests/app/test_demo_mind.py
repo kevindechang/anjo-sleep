@@ -108,6 +108,17 @@ def _service(model: ScriptedModel | None = None, serving: FakeServing | None = N
     return build_service(serving=serving, arms=_arms(model or ScriptedModel(), serving), **changes)
 
 
+def _swap_file() -> None:
+    from anjo.sleep.app.demo_mind import SWAP_FILE
+
+    swap = {"label": "pre-generated", "model": "Spark Open", "generated_at": "2026-10-27T00:00:00+00:00",
+            "pairs": [{"scene": SCENE.id, "prompt_sha256": __import__("hashlib").sha256(SCENE.prompt.encode()).hexdigest(),
+                       "with_state": {"text": "with her state", "prompt_tokens": 900, "cost_usd": None},
+                       "bare": {"text": "bare", "prompt_tokens": 90, "cost_usd": None}}]}
+    _demo_dir().mkdir(parents=True, exist_ok=True)
+    (_demo_dir() / SWAP_FILE).write_text(json.dumps(swap))
+
+
 def _write_answers(model: ScriptedModel, serving: FakeServing) -> Any:
     from anjo.sleep.app.demo_mind import NIGHT_ANSWERS_FILE, demo_stops
     from anjo.sleep.app.demo_pairs import write_night_answers
@@ -195,15 +206,73 @@ def test_the_panel_fails_closed_when_the_filter_cannot_be_built(monkeypatch: pyt
     assert "85 mm" not in json.dumps(body)
 
 
+def _counted(calls: list[str], name: str, real: Any) -> Any:
+    def counted(*args: Any) -> Any:
+        calls.append(name)
+        return real(*args)
+
+    return counted
+
+
+def test_a_second_panel_request_reads_no_source_and_builds_no_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.app import demo_mind
+
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _seed_mind(_held_out())
+    calls: list[str] = []
+    for name in ("held_out", "_sources", "_chart", "_task16", "_ledger"):
+        real = getattr(demo_mind, name)
+        monkeypatch.setattr(demo_mind, name, _counted(calls, name, real))
+    client = _client(_service())
+    headers = _visit(client)
+    first = client.get(f"{API}/mind", headers=headers).json()
+    assert sorted(calls) == ["_chart", "_ledger", "_sources", "_task16", "held_out"]
+    calls.clear()
+    assert client.get(f"{API}/mind", headers=headers).json() == first and calls == []  # kept: nothing read
+    report = _demo_dir() / "mind.md"
+    report.write_text(report.read_text().replace("On 3 of 7 nights", "On 5 of 12 nights"))
+    again = client.get(f"{API}/mind", headers=headers).json()
+    assert "held_out" in calls and "_sources" in calls  # a file it reads changed: built again
+    assert again["task16"]["lines"][0]["text"] == "life-1: On 5 of 12 nights her study target was relevant."
+
+
+def test_the_kept_panel_expires_and_a_failed_filter_is_never_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.app import demo_mind
+    from anjo.sleep.tests.app.test_demo_page import ACCOUNT as USER
+
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _seed_mind(_held_out())
+    clock = [0.0]
+    builds: list[str] = []
+    real_held, real_sources = demo_mind.held_out, demo_mind._sources
+    monkeypatch.setattr(demo_mind, "held_out", _counted(builds, "filter", real_held))
+    monkeypatch.setattr(demo_mind, "_sources", _counted(builds, "sources", real_sources))
+    cache = demo_mind.PanelCache(USER, clock=lambda: clock[0])
+    kept = cache.payload()
+    clock[0] = demo_mind.PANEL_TTL_S - 1
+    assert cache.payload() is kept and builds == ["filter", "sources"]
+    clock[0] = demo_mind.PANEL_TTL_S + 1  # past the ceiling, with no file changed
+    assert cache.payload() == kept and builds == ["filter", "sources"] * 2
+    builds.clear()
+    monkeypatch.setattr(demo_mind, "DEMO_PERSONA", "no-such-persona")  # the filter can't be built
+    for _ in range(2):
+        assert cache.payload()["questions"]["state"] == "unavailable"
+    assert builds == ["filter", "filter"]  # failed closed each time, never kept, and no source read
+
+
 def test_the_panel_shows_only_a_synthetic_account(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app import demo_mind
 
     _seed_mind(_held_out())
+    _swap_file()
     monkeypatch.setattr(demo_mind, "is_synthetic", lambda user: False)
     client = _client(_service())
     body = client.get(f"{API}/mind", headers=_visit(client)).json()
     assert body["questions"]["state"] == "unavailable" and "kitchen" not in json.dumps(body)
-    assert client.get(f"{API}/nights").json()["state"] == "unavailable"
+    nights = client.get(f"{API}/nights").json()
+    assert nights["state"] == "unavailable" and not any(t["swap"] for t in nights["toggles"])
+    toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=_visit(client)).json()
+    assert toggles == {"notes_off": None, "swap": None}  # the swap file too is shown for a synthetic account only
 
 
 def test_the_panel_and_slider_load_without_a_gpu_and_write_nothing(offline_embedder: None) -> None:
@@ -234,8 +303,6 @@ def test_the_panel_and_slider_load_without_a_gpu_and_write_nothing(offline_embed
 
 
 def test_toggle_pairs_pre_generated_and_labeled() -> None:
-    from anjo.sleep.app.demo_mind import SWAP_FILE
-
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     model = ScriptedModel(reply=lambda n: f"answer {n}")
     answers = _write_answers(model, FakeServing())
@@ -255,11 +322,7 @@ def test_toggle_pairs_pre_generated_and_labeled() -> None:
     assert notes_off["stop"]["checkpoint"] == "p-film-n5" and notes_off["generated_at"]
     assert quiet.calls == []
 
-    swap = {"label": "pre-generated", "model": "Spark Open", "generated_at": "2026-10-27T00:00:00+00:00",
-            "pairs": [{"scene": SCENE.id, "prompt_sha256": __import__("hashlib").sha256(SCENE.prompt.encode()).hexdigest(),
-                       "with_state": {"text": "with her state", "prompt_tokens": 900, "cost_usd": None},
-                       "bare": {"text": "bare", "prompt_tokens": 90, "cost_usd": None}}]}
-    (_demo_dir() / SWAP_FILE).write_text(json.dumps(swap))
+    _swap_file()
     toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=headers).json()
     assert toggles["swap"]["model"] == "Spark Open" and toggles["swap"]["label"] == "pre-generated"
     assert (toggles["swap"]["with"]["text"], toggles["swap"]["without"]["text"]) == ("with her state", "bare")
@@ -442,7 +505,7 @@ def test_an_anonymous_visitor_reaches_the_new_routes_inside_the_carve_out(sleep_
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     assert tuple(sleep_app.state.public_prefixes) == PUBLIC
     assert client.get(f"{API}/nights").status_code == 200
-    headers = {HEADER: client.post(f"{API}/visits", json={"adult": True}).json()["token"]}
+    headers = _visit(client)
     assert client.get(f"{API}/mind", headers=headers).status_code == 200
     assert client.post(f"{API}/toggles/{SCENE.id}", headers=headers).status_code == 200
     assert client.post(f"{API}/nights/n5/ask", json={"text": "The title?"}, headers=headers).json()["kind"] == "answer"

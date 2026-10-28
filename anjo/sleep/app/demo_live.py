@@ -430,7 +430,7 @@ def build_service(
         limiter=Limiter(JsonCounterStore(folder / COUNTERS_FILE), _limits(limits, rate)), pairs=PairRegistry(),
         floor=AnjoFloor(), reply_check=AnjoReplyCheck(), arms=arms, starters=_starters,
         votes=_record_vote, waker=waker, upkeep=upkeep(serving, rate),
-        stops=lambda: demo_mind.demo_stops(user), night_answers=demo_mind.night_answers, swaps=demo_mind.swaps,
-        stop_arms=arms if isinstance(arms, (GlimmerArms, Unavailable)) else None,
-        mind=lambda: demo_mind.mind_payload(user),
+        stops=lambda: demo_mind.demo_stops(user), night_answers=demo_mind.night_answers,
+        swaps=lambda: demo_mind.swaps(user), stop_arms=arms if isinstance(arms, (GlimmerArms, Unavailable)) else None,
+        mind=demo_mind.PanelCache(user).payload,
     )
