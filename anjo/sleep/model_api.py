@@ -37,6 +37,15 @@ class ModelApiError(RuntimeError):
     status or a malformed reply."""
 
 
+class RateLimited(ModelApiError):
+    """A provider answered 429 (it was busy, and charged nothing); ``retry_after_s`` is its
+    ``Retry-After`` in seconds, uncapped, when it gave one."""
+
+    def __init__(self, message: str, *, retry_after_s: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+
 class MissingApiKey(ModelApiError):
     """The environment variable that should hold a provider key is unset or blank. A
     ``ModelApiError``, so one ``except ModelApiError`` catches every failed call."""
@@ -81,11 +90,17 @@ class Retries:
 
 def _retry_after(value: str | None) -> float | None:
     """A Retry-After in seconds, capped; None for an HTTP date or anything else."""
+    seconds = _seconds(value)
+    return None if seconds is None else min(seconds, RETRY_AFTER_MAX_S)
+
+
+def _seconds(value: str | None) -> float | None:
+    """A Retry-After in seconds; None for an HTTP date or anything else."""
     try:
         seconds = float(value) if value is not None else math.nan
     except ValueError:
         return None
-    return min(seconds, RETRY_AFTER_MAX_S) if math.isfinite(seconds) and seconds > 0 else None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def read_key(env_var: str) -> str:
@@ -142,6 +157,8 @@ def post_chat(
     except (httpx.InvalidURL, httpx.CookieConflict, httpx.StreamError) as exc:
         # httpx errors outside HTTPError; their text can carry the URL, so only the type is kept.
         raise ModelApiError(f"{where} failed before a reply ({type(exc).__name__})") from None
+    if response.status_code == 429:
+        raise RateLimited(f"{where} returned HTTP 429", retry_after_s=_seconds(response.headers.get("retry-after")))
     if response.is_error:
         raise ModelApiError(f"{where} returned HTTP {response.status_code}")
     result = _parse(response, where, count_reasoning=count_reasoning)
