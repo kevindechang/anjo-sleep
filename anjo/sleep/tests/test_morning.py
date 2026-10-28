@@ -6,6 +6,7 @@ is held first. Fakes only."""
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -215,3 +216,56 @@ def test_a_promoted_night_must_give_its_own_checkpoint(tmp_path: Path) -> None:
     with pytest.raises(MorningError, match="promoted"):
         rig.run(serving=None, promoted=True)
     assert rig.model.calls == []
+
+
+class UnreadableChat:
+    """Muse Spark that answers prose (no JSON) on PROMPT-NEVER always and on PROMPT-ONCE on its first call
+    only; every other answer is a JSON verdict. Every call's cap is recorded, in order (the run is serial)."""
+
+    def __init__(self) -> None:
+        self.caps: list[tuple[str, int | None]] = []
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None, max_tokens: int | None = None) -> Any:
+        from anjo.sleep.model_api import ChatResult
+
+        content = messages[-1]["content"]
+        asked = next(word for word in ("NEVER", "ONCE", "PLAIN") if f"PROMPT-{word}" in content)
+        first_once = asked == "ONCE" and all(seen != "ONCE" for seen, _ in self.caps)
+        self.caps.append((asked, max_tokens))
+        unreadable = asked == "NEVER" or first_once
+        text = "Reply A reads better here." if unreadable else json.dumps({"verdict": "A", "reason": "x"})
+        return ChatResult(text, (), "m", 2900, 2200, "stop")
+
+
+def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
+    from anjo.sleep.probes.morning import JUDGE_RETRY_SHARE
+    from anjo.sleep.probes.score import JUDGE_RETRY_MAX_TOKENS, MuseJudge
+
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    rig = Rig(tmp_path, ledger=ledger)
+    rig.probes = [probe("q1", "new_work", prompt="PROMPT-ONCE"), probe("q2", "vocab", prompt="PROMPT-NEVER"),
+                  probe("q3", "tone_hold", prompt="PROMPT-PLAIN"), taste("t1")]
+    chat = UnreadableChat()
+    rig.morning = replace(rig.morning, judge=MuseJudge(chat=chat, brief_for=lambda pid: "brief"))
+    done = rig.run()  # the run ends and writes its file: an unreadable verdict never crashes the morning
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    comparisons = {f"{a}_vs_1" for a in ARMS - {"1"}} | {"3_vs_3x", "4_vs_2C"}
+    # q1's first answer was unreadable, and its one retry, with more room, gave the verdict.
+    assert chat.caps[:2] == [("ONCE", None), ("ONCE", JUDGE_RETRY_MAX_TOKENS)]
+    assert {r["outcome"] for r in record["outcomes"] if r["probe"] == "q1"} <= {"win", "tie", "loss"}
+    # q2 never gave one: no verdict in every comparison, counted, shown, and left out of the score.
+    assert record["no_verdict"] == dict.fromkeys(comparisons, 1) and done.no_verdict == len(comparisons)
+    assert [r["outcome"] for r in record["outcomes"] if r["probe"] == "q2"] == ["no_verdict"] * len(comparisons)
+    assert record["pairs"]["4_vs_2C"]["overall"]["n"] == 3  # q1, q3 and t1 of the 4
+    # Retries are a share of the run's judge calls (42 here: 5): q1's, then q2's until they ran out.
+    retried = [asked for asked, cap in chat.caps if cap == JUDGE_RETRY_MAX_TOKENS]
+    assert retried == ["ONCE"] + ["NEVER"] * 4 and math.ceil(42 * JUDGE_RETRY_SHARE) == 5
+    assert {cap for asked, cap in chat.caps if asked == "PLAIN"} == {None}  # a readable answer: one call, the provider's cap
+    assert JUDGE_RETRY_MAX_TOKENS >= 8_944  # the longest judge answer seen (Teo's night 1, 257 calls)
+    # Every call, retries included, is counted, and the judge's hold covers them all: no overage.
+    assert done.judge_calls == len(chat.caps)
+    events = read_records(ledger.path, PLAIN)
+    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd"])
+    settled = next(e for e in events if e["op"] == "settle" and e["job"] == held["job"])
+    assert settled["amount"] <= held["amount"] and not ledger.open_holds()
