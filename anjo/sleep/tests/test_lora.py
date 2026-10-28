@@ -262,7 +262,7 @@ def _with_pairs(n: int) -> Dataset:
 def test_objective_is_sft_by_default_and_sft_dpo_is_allowed() -> None:
     assert LoraCfg().objective == "sft"
     cfg = LoraCfg(objective="sft_dpo")
-    assert (cfg.dpo_beta, cfg.dpo_lr) == (0.1, 5e-7)
+    assert (cfg.dpo_beta, cfg.dpo_lr) == (0.1, 5e-6)
     with pytest.raises(LoraCfgError):
         LoraCfg(objective="dpo")  # type: ignore[arg-type]
     with pytest.raises(LoraCfgError):
@@ -271,7 +271,7 @@ def test_objective_is_sft_by_default_and_sft_dpo_is_allowed() -> None:
         LoraCfg(objective="sft_dpo", dpo_lr=1e-3)
     settings = training_config(cfg, 12, warm=False, revision=REVISION, night=NIGHT)
     assert settings["objective"] == "sft_dpo"
-    assert (settings["dpo_beta"], settings["dpo_learning_rate"]) == (0.1, 5e-7)
+    assert (settings["dpo_beta"], settings["dpo_learning_rate"]) == (0.1, 5e-6)
 
 
 def test_sft_dpo_sends_the_nights_pairs_and_sft_sends_none(tmp_path: Path) -> None:

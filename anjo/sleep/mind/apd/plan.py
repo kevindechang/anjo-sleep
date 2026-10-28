@@ -1,8 +1,9 @@
 """What a live APD command would start and hold (Task 17), printed by ``--live`` before anything
 runs: its Colab session and hard timeout, and each hold it takes on each pool, priced at the list
 prices given, Spark Open's on its provider's pool (``mind.spark_provider``). Beside each worst
-case it shows the expected spend when a timing has been measured (``timing.json``). Printing a
-plan spends nothing and reaches nothing."""
+case it shows the expected spend when a timing has been measured (``timing.json``), and beside the
+holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. Printing a plan spends
+nothing and reaches nothing."""
 from __future__ import annotations
 
 import math
@@ -12,6 +13,7 @@ from typing import Final
 
 from anjo.sleep.mind.apd import colab_vllm, generate
 from anjo.sleep.mind.apd.backend import gen_holds
+from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
@@ -46,6 +48,9 @@ class Plan:
     holds: tuple[Hold, ...]
     notes: tuple[str, ...] = ()
     expected_cu: float | None = None  # the session's compute units, as timing projects them
+    ceiling_usd: float | None = None  # --max-usd, for the commands that take it
+    ceiling_unit: str = ""  # what the ceiling is checked before
+    parallel: int = 1  # the units that may be in flight at once
 
 
 def _night(provider: SparkProvider, prices: Prices, nights: int, what: str, timing: Timing | None) -> Hold:
@@ -129,6 +134,21 @@ def kill_plan(prices: Prices, session_s: float, timing: Timing | None, lives: in
         None if timing is None else cu(timing.setup_s) + kill_cu(timing, lives))
 
 
+def _ceiling(plan: Plan) -> tuple[str, ...]:
+    if plan.ceiling_usd is None:
+        return ()
+    flight = (f"the {plan.ceiling_unit} already running finishes under its own hold above, so the run can pass "
+              "the ceiling by at most that one" if plan.parallel == 1 else
+              f"each {plan.ceiling_unit} already running (up to {plan.parallel} at once) finishes under its own hold "
+              "above, so the run can pass the ceiling by at most those")
+    return (
+        f"Ceiling: {dollars(plan.ceiling_usd)} settled by this run (--max-usd): before each new {plan.ceiling_unit} "
+        "it sums what its own holds have settled, not the pools' totals, and starts nothing more once that reaches "
+        "the ceiling; Colab's compute units are capped apart (colab_cu).",
+        f"Note: the ceiling stops new work, not a unit in flight: {flight}.",
+    )
+
+
 def describe(plan: Plan) -> str:
     lines = [f"Plan: {plan.command}."]
     if plan.session_s is None:
@@ -145,6 +165,7 @@ def describe(plan: Plan) -> str:
         expected = "" if hold_.expected is None else (
             f"; expected about ${hold_.expected:.4f} each (timing), ${hold_.expected * hold_.count:.2f} in all")
         lines.append(f"Hold on {hold_.pool}: {amount} each{times}{expected}: {hold_.what}.")
+    lines.extend(_ceiling(plan))
     lines.extend(f"Note: {note}." for note in plan.notes)
     lines.append("Nothing has run. Add --yes to start it.")
     return "\n".join(lines)

@@ -34,7 +34,7 @@ from __future__ import annotations
 import fcntl
 import math
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -262,6 +262,12 @@ class Ledger:
         """Settled costs plus open holds on ``pool``."""
         _pools((pool,))
         return _used(self._holds())[pool]
+
+    def settled(self, jobs: Iterable[str]) -> float:
+        """What the holds under ``jobs`` settled, in their pools' unit; a hold still open,
+        released, or not in this ledger adds nothing."""
+        holds = self._holds()
+        return sum(hold.spent for job in set(jobs) if (hold := holds.get(job)) is not None and hold.spent is not None)
 
     def remaining(self, pool: Pool) -> float:
         """What ``pool`` may still take, Sleep's claim on MIND's Baseten balance included; none

@@ -18,8 +18,8 @@ There are three parts:
 
 **What runs.** vLLM's OpenAI-compatible server serves `meta-models/Muse-Glimmer-30B` (Apache 2.0)
 at the pinned commit, on one L40S in AWS SageMaker, paid by AWS credits (Kevin's call, 2026-10-27).
-LoRA is on, and each person's adapter `p-<hash>-n<night>` loads by name on its first request, so
-the base model and every personal arm share one GPU. Modal (§1.6) stays as the fallback, one
+LoRA is on, and each person's adapter `p-<hash>-n<night>` is loaded before the first request that
+names it, so the base model and every personal arm share one GPU. Modal (§1.6) stays as the fallback, one
 setting away: `ANJO_SLEEP_BACKEND=modal`.
 
 | Setting | Value |
@@ -203,9 +203,21 @@ modal run anjo/sleep/serving/modal_app.py::upload_adapter --folder <dir> --name 
 modal app stop anjo-sleep-serve                                              # the RF3 drill
 ```
 
-On Modal, sleeping is Modal's own idle window, a running container sees a new adapter only after
-its next start, and the L40S costs about $2 an hour while up. `Serve` runs one container at most
-(`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one wake started two.
+On Modal, sleeping is Modal's own idle window, and the L40S costs about $2 an hour while up. The
+night's client loads each adapter through vLLM's `/v1/load_lora_adapter` from
+`/adapters/<name>` before the first request that names it, once per client, and loads it again
+once if a restarted container answers 404 (`serving/client.py`). vLLM's filesystem resolver isn't
+used: in vLLM 0.28.0's source it serves an adapter only when its `base_model_name_or_path` equals the
+path vLLM was started with (`/weights/...`, not the served name), which a trained adapter never names,
+so it answered 404. A running container
+mounts the adapters volume as it was at its start, so `Serve` reloads it every 20 s
+(`config.ADAPTER_REFRESH_S`; a reload that is refused or fails is counted in the container log and the
+next one tries again), and the night's client asks again for a folder vLLM can't see yet for up to
+45 s (`client.LOAD_WAIT_S`). Only the night, the morning and the demo's pre-generated pairs wait so. A
+chat turn (`app/runtime.py`) and the live demo page load once, with no wait, inside the turn's 20 s
+deadline: a missing adapter or a failed load ends the turn, and the frontier talker answers. `Serve` runs
+one container at most (`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one
+wake started two.
 
 ### 1.7 Training on Modal (Colab is the fallback)
 
@@ -214,9 +226,12 @@ its next start, and the L40S costs about $2 an hour while up. `Serve` runs one c
 command, the accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
 17b: replay's thinker and the APD runner) stays on Colab and never reads it.
 
+Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
+
 | Setting | Value |
 |---|---|
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
+| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default) or `sft`; any other value stops the night, the accelerated run and the example before they start |
 | App, function | `anjo-sleep-train`, `train` (`train/modal_app.py`); the runner calls the deployed function by name |
 | GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 21 minutes (the start, the return and a cancel's margin) |
 | Volumes | `anjo-sleep-weights` mounted read-only (Glimmer at the pinned revision), `anjo-sleep-adapters` read-write |
@@ -287,6 +302,9 @@ Colab sessions are stopped wherever the Colab CLI is installed.
    with bf16 dtype and `bnb_4bit_quant_storage` bf16 (Meta's post-training page), and confirm that
    applying it changes the output. If it doesn't load, serve merged checkpoints (`merge_and_unload()`)
    at the same precision, and record that in the night log and the README.
+   **Result (Modal, 2026-10-28):** the adapter loads on the FP8 server via explicit load
+   (`/v1/load_lora_adapter`) and changes the output (same seed). Asked for by name with the
+   filesystem resolver on, it was a 404 every time, so the client now loads each adapter itself (§1.6).
 3. **FP8 against bf16 on the general set.** Run Task 5's general gate set on both precisions. If
    FP8 loses more than the gate's own margin, switch `SERVING` to `BF16_A100`.
 4. **Tool calls.** Chat turns run without tools: the runtime writes the reply's header itself
@@ -589,6 +607,14 @@ below.
   no credit with Sleep, so a MIND night there waits only on other MIND nights. With `baseten`,
   the calls hold `baseten_mind_usd` as before. `--live` prints the provider, the model and the
   pool before anything runs.
+- **The run's ceiling.** `generate`, `run`, `timing` and `judge` take `--max-usd` (default $20).
+  Before each new generation attempt, life-arm run or judge call, the command sums what its own
+  holds have settled (not the pools' totals), and once that reaches the ceiling it starts nothing
+  more and exits with code 5, saying how far it got and what it spent. A unit already running
+  finishes under its own hold, so a run can pass the ceiling by the units in flight (with
+  `--parallel N`, up to N life-arms). After each life and each life-arm it prints what it has
+  settled per life and per arm-day: run `--only 1 generate` first and extrapolate (`--lives`
+  sets only the held-out draw).
 - **One provider per pilot.** The data dir's `serving_pin.json` records `spark_provider` and
   `spark_model` at the first command that calls Spark Open (`generate`, `run`, `timing`,
   `intervene`, `kill-resume`), and refuses a later command on the other provider. It also

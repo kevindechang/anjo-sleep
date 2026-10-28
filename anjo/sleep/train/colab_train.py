@@ -32,7 +32,7 @@ targets are a pattern anchored to the text decoder's layers (``lora_targets``). 
 vision tower is quantized with the rest: training is text only and never runs it.
 
 The ``sft_dpo`` objective (Task 7) adds a DPO pass after SFT on the dataset's pair rows (prompt,
-chosen, rejected), at Meta's TRL settings (beta 0.1, lr 5e-7). The trained PEFT model goes in with
+chosen, rejected), at Meta's TRL settings (beta 0.1, lr 5e-6, the LoRA scale). The trained PEFT model goes in with
 ``ref_model=None``, so no second model loads. TRL 1.x would copy the adapter as a frozen ``ref``
 adapter and use that copy as the reference; the copy is removed, so the reference is the same model
 with the adapter switched off; the receipt's ``dpo_reference`` says which reference TRL used.

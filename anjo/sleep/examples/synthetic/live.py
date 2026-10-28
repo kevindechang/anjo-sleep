@@ -25,6 +25,7 @@ from anjo.sleep.examples.synthetic.services import ExampleError, Services
 from anjo.sleep.serving.backend import MODAL_TOKEN_ENV, MODAL_URL_ENV, ModalServing
 from anjo.sleep.serving import config
 from anjo.sleep.serving.config import REVISION_ENV
+from anjo.sleep.train import objective
 from anjo.sleep.train.runners import choice
 from anjo.sleep.train.runners.colab import ColabCli
 from anjo.sleep.train.runners.modal import CALLS_DIR, SdkCalls
@@ -89,6 +90,10 @@ def build_services(environ: Mapping[str, str] | None = None) -> Services:
     try:
         runner = choice.runner_name(env)
     except choice.RunnerChoiceError as error:
+        raise ExampleError(str(error)) from None
+    try:
+        objective.objective_name(env)  # a name that is no objective stops the example before any call
+    except objective.ObjectiveError as error:
         raise ExampleError(str(error)) from None
     if not env.get(baseten_api.KEY_ENV, "").strip():
         os.environ[baseten_api.KEY_ENV] = env["BASETEN_API_KEY"].strip()  # baseten_api reads its own name

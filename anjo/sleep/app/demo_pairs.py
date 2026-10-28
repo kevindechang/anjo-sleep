@@ -58,6 +58,7 @@ from anjo.sleep.night.holds import held
 from anjo.sleep.probes.morning import ARM_POOLS
 from anjo.sleep.serving import backend
 from anjo.sleep.serving import client as vllm
+from anjo.sleep.serving.client import LOAD_WAIT_S
 from anjo.sleep.types import CheckpointRef, NightResult
 
 logger = logging.getLogger(__name__)
@@ -165,7 +166,8 @@ def after_night(
     if result.status != "promoted":
         return None
     if arms is None:
-        arms = GlimmerArms(user, deps=glimmer_deps(user, backend.from_env()), status=lambda: True)
+        arms = GlimmerArms(user, deps=glimmer_deps(user, backend.from_env(), load_wait_s=LOAD_WAIT_S),
+                           status=lambda: True)  # the night's new adapter: its folder is waited for
     return line_for(user, night, arms, timer=timer)
 
 
@@ -193,7 +195,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif not glimmer_status(serving, warmth):
             print("Glimmer is asleep; pass --wake to wake her for this run", file=sys.stderr)
             return 1
-        arms = GlimmerArms(user, deps=glimmer_deps(user, serving), status=lambda: True)
+        # Pre-generated: nobody waits on these answers, so a new adapter's folder is waited for.
+        arms = GlimmerArms(user, deps=glimmer_deps(user, serving, load_wait_s=LOAD_WAIT_S), status=lambda: True)
         if args.nights:
             return _nights(args.out, arms, user)
         if args.dailies:

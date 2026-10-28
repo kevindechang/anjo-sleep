@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import sys
+import threading
 import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -45,8 +47,9 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert not any("KEY" in part or "TOKEN" in part for part in command)
     env = config.vllm_env()
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"  # no nvcc in the image for FlashInfer's JIT
-    assert env["VLLM_PLUGINS"] == "lora_filesystem_resolver"
-    assert env["VLLM_LORA_RESOLVER_CACHE_DIR"] == config.ADAPTERS_DIR
+    assert env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] == "True"  # the client loads each adapter by name
+    # vLLM's filesystem resolver never loaded an adapter (seen live): nothing may look as if it does.
+    assert "VLLM_PLUGINS" not in env and "VLLM_LORA_RESOLVER_CACHE_DIR" not in env
 
 
 def test_the_bf16_fallback_is_one_line_away_and_quantizes_nothing() -> None:
@@ -250,6 +253,62 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
         "/root/anjo/sleep/__init__.py", "/root/anjo/sleep/serving/__init__.py",
         "/root/anjo/sleep/serving/config.py",
     }
+
+
+def test_a_warm_server_refreshes_its_adapters_volume(
+    modal_app: tuple[types.ModuleType, _Recorder], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A running container sees only the volume as committed when it started, so ``Serve`` reloads the
+    adapters volume every ``ADAPTER_REFRESH_S`` while it runs (after a snapshot's restore too). A reload
+    that fails (here an ``OSError``) doesn't end it: the next one tries again. ``stop`` ends it."""
+    module, recorder = modal_app
+    assert {"snap": False, "target": "watch_adapters"} in recorder.by("enter")
+    refreshed = threading.Semaphore(0)
+    tries: list[int] = []
+
+    def reload() -> None:
+        tries.append(1)
+        if len(tries) == 1:
+            raise OSError("the volume's mount went away")
+        refreshed.release()
+
+    monkeypatch.setattr(module.adapters, "reload", reload, raising=False)
+    monkeypatch.setattr(config, "ADAPTER_REFRESH_S", 0.01)
+    serve = module.Serve()
+    serve.process = types.SimpleNamespace(terminate=lambda: None)
+    serve.watch_adapters()
+    assert refreshed.acquire(timeout=10) and refreshed.acquire(timeout=10)  # failed once, then on and on
+    serve.stop()
+    serve.refresher.join(timeout=10)
+    assert not serve.refresher.is_alive() and serve.refresher.daemon
+
+
+def test_a_refused_or_failed_reload_is_counted_logged_and_tried_again(
+    modal_app: tuple[types.ModuleType, _Recorder], caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reload the volume refuses while a file is open is a skip; any other error a failure. Each
+    is logged with the counts so far and the error's type only, and the loop goes on."""
+    module, _recorder = modal_app
+    stop = threading.Event()
+    outcomes: list[BaseException | None] = [OSError("/adapters/p-aaaaaaaaaaaa-n1 is gone"),
+                                            RuntimeError("there are open files preventing the operation"), None]
+
+    def reload() -> None:
+        outcome = outcomes.pop(0)
+        if not outcomes:
+            stop.set()
+        if outcome is not None:
+            raise outcome
+
+    with caplog.at_level(logging.WARNING):
+        refreshes = module.refresh_adapters(reload, stop, every_s=0.0, busy=(RuntimeError,))
+
+    assert refreshes == module.Refreshes(done=1, skipped=1, failed=1)
+    logged = [record.getMessage() for record in caplog.records]
+    assert len(logged) == 2
+    assert "OSError" in logged[0] and "0 skipped, 1 failed" in logged[0]
+    assert "1 skipped, 1 failed" in logged[1]
+    assert not any("/adapters" in line or "open files" in line for line in logged)  # never what the error said
 
 
 def test_the_gpu_snapshot_is_tried_only_when_its_flag_is_set(

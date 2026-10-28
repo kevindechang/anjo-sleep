@@ -14,7 +14,10 @@ special tokens (``serving.framing``), ``/tokenize`` with the generation prompt a
 reasoning strength and today's date, and the reply's header after it. It streams the reply from
 ``/v1/completions``, naming the person's adapter as the model (the base model when there is none
 yet), so Glimmer answers directly and takes no tools. An adapter trained under another rendering
-is never sent a turn. It refuses a request whose person's words trip Anjo's crisis floor, the last
+is never sent a turn. On Modal, vLLM serves an adapter only once told to load it, so the runtime
+loads the person's adapter before their first turn on that server (``client.load_adapter``, as the
+night's client does): one attempt, under the reply deadline, never the night's wait for a folder to
+appear. A missing adapter or a failed load ends the turn as transient. It refuses a request whose person's words trip Anjo's crisis floor, the last
 of four checks (the chat route's floor, the harness's no-model tiers and the prompt hook come
 first). A refusal, a cold or stopped server and any error before the first token end the call
 with an error, so the chat route's existing fallback answers with the frontier talker (RF3).
@@ -63,7 +66,15 @@ from anjo.core.processors import Family
 from anjo.sleep.app.ancestry import record_served
 from anjo.sleep.app.flags import sleep_enabled_for
 from anjo.sleep.serving import backend, config, framing
-from anjo.sleep.serving.client import HttpPoster, Poster, ServingError, reply_prompt, utc_today
+from anjo.sleep.serving.client import (
+    HttpPoster,
+    ModelNotFound,
+    Poster,
+    ServingError,
+    load_adapter,
+    reply_prompt,
+    utc_today,
+)
 from anjo.sleep.types import CheckpointRef
 
 logger = logging.getLogger(__name__)
@@ -87,6 +98,9 @@ REPLY_DEADLINE_S: Final = 20.0
 CONNECT_DEADLINE_S: Final = 5.0
 _URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?")
 _REVISION_ID = re.compile(r"rv-[0-9a-f]{16}")
+# The adapters this process has loaded into Modal's server, as (server URL, adapter). Each turn gets a
+# runtime of its own, so this outlives them; a server that answers 404 for one forgot it (a new container).
+_LOADED: set[tuple[str, str]] = set()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -323,15 +337,41 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         yield from self._read(_AsChat(upstream), request, cancel)
 
     def _prompt(self, body: Mapping[str, Any]) -> list[int]:
-        """The prompt's ids, as a training row's (``reply_prompt``), dated today (UTC)."""
+        """The prompt's ids, as a training row's (``reply_prompt``), dated today (UTC), with the person's
+        adapter loaded first (``_loaded_prompt``)."""
         poster = self._poster or self._made_poster()
         try:
-            return reply_prompt(poster, body["model"], body["messages"], self._glimmer.reasoning_strength, utc_today())
+            return self._loaded_prompt(poster, body)
         except ValueError:
             raise RequestNotSent("rejected") from None
         finally:
             if poster is not self._poster:
                 poster.close()
+
+    def _render(self, poster: Poster, body: Mapping[str, Any]) -> list[int]:
+        return reply_prompt(poster, body["model"], body["messages"], self._glimmer.reasoning_strength, utc_today())
+
+    def _loaded_prompt(self, poster: Poster, body: Mapping[str, Any]) -> list[int]:
+        """``_render``, the person's adapter loaded into the server first unless this process has
+        loaded it there. One load attempt per turn at most, under the poster's reply deadline: a
+        loaded adapter the server has forgotten (a 404) gets that one load and one more try, and a
+        fresh load it still doesn't serve ends the turn. Only an ``HttpPoster`` reaches vLLM itself
+        (Modal's); SageMaker's shim loads by itself."""
+        adapter = self._glimmer.adapter
+        if adapter is None or not isinstance(poster, HttpPoster):
+            return self._render(poster, body)
+        key = (poster.base_url, adapter)
+        loaded_before = key in _LOADED
+        if not loaded_before:
+            _load(poster, key)
+        try:
+            return self._render(poster, body)
+        except ModelNotFound:
+            _LOADED.discard(key)
+            if not loaded_before:
+                raise
+            _load(poster, key)
+            return self._render(poster, body)
 
     def _made_poster(self) -> Poster:
         if on_sagemaker():
@@ -361,6 +401,12 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         if served.model in (self._wire_model(), config.MODEL):
             return Served(model=config.MODEL, provider="")
         return served
+
+
+def _load(poster: HttpPoster, key: tuple[str, str]) -> None:
+    """One load of ``key``'s adapter from the adapters volume, with no wait for its folder."""
+    load_adapter(poster, key[1], config.ADAPTERS_DIR)
+    _LOADED.add(key)
 
 
 # The adapter a person's turns are served with: Task 5's promoted checkpoint, once it sets one.

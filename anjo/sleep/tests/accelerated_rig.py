@@ -7,6 +7,7 @@ thread and a commitment due nine days after that date."""
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.mind_night_fakes import LifeThinker, mind_night
 from anjo.sleep.tests.night_fakes import World
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy
+from anjo.sleep.train.lora import objective_used
+from anjo.sleep.train.objective import night_cfg
 from anjo.sleep.types import CheckpointRef, Evidence, NightResult, Probe, Target
 
 FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -98,6 +101,33 @@ class Heard:
     ancestry: frozenset[str] | None
 
 
+class ObjectiveTrainer:
+    """The fake world's trainer with the receipt the real one gives: the objective the setting names, or
+    ``sft`` for a night with no pair, and the pair count (``train/lora.py``'s ``objective_used``)."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def train(self, user_id: str, night: date, prev: CheckpointRef | None, data: Any, name: str) -> Any:
+        ckpt, receipt = self._inner.train(user_id, night, prev, data, name)
+        used = objective_used(night_cfg(os.environ), data)
+        return ckpt, {**receipt, "objective": used, "pairs": len(data.pairs) if used == "sft_dpo" else 0}
+
+
+class PairedPractice:
+    """The fake world's practice, as full practice writes it: each scene also keeps its worst candidate,
+    so the night has (best, worst) pairs and trains ``sft_dpo``."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.max_spark_calls = inner.max_spark_calls
+
+    def run(self, *args: Any, **kw: Any) -> Any:
+        done = self._inner.run(*args, **kw)
+        worse = tuple(replace(t, rejected=f"{t.reply} (flatter)", rejected_from="glimmer") for t in done.transcripts)
+        return replace(done, transcripts=worse, pairs=len(worse))
+
+
 @dataclass
 class FakeAccelerated:
     root: Path
@@ -162,7 +192,9 @@ class FakeAccelerated:
                            promoted=result.status == "promoted")
 
     def rig(self, sha: str = FAKE_SHA) -> Rig:
-        deps = self.world.deps(extractor=lambda chat: self)
+        deps = self.world.deps(extractor=lambda chat: self,
+                               practice=lambda chat, night: PairedPractice(self.world.practice(chat, night)),
+                               trainer=ObjectiveTrainer(self.world.trainer))
         if self.mind_from is not None:
             self.thinker = self.thinker or LifeThinker(targets=("fake-life-t1", "fake-life-c1"), queries=["pilot"])
             mind = mind_night(self.world, self.thinker, resolver=self.resolver)

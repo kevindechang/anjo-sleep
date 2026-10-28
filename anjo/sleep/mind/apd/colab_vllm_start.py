@@ -44,7 +44,6 @@ def _start() -> None:
     if not (isinstance(command, list) and command[:2] == ["vllm", "serve"] and key):
         raise SystemExit("the start step runs vllm serve, with its key set")
     env = {**os.environ, **{str(k): str(v) for k, v in extra.items()}, "VLLM_API_KEY": key}
-    os.makedirs(env.get("VLLM_LORA_RESOLVER_CACHE_DIR", "/content/adapters"), exist_ok=True)
     with open(LOG, "ab") as log:  # noqa: SIM115 - the server outlives this step and keeps writing
         process = subprocess.Popen(["timeout", str(seconds), *command], env=env, stdout=log,
                                    stderr=subprocess.STDOUT, start_new_session=True)

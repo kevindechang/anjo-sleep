@@ -18,9 +18,13 @@ turn, 'high' unless told otherwise; every call and the training text are rendere
 a chat request, and never reads a completion.
 
 **Adapters.** Each person's LoRA adapter is a folder ``p-<hash>-n<night>`` on the adapters volume.
-vLLM's filesystem resolver loads it the first time a request names it, so the base and the
-personal arms share one GPU. ``check_adapter`` holds a folder to what the resolver needs before it
-is uploaded.
+The night's client loads it through vLLM's ``/v1/load_lora_adapter`` before the first request that
+names it (``client.VllmClient``), so the base and the personal arms share one GPU. vLLM's
+filesystem resolver is not used: on 0.28.0 it never loaded one (seen live, 2026-10-28; it compares
+an adapter's base model with the path the server was started on, not the served name). A running
+Modal container sees the adapters volume as it was when it started, so it reloads the volume every
+``ADAPTER_REFRESH_S``. ``check_adapter`` holds a folder to what the server needs before it is
+uploaded.
 """
 from __future__ import annotations
 
@@ -96,6 +100,7 @@ CONCURRENT_REQUESTS: Final = 16
 # Every arm (the base and each person's adapter) shares one GPU by design, so a wake never starts a
 # second container: on 2026-10-28 one wake started two L40S containers before this was set.
 MAX_CONTAINERS: Final = 1
+ADAPTER_REFRESH_S: Final = 20.0  # a warm container reloads the adapters volume this often
 
 MAX_MODEL_LEN: Final = 32_768
 MAX_OUTPUT_TOKENS: Final = 4096
@@ -227,13 +232,11 @@ NATIVE_SAMPLER_ENV: Final = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 
 def vllm_env() -> dict[str, str]:
-    """The server's environment beside the secret: adapters resolve from the adapters volume by
-    name, and Hugging Face's cache stays on the weights volume."""
+    """The server's environment beside the secret: adapters load at runtime, by the client's
+    ``/v1/load_lora_adapter``, and Hugging Face's cache stays on the weights volume."""
     return {
         **NATIVE_SAMPLER_ENV,
         "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True",
-        "VLLM_PLUGINS": "lora_filesystem_resolver",
-        "VLLM_LORA_RESOLVER_CACHE_DIR": ADAPTERS_DIR,
         "HF_HOME": f"{WEIGHTS_DIR}/hf",
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
     }
@@ -246,7 +249,7 @@ def check_adapter_name(name: str) -> str:
 
 
 def check_adapter(folder: Path, name: str) -> None:
-    """A LoRA adapter folder the resolver will load: the PEFT files, a LoRA of Glimmer, a rank the
+    """A LoRA adapter folder the server will load: the PEFT files, a LoRA of Glimmer, a rank the
     server takes, and nothing else."""
     check_adapter_name(name)
     if not folder.is_dir():
@@ -263,7 +266,7 @@ def check_adapter(folder: Path, name: str) -> None:
     if not isinstance(meta, dict) or meta.get("peft_type") != "LORA":
         raise ServeConfigError("the adapter is a PEFT LoRA")
     if meta.get("base_model_name_or_path") != MODEL:
-        raise ServeConfigError(f"the adapter's base model is {MODEL}, as the resolver checks")
+        raise ServeConfigError(f"the adapter's base model is {MODEL}, the model the server serves")
     rank = meta.get("r")
     if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= MAX_LORA_RANK:
         raise ServeConfigError(f"the adapter's rank is 1 to {MAX_LORA_RANK}")
