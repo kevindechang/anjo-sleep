@@ -11,7 +11,8 @@
 - **timing** (``timing``) and the **intervention test** (``intervene``), on the same session.
 - **judge** and **report:** ``judging`` and ``reports/apd.py``, with 17b's section when its arms ran
   and the intervention test's when it has.
-- **kill-resume:** ``resume.kill_resume`` on held-out lives, at once, its children attached to this
+- **kill-resume:** ``resume.kill_resume`` on held-out lives, one at a time (vLLM at temperature 0
+  isn't batch-invariant, and the runs are compared token for token), its children attached to this
   session (``kill_setup``). Each process holds its own Spark Open a night at a time and journals
   every call; the killed child's open night is settled from its journal (``batch.settle_orphans``).
 
@@ -233,10 +234,12 @@ def report(judged: judging.Judged,
 
 
 def kill_lives(data: DataDir, lives: Sequence[Life], session: ColabSession, kill_at: int, backend: Backend,
-               out: Out, *, parallel: int, run_s: float = colab_vllm.MIN_SERVE_S) -> tuple[resume.KillResume, ...]:
-    """``resume.kill_resume`` on each life, ``parallel`` lives at once, its children attached to
-    ``session``; a life done before is kept. A life starts only when the session can carry its
-    three runs, ``run_s`` each."""
+               out: Out, *, parallel: int = 1, run_s: float = colab_vllm.MIN_SERVE_S) -> tuple[resume.KillResume, ...]:
+    """``resume.kill_resume`` on each life, one at a time, its children attached to ``session``; a
+    life done before is kept. A life starts only when the session can carry its three runs,
+    ``run_s`` each."""
+    if parallel != 1:  # the runs are compared token for token: never batched with another life's requests
+        raise ValueError("kill-resume runs one at a time: vLLM at temperature 0 isn't batch-invariant")
     say = serial(out)
     with _attached(data, session, backend):
         return tuple(in_parallel([partial(_kill_one, data, life, kill_at, backend, say, session, run_s)

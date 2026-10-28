@@ -5,7 +5,8 @@
 1. B and M on ``ceil(parallel / 2)`` development lives at once (``batch.run_lives``, measuring), with
    a ``Meter`` counting Glimmer thinker calls and Spark Open calls and their real price;
 2. 17b's labels and branches from one of those M runs, and its training planned as a dry run;
-3. the intervention test on one snapshot from those M runs, its three edits at once (nothing kept).
+3. the intervention test on one snapshot from those M runs, its three edits one at a time, as the
+   test runs them (nothing kept).
 
 It prints the measured throughput (thinker calls a minute, compute units per life-arm night) and
 the expected Spark Open spend per call and per MIND night, then projects the held-out step for 16
@@ -15,9 +16,10 @@ against the ``colab_cu`` cap and ``COLAB_LINE``, and its expected Spark Open spe
 expected spend beside its worst-case holds.
 
 **The model:** the A100 is billed by the hour whatever runs on it, so a life-arm night costs the
-batch's compute units over its life-arm nights at this parallelism. A step that keeps fewer
-life-arms busy (kill-resume's 3 lives at once, each 3 M runs one after another, counted whole) costs
-its nights' wall time. Training is planned for all 8 development lives at the measured life's rows.
+batch's compute units over its life-arm nights at this parallelism. A step that runs one at a
+time (kill-resume's 3 lives, each 3 M runs one after another, counted whole; the intervention
+test's snapshot-edits) costs its wall time. Training is planned for all 8 development lives at the
+measured life's rows.
 """
 from __future__ import annotations
 
@@ -111,18 +113,17 @@ class Timing:
         return self.spark_usd / max(1, self.mind_nights)
 
     def intervene_cu(self, items: int) -> float:
-        """``items`` snapshot-edits at this parallelism: the measured ones ran ``k`` at once."""
+        """``items`` snapshot-edits, one at a time, as the measured ones ran."""
         if self.intervene_items == 0:
             return 0.0
-        k = min(self.parallel, self.intervene_items)
-        return items * cu(self.intervene_s) / self.intervene_items * k / self.parallel
+        return items * cu(self.intervene_s) / self.intervene_items
 
     def held_out(self, lives: int, *, control: bool, replay: bool) -> tuple[float, float]:
         """The held-out step's compute units and expected Spark Open dollars: A and B at the
         measured night, every MIND arm too; kill-resume and the intervention test included."""
         mind_arms = 3 + (1 if control else 0) + (2 if replay else 0)  # M, M-persist, M-kernel (+ M-control, 17b's)
         units = cu(self.setup_s) + lives * (2 + mind_arms) * LIFE_DAYS * self.cu_per_night
-        units += cu(KILL_RUNS * LIFE_DAYS * self.night_wall_s)  # its lives at once, each run after run
+        units += kill_cu(self)  # its lives one at a time, each run after run
         items = INTERVENTION_SNAPSHOTS * len(EDIT_KINDS)
         units += self.intervene_cu(items)
         spark = (lives * mind_arms + KILL_RESUME_LIVES * KILL_RUNS) * LIFE_DAYS * self.spark_per_mind_night
@@ -131,6 +132,12 @@ class Timing:
             units += DEVELOPMENT_LIVES * cu(self.branches_s) + self.training_cu
             spark += DEVELOPMENT_LIVES * self.branches_usd
         return units, spark
+
+
+def kill_cu(timing: Timing, lives: int = KILL_RESUME_LIVES) -> float:
+    """Kill-resume's compute units: ``lives`` one at a time, each ``KILL_RUNS`` runs one after
+    another, at the measured night."""
+    return cu(lives * KILL_RUNS * LIFE_DAYS * timing.night_wall_s)
 
 
 def run_s(timing: Timing | None) -> float:
@@ -245,8 +252,8 @@ def time_pilot(data: DataDir, session: ColabSession, backend: Backend, out: Out,
     branches_s, branches_usd, training_cu = _replay(data.life(m_run.life_id), m_run, session, backend, out, clock)
     snaps = intervene.draw(data, count=1, whole=False)  # a probe from the timed M runs, nothing kept
     probe = Meter()
-    _, intervene_s = _timed(clock, lambda: intervene.intervene(data, session, backend, out, parallel=parallel,
-                                                               snapshots=snaps, keep=False, meter=probe))
+    _, intervene_s = _timed(clock, lambda: intervene.intervene(data, session, backend, out, snapshots=snaps,
+                                                               keep=False, meter=probe))
     timing = Timing(
         parallel=parallel, setup_s=setup_s, batch_runs=len(runs), batch_s=batch_s, nights=meter.nights,
         mind_nights=sum(len(data.life(r.life_id).days) for r in runs if r.arm == "M"),

@@ -3,7 +3,9 @@
 ``--fake`` runs any command, or with no command the whole chain (generate, timing, the
 development runs, the intervention test, a fake freeze, the held-out lives and runs with 17b's arms,
 kill-resume, judge and report), on offline fakes: no key, no network, no spend. Their numbers mean
-nothing. ``--parallel N`` (default 8) runs that many life-arms at once against the one server.
+nothing. ``--parallel N`` (default 8) runs that many life-arms at once against the one server, for
+``run`` and ``timing``. The intervention test and kill-resume run one at a time and refuse any
+other value (``SERIAL_COMMANDS``).
 
 A real run makes paid calls, so it is refused without ``--live``; ``--live`` prints the command's
 plan (its Colab session and hard timeout, and every hold on every pool) and stops, and only
@@ -77,6 +79,10 @@ STOPPED: Final = 3
 BUSY: Final = 4
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
+# vLLM at temperature 0 isn't batch-invariant: a reply can change with what else is in its batch.
+# The intervention test's twins and kill-resume's runs are compared token for token, so they run
+# one at a time; mind.lock already keeps every other MIND command off the session.
+SERIAL_COMMANDS: Final = ("intervene", "kill-resume")
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
 
 
@@ -90,7 +96,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-prices", help="muse_in,muse_out,gemini_in,gemini_out (USD per million tokens)")
     parser.add_argument("--hours", type=float, default=DEFAULT_HOURS, help="the Colab session's hard timeout")
     parser.add_argument("--only", type=int, help="run a step on its first N lives only")
-    parser.add_argument("--parallel", type=int, default=PARALLEL, help="life-arms at once against the one server")
+    parser.add_argument("--parallel", type=int, help=f"life-arms at once against the one server, for run and timing "
+                        f"(default {PARALLEL}); intervene and kill-resume run one at a time")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("pilot", help="the whole chain (--fake only)")
     made = commands.add_parser("generate", help="the development lives; --held-out only at the freeze")
@@ -127,6 +134,19 @@ def _rates(text: str | None) -> dict[str, Rate] | None:
     return None if parts is None else {MUSE: Rate(parts[0], parts[1]), GEMINI: Rate(parts[2], parts[3])}
 
 
+def _parallel(args: argparse.Namespace) -> int:
+    """Life-arms at once: one for ``SERIAL_COMMANDS``, else ``--parallel`` or ``PARALLEL``."""
+    if args.command in SERIAL_COMMANDS:
+        return 1
+    return PARALLEL if args.parallel is None else int(args.parallel)
+
+
+def _check_parallel(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.command in SERIAL_COMMANDS and args.parallel not in (None, 1):
+        parser.error(f"{args.command} runs one at a time (--parallel 1): vLLM at temperature 0 isn't batch-invariant, "
+                     "and its runs are compared token for token")
+
+
 def _split(args: argparse.Namespace) -> Split:
     return "held_out" if getattr(args, "held_out", False) else "development"
 
@@ -140,7 +160,7 @@ def _lives(data: DataDir, split: Split, only: int | None) -> tuple[Life, ...]:
 
 
 def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[str, Rate]) -> plan.Plan:
-    session_s, parallel, measured = args.hours * 3600.0, args.parallel, timing.load(data)
+    session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
     on_disk = len(_lives(data, split, args.only))
     if args.command == "generate":
@@ -152,7 +172,7 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     if args.command == "timing":
         return plan.timing_plan(prices, session_s, parallel)
     if args.command == "intervene":
-        return plan.intervene_plan(prices, session_s, parallel, measured)
+        return plan.intervene_plan(prices, session_s, measured)
     if args.command == "judge":
         return plan.judge_plan(rates)
     if args.command == "kill-resume":
@@ -282,19 +302,18 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
                 publisher.upload(session)
                 arms = (*arms, *pilot.REPLAY_ARMS)
             pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters,
-                            parallel=args.parallel, run_s=run_s)
+                            parallel=_parallel(args), run_s=run_s)
     elif args.command == "timing":
         started = time.monotonic()
         with pilot.serving(backend, settings_, session_s, out) as session:
             measured = timing.time_pilot(data, session, backend, out, setup_s=time.monotonic() - started,
-                                         parallel=args.parallel)
+                                         parallel=_parallel(args))
         left = None if backend.ledger is None else backend.ledger.remaining("baseten_mind_usd")
         out(timing.describe(measured, spark_left=left))
     elif args.command == "intervene":
         snaps = intervene.draw(data)  # before the VM: refused until every development M run is on disk
         with pilot.serving(backend, settings_, session_s, out) as session:
-            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel,
-                                                   snapshots=snaps, run_s=run_s)
+            results, skipped = intervene.intervene(data, session, backend, out, snapshots=snaps, run_s=run_s)
         out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
         pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
@@ -304,7 +323,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
     elif args.command == "kill-resume":
         with pilot.serving(backend, settings_, session_s, out) as session:
             pilot.kill_lives(data, _lives(data, "held_out", KILL_RESUME_LIVES), session, args.kill_at, backend, out,
-                             parallel=min(args.parallel, KILL_RESUME_LIVES), run_s=run_s)
+                             run_s=run_s)
     return 0
 
 
@@ -371,18 +390,20 @@ def _fake_adapters(root: Path) -> Path:
     return folder
 
 
-def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out, *, whole: bool = True) -> int:
-    """The whole pilot on the fakes, step by step through the same commands. On some lives only
-    (``whole`` off, ``--only``), the intervention test, which draws from all the development
-    lives, is left out."""
+def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out, *, whole: bool = True,
+           parallel: Sequence[str] = ()) -> int:
+    """The whole pilot on the fakes, step by step through the same commands, ``parallel`` (the
+    ``--parallel`` flag, if given) on the runs and timing only. On some lives only (``whole`` off,
+    ``--only``), the intervention test, which draws from all the development lives, is left out."""
     prereg = _fake_freeze(data, HELD_OUT_LIVES)
     adapters = _fake_adapters(data.root)
     if not whole:
         out("the intervention test draws from all the development lives' M runs: left out with --only")
     for argv in (
-        ["generate"], ["timing"], ["run"], *([["intervene"]] if whole else []),
+        ["generate"], [*parallel, "timing"], [*parallel, "run"], *([["intervene"]] if whole else []),
         ["generate", "--held-out", "--draw-seed", FAKE_DRAW_SEED, "--lives", str(HELD_OUT_LIVES), "--prereg", str(prereg)],
-        ["run", "--held-out", "--adapters", str(adapters), "--replay", FAKE_ADAPTERS[0], "--shuffled", FAKE_ADAPTERS[1]],
+        [*parallel, "run", "--held-out", "--adapters", str(adapters), "--replay", FAKE_ADAPTERS[0],
+         "--shuffled", FAKE_ADAPTERS[1]],
         ["kill-resume", "--kill-at", str(FAKE_KILL_AT)],
         ["judge", "--held-out"], ["report"],
     ):
@@ -401,13 +422,14 @@ def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
 def _main(argv: Sequence[str] | None, out: Out) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    _check_parallel(parser, args)
     if args.fake:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
         out(f"APD on fakes in {data.root}. The numbers mean nothing.")
         if args.command in (None, "pilot"):
-            base = ["--fake", "--data", str(data.root), "--parallel", str(args.parallel),
-                    *([] if args.only is None else ["--only", str(args.only)])]
-            return _chain(parser, base, data, out, whole=args.only is None)
+            base = ["--fake", "--data", str(data.root), *([] if args.only is None else ["--only", str(args.only)])]
+            parallel = [] if args.parallel is None else ["--parallel", str(args.parallel)]
+            return _chain(parser, base, data, out, whole=args.only is None, parallel=parallel)
         return _guarded(args, data, _fake_backend(data), out)
     if args.command in (None, "pilot"):
         parser.error("the whole chain runs only with --fake; live, run each command")

@@ -3,10 +3,10 @@
 ``INTERVENTION_SNAPSHOTS`` mid-inquiry snapshots are drawn from the development lives' M runs on
 disk, in the order ``SNAPSHOT_SEED`` fixes (``interventions.draw_snapshots``), only once all
 ``DEVELOPMENT_LIVES`` of them are there (``DrawRefused`` before), so the draw is the same on every
-rerun. Each is resumed after
-each of the three edits against its unedited twin (``interventions.intervention_test``), on the
-APD session's base Glimmer at temperature 0, dated on the snapshot's night, with the evidence held
-fixed: both twins read the life's evidence as of the snapshot.
+rerun. Each is resumed after each of the three edits against its unedited twin
+(``interventions.intervention_test``), on the APD session's base Glimmer at temperature 0, dated
+on the snapshot's night, with the evidence held fixed: both twins read the life's evidence as of
+the snapshot.
 
 - **The wrong hypothesis** is written by Spark Open (``wrong_hypothesis_v1.md``, ``SparkWrong``),
   the model that generated the life, from the question, its hypotheses and the development life's
@@ -17,9 +17,14 @@ fixed: both twins read the life's evidence as of the snapshot.
   worst case and journaled (``SparkCalls``), as the runs are held.
 - **Never twice, never mixed:** each finished item is stored under its snapshot's identity
   (``item_name``: the life, its M run, the step the snapshot ends at and its question, then the
-  edit) and skipped on a rerun; only the draw's own items are read back (``on_disk``). Items run in parallel against the one server (``batch.in_parallel``). An item starts only
-  when the session can carry ``run_s`` more. One with a failed call (after ``retry``'s tries) fails
-  alone: recorded (``DataDir.record_failed``), never stored, run again on a rerun; the others go on.
+  edit) and skipped on a rerun; only the draw's own items are read back (``on_disk``). An item
+  starts only when the session can carry ``run_s`` more. One with a failed call (after ``retry``'s
+  tries) fails alone: recorded (``DataDir.record_failed``), never stored, run again on a rerun; the
+  others go on.
+- **One at a time:** vLLM at temperature 0 isn't batch-invariant (a reply can change with what
+  else is in its batch), and each item's twins are compared token for token, so items run one
+  after another (``parallel`` is 1; any other value is refused). MIND's lock keeps every other
+  MIND command off the session.
 
 The section of the report is ``reports.apd.intervention_section``.
 """
@@ -131,12 +136,14 @@ def _item(
 
 
 def intervene(
-    data: DataDir, session: ColabSession, backend: Backend, out: Out, *, parallel: int,
+    data: DataDir, session: ColabSession, backend: Backend, out: Out, *, parallel: int = 1,
     snapshots: Sequence[Snapshot] | None = None, keep: bool = True, meter: Meter | None = None,
     run_s: float = MIN_SERVE_S,
 ) -> Done:
-    """Every snapshot-edit not on disk, ``parallel`` at a time; then every one's results and skips.
+    """Every snapshot-edit not on disk, one at a time; then every one's results and skips.
     ``keep=False`` (timing) runs the given snapshots and stores nothing."""
+    if parallel != 1:  # twins compared token for token: never batched with another item's requests
+        raise ValueError("the intervention test runs one at a time: vLLM at temperature 0 isn't batch-invariant")
     snaps = draw(data) if snapshots is None else tuple(snapshots)
     say = serial(out)
     todo = [(snap, kind) for snap in snaps for kind in EDIT_KINDS

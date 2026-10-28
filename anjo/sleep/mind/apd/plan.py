@@ -15,7 +15,7 @@ from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
 from anjo.sleep.mind.apd.resume import KILL_RUNS
-from anjo.sleep.mind.apd.timing import Timing, cu
+from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import spark_worst_usd
@@ -89,15 +89,17 @@ def timing_plan(prices: Prices, session_s: float, parallel: int) -> Plan:
                 ), ("the training is planned only: no training job runs",))
 
 
-def intervene_plan(prices: Prices, session_s: float, parallel: int, timing: Timing | None) -> Plan:
+def intervene_plan(prices: Prices, session_s: float, timing: Timing | None) -> Plan:
     items = INTERVENTION_SNAPSHOTS * len(EDIT_KINDS)
     expected = None if timing is None or not timing.intervene_items else timing.intervene_usd / timing.intervene_items
-    return Plan(f"the intervention test: {INTERVENTION_SNAPSHOTS} snapshots x {len(EDIT_KINDS)} edits, {parallel} at once",
+    return Plan(f"the intervention test: {INTERVENTION_SNAPSHOTS} snapshots x {len(EDIT_KINDS)} edits, one at a time",
                 session_s, (
                     Hold(SPARK_POOL, spark_worst_usd(prices, EDIT_SPARK_CALLS), items, expected=expected,
                          what="Spark Open per snapshot-edit: both twins' screen and resolver, and the wrong "
                               "hypothesis's writer"),
-                ), ("a snapshot-edit already on disk is skipped",),
+                ), ("a snapshot-edit already on disk is skipped",
+                    "one at a time: vLLM at temperature 0 isn't batch-invariant, and the twins are compared token "
+                    "for token"),
                 None if timing is None else cu(timing.setup_s) + timing.intervene_cu(items))
 
 
@@ -109,12 +111,13 @@ def judge_plan(rates: Mapping[str, Rate]) -> Plan:
 
 
 def kill_plan(prices: Prices, session_s: float, timing: Timing | None, lives: int = KILL_RESUME_LIVES) -> Plan:
-    return Plan(f"kill-resume on {lives} held-out lives at once", session_s, (
+    return Plan(f"kill-resume on {lives} held-out lives, one at a time", session_s, (
         _night(prices, lives * KILL_RUNS * LIFE_DAYS,
                "Spark Open per night of each uninterrupted, killed and resumed run, in that run's process; a "
                "killed night settles at its journal plus one call's worst case", timing),
-    ), ("a life done before is skipped",),
-        None if timing is None else cu(timing.setup_s + KILL_RUNS * LIFE_DAYS * timing.night_wall_s))
+    ), ("a life done before is skipped",
+        "one at a time: vLLM at temperature 0 isn't batch-invariant, and the runs are compared token for token"),
+        None if timing is None else cu(timing.setup_s) + kill_cu(timing, lives))
 
 
 def describe(plan: Plan) -> str:

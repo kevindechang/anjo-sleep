@@ -235,3 +235,21 @@ def test_timing_measures_throughput_and_projects_against_the_cap_and_the_line(tm
     assert measured.branches_s > 0  # the branches ran: their world query was dated on their start state's night
     plan_text = _main([*LIVE, "--data", str(tmp_path), "run"])[1]
     assert "expected about $" in plan_text and "expected about" in plan_text.split("Colab:")[1].splitlines()[0]
+
+
+def test_intervention_twins_and_kill_resume_run_one_at_a_time(tmp_path: Path) -> None:
+    """vLLM at temperature 0 varies with what else is in its batch, and both compare runs token for
+    token: so they run at --parallel 1, and a larger value is refused before anything starts."""
+    for command in (["intervene"], ["kill-resume", "--kill-at", "9"]):
+        with pytest.raises(SystemExit):
+            cli.main(["--fake", "--data", str(tmp_path), "--parallel", "2", *command], out=lambda _line: None)
+        text = _main([*LIVE, "--data", str(tmp_path), "--parallel", "1", *command])[1]
+        assert "one at a time" in text
+    assert not (tmp_path / "fake-budget.jsonl").exists()  # refused before anything ran
+    assert "8 at once" in _main([*LIVE, "--data", str(tmp_path), "run"])[1]  # runs still go 8 at a time
+    backend = backends.fake_backend()
+    with fakes.serving() as session:
+        with pytest.raises(ValueError, match="one at a time"):
+            intervene.intervene(DataDir(tmp_path), session, backend, lambda _line: None, parallel=2, snapshots=())
+        with pytest.raises(ValueError, match="one at a time"):
+            pilot.kill_lives(DataDir(tmp_path), [], session, 9, backend, lambda _line: None, parallel=2)
