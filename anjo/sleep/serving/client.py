@@ -67,7 +67,7 @@ never retries.
 
 **A long call is read from Modal's result URL.** Past 150 s Modal answers 303 to a URL that serves the
 result to a GET, holding each hop up to 150 s (mornings of 2026-10-24/25 read that empty 303 as "not
-JSON"). ``HttpPoster`` follows it on the server's own host only, inside the post's one timeout; a call
+JSON"). ``HttpPoster`` follows it on the server's own host only, inside the request's one bound; a call
 still running then is ``TransportFailed``, and any other redirect a ``ServingError`` naming its status.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
@@ -101,15 +101,15 @@ MAX_TOKENS: Final = 1024
 REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own limit; one request's whole bound
 # The night's client sends a request lost in transport (no status came back) again: every night post
 # is idempotent, and its seed fixed, so a repeat gives the same answer. A first attempt at a warm server
-# gives up at WARM_TIMEOUT_S, 2.25 times the slowest warm completion seen (40 s at 1,024 tokens, 16 at
-# once). The container may have restarted meanwhile, so every later attempt gets the rest of
-# REQUEST_TIMEOUT_S (300 - 90 - 2 = 208 s after a warm timeout): all of them end inside it.
-WARM_TIMEOUT_S: Final = 90.0
+# gives up at WARM_TIMEOUT_S, past the 150 s at which Modal answers any request it holds with a 303 the
+# client follows (at 90 s, warm completions of 128 s and 147 s were cut and sent again): only a request
+# with no status by then is lost. Hops after a 303, and any later attempt, get the rest of
+# REQUEST_TIMEOUT_S (300 - 165 - 2 = 133 s after a warm timeout): all of them end inside it.
+WARM_TIMEOUT_S: Final = 165.0
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
 ATTEMPTS: Final = len(BACKOFF_S) + 1
-# Statuses Modal's proxy sends by itself, vLLM's answer never reaching the client: a request that met
-# one goes again once, inside ATTEMPTS and the same bound. It is the same idempotent post, so at worst
-# vLLM computes the answer twice; no liveness question is asked, since the proxy answered.
+# Statuses Modal's proxy sends by itself: a request that met one goes again once, inside ATTEMPTS and the
+# same bound. The same idempotent post, so at worst vLLM computes it twice; the proxy answered: no liveness.
 PROXY_STATUSES: Final = frozenset({502, 503, 504})
 RESULT_HOPS: Final = 4  # Modal's 303s one post follows: 300 s holds two 150 s waits; never forever
 
@@ -146,8 +146,7 @@ class TransportFailed(ServingError):
 
 
 class ProxyFailed(ServingError):
-    """Modal's proxy answered 502, 503 or 504 (``PROXY_STATUSES``) itself: the request may never have
-    reached vLLM, or vLLM's answer never came back."""
+    """Modal's proxy answered 502, 503 or 504 itself: the request, or vLLM's answer, was lost behind it."""
 
 
 class ServerUnresponsive(ServingError):
@@ -285,11 +284,12 @@ class HttpPoster:
     def close(self) -> None:
         self._http.close()
 
-    def _send(self, path: str, body: Mapping[str, Any], timeout_s: float | None) -> httpx.Response:
-        """One POST, and Modal's 303 to its result followed with a GET on what is left of ``timeout_s``
-        (None: the poster's), so every hop ends within it. Any other redirect is ``ServingError``."""
+    def _send(self, path: str, body: Mapping[str, Any], timeout_s: float | None, hops_s: float | None) -> httpx.Response:
+        """One POST, waiting ``timeout_s`` (None: the poster's) for an answer, and Modal's 303 to its result
+        followed with GETs, all within ``hops_s`` (None: ``timeout_s``). Any other redirect is ``ServingError``."""
         budget = self._timeout_s if timeout_s is None else timeout_s
-        deadline = self._clock() + budget
+        bound = budget if hops_s is None else max(budget, hops_s)
+        deadline = self._clock() + bound
         try:
             response = self._http.post(path, json=dict(body), timeout=budget)
             for _ in range(RESULT_HOPS):
@@ -298,7 +298,7 @@ class HttpPoster:
                     break
                 left = deadline - self._clock()
                 if left <= 0:
-                    raise TransportFailed(f"{path} was still running after {budget:.0f} s (HTTP 303)")
+                    raise TransportFailed(f"{path} was still running after {bound:.0f} s (HTTP 303)")
                 response = self._http.get(target, timeout=left)
         except httpx.HTTPError as error:
             raise TransportFailed(f"{path} failed in transport ({type(error).__name__})") from None
@@ -318,9 +318,10 @@ class HttpPoster:
         base = httpx.URL(self.base_url)
         return target if (target.scheme, target.host, target.port) == (base.scheme, base.host, base.port) else None
 
-    def post(self, path: str, body: Mapping[str, Any], *, timeout_s: float | None = None) -> dict[str, Any]:
-        """``timeout_s`` is this request's alone; None keeps the poster's."""
-        response = self._send(path, body, timeout_s)
+    def post(self, path: str, body: Mapping[str, Any], *, timeout_s: float | None = None,
+             hops_s: float | None = None) -> dict[str, Any]:
+        """``timeout_s`` is this request's alone (None: the poster's); ``hops_s`` bounds its 303 hops too."""
+        response = self._send(path, body, timeout_s, hops_s)
         if response.status_code == 404:
             raise ModelNotFound(f"{path} returned HTTP 404")
         if response.status_code in PROXY_STATUSES:
@@ -347,11 +348,11 @@ class HttpPoster:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
 
-    def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None) -> bool:
+    def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None, hops_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
         other failure is ``ServingError`` naming the endpoint, never what the server said."""
-        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder}, timeout_s)
+        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder}, timeout_s, hops_s)
         if response.status_code == 400 and _ALREADY_LOADED in response.content:
             return True
         if response.status_code == 404:
@@ -486,14 +487,14 @@ class _Requests:
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         poster = self.poster
         if isinstance(poster, HttpPoster):
-            return self._send(lambda timeout: poster.post(path, body, timeout_s=timeout))
-        return self._send(lambda timeout: poster.post(path, body))
+            return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left))
+        return self._send(lambda timeout, left: poster.post(path, body))
 
     def load_adapter(self, name: str, folder: str) -> bool:
         poster = self.poster
         if not isinstance(poster, HttpPoster):
             raise ServingError("only a server that reads adapters from a folder loads one")
-        return self._send(lambda timeout: poster.load_adapter(name, folder, timeout_s=timeout))
+        return self._send(lambda timeout, left: poster.load_adapter(name, folder, timeout_s=timeout, hops_s=left))
 
     def stage(self, stage: Stage, name: str) -> str | None:
         """``stage`` under one of the client's slots: it is one more input for the container."""
@@ -504,14 +505,14 @@ class _Requests:
     def close(self) -> None:
         self.poster.close()
 
-    def _send(self, attempt: Callable[[float], T]) -> T:
+    def _send(self, attempt: Callable[[float, float], T]) -> T:  # its timeout, and the rest of cold_s for 303 hops
         deadline = self.clock() + self.cold_s
         proxied = False  # a status from the proxy has gone again: it never goes a third time
         for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
             try:
                 with self.sent.slots:
                     self._refuse_if_down()
-                    got = attempt(self._timeout(deadline, first=tried == 0))
+                    got = attempt(self._timeout(deadline, first=tried == 0), deadline - self.clock())
             except ProxyFailed:
                 if proxied or pause is None or deadline - self.clock() <= pause:
                     raise

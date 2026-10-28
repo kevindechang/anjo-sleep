@@ -81,24 +81,39 @@ def test_a_303_past_the_bound_gives_up_inside_it() -> None:
     assert waits.now == 200.0 and fake.seen[-1][2] == 50.0
 
 
-def test_a_night_completion_past_150_s_is_read() -> None:
-    """The seed arm's morning: one completion took past 150 s under load. Its warm first attempt still
-    gives up at ``WARM_TIMEOUT_S`` and goes again; the second follows the 303 and reads the reply, and
-    every attempt ends inside the one 300 s bound."""
+def _night(fake: Held, waits: Waits) -> VllmClient:
+    return VllmClient(URL, "tok", transport=httpx.MockTransport(fake), clock=waits.clock, sleep=waits.sleep)
+
+
+def _completions(fake: Held) -> list[tuple[str, float]]:
+    return [(method, timeout) for method, url, timeout, _ in fake.seen if COMPLETIONS in url]
+
+
+def test_a_120_s_completion_on_a_warm_server_is_not_sent_again() -> None:
+    """The seed arm's mornings: warm completions took 128 s and 147 s under load. A warm first try now
+    waits past Modal's 150 s hop, so a slow reply is read the first time, never cut and sent again."""
     waits = Waits()
-    fake = Held(waits, work_s=170.0)
-    client = VllmClient(URL, "tok", transport=httpx.MockTransport(fake), clock=waits.clock, sleep=waits.sleep)
+    fake = Held(waits, work_s=120.0)
+    client = _night(fake, waits)
     assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
-    sent = [(m, t) for m, url, t, _ in fake.seen if COMPLETIONS in url]
-    budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
-    assert sent == [("POST", vllm.WARM_TIMEOUT_S), ("POST", budget), ("GET", budget - HOLD_S)]
-    assert waits.now == vllm.WARM_TIMEOUT_S + vllm.BACKOFF_S[0] + 170.0 and client.retries() == 1
+    assert _completions(fake) == [("POST", vllm.WARM_TIMEOUT_S)] and client.retries() == 0 and waits.now == 120.0
+    assert HOLD_S < vllm.WARM_TIMEOUT_S < vllm.REQUEST_TIMEOUT_S
+
+
+def test_a_completion_past_the_hop_is_followed_on_the_first_try() -> None:
+    """Past 150 s Modal answers 303: the request isn't lost, so its result is waited for on the rest of
+    the request's 300 s, never cut at the warm try's bound and generated again."""
+    waits = Waits()
+    fake = Held(waits, work_s=250.0)
+    client = _night(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert _completions(fake) == [("POST", vllm.WARM_TIMEOUT_S), ("GET", vllm.REQUEST_TIMEOUT_S - HOLD_S)]
+    assert client.retries() == 0 and waits.now == 250.0
 
     waits = Waits()
     fake = Held(waits, work_s=1000.0)
-    client = VllmClient(URL, "tok", transport=httpx.MockTransport(fake), clock=waits.clock, sleep=waits.sleep)
     with pytest.raises(TransportFailed):
-        client.complete(None, MESSAGES, temperature=1.0, seed=3)
+        _night(fake, waits).complete(None, MESSAGES, temperature=1.0, seed=3)
     assert waits.now == vllm.REQUEST_TIMEOUT_S  # never past the bound one request could always take
 
 
