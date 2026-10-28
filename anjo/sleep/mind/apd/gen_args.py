@@ -18,7 +18,7 @@ or the script audit up to ``repair.ROUNDS`` repair rounds (``repair``); APD's ow
 regenerated whole, as registered. ``--keep-failed`` keeps each failed check's life under the data
 dir's ``quarantine``, on ``core-train`` only: every other split's items are sealed. ``--keep-off``
 gives a core split's writer its life's planted topics, to keep to their beats (``generate.KEEP_OFF``);
-APD's own splits are written as registered.
+APD's own splits are written as registered, and the pairs follow most core lives on disk.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import argparse
 import dataclasses
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import generators, readers, repair, retry
+from anjo.sleep.mind.apd import gen_batch, generators, readers, repair, retry
 from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, DEFAULT_PER_MINUTE, Limiter
@@ -180,20 +180,25 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
-    """A warning when a core split's ``generate`` and the core lives on disk differ on ``--keep-off``
-    (a life's made record says it): it goes on every core split or none, so the splits compare."""
+    """A warning when a core split's ``generate`` differs on ``--keep-off`` from most core lives on
+    disk (a tie warns neither way): it goes on every core split or none, so the splits compare."""
     split = split_of(args)
     if args.command != "generate" or split not in CORE_SPLITS:
         return ()
-    on = bool(getattr(args, "keep_off", False))
-    other = [life.id for core in CORE_SPLITS for life in data.lives(core)
-             if bool((data.made(life.id) or {}).get("keep_off")) != on]
-    if not other:
+    found, on = gen_batch.kept_off(data), bool(getattr(args, "keep_off", False))
+    if found.majority is None or found.majority == on:
         return ()
-    lives = "1 core life was" if len(other) == 1 else f"{len(other)} core lives were"
-    return (f"--keep-off is {'on' if on else 'off'} for this {split} run, but {lives} written "
-            f"{'without' if on else 'with'} it ({', '.join(other[:3])}{', ...' if len(other) > 3 else ''}); "
-            "it goes on every core split or none, so core-train, core-val and core-test stay comparable",)
+    return (f"--keep-off is {'on' if on else 'off'} for this {split} run, unlike most {found}; it goes on every "
+            "core split or none, so core-train, core-val and core-test stay comparable",)
+
+
+def pairs_keep_off_note(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
+    """The plan's note on the pairs' ``keep_off``, which follows most core lives on disk."""
+    if args.command != "generate-pairs":
+        return ()
+    found = gen_batch.kept_off(data)
+    return (f"the pairs' writer is given their topics (keep_off) only when most core lives were: "
+            f"{'on' if found.majority else 'off'}, {found}",)
 
 
 def pace_note(args: argparse.Namespace) -> str:

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep.mind.apd import __main__ as cli
-from anjo.sleep.mind.apd import calls, core_splits, fakes, generate
+from anjo.sleep.mind.apd import calls, core_families, core_splits, fakes, generate, pairs
 from anjo.sleep.mind.apd.generators import DEEPSEEK
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.model_api import ChatResult
@@ -96,24 +96,61 @@ def test_apds_own_splits_refuse_keep_off(tmp_path: Path, capsys: pytest.CaptureF
 LIVE = ["--live", "--prices", "1.25,4.25,2.50,1.95", "--judge-prices", "1.25,4.25,0.75,3.75"]
 
 
-def test_the_plan_warns_when_a_core_run_and_the_core_lives_on_disk_differ_on_keep_off(tmp_path: Path) -> None:
-    # Arrange: one core-train life written with --keep-off, one data dir's worth
+def _generate(data: Path, *argv: str) -> None:
+    assert cli.main(["--fake", "--data", str(data), *argv], out=lambda line: None) == 0
+
+
+def test_the_plan_warns_once_when_a_core_run_differs_from_most_core_lives_on_disk(tmp_path: Path) -> None:
+    # Arrange: one core-train life written with --keep-off
     data = tmp_path / "pilot"
-    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-train", "--keep-off"],
-                    out=lambda line: None) == 0
+    _generate(data, "--only", "1", "generate", "--split", "core-train", "--keep-off")
 
     def warnings(*argv: str) -> list[str]:
         lines: list[str] = []
         assert cli.main([*LIVE, "--data", str(data), "--only", "2", "generate", *argv], out=lines.append) == 0
         return [line for line in "\n".join(lines).splitlines() if line.startswith("Warning:")]
 
-    # Act / Assert: another core split without it is warned; with it, or on APD's own split, not
+    # Act / Assert: a core run without it is warned once, with the counts; with it, or on APD's own split, not
     (warned,) = warnings("--split", "core-val")
-    assert "--keep-off is off" in warned and "1 core life was written with it" in warned
+    assert "--keep-off is off" in warned and "core lives on disk: 0 without keep_off, 1 with" in warned
     assert "every core split or none" in warned
     assert warnings("--split", "core-val", "--keep-off") == [] and warnings() == []
-    # and the other way round: a core run with it, beside a core life written without it
-    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-val"],
-                    out=lambda line: None) == 0
+    # a tie is no majority: neither setting is warned
+    _generate(data, "--only", "1", "generate", "--split", "core-val")
+    assert warnings("--split", "core-test") == [] and warnings("--split", "core-test", "--keep-off") == []
+    # most without it: a run with it is warned, one without is not
+    _generate(data, "--only", "2", "generate", "--split", "core-val")
     (warned,) = warnings("--split", "core-test", "--keep-off")
-    assert "--keep-off is on" in warned and "1 core life was written without it" in warned
+    assert "--keep-off is on" in warned and "core lives on disk: 2 without keep_off, 1 with" in warned
+    assert warnings("--split", "core-test") == []
+
+
+def test_pairs_take_keep_off_from_most_core_lives_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: the first pair's topics, the unrelated item's and the commitment's gap's
+    spec = pairs.pair_specs(1)[0]
+    unrelated = core_families.template(spec.unrelated)
+    assert unrelated is not None
+    topics = [unrelated.topic, pairs.pair_template(spec.template).gap.topic]
+    found: dict[str, tuple[Writes, DataDir]] = {}
+
+    # Act: pairs beside core lives written with it, beside core lives written without it, and alone
+    for setting, argv in (("with", ["--keep-off"]), ("without", []), ("alone", None)):
+        data = DataDir(tmp_path / setting)
+        monkeypatch.setattr(fakes, "FakeLifeChat", LifeChat)  # the core life's writes are not the pair's
+        if argv is not None:
+            _generate(data.root, "--only", "1", "generate", "--split", "core-test", *argv)
+        writes = Writes()
+        monkeypatch.setattr(fakes, "FakeLifeChat", lambda writes=writes: writes)
+        _generate(data.root, "generate-pairs", "--n", "1")
+        found[setting] = writes, data
+
+    # Assert: each pair's every write follows the core lives, and its made record says so
+    writes, data = found["with"]
+    (pair,) = data.pairs()
+    assert writes.seen and all(payload["keep_off"] == topics for _, payload in writes.seen)
+    assert (data.made(pair.id) or {})["keep_off"] is True
+    for setting in ("without", "alone"):
+        writes, data = found[setting]
+        (pair,) = data.pairs()
+        assert writes.seen and all("keep_off" not in payload for _, payload in writes.seen)
+        assert "keep_off" not in (data.made(pair.id) or {})

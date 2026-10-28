@@ -329,11 +329,13 @@ def _choice(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _noted(args: argparse.Namespace, found: plan.Plan, data: DataDir) -> plan.Plan:
-    """A generation plan, with how its Gemini reads are limited and its 429s waited out, and a
-    warning when its ``--keep-off`` differs from the core lives on disk."""
+    """A generation plan, with how its Gemini reads are limited and its 429s waited out, the
+    pairs' ``keep_off``, and a warning when a core run's ``--keep-off`` differs from most core lives
+    on disk."""
     if args.command not in GEN_COMMANDS:
         return found
-    return dataclasses.replace(found, notes=(*found.notes, gen_args.pace_note(args), *gen_args.repair_note(args)),
+    return dataclasses.replace(found, notes=(*found.notes, gen_args.pace_note(args), *gen_args.repair_note(args),
+                                             *gen_args.pairs_keep_off_note(args, data)),
                                warnings=(*found.warnings, *gen_args.keep_off_warning(args, data)))
 
 
