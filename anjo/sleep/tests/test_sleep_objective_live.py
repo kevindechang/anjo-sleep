@@ -72,6 +72,7 @@ def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: float = 100.0) 
 
 def test_the_plan_runs_nothing_and_prices_every_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANJO_DATA_DIR", raising=False)  # a plan needs no data dir
+    monkeypatch.delenv("ANJO_SLEEP_CHANNEL", raising=False)
     lines: list[str] = []
     calls: list[Any] = []
     assert live.main([*ACCOUNTS, "--days", "3", "--night-usd", "2.0"], run=lambda *a, **k: calls.append(a),
@@ -79,6 +80,7 @@ def test_the_plan_runs_nothing_and_prices_every_arm(monkeypatch: pytest.MonkeyPa
     text = "\n".join(lines)
     assert not calls and "plan only" in lines[0] and "3 arms" in lines[0] and "--start 2026-10-25" in text
     assert "ANJO_SLEEP_PRESSURE=0" in text and "--match-file <seed arm's minutes per night>" in text
+    assert "thought channel: off" in text  # the shell's, the same in every arm
     assert live.arm_usd("seed", 3, 2.0) == round(3 * (2.0 + 3.0 / 60 * 2.5), 2)
     assert live.arm_usd("today", 3, 2.0) == round(3 * (2.0 + (2.83 + 3.0) / 60 * 2.5), 2)  # its whole budget
     assert live.arm_usd("today", 3, 2.0, {"a": 6.0, "b": 6.0, "c": 6.0}) == round(3 * 2.0 + 18.0 / 60 * 2.5, 2)

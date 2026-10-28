@@ -45,11 +45,17 @@ time budget instead of a step plan, epochs of the rows in fresh seeded orders, e
 ``stretch`` gives the share of the budget used (one warmup, one cosine to zero); then the DPO block, as
 any night. It never dreams: it is the control a dreaming arm is held to.
 
-**The fold** (``fold``, ``fold_folder``): with ``long_term_rank`` set, the job trains a LoRA whose
-first ranks hold the person's long-term adapter, frozen by gradient masks, and whose last ranks are
-tonight's fresh slot (B at zero: the reset). After training, each module's product B A is cut to the
-best rank-R approximation (QR, then an SVD of the small core) and written as a plain LoRA of rank R,
-alpha 2R, which the server takes as any other. Scale is 2 before and after (alpha is always 2r).
+**The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
+hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
+are tonight's fresh slot (B at zero: the reset, ``load_leading``); after training the job folds it.
+
+**The thought channel** (``Soft``, the recipe's ``channel`` block): a row with a ``state`` reads it as K
+soft tokens from the projector (``channel_train.Channel``), spliced just before the prompt's last
+``<|eot|>`` as the server splices them, and the projector trains in the same loop: its groups in the main
+block's optimizer at their own rates (the first ``warmup_share`` of the main updates the projector's
+alone), its MLP in the DPO block's (whose reference reads the projector as the night began). Only ``sft``
+and ``dpo`` teach it: seeding's student, imitation and dreams read the state through it detached, and
+seeding's teacher reads it as the night began (``sleep_job.py`` says why).
 
 It is standalone, as the training script is: the standard library at the top and torch inside the
 functions. Modal's image carries it beside ``colab_train.py``, which loads it by its path. The host's
@@ -57,16 +63,12 @@ tests import it as a module and run every function on a tiny CPU model.
 """
 from __future__ import annotations
 
-import json
 import math
-import os
 import random
-import struct
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any, Final
 
 WEIGHTS: Final = {"sft": 1.0, "dpo": 1.0, "seed": 1.0, "imitate": 0.25, "dream": 0.5}
@@ -87,7 +89,6 @@ WARMUP: Final = 0.03
 MAX_ACCUMULATION: Final = 16
 MAX_EPOCHS: Final = 4
 TEMPERATURE: Final = 1.0
-_DTYPES: Final = {"F32": "float32", "F16": "float16", "BF16": "bfloat16"}
 
 Ids = tuple[int, ...]
 
@@ -97,6 +98,7 @@ class Seq:
     prompt: Ids
     reply: Ids
     weight: float = 1.0  # MIND's surprise weight on an SFT row (the Sleep link); a dream's is always 1.0
+    state: str | None = None  # the reading its reply was made under (``Soft.readings``), channel on
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ class PairSeq:
     chosen: Ids
     rejected: Ids
     weight: float = 1.0  # MIND's surprise weight on the pair
+    state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,7 @@ class SeedSeq:
     prompt: Ids
     teacher: Ids
     reply: Ids
+    state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,36 @@ class Plan:
     long_term_rank: int = 0  # the fold: the leading ranks that hold the long-term adapter, frozen
     dreams: bool = False
     stretch_s: float = 0.0  # the matched control: the main block trains this long by the clock (0: the step plan)
+    deadline: float = math.inf  # the timer's reading past which no update starts (the channel's ``max_minutes``)
+
+
+Spliced = tuple[Any, Any]  # the thought channel (``channel_train.Channel``) and K soft tokens ``(K, H)``
+
+
+@dataclass(frozen=True)
+class Soft:
+    """The thought channel in the one loss: ``channel`` (``channel_train.Channel``, the projector on the
+    model), the readings the rows' ``state`` names, the projector's groups in the main block's optimizer
+    (``Channel.projector_groups``), its tensors the DPO block trains with the adapter (its MLP), and the
+    share of the main block's first updates the projector takes alone."""
+
+    channel: Any
+    readings: Mapping[str, Any]
+    groups: tuple[Mapping[str, Any], ...] = ()
+    dpo_params: tuple[Any, ...] = ()
+    warmup_share: float = 0.0
+
+    def tokens(self, state: str | None, *, ref: bool = False, detach: bool = False) -> Spliced | None:
+        """``state``'s soft tokens with the channel that splices them: from the projector now, or as the
+        night began (``ref``); ``detach`` keeps the term's gradient off the projector. None without a state."""
+        if state is None:
+            return None
+        soft = self.channel.soft(self.readings[state], ref=ref)
+        return self.channel, soft.detach() if detach else soft
+
+
+def _tokens(soft: Soft | None, state: str | None, *, ref: bool = False, detach: bool = False) -> Spliced | None:
+    return None if soft is None else soft.tokens(state, ref=ref, detach=detach)
 
 
 # ── the pure parts ───────────────────────────────────────────────────────────
@@ -223,34 +257,47 @@ def _device(model: Any) -> Any:
     return next(model.parameters()).device
 
 
-def reply_logits(model: Any, prompt: Ids, reply: Ids) -> Any:
-    """The logits that predict each token of ``reply`` after ``prompt``: only those positions are kept."""
+def _spliced(prompt: Ids, reply: Ids, soft: Spliced) -> Any:
+    """The rows the model reads with soft tokens: ``prompt`` and ``reply`` through its input embedding, the
+    tokens before the prompt's last ``<|eot|>`` (``Channel.splice``), in the model's own dtype, batched."""
+    channel, tokens = soft
+    rows, _ = channel.splice(prompt, reply, tokens)
+    return rows[None].to(channel.dtype)
+
+
+def reply_logits(model: Any, prompt: Ids, reply: Ids, soft: Spliced | None = None) -> Any:
+    """The logits that predict each token of ``reply`` after ``prompt``: only those positions are kept.
+    With ``soft`` the model reads the spliced rows; the reply still ends the sequence."""
     import torch
 
+    keep = len(reply) + 1
+    if soft is not None:
+        return model(inputs_embeds=_spliced(prompt, reply, soft), logits_to_keep=keep).logits[0, :-1].float()
     ids = torch.tensor([[*prompt, *reply]], device=_device(model))
-    return model(input_ids=ids, logits_to_keep=len(reply) + 1).logits[0, :-1].float()
+    return model(input_ids=ids, logits_to_keep=keep).logits[0, :-1].float()
 
 
-def reply_logprobs(model: Any, prompt: Ids, reply: Ids) -> Any:
+def reply_logprobs(model: Any, prompt: Ids, reply: Ids, soft: Spliced | None = None) -> Any:
     import torch
 
-    logp = torch.log_softmax(reply_logits(model, prompt, reply), dim=-1)
+    logp = torch.log_softmax(reply_logits(model, prompt, reply, soft), dim=-1)
     return logp.gather(-1, torch.tensor(reply, device=logp.device).view(-1, 1)).squeeze(-1)
 
 
-def sft_loss(model: Any, row: Seq) -> Any:
-    return -reply_logprobs(model, row.prompt, row.reply).mean()
+def sft_loss(model: Any, row: Seq, soft: Spliced | None = None) -> Any:
+    return -reply_logprobs(model, row.prompt, row.reply, soft).mean()
 
 
-def dpo_loss(model: Any, pair: PairSeq, beta: float) -> Any:
-    """DPO against the same model with its adapter off, as today's pass scores its reference."""
+def dpo_loss(model: Any, pair: PairSeq, beta: float, soft: Spliced | None = None, ref: Spliced | None = None) -> Any:
+    """DPO against the same model with its adapter off, as today's pass scores its reference; with the
+    channel the policy reads the projector now (``soft``) and the reference the one the night began with (``ref``)."""
     import torch
 
-    chosen = reply_logprobs(model, pair.prompt, pair.chosen).sum()
-    rejected = reply_logprobs(model, pair.prompt, pair.rejected).sum()
+    chosen = reply_logprobs(model, pair.prompt, pair.chosen, soft).sum()
+    rejected = reply_logprobs(model, pair.prompt, pair.rejected, soft).sum()
     with torch.no_grad(), model.disable_adapter():
-        reference = (reply_logprobs(model, pair.prompt, pair.chosen).sum()
-                     - reply_logprobs(model, pair.prompt, pair.rejected).sum())
+        reference = (reply_logprobs(model, pair.prompt, pair.chosen, ref).sum()
+                     - reply_logprobs(model, pair.prompt, pair.rejected, ref).sum())
     return -torch.nn.functional.logsigmoid(beta * ((chosen - rejected) - reference))
 
 
@@ -281,15 +328,17 @@ class Teacher:
                     p.copy_(live)
 
 
-def seed_kl(model: Any, row: SeedSeq, teacher: Teacher) -> Any:
+def seed_kl(model: Any, row: SeedSeq, teacher: Teacher, soft: Spliced | None = None,
+            teacher_soft: Spliced | None = None) -> Any:
     """Knowledge seeding: reverse KL(student || teacher) a reply position, averaged. The teacher is
     the night-start adapter with the day in context, scored without a gradient; the student is
-    tonight's adapter on the message alone."""
+    tonight's adapter on the message alone. With the channel both read the row's state: the student
+    through ``soft``, the teacher through ``teacher_soft`` (the projector as the night began)."""
     import torch
 
     with teacher(model):
-        target = torch.log_softmax(reply_logits(model, row.teacher, row.reply), dim=-1)
-    student = torch.log_softmax(reply_logits(model, row.prompt, row.reply), dim=-1)
+        target = torch.log_softmax(reply_logits(model, row.teacher, row.reply, teacher_soft), dim=-1)
+    student = torch.log_softmax(reply_logits(model, row.prompt, row.reply, soft), dim=-1)
     return (student.exp() * (student - target)).sum(dim=-1).mean()
 
 
@@ -305,18 +354,26 @@ def _evaluating(model: Any) -> Iterator[None]:
             model.train()
 
 
-def sample(model: Any, prompt: Ids, max_new: int, plan: Plan) -> Ids:
-    """One sample of her adapter (on) after ``prompt``, up to ``max_new`` tokens or her end of turn."""
+def sample(model: Any, prompt: Ids, max_new: int, plan: Plan, soft: Spliced | None = None) -> Ids:
+    """One sample of her adapter (on) after ``prompt``, up to ``max_new`` tokens or her end of turn; with
+    ``soft``, from the spliced rows (a run from embeddings returns the new tokens only)."""
     import torch
 
-    ids = torch.tensor([list(prompt)], device=_device(model))
+    settings = {"do_sample": True, "temperature": TEMPERATURE, "top_p": 1.0, "top_k": 0, "max_new_tokens": max_new,
+                "eos_token_id": plan.eot, "pad_token_id": plan.pad}
     with _evaluating(model), torch.no_grad():
-        out = model.generate(input_ids=ids, attention_mask=torch.ones_like(ids), do_sample=True, temperature=TEMPERATURE,
-                             top_p=1.0, top_k=0, max_new_tokens=max_new, eos_token_id=plan.eot, pad_token_id=plan.pad)
-    return _until_eot([int(t) for t in out[0, len(prompt):].tolist()], plan.eot)
+        if soft is not None:
+            rows = _spliced(prompt, (), soft)
+            mask = torch.ones(rows.shape[:2], dtype=torch.long, device=rows.device)
+            new = model.generate(inputs_embeds=rows, attention_mask=mask, **settings)[0]
+        else:
+            ids = torch.tensor([list(prompt)], device=_device(model))
+            new = model.generate(input_ids=ids, attention_mask=torch.ones_like(ids), **settings)[0, len(prompt):]
+    return _until_eot([int(t) for t in new.tolist()], plan.eot)
 
 
-def imitation_loss(model: Any, row: SeedSeq, rng: random.Random, plan: Plan) -> tuple[Any, float | None]:
+def imitation_loss(model: Any, row: SeedSeq, rng: random.Random, plan: Plan,
+                   soft: Spliced | None = None) -> tuple[Any, float | None]:
     """Learning to imitate: complete a prefix of the reply without the context; REINFORCE on edit
     similarity, each sample's baseline the others' mean. Returns the loss (None when every sample
     scored alike) and the mean reward (None for a reply too short to cut)."""
@@ -328,7 +385,7 @@ def imitation_loss(model: Any, row: SeedSeq, rng: random.Random, plan: Plan) -> 
         return None, None
     cut = rng.randint(low, high)
     prompt, target = (*row.prompt, *row.reply[:cut]), row.reply[cut:cut + IMITATION_TOKENS]
-    samples = [sample(model, prompt, len(target), plan) for _ in range(IMITATION_SAMPLES)]
+    samples = [sample(model, prompt, len(target), plan, soft) for _ in range(IMITATION_SAMPLES)]
     rewards = [edit_reward(s, target) for s in samples]
     total, n = sum(rewards), len(rewards)
     advantages = [r - (total - r) / (n - 1) for r in rewards]
@@ -336,7 +393,7 @@ def imitation_loss(model: Any, row: SeedSeq, rng: random.Random, plan: Plan) -> 
     used = [(s, a) for s, a in zip(samples, advantages, strict=True) if s and a != 0.0]
     if not used:
         return None, mean
-    gain = torch.stack([a * reply_logprobs(model, prompt, s).mean() for s, a in used]).sum()
+    gain = torch.stack([a * reply_logprobs(model, prompt, s, soft).mean() for s, a in used]).sum()
     return -gain / n, mean
 
 
@@ -396,11 +453,11 @@ def load_leading(model: Any, tensors: Mapping[str, Any], rank: int, adapter: str
         raise ValueError("the long-term adapter doesn't cover tonight's LoRA modules")
 
 
-def grad_norm(model: Any, params: Sequence[Any], row: Seq) -> float:
+def grad_norm(model: Any, params: Sequence[Any], row: Seq, soft: Spliced | None = None) -> float:
     """The norm of one row's SFT gradient on the adapter: the dream filter's importance proxy."""
     for p in params:
         p.grad = None
-    sft_loss(model, row).backward()
+    sft_loss(model, row, soft).backward()
     norm = math.sqrt(sum(float(p.grad.float().pow(2).sum()) for p in params if p.grad is not None))
     for p in params:
         p.grad = None
@@ -450,24 +507,38 @@ class _Run:
     fresh: set[int]
     losses: dict[str, list[float]]
     rewards: list[float]
+    soft: Soft | None = None
+    timer: Callable[[], float] = time.monotonic
     sampled: int = 0
     steps: int = 0
+    projector_only: int = 0
+    warmup_updates: int = 0
+    out_of_time: bool = False
     grads_checked: bool = False
+
+    def tokens(self, state: str | None, *, ref: bool = False, detach: bool = False) -> Spliced | None:
+        return _tokens(self.soft, state, ref=ref, detach=detach)
+
+    def late(self) -> bool:
+        """Whether the deadline has passed; once it has, no update starts."""
+        self.out_of_time = self.out_of_time or self.timer() > self.plan.deadline
+        return self.out_of_time
 
     def loss(self, term: str, row: Any) -> Any:
         if term == "dpo":
-            return dpo_loss(self.model, row, self.plan.beta)
-        if term == "seed":
+            return dpo_loss(self.model, row, self.plan.beta, self.tokens(row.state), self.tokens(row.state, ref=True))
+        if term == "seed":  # the student reads the state detached; the teacher, as the night began
             index, seq = row
-            if index in self.fresh and (fresh := sample(self.model, seq.prompt, FRESH_TOKENS, self.plan)):
+            student = self.tokens(seq.state, detach=True)
+            if index in self.fresh and (fresh := sample(self.model, seq.prompt, FRESH_TOKENS, self.plan, student)):
                 seq, self.sampled = replace(seq, reply=fresh), self.sampled + 1
-            return seed_kl(self.model, seq, self.teacher)
+            return seed_kl(self.model, seq, self.teacher, student, self.tokens(seq.state, ref=True))
         if term == "imitate":
-            loss, reward = imitation_loss(self.model, row, self.rng, self.plan)
+            loss, reward = imitation_loss(self.model, row, self.rng, self.plan, self.tokens(row.state, detach=True))
             if reward is not None:
                 self.rewards.append(reward)
             return loss
-        return sft_loss(self.model, row)  # sft and dream
+        return sft_loss(self.model, row, self.tokens(row.state, detach=term == "dream"))  # an imagined state never teaches it
 
     def backward(self, chunk: Sequence[tuple[str, Any]]) -> None:
         """Each row's weighted loss, its share of the chunk's mean, into the adapter's gradient: the
@@ -481,14 +552,20 @@ class _Run:
                     self.losses[term].append(float(loss.detach()))
 
     def step(self, chunk: Sequence[tuple[str, Any]], optimizer: Any = None, rate: Any = None) -> None:
-        """One update on ``chunk``: the main block's optimizer and schedule unless others are given."""
+        """One update on ``chunk``: the main block's optimizer and schedule unless others are given. In the
+        main block's first ``warmup_updates`` the adapter's gradients are dropped: the projector learns alone."""
         import torch
 
+        main = optimizer is None
         optimizer, rate = optimizer or self.optimizer, rate or self.rate
         self.backward(chunk)
         if self.steps == 0:
             self.check_grads()
-        torch.nn.utils.clip_grad_norm_(self.params, MAX_GRAD_NORM)
+        if main and self.steps < self.warmup_updates:
+            for p in self.params:
+                p.grad = None  # AdamW skips a tensor with no gradient
+            self.projector_only += 1
+        torch.nn.utils.clip_grad_norm_([p for group in optimizer.param_groups for p in group["params"]], MAX_GRAD_NORM)
         optimizer.step()
         rate.step()
         optimizer.zero_grad(set_to_none=True)
@@ -528,14 +605,14 @@ def _stretched(run: _Run, items: Sequence[tuple[str, Any]], accumulation: int, t
     """The matched control's main block: fresh seeded orders of ``items`` until ``plan.stretch_s`` is
     used, each step at the rate ``stretch`` gives the share used. No step starts past the budget."""
     budget, started, steps = run.plan.stretch_s, timer(), 0
-    while items and timer() - started < budget:
+    while items and timer() - started < budget and not run.late():
         order = list(items)
         run.rng.shuffle(order)
         for chunk in _chunks(order, accumulation):
-            if (used := timer() - started) >= budget:
+            if (used := timer() - started) >= budget or run.late():
                 break
-            for group in run.optimizer.param_groups:
-                group["lr"] = run.plan.lr * stretch(used / budget)
+            for group in run.optimizer.param_groups:  # each group at its own peak (the projector's too)
+                group["lr"] = group["initial_lr"] * stretch(used / budget)
             run.step(chunk, rate=_Held())
             steps += 1
     return {"budget_minutes": round(budget / 60.0, 4), "minutes": round((timer() - started) / 60.0, 4), "steps": steps}
@@ -550,13 +627,16 @@ def _dpo_block(run: _Run, pairs: Sequence[PairSeq]) -> dict[str, Any]:
     if not pairs:
         return {"steps": 0, "lr": run.plan.dpo_lr, "accumulation": 0, "epochs": 0, "max_update": 0.0}
     accumulation, epochs, per_epoch = step_plan(len(pairs), run.plan.min_steps)
-    optimizer = torch.optim.AdamW(run.params, lr=run.plan.dpo_lr, weight_decay=0.0)
+    projector = list(run.soft.dpo_params) if run.soft is not None else []
+    optimizer = torch.optim.AdamW([*run.params, *projector], lr=run.plan.dpo_lr, weight_decay=0.0)
     rate = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(epochs * per_epoch))
     largest, steps = 0.0, 0
     for _ in range(epochs):
         order = list(pairs)
         run.rng.shuffle(order)
         for chunk in _chunks([("dpo", pair) for pair in order], accumulation):
+            if run.late():
+                break
             before = [p.detach().clone() for p in run.params]
             run.step(chunk, optimizer, rate)
             largest = max(largest, max(float((p.detach() - b).abs().max()) for p, b in zip(run.params, before, strict=True)))
@@ -571,7 +651,7 @@ def _dream_block(run: _Run, batch: Batch, accumulation: int) -> dict[str, Any]:
     import torch
 
     with run.clock("dream_rank"):
-        norms = [grad_norm(run.model, run.params, row) for row in batch.dreams]
+        norms = [grad_norm(run.model, run.params, row, run.tokens(row.state, detach=True)) for row in batch.dreams]
     kept = select_dreams(norms, DREAM_TOP_K, DREAM_RANDOM, run.plan.seed)
     with run.clock("anchor"):
         before = anchor_score(run.model, batch.anchors)
@@ -604,23 +684,26 @@ def by_group(groups: Sequence[str], norms: Sequence[float], kept: Sequence[int],
     return out
 
 
-def _probe(model: Any, row: SeedSeq | None, teacher: Teacher) -> tuple[Any, float | None]:
-    """The teacher's logits on ``row`` (night-start adapter, context on) and the seeding KL there,
-    without dropout or a gradient: taken before and after training, the first must not move and the
-    second should."""
+def _probe(model: Any, row: SeedSeq | None, teacher: Teacher, soft: Soft | None) -> tuple[Any, float | None]:
+    """The teacher's logits on ``row`` (night-start adapter and projector, context on) and the seeding KL
+    there, without dropout or a gradient: taken before and after training, the first must not move and
+    the second should."""
     import torch
 
     if row is None:
         return None, None
+    start = _tokens(soft, row.state, ref=True)
     with teacher(model):
-        logits = reply_logits(model, row.teacher, row.reply)
+        logits = reply_logits(model, row.teacher, row.reply, start)
     with _evaluating(model), torch.no_grad():
-        return logits, float(seed_kl(model, row, teacher))
+        return logits, float(seed_kl(model, row, teacher, _tokens(soft, row.state, detach=True), start))
 
 
-def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], float] = time.monotonic) -> dict[str, Any]:
-    """Train the adapter on the one loss; returns the receipt: rows, mean loss and minutes per term,
-    the on-policy samples taken, the imitation reward, and the dream block's outcome. Counts only."""
+def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = None,
+                timer: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+    """Train the adapter (and with ``soft`` the projector) on the one loss; returns the receipt: rows,
+    mean loss and minutes per term, the on-policy samples taken, the imitation reward, the dream block's
+    outcome, and whether the deadline cut the loop short. Counts only."""
     import torch
 
     named = adapter_params(model)
@@ -642,25 +725,28 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
         raise ValueError("a night trains at least one row")
     params = [p for _, p in named]
     teacher = Teacher(params)  # the night-start adapter: the long-term one, before anything trains
-    optimizer = torch.optim.AdamW(params, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
+    groups = [{"params": params, "lr": plan.lr}, *(dict(group) for group in (soft.groups if soft else ()))]
+    optimizer = torch.optim.AdamW(groups, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
     run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
-               teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [])
+               teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
+               warmup_updates=int(soft.warmup_share * main) if soft else 0)
     hooks = freeze_leading(named, plan.long_term_rank) if plan.long_term_rank else []
     held = leading(named, plan.long_term_rank) if plan.long_term_rank else []
     probe = batch.seeds[0] if batch.seeds else None
-    teacher_before, kl_before = _probe(model, probe, teacher)
+    teacher_before, kl_before = _probe(model, probe, teacher, soft)
     model.train()
     try:
         stretched = _stretched(run, items, accumulation, timer) if plan.stretch_s else None
-        for _ in range(0 if stretched else epochs):
-            for chunk in _chunks(items, accumulation):
-                run.step(chunk)
+        for chunk in [] if stretched else [c for _ in range(epochs) for c in _chunks(items, accumulation)]:
+            if run.late():
+                break
+            run.step(chunk)
         dpo = _dpo_block(run, batch.pairs)
-        dream = _dream_block(run, batch, accumulation) if dreaming else None
+        dream = _dream_block(run, batch, accumulation) if dreaming and not run.late() else None
     finally:
         for hook in hooks:
             hook.remove()
-    teacher_after, kl_after = _probe(model, probe, teacher)
+    teacher_after, kl_after = _probe(model, probe, teacher, soft)
     drift = None if probe is None else float((teacher_after - teacher_before).abs().max())
     moved = max((float((now - was).abs().max()) for now, was in zip(leading(named, plan.long_term_rank), held,
                                                                      strict=True)), default=0.0) if held else None
@@ -674,92 +760,6 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
         "on_policy_samples": run.sampled, "imitation_reward": sum(run.rewards) / len(run.rewards) if run.rewards else None,
         "long_term_rank": plan.long_term_rank, "dpo": dpo, "dreams": dream,
         "grads_adapter_only": run.grads_checked, "teacher_drift": drift, "long_term_drift": moved, "seed_kl_before": kl_before,
-        "seed_kl_after": kl_after, **({"stretch": stretched} if stretched else {}),
+        "seed_kl_after": kl_after, "out_of_time": run.out_of_time, **({"stretch": stretched} if stretched else {}),
+        **({"projector_only_updates": run.projector_only} if soft else {}),
     }
-
-
-# ── the fold, and the adapter file ───────────────────────────────────────────
-
-
-def fold(tensors: Mapping[str, Any], rank: int) -> dict[str, Any]:
-    """Each LoRA pair's product cut to its best rank ``min(rank, k)`` approximation, as a plain pair."""
-    import torch
-
-    a_names = sorted(name for name in tensors if name.endswith("lora_A.weight"))
-    if not a_names or len(tensors) != 2 * len(a_names):
-        raise ValueError("a plain LoRA holds lora_A and lora_B pairs and nothing else")
-    out: dict[str, Any] = {}
-    for a_name in a_names:
-        b_name = a_name[: -len("lora_A.weight")] + "lora_B.weight"
-        a, b = tensors[a_name].double(), tensors[b_name].double()  # (k, d_in) and (d_out, k)
-        keep = min(rank, a.shape[0])
-        qb, rb = torch.linalg.qr(b)
-        qa, ra = torch.linalg.qr(a.T)
-        u, s, vh = torch.linalg.svd(rb @ ra.T, full_matrices=False)
-        m = min(keep, s.numel())
-        root = s[:m].sqrt()
-        new_b = torch.zeros(b.shape[0], keep, dtype=b.dtype)
-        new_a = torch.zeros(keep, a.shape[1], dtype=a.dtype)
-        new_b[:, :m] = (qb @ u[:, :m]) * root
-        new_a[:m] = root[:, None] * (vh[:m] @ qa.T)
-        dtype = tensors[a_name].dtype
-        out[a_name], out[b_name] = new_a.to(dtype).contiguous(), new_b.to(dtype).contiguous()
-    return out
-
-
-def read_safetensors(path: Path) -> dict[str, Any]:
-    import torch
-
-    raw = path.read_bytes()
-    (size,) = struct.unpack("<Q", raw[:8])
-    header = json.loads(raw[8:8 + size])
-    data = raw[8 + size:]
-    out = {}
-    for name, meta in header.items():
-        if name == "__metadata__":
-            continue
-        if meta["dtype"] not in _DTYPES:
-            raise ValueError(f"{name} is {meta['dtype']}, not a float type an adapter is saved in")
-        begin, end = meta["data_offsets"]
-        flat = torch.frombuffer(bytearray(data[begin:end]), dtype=getattr(torch, _DTYPES[meta["dtype"]]))
-        out[name] = flat.reshape(meta["shape"]).clone()
-    return out
-
-
-def write_safetensors(tensors: Mapping[str, Any], path: Path) -> None:
-    import torch
-
-    codes = {name: code for code, name in _DTYPES.items()}
-    header: dict[str, Any] = {"__metadata__": {"format": "pt"}}
-    blobs, offset = [], 0
-    for name in sorted(tensors):
-        tensor = tensors[name].detach().contiguous().cpu()
-        blob = tensor.view(-1).view(torch.uint8).numpy().tobytes()  # bfloat16 has no numpy type
-        header[name] = {"dtype": codes[str(tensor.dtype).removeprefix("torch.")], "shape": list(tensor.shape),
-                        "data_offsets": [offset, offset + len(blob)]}
-        blobs.append(blob)
-        offset += len(blob)
-    text = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    text += b" " * (-len(text) % 8)
-    path.write_bytes(struct.pack("<Q", len(text)) + text + b"".join(blobs))
-
-
-def fold_folder(folder: Path, rank: int) -> int:
-    """Fold the adapter saved in ``folder`` to rank ``min(rank, r)`` in place, as a plain LoRA with
-    alpha 2r: the two files, nothing else. Returns the rank it holds."""
-    config_path, weights_path = folder / "adapter_config.json", folder / "adapter_model.safetensors"
-    meta = json.loads(config_path.read_text(encoding="utf-8"))
-    r = meta.get("r")
-    if (meta.get("peft_type") != "LORA" or meta.get("use_dora") or meta.get("rank_pattern")
-            or meta.get("alpha_pattern") or not isinstance(r, int) or meta.get("lora_alpha") != 2 * r):
-        raise ValueError("the fold takes a plain LoRA with alpha 2r")
-    tensors = read_safetensors(weights_path)
-    if any(t.shape[0 if name.endswith("lora_A.weight") else 1] != r for name, t in tensors.items()):
-        raise ValueError("the adapter's tensors don't hold the rank its config names")
-    folded, kept = fold(tensors, rank), min(rank, r)
-    pending = folder / f".{weights_path.name}.tmp"
-    write_safetensors(folded, pending)
-    os.replace(pending, weights_path)
-    meta.update({"r": kept, "lora_alpha": 2 * kept, "rank_pattern": {}, "alpha_pattern": {}})
-    config_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
-    return kept

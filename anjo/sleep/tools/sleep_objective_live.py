@@ -24,7 +24,8 @@ A control runs after the arm it is matched to, with a match file of that arm's m
 **Never a real night.** Every account must be new: one that already has a results folder is refused,
 so no arm ever trains on a running life. Each run names a persona; the wiring refuses a persona on an
 account that isn't registered synthetic. The runs inherit this shell's environment, with the switches
-replaced by the arm's.
+replaced by the arm's; the thought channel (``ANJO_SLEEP_CHANNEL``) is the shell's, so on or off it is
+the same in every arm, and a claim and its control differ in their objective alone.
 
 **Holds.** The plan's worst case is priced at ``--night-usd`` (a measured night's ``cost_usd``, today's
 objective) plus each arm's added A100 minutes (``ADDED_A100_MIN``, estimates; a control at its match
@@ -52,6 +53,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.budget import Ledger, Reservation, default_ledger
+from anjo.sleep.night.core_snapshot import CHANNEL_ENV
 from anjo.sleep.night.holds import usd
 from anjo.sleep.reports.results import results_root
 from anjo.sleep.train import objective
@@ -229,6 +231,7 @@ def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, out: Cal
         match = f" --match-file <{CONTROL_OF[arm]} arm's minutes per night>" if arm in CONTROL_OF else ""
         out(f"  {arm}: {env} {' '.join(command('<' + arm + ' account>', args.persona, args.days, start)[1:])}{match}")
         out(f"    worst case ${priced[arm]:.2f} (estimate)")
+    out(f"  thought channel: {os.environ.get(CHANNEL_ENV) or 'off'} ({CHANNEL_ENV}, this shell's), the same in every arm")
     if "dreams" in chosen:
         out("  dreams: the app must wire the core's dream seeds into NightDeps.dreams first; unwired, its dataset "
             f"step says dreams: {DREAMS_NOT_WIRED}, and its control doesn't run")

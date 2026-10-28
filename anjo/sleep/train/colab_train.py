@@ -38,14 +38,16 @@ adapter and use that copy as the reference; the copy is removed, so the referenc
 with the adapter switched off; the receipt's ``dpo_reference`` says which reference TRL used.
 Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
-The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_loss.py``, which ships beside
-this file (Modal's image only; the Colab runner refuses the objective), runs the one weighted loss over
-the SFT rows, the pairs and the dataset's ``kind`` rows (seeding, dreams, anchors), each tokenized as
-the server renders it (``served_ids``). Its recipe carries ``terms``: ``fold_rank`` (fold the night into
-the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and ``dreams``. ``match_minutes`` is the live
-comparison's matched control and nothing else: the SFT pass (or ``sft_dpo_seed``'s main block, dreams
-off) trains for that many minutes by the clock, one warmup and one cosine over them (``stretch``), and the
-DPO pass follows as today. The receipt's ``match`` gives the budget, the minutes used and the steps.
+The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_job.py``, which ships beside
+this file with ``sleep_loss.py`` and ``sleep_fold.py`` (Modal's image only; the Colab runner refuses the
+objective), runs the one weighted loss over the SFT rows, the pairs and the dataset's ``kind`` rows
+(seeding, dreams, anchors), each tokenized as the server renders it (``served_ids``), and with a
+``channel`` block trains the thought channel's projector in the same loop. Its recipe carries ``terms``:
+``fold_rank`` (fold the night into the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and
+``dreams``. ``match_minutes`` is the live comparison's matched control and nothing else: the SFT pass
+(or ``sft_dpo_seed``'s main block, dreams off) trains for that many minutes by the clock, one warmup and
+one cosine over them (``stretch``), and the DPO pass follows as today. The receipt's ``match`` gives the
+budget, the minutes used and the steps.
 
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
@@ -60,8 +62,9 @@ TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against 
 
 **The thought channel.** A recipe with a ``channel`` block (``channel_train.check_channel``) is run by
 ``channel_train.main`` instead, on the same inputs: the LoRA and the projector that lets Glimmer read
-MIND's state, trained together on rows that carry the core state they were made under. It needs
-``channel_train.py`` beside this file, which the Modal image carries.
+MIND's state, trained together on rows that carry the core state they were made under; with
+``sft_dpo_seed`` it is ``sleep_job.main``'s, in the one loss. It needs ``channel_train.py`` beside this
+file, which the Modal image carries.
 
 ``TRAIN_PACKAGES`` are the versions every runner installs (Colab's image brings its own torch), and
 ``TORCH`` the torch for a runner that brings none. They live here, in a file that imports only the
@@ -98,7 +101,7 @@ RECEIPT = "receipt.json"
 OBJECTIVES = ("sft", "sft_dpo", "sft_dpo_seed")
 SEED_OBJECTIVE = "sft_dpo_seed"
 LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
-KINDS = ("seed", "dream", "anchor")
+SEED_SCRIPT = "sleep_job.py"  # sft_dpo_seed's run (the thought channel's projector in it too), beside this file
 SURPRISE_RANGE = (0.5, 2.0)  # MIND's surprise weight on a row (the Sleep link); a row without one weighs 1.0
 MAX_MATCH_MINUTES = 100.0
 STRETCH_STEPS = 1_000_000  # the stretched SFT's step cap: its clock stops it long before
@@ -185,8 +188,6 @@ def load_config(raw: str) -> dict[str, Any]:
         raise ValueError("the rendering names the reasoning strength the rows are rendered at")
     if cfg.get("channel") is not None:
         channel_module().check_channel(cfg["channel"])
-        if cfg["objective"] == SEED_OBJECTIVE:  # until the one job trains both: never one silently dropped
-            raise ValueError(f"the thought channel and {SEED_OBJECTIVE} don't train in one job yet")
     return cfg
 
 
@@ -211,6 +212,11 @@ def channel_module() -> Any:
     """``channel_train.py`` from beside this file: the thought channel's run (a recipe with a ``channel``
     block), which the Modal image carries and a single-file Colab run doesn't."""
     return sibling(CHANNEL_SCRIPT, "anjo_channel_train", "a channel recipe")
+
+
+def seed_module() -> Any:
+    """``sleep_job.py`` from beside this file: ``sft_dpo_seed``'s run, the channel's projector in it too."""
+    return sibling(SEED_SCRIPT, "anjo_sleep_job", SEED_OBJECTIVE)
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -277,7 +283,7 @@ def dpo_plan(n_pairs: int, cfg: dict[str, Any]) -> tuple[int, int]:
 
 def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The SFT rows (prompt, completion) and the pair rows (prompt, chosen, rejected); the rows
-    with a ``kind`` belong to ``sft_dpo_seed`` alone (``term_rows``)."""
+    with a ``kind`` belong to ``sft_dpo_seed`` alone (``sleep_job.term_rows``)."""
     plain = [row for row in rows if "kind" not in row]
     return [row for row in plain if "completion" in row], [row for row in plain if "chosen" in row]
 
@@ -298,28 +304,6 @@ def surprise_weights(objective: str, rows: list[dict[str, Any]]) -> str | None:
     if not any("weight" in row for row in rows):
         return None
     return "applied" if objective == SEED_OBJECTIVE else f"not applied (objective {objective})"
-
-
-def term_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """``sft_dpo_seed``'s rows by kind, each checked as the host cleaned it."""
-    found: dict[str, list[dict[str, Any]]] = {kind: [] for kind in KINDS}
-    for row in rows:
-        if "kind" not in row:
-            continue
-        if row["kind"] not in KINDS:
-            raise ValueError(f"row {row.get('id')}'s kind is one of {', '.join(KINDS)}")
-        if row["kind"] == "anchor":
-            check_clean({"id": row.get("id"), "prompt": row["prompt"], "chosen": [], "rejected": []})
-            choices, answer = row.get("choices"), row.get("answer")
-            if (not isinstance(choices, list) or not all(isinstance(c, str) and not SPECIAL_TOKEN.search(c) for c in choices)
-                    or isinstance(answer, bool) or not isinstance(answer, int) or not 0 <= answer < len(choices)):
-                raise ValueError(f"anchor {row.get('id')} has clean choices and an answer among them")
-        else:
-            check_clean(row)
-            if row["kind"] == "seed":
-                check_clean({**row, "prompt": row.get("teacher")})
-        found[row["kind"]].append(row)
-    return found
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -570,99 +554,6 @@ def reply_ids(tokenizer: Any, text: str, *, end: bool = True) -> list[int]:
     return [*ids, tokenizer.convert_tokens_to_ids(REPLY_END)] if end else ids
 
 
-def seed_batch(loss: Any, tokenizer: Any, kept: list[tuple[dict[str, Any], dict[str, str]]],
-               pairs: list[tuple[dict[str, Any], dict[str, str]]], terms: dict[str, list[dict[str, Any]]],
-               cfg: dict[str, Any], template: dict[str, str]) -> tuple[Any, dict[str, int]]:
-    """The loss's batch, every row as the server renders it, and the term rows too long to train."""
-    def prompt(row: dict[str, Any], key: str = "prompt") -> tuple[int, ...]:
-        return tuple(served_ids(tokenizer, row[key], row_template(template, row)))
-
-    def reply(row: dict[str, Any], side: str = "completion") -> tuple[int, ...]:
-        return tuple(reply_ids(tokenizer, _reply(row[side])))
-
-    limit = cfg["max_seq_length"]
-    seeds = [loss.SeedSeq(prompt(row), prompt(row, "teacher"), reply(row)) for row in terms["seed"]]
-    dreams = ([(loss.Seq(prompt(row), reply(row)), str(row.get("seed_kind", ""))) for row in terms["dream"]]
-              if cfg["terms"]["dreams"] else [])  # dream rows train only when the recipe asks for them
-    fit = [(seq, kind) for seq, kind in dreams if len(seq.prompt) + len(seq.reply) <= limit]
-    batch = loss.Batch(
-        sft=tuple(loss.Seq(prompt(row), reply(row), row_weight(row)) for row, _ in kept),
-        pairs=tuple(loss.PairSeq(prompt(row), reply(row, "chosen"), reply(row, "rejected"), row_weight(row))
-                    for row, _ in pairs),
-        seeds=tuple(row for row in seeds if len(row.teacher) + len(row.reply) <= limit),
-        dreams=tuple(seq for seq, _ in fit), dream_groups=tuple(kind for _, kind in fit),
-        anchors=tuple(loss.AnchorSeq(prompt(row), tuple(tuple(reply_ids(tokenizer, c, end=False)) for c in row["choices"]),
-                                     row["answer"]) for row in terms["anchor"]),
-    )
-    return batch, {"seed": len(seeds) - len(batch.seeds), "dream": len(dreams) - len(batch.dreams)}
-
-
-def _seed_model(model: Any, settings: dict[str, Any], prev: str | None, fold: int | None,
-                loss: Any) -> tuple[Any, int]:  # pragma: no cover - needs the training stack
-    """The PEFT model ``sft_dpo_seed`` trains, and how many leading ranks stay frozen. Folding, the
-    long-term adapter fills the first ranks of a LoRA of its rank plus the night's, and the rest of B
-    starts at zero (the reset); otherwise a warm start loads the previous adapter as today's does."""
-    from peft import LoraConfig, PeftModel, get_peft_model  # type: ignore[import-not-found, unused-ignore]
-
-    if fold is None and prev:
-        return PeftModel.from_pretrained(model, prev, is_trainable=True), 0
-    if fold is None or not prev:
-        return get_peft_model(model, LoraConfig(**settings["lora"])), 0
-    meta = json.loads((Path(prev) / "adapter_config.json").read_text(encoding="utf-8"))
-    r_prev = meta.get("r")
-    if not isinstance(r_prev, int) or meta.get("lora_alpha") != 2 * r_prev or meta.get("rank_pattern"):
-        raise ValueError("the long-term adapter is a plain LoRA with alpha 2r")
-    width = r_prev + settings["lora"]["r"]
-    peft = get_peft_model(model, LoraConfig(**{**settings["lora"], "r": width, "lora_alpha": 2 * width}))
-    loss.load_leading(peft, loss.read_safetensors(Path(prev) / "adapter_model.safetensors"), r_prev)
-    return peft, r_prev
-
-
-def _train_seed(cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, template: dict[str, str],
-                kept: list[tuple[dict[str, Any], dict[str, str]]], pairs: list[tuple[dict[str, Any], dict[str, str]]],
-                rows: list[dict[str, Any]], model: Any, prev: str | None, out: Path) -> dict[str, Any]:  # pragma: no cover - needs the training stack
-    """``sft_dpo_seed``: the one weighted loss over every term in one loop, then the fold. Returns the
-    receipt's own part: the terms' receipt, the steps and the pairs trained."""
-    loss = load_loss()
-    fold = cfg["terms"]["fold_rank"]
-    by_kind = term_rows(rows)
-    batch, too_long = seed_batch(loss, tokenizer, kept, pairs, by_kind, cfg, template)
-    checked = _check_seed_tokens(tokenizer, batch, kept, pairs, by_kind, template)
-    model, frozen = _seed_model(model, settings, prev, fold, loss)
-    eot = tokenizer.convert_tokens_to_ids(REPLY_END)
-    plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
-                     seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
-                     dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"],
-                     stretch_s=cfg.get("match_minutes", 0.0) * 60.0)
-    terms = loss.train_terms(model, batch, plan)
-    model.save_pretrained(str(out))
-    terms |= {"dropped_truncated": too_long, "fold_rank": fold,
-              "folded_to": loss.fold_folder(out, fold) if fold is not None else None}
-    return {"terms": terms, "steps": terms["steps"], "pairs": len(batch.pairs), "rows_checked": checked}
-
-
-def _check_seed_tokens(tokenizer: Any, batch: Any, kept: list[tuple[dict[str, Any], dict[str, str]]],
-                       pairs: list[tuple[dict[str, Any], dict[str, str]]], by_kind: dict[str, list[dict[str, Any]]],
-                       template: dict[str, str]) -> int:  # pragma: no cover - needs the training stack
-    """Each trained row's ids against the template's own render of the whole conversation, as the
-    SFT and DPO passes' rows are checked: the teacher's form of a seeding row too."""
-    done = 0
-    for (row, _), seq in zip(kept, batch.sft, strict=True):
-        _check_tokens(tokenizer, row, "completion", seq.prompt, seq.reply, template)
-        done += 1
-    for (row, _), pair in zip(pairs, batch.pairs, strict=True):
-        _check_tokens(tokenizer, row, "chosen", pair.prompt, pair.chosen, template)
-        _check_tokens(tokenizer, row, "rejected", pair.prompt, pair.rejected, template)
-        done += 1
-    for row in [*by_kind["seed"], *by_kind["dream"]]:
-        forms = [row, {**row, "prompt": row["teacher"]}] if row["kind"] == "seed" else [row]
-        for form in forms:
-            _check_tokens(tokenizer, form, "completion", served_ids(tokenizer, form["prompt"], row_template(template, form)),
-                          reply_ids(tokenizer, _reply(form["completion"])), template)
-        done += 1
-    return done
-
-
 def stretch(share: float) -> float:
     """The rate's factor at ``share`` of a time budget used: a 3% linear warmup, then a cosine to zero
     (``sleep_loss.stretch``'s standalone copy; a test holds them equal)."""
@@ -716,6 +607,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
+    if cfg["objective"] == SEED_OBJECTIVE:  # the one loss, with the thought channel's projector when the recipe has it
+        return int(seed_module().main(sys.modules[__name__], cfg))
     if cfg.get("channel") is not None:  # the LoRA and the thought channel's projector, trained together
         return int(channel_module().main(sys.modules[__name__], cfg))
     smoke = _smoke_model()
@@ -739,26 +632,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     surprise = surprise_weights(cfg["objective"], [*rows, *pair_rows])  # checked before the model loads
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
-    seeded = cfg["objective"] == SEED_OBJECTIVE
-    pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings or seeded else []
+    pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
     model = _load_model(cfg, settings, smoke, base)
-    if seeded:
-        started = time.monotonic()
-        done = _train_seed(cfg, settings, tokenizer, template, kept, pairs, every, model, prev, out)
-        minutes = (time.monotonic() - started) / 60.0
-        record_rendering(out, cfg["rendering"])
-        if base is not None:
-            record_base_model(out)
-        receipt = {
-            **done, "epochs": done["terms"]["epochs"], "train_minutes": minutes, "examples": len(kept),
-            "dropped_truncated": len(rows) - len(kept), "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu",
-            "objective": cfg["objective"], "dpo_steps": 0, "pairs_dropped_truncated": len(pair_rows) - len(pairs),
-            "dpo_reference": "adapter_off", "rendering": cfg["rendering"],
-            **({"surprise_weights": surprise} if surprise else {}),
-            **({"match": done["terms"]["stretch"]} if "stretch" in done["terms"] else {}),
-        }
-        (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
-        return 0
     peft_config = None
     if prev:
         model = PeftModel.from_pretrained(model, prev, is_trainable=True)

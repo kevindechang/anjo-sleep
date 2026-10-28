@@ -13,6 +13,8 @@ are written only for the ``sft_dpo`` objective (``to_jsonl(pairs=True)``).
 With the thought channel on, a transcript carries the core state its reply was made under, and its
 example and pair rows carry it as ``core`` (``night.core_snapshot``): a replayed row keeps the state
 of the night it was made on, and the training job splices that state's soft tokens into its prompt.
+A seeding row carries its example's (``SeedRow.core``), and a dream row the imagined state's when its
+source dreamt through the channel (``DreamRow.core``), for ``sft_dpo_seed``'s one job.
 
 In order, the builder:
 
@@ -123,6 +125,7 @@ class SeedRow:
     message: str
     reply: str
     tokens: int
+    core: str | None = None  # its example's core state (JSON), channel on: student and teacher both read it
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,7 @@ class DreamRow:
     reply: str
     tokens: int
     kind: str
+    core: str | None = None  # the imagined state's snapshot (JSON), when the dream source dreamt through the channel
 
 
 @dataclass(frozen=True)
@@ -156,6 +160,11 @@ def _messages(prompt: tuple[Message, ...]) -> list[dict[str, str]]:
 
 def _reply(text: str) -> list[dict[str, str]]:
     return [{"role": "assistant", "content": framing.clean_text(text)}]
+
+
+def _core(core: str | None) -> dict[str, object]:
+    """A row's ``core`` field: the state it was made under, channel on; nothing otherwise."""
+    return {} if core is None else {"core": json.loads(core)}
 
 
 @dataclass(frozen=True)
@@ -190,13 +199,13 @@ class Dataset:
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
              "prompt": _messages(example.prompt), "completion": _reply(example.completion),
              **({} if example.current_date is None else {"current_date": example.current_date.isoformat()}),
-             **({} if example.core is None else {"core": json.loads(example.core)})}
+             **_core(example.core)}
             for example in self.examples
         ]
         if pairs:
             rows += [
                 {"id": pair.id, "prompt": _messages(pair.prompt), "chosen": _reply(pair.chosen),
-                 "rejected": _reply(pair.rejected), **({} if pair.core is None else {"core": json.loads(pair.core)})}
+                 "rejected": _reply(pair.rejected), **_core(pair.core)}
                 for pair in self.pairs
             ]
         if terms:
@@ -205,10 +214,11 @@ class Dataset:
 
     def _term_rows(self) -> list[dict[str, object]]:
         seeds: list[dict[str, object]] = [{"id": row.id, "kind": "seed", "teacher": _messages((("system", row.context), ("user", row.message))),
-                  "prompt": _messages((("user", row.message),)), "completion": _reply(row.reply)} for row in self.seeds]
+                  "prompt": _messages((("user", row.message),)), "completion": _reply(row.reply), **_core(row.core)}
+                  for row in self.seeds]
         dreams: list[dict[str, object]] = [{"id": row.id, "kind": "dream", "seed_kind": row.kind,
                    "prompt": _messages((("system", row.thread), ("user", row.message))),
-                   "completion": _reply(row.reply)} for row in self.dreams]
+                   "completion": _reply(row.reply), **_core(row.core)} for row in self.dreams]
         anchors: list[dict[str, object]] = [{"id": row.id, "kind": "anchor", "prompt": _messages((("user", row.question),)),
                     "choices": [framing.clean_text(choice) for choice in row.choices], "answer": row.answer}
                    for row in self.anchors]

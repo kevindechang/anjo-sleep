@@ -108,6 +108,7 @@ class Dream:
     ancestry: frozenset[str] | None
     kind: SeedKind
     event_ids: tuple[str, ...]
+    core: str | None = None  # the imagined state's channel snapshot (JSON) when it was dreamt through the channel
 
 
 class DreamSource(Protocol):

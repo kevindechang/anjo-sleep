@@ -43,6 +43,10 @@ downloaded):
    its SFT stretched by the clock, night 6 ``sft_dpo_seed`` (dreams off) with its main block stretched.
    Each receipt's ``match`` must have used its budget, give or take one step, in more steps than the
    step plan, and the DPO pass must still follow.
+9. runs the thought channel with the one loss (``sleep_job``): night 7 ``sft_dpo_seed`` with a
+   ``channel`` block, cold, the fold on, on rows made under core states (a fresh projector trained with
+   the LoRA in one loop, seeding's teacher on the night-start adapter and projector), then night 8 the
+   channel's own run (``channel_train``, ``sft_dpo``) warm from night 7's adapter and projector.
 
 It prints one line per step and exits 1 on the first failed check.
 
@@ -80,12 +84,14 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.budget import Bound, BudgetError, Ledger, Pool, default_ledger
+from anjo.sleep.mind.core.projector import Reading
+from anjo.sleep.night.core_snapshot import CoreSnapshot
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import VllmClient
 from anjo.sleep.stops import BudgetStop
-from anjo.sleep.train import colab_train, modal_job, smoke_model
+from anjo.sleep.train import channel_train, colab_train, modal_job, smoke_model
 from anjo.sleep.train.dataset import AnchorRow, Dataset, DreamRow, Example, Pair, SeedRow
 from anjo.sleep.train.lora import (
     DATASET_FILE,
@@ -120,6 +126,8 @@ TODAY_RECEIPT: Final = frozenset({
 TEACHER_TOLERANCE: Final = 1e-5  # fp32 on the CPU: the night-start teacher's logits don't move at all
 CONTROL_MINUTES: Final = 0.04  # the CPU control nights' budget: a few seconds, many tiny steps
 CONTROL_SLACK_MINUTES: Final = 0.05  # one CPU step past the budget, at most
+CHANNEL: Final = {"k": 4, "d": 8, "width": 16}  # the channel nights' projector; the tiny model's width is 64
+CHANNEL_GAP: Final = 1e-3  # fp32 on the CPU: embeddings and the projector's torch and numpy agree this closely
 _LORA_KEY: Final = re.compile(
     rf"base_model\.model\.(?P<module>{colab_train.TEXT_DECODER}\.(?P<name>[a-z0-9_]+))\.lora_[AB]\.weight")
 
@@ -420,7 +428,8 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
             raise SmokeError(f"{night} wrote {present}, without the files the runner downloads")
     lines.append(f"target_modules: {colab_train.lora_targets(DEFAULT_TARGET_MODULES)}")
     lines.append("switches off: both nights' recipes and receipts are exactly today's (no terms, no match_minutes)")
-    return [*lines, *seed_nights(python, base, root, template), *control_nights(python, base, root, template)]
+    return [*lines, *seed_nights(python, base, root, template), *control_nights(python, base, root, template),
+            *channel_nights(python, base, root, template)]
 
 
 def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
@@ -491,6 +500,70 @@ def control_nights(python: str, base: Path, root: Path, template: Mapping[str, s
                      f"{match['minutes'] * 60:.1f} s of a {CONTROL_MINUTES * 60:.1f} s budget, one warmup and one decay "
                      f"by the clock, then {dpo} DPO steps")
     return lines
+
+
+def channel_core(seed: int) -> str:
+    """A row's ``core``: a seeded reading in the snapshot the night stamps on a transcript."""
+    import numpy as np
+
+    rng, k, d = np.random.default_rng(seed), CHANNEL["k"], CHANNEL["d"]
+    reading = Reading(rng.standard_normal((k - 1, channel_train.features(d))).astype(np.float32),
+                      np.linspace(1.0, 0.3, k - 1, dtype=np.float32), rng.standard_normal(2 * d).astype(np.float32), 0.8)
+    return json.dumps(CoreSnapshot("smoke-core", f"state-{seed}", 3, "state", reading).to_json())
+
+
+def channel_dataset() -> Dataset:
+    """``seed_smoke_dataset`` without dreams, each short example, its seeding row and each pair made under a core state."""
+    data = replace(seed_smoke_dataset(), dreams=(), anchors=())
+    return replace(data, examples=tuple(replace(e, core=channel_core(i)) if i < 4 else e for i, e in enumerate(data.examples)),
+                   seeds=tuple(replace(row, core=channel_core(i)) for i, row in enumerate(data.seeds)),
+                   pairs=tuple(replace(pair, core=channel_core(10 + i)) for i, pair in enumerate(data.pairs)))
+
+
+def check_channel_receipt(receipt: Mapping[str, Any], folder: Path, *, fresh: bool) -> Mapping[str, Any]:
+    """A channel night's receipt: the projector it started from (fresh or warm) moved and saved beside the
+    adapter, the model's embeddings and the projector's two copies agreeing, the DPO reference the channel's."""
+    channel = receipt.get("channel")
+    if not isinstance(channel, Mapping) or channel.get("fresh") is not fresh:
+        raise SmokeError(f"the channel's receipt is {channel!r}, not a {'fresh' if fresh else 'warm'} projector's")
+    if channel.get("projector") == channel.get("projector_from") or not (folder / channel_train.PROJECTOR_FILE).is_file():
+        raise SmokeError("the projector didn't train, or wasn't saved beside the adapter")
+    if not all(isinstance(channel.get(gap), float) and channel[gap] < CHANNEL_GAP for gap in ("embeds_gap", "forward_gap")):
+        raise SmokeError(f"the channel's checks failed: {channel.get('embeds_gap')}, {channel.get('forward_gap')}")
+    if receipt.get("dpo_reference") != "adapter_off+projector_start":
+        raise SmokeError(f"the DPO reference is {receipt.get('dpo_reference')}, not the channel's")
+    return channel
+
+
+def channel_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """Night 7: ``sft_dpo_seed`` and the thought channel in one job, cold, the fold on. Night 8: the
+    channel's own run (``sft_dpo``), warm from night 7's adapter and projector."""
+    data = channel_dataset()
+    block = channel_train.block(**CHANNEL, arm="state", exec_s=RUN_TIMEOUT_S)
+    seeded = LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS, fold_rank=config.MAX_LORA_RANK)
+    recipe = {**training_config(seeded, len(data.examples), warm=False, revision=REVISION, night=NIGHT, channel=block),
+              **template}
+    seventh = _night(python, base, root / "night7", recipe, data, None)
+    check_seed_receipt(seventh, folded_to=seeded.r, long_term=0, dpo_lr=seeded.dpo_lr)
+    first = check_channel_receipt(seventh, root / "night7" / "out", fresh=True)
+    check_adapter(root / "night7" / "out", layers=smoke_model.LAYERS, r=seeded.r, rendering=recipe["rendering"])
+    terms: Mapping[str, Any] = seventh["terms"]  # type: ignore[assignment]
+    if terms.get("out_of_time") or not first.get("rows_with_state") or "projector_only_updates" not in first:
+        raise SmokeError(f"night 7's channel didn't train in the loop: {dict(first)}")
+    plain = LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS)
+    warm = {**training_config(plain, len(data.examples), warm=True, revision=REVISION, night=NIGHT, channel=block),
+            **template}
+    eighth = _night(python, base, root / "night8", warm, data, root / "night7" / "out")
+    second = check_channel_receipt(eighth, root / "night8" / "out", fresh=False)
+    if second.get("projector_from") != first.get("projector"):
+        raise SmokeError("night 8's channel didn't warm from the projector night 7 saved")
+    return [f"night 7 (sft_dpo_seed + thought channel, cold, fold): one job, {seventh['steps']} steps; a fresh "
+            f"projector (K {first['k']}) trained with the LoRA on {first['rows_with_state']} states "
+            f"({first['projector_only_updates']} updates alone first), taught by sft and dpo only; seeding KL "
+            f"{terms['seed_kl_before']:.6g} -> {terms['seed_kl_after']:.6g}, teacher drift {terms['teacher_drift']:.1e} "
+            f"(night-start adapter and projector); folded to {terms['folded_to']}; projector saved beside the adapter",
+            f"night 8 (sft_dpo + thought channel, warm from night 7): the channel's own run from night 7's adapter "
+            f"and projector, {eighth['steps']} steps, {eighth['dpo_steps']} DPO steps"]
 
 
 def _money(runner: str, amount: float) -> str:

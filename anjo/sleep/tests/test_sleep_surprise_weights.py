@@ -18,7 +18,7 @@ import pytest
 from anjo.sleep.tests.test_lora import REVISION, _examples, _with_pairs
 from anjo.sleep.tests.test_sft_dpo_default import NIGHT, Seen
 from anjo.sleep.tests.test_sleep_objective import _plan, _tiny, _Tokens, _torch
-from anjo.sleep.train import colab_train, sleep_loss
+from anjo.sleep.train import colab_train, sleep_job, sleep_loss
 from anjo.sleep.train.lora import LoraCfg, adapter_name
 from anjo.sleep.train.trainer import LoraTrainer
 
@@ -76,9 +76,9 @@ def test_the_script_reads_each_rows_weight_and_reports_it() -> None:
     pair = {"id": "y", "prompt": row["prompt"], "chosen": row["completion"],
             "rejected": [{"role": "assistant", "content": "no"}], "weight": 0.5}
     cfg = {"max_seq_length": 8192, "terms": {"fold_rank": None, "dreams": False}}
-    batch, _ = colab_train.seed_batch(sleep_loss, _Tokens(), [(row, {}), ({**row, "id": "z", "weight": 1.0}, {})],
-                                      [(pair, {})], {kind: [] for kind in colab_train.KINDS}, cfg,
-                                      {"reasoning_strength": "low", "current_date": NIGHT.isoformat()})
+    batch, _ = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [(row, {}), ({**row, "id": "z", "weight": 1.0}, {})],
+                                    [(pair, {})], {kind: [] for kind in sleep_job.KINDS}, cfg,
+                                    {"reasoning_strength": "low", "current_date": NIGHT.isoformat()})
     assert [seq.weight for seq in batch.sft] == [2.0, 1.0] and batch.pairs[0].weight == 0.5
 
 

@@ -115,7 +115,7 @@ def seed_rows(
             dropped[reason] += 1
             continue
         rows.append(SeedRow(id=example.id, context=context, message=transcript.message, reply=example.completion,
-                            tokens=tokens))
+                            tokens=tokens, core=example.core))
     return tuple(rows), dropped
 
 
@@ -142,7 +142,7 @@ def dream_rows(
             dropped[reason] += 1
             continue
         rows.append(DreamRow(id=dream.id, thread=dream.thread, message=dream.message, reply=dream.reply, tokens=tokens,
-                             kind=dream.kind))
+                             kind=dream.kind, core=dream.core))
     return tuple(rows), dropped
 
 

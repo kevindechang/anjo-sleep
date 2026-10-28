@@ -38,7 +38,7 @@ from anjo.sleep.practice.transcripts import PracticeTranscript
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving import config
 from anjo.sleep.tests.night_fakes import World, step, window
-from anjo.sleep.train import colab_train, objective, sleep_loss, terms
+from anjo.sleep.train import colab_train, objective, sleep_fold, sleep_job, sleep_loss, terms
 from anjo.sleep.train.dataset import Dataset, Example
 from anjo.sleep.train.lora import LoraCfg, LoraCfgError, training_config
 from anjo.sleep.types import Evidence, Probe
@@ -271,25 +271,25 @@ def test_the_script_feeds_each_term_the_rows_the_server_would_render(tmp_path: P
     data = replace(_data(made), seeds=rows, dreams=dreams, anchors=terms.anchor_rows(3, n=2))
     written = [json.loads(line) for line in data.to_jsonl(pairs=True, terms=True).splitlines()]
     plain, pair_rows = colab_train.split_rows(written)
-    by_kind = colab_train.term_rows(written)
-    assert [len(by_kind[k]) for k in colab_train.KINDS] == [1, 1, 2] and len(plain) == 1 and not pair_rows
+    by_kind = sleep_job.term_rows(colab_train, written)
+    assert [len(by_kind[k]) for k in sleep_job.KINDS] == [1, 1, 2] and len(plain) == 1 and not pair_rows
     cfg = {"max_seq_length": 8192, "terms": {"fold_rank": None, "dreams": True}}
     template = {"reasoning_strength": "low", "current_date": NIGHT.isoformat()}
-    batch, too_long = colab_train.seed_batch(sleep_loss, _Tokens(), [(row, {}) for row in plain], [], by_kind, cfg,
-                                             template)
+    batch, too_long = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [(row, {}) for row in plain], [], by_kind,
+                                           cfg, template)
     seed = batch.seeds[0]
     assert seed.prompt[:2] == (1, 8) and seed.teacher[:2] == (1, 7)  # the student reads the message, the teacher the day first
     assert seed.prompt[-2:] == (9, 5) and seed.reply[-1] == 11 and seed.reply == batch.sft[0].reply
     assert batch.dreams[0].prompt[:2] == (1, 7) and batch.dream_groups == ("random",)
     assert all(11 not in choice for item in batch.anchors for choice in item.choices)  # scored open, as the gate does
     assert too_long == {"seed": 0, "dream": 0}
-    off, _ = colab_train.seed_batch(sleep_loss, _Tokens(), [], [], by_kind, {**cfg, "terms": {"fold_rank": None,
-                                    "dreams": False}}, template)
+    off, _ = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [], [], by_kind,
+                                  {**cfg, "terms": {"fold_rank": None, "dreams": False}}, template)
     assert off.dreams == () and off.dream_groups == ()
     with pytest.raises(ValueError, match="kind"):
-        colab_train.term_rows([{**written[-1], "kind": "nightmare"}])
+        sleep_job.term_rows(colab_train, [{**written[-1], "kind": "nightmare"}])
     with pytest.raises(ValueError, match="cleaned"):
-        colab_train.term_rows([{**by_kind["seed"][0], "teacher": [{"role": "system", "content": "<|eot|>"}]}])
+        sleep_job.term_rows(colab_train, [{**by_kind["seed"][0], "teacher": [{"role": "system", "content": "<|eot|>"}]}])
     loaded = colab_train.load_loss(Path(sleep_loss.__file__).parent)  # as the job loads it under python -I
     assert loaded.WEIGHTS == sleep_loss.WEIGHTS
     with pytest.raises(ValueError, match="beside"):
@@ -531,7 +531,7 @@ def _adapter(torch: Any, folder: Path, k: int, d_in: int = 40, d_out: int = 36, 
         tensors[f"{PREFIX.format(layer)}.lora_A.weight"] = torch.randn(k, d_in)
         tensors[f"{PREFIX.format(layer)}.lora_B.weight"] = torch.randn(d_out, k)
     folder.mkdir(parents=True)
-    sleep_loss.write_safetensors(tensors, folder / "adapter_model.safetensors")
+    sleep_fold.write_safetensors(tensors, folder / "adapter_model.safetensors")
     meta = {"peft_type": "LORA", "r": k, "lora_alpha": 2 * k, "base_model_name_or_path": config.MODEL,
             "target_modules": colab_train.lora_targets(("q_proj",)), "rank_pattern": {}, "alpha_pattern": {},
             "use_dora": False, "task_type": "CAUSAL_LM", "anjo_rendering": "g1/medium"}
@@ -543,12 +543,12 @@ def test_fold_keeps_a_servable_plain_lora(tmp_path: Path) -> None:
     torch = _torch()
     folder = tmp_path / "p-0123456789ab-n3"
     before = _adapter(torch, folder, k=48)  # tonight's 16 on top of a long-term 32
-    sleep_loss.fold_folder(folder, rank=32)
+    sleep_fold.fold_folder(folder, rank=32)
     config.check_adapter(folder, folder.name)  # what the server and the upload accept
     meta = json.loads((folder / "adapter_config.json").read_text())
     assert (meta["r"], meta["lora_alpha"], meta["rank_pattern"], meta["alpha_pattern"]) == (32, 64, {}, {})
     assert meta["anjo_rendering"] == "g1/medium" and meta["use_dora"] is False
-    after = sleep_loss.read_safetensors(folder / "adapter_model.safetensors")
+    after = sleep_fold.read_safetensors(folder / "adapter_model.safetensors")
     assert set(after) == set(before)  # the same LoRA pairs, nothing added
     for layer in range(2):
         a, b = after[f"{PREFIX.format(layer)}.lora_A.weight"], after[f"{PREFIX.format(layer)}.lora_B.weight"]
@@ -558,8 +558,8 @@ def test_fold_keeps_a_servable_plain_lora(tmp_path: Path) -> None:
         assert torch.linalg.norm(full - b @ a) == pytest.approx(float(torch.linalg.norm(tail)), rel=1e-3)  # best rank 32
     small = tmp_path / "p-0123456789ab-n1"
     first = _adapter(torch, small, k=16)
-    sleep_loss.fold_folder(small, rank=32)  # a first night fits: kept whole, at its own rank
-    kept = sleep_loss.read_safetensors(small / "adapter_model.safetensors")
+    sleep_fold.fold_folder(small, rank=32)  # a first night fits: kept whole, at its own rank
+    kept = sleep_fold.read_safetensors(small / "adapter_model.safetensors")
     name = PREFIX.format(0)
     assert kept[f"{name}.lora_A.weight"].shape == (16, 40)
     assert torch.allclose(kept[f"{name}.lora_B.weight"] @ kept[f"{name}.lora_A.weight"],
