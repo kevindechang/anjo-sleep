@@ -15,6 +15,8 @@ from typing import Any
 import pytest
 
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.budget import CAPS, Ledger
+from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import NightOptions, Prices
 from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.practice.roles import TODAY, Roles
@@ -82,11 +84,11 @@ def _wiring(spark: Spark, deepseek: DeepSeek) -> Any:
 
 
 def _go(tmp_path: Path, judge: Judge, capsys: pytest.CaptureFixture[str], *, cut: Any = lambda n: False,
-        ) -> tuple[Spark, DeepSeek, list[Any]]:
+        args: list[str] = ARGS, ledger: Any = None) -> tuple[Spark, DeepSeek, list[Any]]:
     spark = Spark(_scenes(), scored(5, (6, 7, 8), lambda text: False))  # arm A: Glimmer's third, nothing flagged
     deepseek = DeepSeek(scored(9, (5, 6, 7), lambda text: text.startswith("GLIMMER")), cut=cut)  # every Glimmer one misses
-    code = practice_ab.main([*ARGS, "--out", str(tmp_path), "--go"], wiring=_wiring(spark, deepseek),
-                            critic_port=lambda night, ledger: _critic(deepseek), judge=judge, ledger=None)
+    code = practice_ab.main([*args, "--out", str(tmp_path), "--go"], wiring=_wiring(spark, deepseek),
+                            critic_port=lambda night, ledger: _critic(deepseek), judge=judge, ledger=ledger)
     assert code == 0
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
     return spark, deepseek, lines
@@ -128,3 +130,42 @@ def test_practice_ab_counts_a_dropped_scene_as_its_arms_loss(tmp_path: Path, cap
     assert judged["score_b"] == pytest.approx((120 * 0.5) / 160)  # the 40 dropped scenes are B's losses
     assert judged["lower_bound"] < judged["bar"] == 0.4 and judged["non_inferior"] is False
     assert lines[23] == {"switch_default": False}
+
+
+PILOT = [*CASES[:2], "--arm-b", "critic=deepseek", "--pilot"]
+VERDICT_KEYS = ("non_inferior", "switch_default", "score_b", "lower_bound", "bar")
+
+
+def test_the_pilot_plan_is_one_case_with_its_own_small_holds(capsys: pytest.CaptureFixture[str]) -> None:
+    assert practice_ab.main(PILOT, wiring=_refuse, critic_port=_refuse, judge=_refuse, ledger=_refuse) == 0
+    out = capsys.readouterr().out
+    assert "1 synthetic person-night of 16 scenes" in out and "never a verdict" in out
+    assert "32 calls (both orders)" in out and "fireworks_sleep_usd at $0.010" in out
+    gpu = practice_ab._LIST.serve_gpu_per_hour * (practice_ab.CASE_MAX_S + practice_ab.WAKE_S + 600) / 3600
+    assert f"held on modal_usd: ${gpu:.2f}" in out  # one case's GPU, not ten
+    with pytest.raises(SystemExit):  # a pilot is one case, so it never stands in for the full run
+        practice_ab.main([*CASES[:4], "--arm-b", "critic=deepseek", "--pilot"], wiring=_refuse)
+
+
+def test_the_pilot_reports_cost_a_scene_and_judge_agreement_and_never_a_verdict(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    judge = Judge()
+    _, _, lines = _go(tmp_path / "out", judge, capsys, args=PILOT, ledger=ledger)
+    arms, agreement, pilot = lines[:2], lines[2:4], lines[4]
+    assert [a["arm"] for a in arms] == ["A", "B"] and len(lines) == 5
+    assert len(judge.prompts) == 32 and [a["critic"] for a in agreement] == ["spark-retest", "deepseek"]
+    assert pilot["pilot"] is True and pilot["scenes"] == pilot["judged"] == 16
+    assert pilot["judge_order_agreement"] == 1.0  # this judge never flips with the order
+    assert pilot["usd"]["judge"] > 0 and pilot["usd"]["critic"] > 0 and pilot["usd"]["spark"] > 0
+    assert pilot["usd_per_scene"] == pytest.approx(pilot["usd"]["total"] / 16, abs=1e-4)
+    assert not any(key in line for line in lines for key in VERDICT_KEYS)  # no score, bound or switch
+    reserved = [e for e in read_records(ledger.path, PLAIN) if e["op"] == "reserve"]
+    assert reserved and all(e["job"].startswith("practice_ab:pilot:") for e in reserved)
+    (gpu,) = [e for e in reserved if e["pools"] == ["modal_usd"]]
+    assert gpu["amount"] < 1.5 and ledger.open_holds() == ()  # one case's hold, all settled
+
+
+def test_the_pilot_counts_a_flip_against_the_judges_agreement(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _, _, lines = _go(tmp_path, Judge(always="1"), capsys, args=PILOT)  # picks whatever it sees first
+    assert lines[-1]["judge"]["flips"] == 16 and lines[-1]["judge_order_agreement"] == 0.0
