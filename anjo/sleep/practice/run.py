@@ -63,6 +63,7 @@ class PracticeRun:
     pairs: int = 0  # full practice: scenes that kept a (best, worst) pair
     teacher_targets: int = 0  # full practice: scenes whose target is the teacher's
     critic_unreadable: int = 0  # full practice: scenes whose critic reply couldn't be read
+    capped_scenes: int = 0  # full practice: scenes dropped because a Spark Open reply reached its cap
     # full practice: Spark Open's calls by role (person, teacher, critic), the provider's tokens in
     # and out, and the replies cut at the role's cap; counts only, for the night log and the cost model
     spark: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
