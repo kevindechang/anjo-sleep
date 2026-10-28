@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from anjo.sleep.demo.night_view import LINKS, story_view
 from anjo.sleep.demo.page import WEB_DIR
 from anjo.sleep.demo.panel import MindSources, mind_view, night_record
 from anjo.sleep.night import story as st
-from anjo.sleep.tests.test_night_story import FULL, PROMOTED, TOLD
+from anjo.sleep.tests.test_night_story import CORE_DREAM, FULL, PROMOTED, TOLD, _napped, _with
 
 NIGHT = date(2026, 10, 30)
 
@@ -64,7 +64,7 @@ def test_what_didnt_run_is_greyed_with_its_reason() -> None:
     assert stages["wake"]["state"] == "not_run" and stages["wake"]["reason"] == st.SCORED_IN_MORNING
     assert stages["wake"]["key"] is None
     numbers = _numbers(stages["learn"])
-    assert numbers["channel_loss"] == ("not_run", st.CHANNEL_NOT_YET) and numbers["fold"] == ("not_run", st.FOLD_NOT_YET)
+    assert numbers["channel_loss"] == ("not_run", st.CHANNEL_OFF) and numbers["fold"] == ("not_run", st.FOLD_NOT_YET)
     quiet = _by(story_view([(1, TOLD["nothing_new"])]))
     assert quiet["dream"]["state"] == "not_run" and quiet["dream"]["reason"] == st.MIND_OFF
     assert all((quiet[name]["state"], quiet[name]["reason"]) == ("not_run", st.NOTHING_NEW)
@@ -77,6 +77,36 @@ def test_a_nap_stops_after_the_dream_learning_tomorrow() -> None:
         assert view["napped"] is True and view["sleep"]["kind"] == "nap"
         after = view["stages"][1:]
         assert [(s["state"], s["reason"]) for s in after] == [("not_run", st.LEARNING_TOMORROW)] * 4
+
+
+def test_a_reused_practice_says_whose_it_was_never_that_it_ran() -> None:
+    earlier = NIGHT - timedelta(days=1)
+    rehearse = _by(story_view([(2, replace(FULL, rehearse=st.Reused(earlier, 12)))]))["rehearse"]
+    assert rehearse == {**rehearse, "state": "reused", "key": 12, "reused_from": earlier.isoformat(), "numbers": []}
+
+
+def test_a_nap_the_core_dreamt_in_shows_its_dream_then_stops() -> None:
+    view = story_view([(2, st.tell(NIGHT, "napped", _with(_napped(mind=True), "notice", CORE_DREAM)))])
+    dream = view["stages"][0]
+    assert (dream["state"], dream["key"], dream["cites"]) == ("ran", 1, ["e-0a1b", "e-2c3d"])  # its one ignition
+    assert [(s["state"], s["reason"]) for s in view["stages"][1:]] == [("not_run", st.LEARNING_TOMORROW)] * 4
+
+
+def _claims(story: st.Story) -> bool:
+    claimed: bool = story_view([(1, story)])["rehearsed_the_dream"]
+    return claimed
+
+
+def test_the_lede_claims_the_whole_loop_only_when_it_ran() -> None:
+    assert _claims(FULL) is True  # the dream picked threads, practice was seeded on them, and she woke better
+    dreamt, rehearsed = FULL.dream, FULL.rehearse
+    assert isinstance(dreamt, st.Dream) and isinstance(rehearsed, st.Rehearse)
+    for story in (TOLD["promoted"], TOLD["napped, MIND on"], TOLD["failed at gates"],
+                  replace(FULL, dream=replace(dreamt, threads=st.NotRun(st.NO_CURRICULUM))),
+                  replace(FULL, rehearse=replace(rehearsed, seeded=st.NotRun(st.CURRICULUM_NOT_YET))),
+                  replace(FULL, rehearse=st.Reused(NIGHT, 16)), replace(FULL, check=st.Check((), promoted=False))):
+        assert _claims(story) is False
+    assert "rehearsed_the_dream" not in story_view([]) and "rehearsed_the_dream" not in story_view(None)
 
 
 def test_a_failure_names_its_step_never_its_error() -> None:
@@ -110,8 +140,11 @@ def test_the_panel_tells_each_night_from_its_story_file_or_else_its_log() -> Non
     assert from_log.story == st.tell(NIGHT, "promoted", PROMOTED)
     from_file = night_record(_summary("promoted"), PROMOTED, story=replace(FULL, night=NIGHT).record())
     assert from_file.story == replace(FULL, night=NIGHT)
-    unreadable = night_record(_summary("promoted"), PROMOTED, story={"version": 9})
-    assert unreadable.story is None and unreadable.status == "promoted"  # only the story is unavailable
+    older = night_record(_summary("promoted"), PROMOTED, story={**FULL.record(), "version": 1})
+    assert older.story == st.tell(NIGHT, "promoted", PROMOTED)  # an older schema's story: told again from the log
+    broken = [r if r["step"] != "dataset" else {"step": "dataset", "status": "ok"} for r in PROMOTED]
+    untellable = night_record(_summary("promoted"), broken, story={"version": 9})  # nor its log: no dataset count
+    assert untellable.story is None and untellable.status == "promoted"  # only the story is unavailable
     view = mind_view(MindSources(nights=(from_log,)), HeldOutText([]))
     assert view["story"]["state"] == "ok" and view["story"]["night"] == 1
     assert mind_view(MindSources(), HeldOutText([]))["story"] == {"state": "unavailable"}
@@ -147,7 +180,9 @@ def _styled_elsewhere() -> set[str]:
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_night_js_draws_a_nap_and_a_full_night_in_a_fake_page(tmp_path: Path) -> None:
-    payloads = {"full": story_view([(3, FULL)]), "nap": story_view([(2, TOLD["napped, MIND on"])])}
+    payloads = {"full": story_view([(3, FULL)]), "nap": story_view([(2, TOLD["napped, MIND on"])]),
+                "reused": story_view([(2, replace(FULL, rehearse=st.Reused(NIGHT - timedelta(days=1), 12)))]),
+                "none": story_view([])}
     harness = tmp_path / "harness.js"
     harness.write_text((Path(__file__).parent / "night_js_harness.js").read_text())
     for name, payload in payloads.items():
@@ -156,11 +191,25 @@ def test_night_js_draws_a_nap_and_a_full_night_in_a_fake_page(tmp_path: Path) ->
                               json.dumps(handed)], capture_output=True, text=True, timeout=60, check=False)
         assert run.returncode == 0, run.stderr
         drawn = json.loads(run.stdout)
-        assert [s["stage"] for s in drawn["stages"]] == list(st.STAGES), name
         assert set(drawn["classes"]) & _styled_elsewhere() <= SHARED, name
+        lede = {"full": "story_lede", "nap": "story_lede_plain", "reused": "story_lede_plain"}.get(name)
+        assert drawn["lede"] == ({"text": words.COPY[lede], "hidden": False} if lede else {"text": "", "hidden": True}), name
+        if name == "none":
+            assert drawn["stages"] == [] and words.COPY["story_none"] in drawn["text"]
+            continue
+        assert [s["stage"] for s in drawn["stages"]] == list(st.STAGES), name
         if name == "nap":
             assert [s["state"] for s in drawn["stages"]] == ["not_run"] * 5  # MIND on: the dream deferred too
             assert words.COPY["story_nap"] in drawn["text"]
+        elif name == "reused":
+            assert [s["state"] for s in drawn["stages"]] == ["ran", "reused", "ran", "ran", "ran"]
+            assert "12" in drawn["text"] and (NIGHT - timedelta(days=1)).isoformat() in drawn["text"]
         else:
             assert [s["state"] for s in drawn["stages"]] == ["ran"] * 5
             assert "#mind-questions" in drawn["links"] and "#mind-gates" in drawn["links"]
+
+
+def test_the_page_claims_nothing_before_the_story_says_what_ran() -> None:
+    page = (WEB_DIR / "index.html").read_text()
+    assert re.search(r'<p id="night-loop-lede" class="night-lede" hidden></p>', page)  # night.js fills it from the story
+    assert "{{story_lede}}" not in page

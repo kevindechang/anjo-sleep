@@ -9,7 +9,8 @@ verdicts, never a person's words.
 - ``mind_points.jsonl``: a synthetic life's two decision points (Task 16, ``mind.points``), ids,
   numbers and times only.
 - ``story.json``: the night as one loop (``night/story.py``), told from ``log.jsonl`` when the night
-  finishes and told again after the morning; rewritten whole, atomically, each time.
+  finishes and told again after the morning; rewritten whole, atomically, each time. A story that
+  can't be told or written is a failed ``story`` step in the log, never a failed night.
 
 A night run again on the same date gets its own folder (``<date>.2``, ``<date>.3``), so no log is
 ever overwritten. A log whose folder was removed (the person deleted their data, Task 9) writes
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any, Final, Literal
 
 from anjo.sleep.checkpoints import ref_record
-from anjo.sleep.night.story import StoryError, tell
+from anjo.sleep.night.story import STORY_STEP, tell
 from anjo.sleep.types import Choice, GateResult, NightResult, NightStatus
 
 LOG: Final = "log.jsonl"
@@ -37,6 +38,13 @@ STORY: Final = "story.json"
 Uses = Literal["new", "existing"]
 StepStatus = Literal["ok", "skipped", "failed"]
 logger = logging.getLogger(__name__)
+
+
+def safe_error(error: BaseException) -> str:
+    """The error's type, and its message only when Sleep raised it (never another library's text,
+    which could quote a request)."""
+    name = type(error).__name__
+    return f"{name}: {error}" if type(error).__module__.startswith("anjo.sleep") else name
 
 
 def night_folder(root: Path, night: date) -> Path:
@@ -134,14 +142,20 @@ class NightLog:
 
     def tell(self, night: date, status: NightStatus) -> None:
         """The night as one loop (``story.tell``) from this log's records, replacing the one told before.
-        A log the story can't be told from is logged and leaves the story as it was: the night's own
-        record never fails it, and the page says its story is unavailable."""
+        A story that can't be told from the log, or written, is a failed ``story`` step and leaves the
+        story as it was: telling it never fails the night, whose status and summary stand, and the page
+        tells the story from the log or says it's unavailable."""
         try:
-            record = tell(night, status, self.steps()).record()
-        except StoryError as error:
-            logger.warning("the story of night %s can't be told from its log: %s", night.isoformat(), error)
-            return
-        self._replace(STORY, json.dumps(record, indent=1))
+            self._replace(STORY, json.dumps(tell(night, status, self.steps()).record(), indent=1))
+        except Exception as error:  # the night's account of itself, never a reason the night fails
+            self._untold(night, error)
+
+    def _untold(self, night: date, error: Exception) -> None:
+        logger.warning("the story of night %s wasn't written: %s", night.isoformat(), safe_error(error))
+        try:
+            self.step(STORY_STEP, "failed", uses="new", system=None, error=safe_error(error))
+        except OSError as unlogged:  # the log can't take it either (a full disk): the warning stands for both
+            logger.warning("nor was its failure logged: %s", type(unlogged).__name__)
 
     def _replace(self, name: str, text: str) -> None:
         if not self.folder.is_dir():

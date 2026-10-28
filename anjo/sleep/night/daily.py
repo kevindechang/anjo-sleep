@@ -211,20 +211,33 @@ def _score_morning(
         done = score(user, night, result.checkpoint, morning=ports, label=label,
                      promoted=result.status == "promoted", subset=subset)
     except Exception as error:  # a judge that can't be read, or one that timed out: logged, never lost
-        logger.warning("the morning for %s failed: %s", night.isoformat(), type(error).__name__)
-        unread: dict[str, Any] = {"no_verdict": error.no_verdict} if isinstance(error, TooManyNoVerdicts) else {}
-        log.step("morning", "failed", uses="new", system=None, seconds=round(timer() - started, 3),
-                 why=f"{MORNING_FAILED}{safe_error(error)}", **unread)
+        log_failed_morning(log, night, error, timer() - started)
         return
-    receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
-    if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
-        receipt.update(replies=done.replies, judge_calls=done.judge_calls,
-                       **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
+    receipt = morning_receipt(done, timer() - started)
     if subset is not None:
         receipt["subset"] = subset.name
     if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
         receipt["retries"] = retries
     log.step("morning", "ok", uses="new", system=None, **receipt)
+
+
+def log_failed_morning(log: NightLog, night: date, error: Exception, seconds: float) -> None:
+    """A morning that failed, in its night's log: why (its error's type, and its message when Sleep
+    raised it), how long it ran, and the unread verdicts when the judge couldn't be read."""
+    logger.warning("the morning for %s failed: %s", night.isoformat(), type(error).__name__)
+    unread: dict[str, Any] = {"no_verdict": error.no_verdict} if isinstance(error, TooManyNoVerdicts) else {}
+    log.step("morning", "failed", uses="new", system=None, seconds=round(seconds, 3),
+             why=f"{MORNING_FAILED}{safe_error(error)}", **unread)
+
+
+def morning_receipt(done: object, seconds: float) -> dict[str, Any]:
+    """A morning that scored: how long it ran and, from its ``MorningResult``, what it asked (the
+    cost model's morning lines) and the verdicts it couldn't read, counted."""
+    receipt: dict[str, Any] = {"seconds": round(seconds, 3)}
+    if isinstance(done, MorningResult):
+        receipt.update(replies=done.replies, judge_calls=done.judge_calls,
+                       **({"no_verdict": done.no_verdict} if done.no_verdict else {}))
+    return receipt
 
 
 def morning_outcome(result: NightResult) -> str:

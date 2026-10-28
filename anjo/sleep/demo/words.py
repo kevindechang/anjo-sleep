@@ -379,7 +379,8 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "story_lede": (
         "She lives with you by day, dreams at night about what she's unsure of, rehearses exactly that, "
         "and wakes up a better mind of you."
-    ),
+    ),  # only when that is what ran (``night_view.rehearsed_the_dream``); else the plain line
+    "story_lede_plain": "She lived with you by day and slept on it last night.",
     "story_night": "Night {night} · {date} · {status}",
     "story_loading": "Loading last night…",
     "story_none": "She hasn't slept yet.",
@@ -393,12 +394,14 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "story_stage_wake": "Wake",
     "story_line_dream": "She dreamt about {n} things she's unsure of.",
     "story_line_rehearse": "She rehearsed {n} scenes.",
+    "story_line_reused": "She reused {n} scenes she rehearsed for {night} in an earlier run.",
     "story_line_learn": "She learned from {n} rows of the day.",
     "story_line_check": "{n} of {of} gates passed: her new weights went live.",
     "story_line_check_held": "{n} of {of} gates passed: yesterday's weights still serve.",
     "story_line_wake": "The morning scored {n} replies.",
     "story_line_wake_uncounted": "The morning scored her new weights.",
     "story_not_run": "didn't run",
+    "story_reused": "reused",
     "story_failed": "stopped",
     "story_failed_line": "The {step} step failed, so the night stopped here.",
     "story_not_yet": "not yet",

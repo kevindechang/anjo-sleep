@@ -21,7 +21,9 @@ from anjo.sleep.mind.core.projector import Projector
 from anjo.sleep.night import channel_night
 from anjo.sleep.night.channel_night import ChannelSetup, MindReading
 from anjo.sleep.night.core_snapshot import CoreSnapshot, state_sha
+from anjo.sleep.night.nightlog import STORY
 from anjo.sleep.night.run import run_night_batch_with
+from anjo.sleep.night.story import NO_CHANNEL_LOSS, Learn, NotRun, story_from
 from anjo.sleep.practice.run import MinimalPractice
 from anjo.sleep.tests.night_fakes import NIGHT, Trainer, World, result, step
 from anjo.sleep.tests.test_thought_channel import K, _anchors, _predictions, _state
@@ -107,6 +109,9 @@ def test_practice_reads_the_state_and_the_night_trains_the_projector_with_the_lo
     train = step(night.log_path, "train")["receipt"]
     assert train["channel"] == {"val_state_margin": 0.2} and train["projector"].endswith(".projector.npz")
     assert asked == [(UID, NIGHT), (UID, NIGHT)]  # practice, then training: the same night's reading
+    learned = story_from(json.loads((night.log_path.parent / STORY).read_text(encoding="utf-8"))).learn
+    assert isinstance(learned, Learn) and learned.stamp == night.checkpoint.id  # type: ignore[union-attr]
+    assert learned.channel_loss == NotRun(NO_CHANNEL_LOSS)  # this fake job reports a margin, no loss
 
 
 def test_a_person_with_their_own_projector_trains_from_it(tmp_path: Path) -> None:

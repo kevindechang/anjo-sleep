@@ -247,6 +247,7 @@
 .loop-stage.state-not_run { background: transparent; border-style: dashed; border-top: 3px dashed var(--rule-strong); }
 .loop-stage.state-not_run .stage-line { font-size: 0.9375rem; font-style: italic; color: var(--ink-faint); }
 .loop-stage.state-failed { border-top-color: var(--fail); }
+.loop-stage.state-reused { border-top-style: dashed; }  /* ran on an earlier run: kept, never redone */
 .loop-stage.state-failed .stage-line { color: var(--fail); }
 
 .mind-section { background: var(--paper-raised); border: 1px solid var(--rule); border-left: 3px solid var(--rule-strong); }

@@ -10,7 +10,14 @@ and Sleep page: each stage is one step of the same night. Each stage is:
   the wake. A dream that cites events sends their ids (``cites``, ``e-`` and a hash, never an account);
 - ``not_run``, greyed on the page, with the reason the night wrote (``reason``). A nap stops after
   the dream: every later stage says "napped: learning tomorrow", and ``napped`` is true;
+- ``reused``: practice a rerun didn't run again, with its scenes (``key``) and the night whose earlier
+  run made them (``reused_from``);
 - ``failed``, naming the step that failed (``step``), never its error, which can carry a message.
+
+``rehearsed_the_dream`` says whether the page may claim the whole loop ("dreams at night about what
+she's unsure of, rehearses exactly that, and wakes up a better mind of you"): only when the dream
+picked threads, practice was seeded on them and the night promoted. Otherwise the page says only
+what happened.
 
 The check also sends each gate (passed, failed or switched off, its value and threshold), how many
 gates ran and whether the night promoted. A gate's reason is never sent: it can name a safety case.
@@ -29,6 +36,7 @@ from anjo.sleep.night.story import (
     Learn,
     NotRun,
     Rehearse,
+    Reused,
     Sleep,
     Story,
     Surprise,
@@ -75,6 +83,10 @@ def _rehearse(rehearse: Rehearse) -> dict[str, Any]:
             "numbers": [_number(name, getattr(rehearse, name)) for name in ("flagged", "corrected", "seeded")]}
 
 
+def _reused(reused: Reused) -> dict[str, Any]:
+    return {"state": "reused", "key": reused.scenes, "reused_from": reused.night.isoformat(), "numbers": []}
+
+
 def _learn(learn: Learn) -> dict[str, Any]:
     rest = ("channel_loss", "stamp", "seeding_kl", "fold", "core_adaptation")
     return {**_keyed(learn.rows), "numbers": [*_surprise(learn.surprise), *(_number(n, getattr(learn, n)) for n in rest)]}
@@ -102,7 +114,7 @@ def _wake(wake: Wake) -> dict[str, Any]:
 
 
 BUILDERS: Final[tuple[tuple[type, Callable[[Any], dict[str, Any]]], ...]] = (
-    (Dream, _dream), (Rehearse, _rehearse), (Learn, _learn), (Check, _check), (Wake, _wake))
+    (Dream, _dream), (Rehearse, _rehearse), (Reused, _reused), (Learn, _learn), (Check, _check), (Wake, _wake))
 
 
 def _drawn(value: Any) -> dict[str, Any]:
@@ -129,6 +141,14 @@ def _slept(sleep: Sleep | Failed | NotRun) -> dict[str, Any]:
     return {"kind": sleep.kind, "pressure": sleep.pressure, "threshold": sleep.threshold, "reason": sleep.reason}
 
 
+def _rehearsed_the_dream(story: Story) -> bool:
+    """The dream picked threads, practice was seeded on them, and the night promoted what it learned."""
+    dream, rehearse, check = story.dream, story.rehearse, story.check
+    return (isinstance(dream, Dream) and isinstance(dream.threads, tuple) and bool(dream.threads)
+            and isinstance(rehearse, Rehearse) and isinstance(rehearse.seeded, tuple) and bool(rehearse.seeded)
+            and isinstance(check, Check) and check.promoted)
+
+
 def story_view(stories: Sequence[tuple[int, Story | None]] | None) -> dict[str, Any]:
     """The newest night's loop from ``stories`` (each with its number, newest first); ``unavailable``
     when they couldn't be read or the newest couldn't be told, ``none`` before her first night."""
@@ -140,5 +160,6 @@ def story_view(stories: Sequence[tuple[int, Story | None]] | None) -> dict[str, 
     if story is None:
         return {"state": "unavailable", "night": number}
     return {"state": "ok", "night": number, "date": story.night.isoformat(), "status": story.status,
-            "napped": story.status == "napped", "sleep": _slept(story.sleep),
+            "napped": story.status == "napped", "rehearsed_the_dream": _rehearsed_the_dream(story),
+            "sleep": _slept(story.sleep),
             "stages": [_stage(name, getattr(story, name)) for name in STAGES]}
