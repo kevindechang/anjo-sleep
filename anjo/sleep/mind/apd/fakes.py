@@ -6,6 +6,8 @@ The fakes stand where the real things stand, so the code that runs is the code t
 - ``FakeColab`` is the ``colab`` CLI (a ``CliRun``): sessions come and go, ``exec`` runs the steps
   ``colab_vllm_start.py`` would (it keeps the key and the ``vllm serve`` command the start step
   was given), and ``upload`` lands adapters in the VM's LoRA directory.
+- ``fake_keygen`` stands for ``ssh-keygen``: it writes a dummy pair where the session's throwaway
+  key goes, so the real ``session_key`` makes and deletes it as it does live.
 - ``fake_tunnels`` opens a "tunnel" whose transport is ``FakeVllm``: the real ``VllmClient`` talks
   to it over a loopback URL, with the session's own key, through ``/v1/models``, ``/tokenize`` and
   ``/v1/completions``. Its thinker is ``FakeInquirer`` for MIND (it notices, hypothesizes, asks a
@@ -23,6 +25,7 @@ rules run as they do live. The numbers mean nothing.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -298,6 +301,13 @@ class FakeColab:
                        for name in self.live)
 
 
+def fake_keygen(path: Path) -> None:
+    """``ssh-keygen``'s stand-in: a dummy private half (0600) and its public half."""
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as file:
+        file.write("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n")
+    path.with_name(f"{path.name}.pub").write_text("ssh-ed25519 AAAAfake\n", encoding="utf-8")
+
+
 @dataclass
 class FakeTunnel:
     vm: FakeColab
@@ -314,9 +324,11 @@ class FakeTunnel:
 def fake_tunnels(vm: FakeColab) -> colab_vllm.TunnelOpener:
     """A tunnel to ``vm``'s session: its transport is that session's fake vLLM."""
 
-    def open_tunnel(session: str, local_port: int, remote_port: int, timeout_s: float) -> FakeTunnel:
+    def open_tunnel(session: str, local_port: int, remote_port: int, timeout_s: float, identity: Path) -> FakeTunnel:
         if remote_port != config.PORT or not 0 < timeout_s:
             raise ValueError("a tunnel forwards the vLLM port, under a hard timeout")
+        if not identity.is_file():
+            raise ValueError("a tunnel opens on its session's own key")
         return FakeTunnel(vm, session, httpx.MockTransport(vm.live[session]))
 
     return open_tunnel
@@ -348,12 +360,13 @@ def serving(transport: httpx.BaseTransport | None = None, vm: FakeColab | None =
     machine = vm or FakeColab(ledger=ledger)
     opener = fake_tunnels(machine)
 
-    def tunnels(session: str, local: int, remote: int, timeout_s: float) -> colab_vllm.Tunnel:
-        tunnel = opener(session, local, remote, timeout_s)
+    def tunnels(session: str, local: int, remote: int, timeout_s: float, identity: Path) -> colab_vllm.Tunnel:
+        tunnel = opener(session, local, remote, timeout_s, identity)
         return tunnel if transport is None else FakeTunnel(machine, session, transport)
 
     with colab_vllm.serve(ColabCli(Path("/fake/colab"), run=machine), ledger, SETTINGS, timeout_s=SERVE_S,
-                          tunnels=tunnels, clock=Ticks(), wait=lambda _session: True, sleep=lambda _s: None) as session:
+                          tunnels=tunnels, clock=Ticks(), wait=lambda _session: True, sleep=lambda _s: None,
+                          keygen=fake_keygen) as session:
         yield session
 
 

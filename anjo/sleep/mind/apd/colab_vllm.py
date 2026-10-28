@@ -21,9 +21,13 @@ uses (Tasks 17 and 17b; spec: "APD runs Glimmer on Colab vLLM at one precision f
 3. **Reached through a tunnel.** ``ssh -N -L 127.0.0.1:<local>:127.0.0.1:8000`` with the Colab CLI as
    its ProxyCommand (``colab ssh --proxy-mode -s <session>``). The tunnel has a hard timeout of its
    own (a timer kills it at the session's deadline), and every CLI call runs under one. ``ssh``
-   reads no config file and uses no agent: one identity, the one the CLI sends the VM's public key
-   for (``colab_identity``), is passed to both explicitly; nothing is forwarded but the one port,
-   and no shared connection is opened or reused.
+   reads no config file and uses no agent. Its one identity is a throwaway ed25519 pair with no
+   passphrase, made for this session before anything is held or started (``session_key``, in a
+   0700 folder of the run's own, the key 0600) and deleted in the outermost ``finally``: it is
+   passed to ``ssh -i`` and to the proxy's ``-i`` (the CLI sends the VM its public half) and
+   nowhere else, never uploaded or logged. Nothing is forwarded but the one port, and no shared
+   connection is opened or reused. ``preflight`` checks the CLI, ``ssh`` and ``ssh-keygen`` are
+   here before a command serves.
 4. **Health-checked** (``ready``): ``/v1/models`` answers with Glimmer through the tunnel, with the
    key, before ``serve`` yields, so no arm starts on a server that isn't up.
 5. **Stopped in a ``finally``**, on success, on failure and when the health check fails: the
@@ -48,6 +52,7 @@ import math
 import os
 import secrets
 import shlex
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -91,7 +96,9 @@ KEY_FILE: Final = f"{ROOT}/.vllm_key"  # the start step reads it into vLLM's env
 STEP_OK: Final = "ANJO_STEP_OK"  # what colab_vllm_start.py prints when a step finished
 SSH: Final = "ssh"
 SSH_USER: Final = "root"
-IDENTITIES: Final = ("id_ed25519", "id_ecdsa")  # the Colab CLI's default order (colab ssh --help)
+SSH_KEYGEN: Final = "ssh-keygen"
+SESSION_KEY: Final = "id_ed25519"  # the throwaway key's file name in its session's own folder
+KEYGEN_TIMEOUT_S: Final = 30.0
 SESSION_LABEL: Final = "apd-"
 DOWNLOAD_TIMEOUT_S: Final = config.DOWNLOAD_TIMEOUT_S
 START_TIMEOUT_S: Final = 120.0
@@ -113,6 +120,10 @@ class NotReady(ColabError):
     """vLLM never answered through the tunnel inside ``READY_TIMEOUT_S``."""
 
 
+class PreflightError(ColabError):
+    """A tool a session needs isn't on this machine: refused before anything is held or started."""
+
+
 class SessionEnding(ColabError):
     """The session can't carry another run: it ended, its tunnel dropped, vLLM stopped answering,
     or too little of its time is left. The batch stops cleanly; what finished is kept."""
@@ -130,7 +141,8 @@ class Tunnel(Protocol):
     def alive(self) -> bool: ...
 
 
-TunnelOpener = Callable[[str, int, int, float], Tunnel]  # session, local port, remote port, hard timeout
+TunnelOpener = Callable[[str, int, int, float, Path], Tunnel]  # session, ports, hard timeout, identity
+KeyGen = Callable[[Path], None]  # makes a key pair with no passphrase at ``path`` and ``path.pub``
 
 
 def new_key() -> str:
@@ -153,15 +165,44 @@ def session_name(token: str | None = None) -> str:
 # ── The tunnel ────────────────────────────────────────────────────────────────
 
 
-def colab_identity(home: Path | None = None) -> Path:
-    """The SSH key the Colab CLI sends the VM's public key for, by its own documented default
-    (``colab ssh --help``: the first of ``~/.ssh/id_ed25519`` and ``id_ecdsa``), so the tunnel
-    passes the same one to both sides."""
-    folder = (home or Path.home()) / ".ssh"
-    for name in IDENTITIES:
-        if (folder / name).is_file():
-            return folder / name
-    raise ColabError(f"the tunnel needs an SSH key: one of {', '.join(IDENTITIES)} in {folder}")
+def preflight(binary: Path = COLAB_BIN, *, which: Callable[[str], str | None] = shutil.which) -> None:
+    """What a serving command needs on this machine, checked before anything is held: the Colab
+    CLI, ``ssh`` and ``ssh-keygen``."""
+    missing = [] if binary.is_file() and os.access(binary, os.X_OK) else [f"the colab CLI ({binary})"]
+    missing += [tool for tool in (SSH, SSH_KEYGEN) if which(tool) is None]
+    if missing:
+        raise PreflightError(f"a Colab session needs {', '.join(missing)} on this machine")
+
+
+def ssh_keygen(path: Path) -> None:
+    """A fresh ed25519 pair at ``path`` and ``path.pub``: no passphrase, and no comment, so no
+    user or host name rides on the public half."""
+    tool = shutil.which(SSH_KEYGEN)
+    if tool is None:
+        raise PreflightError(f"{SSH_KEYGEN} isn't on this machine")
+    try:
+        subprocess.run([tool, "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", str(path)], check=True,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=KEYGEN_TIMEOUT_S)
+    except (subprocess.SubprocessError, OSError) as error:
+        raise ColabError("ssh-keygen couldn't make the session's key") from error
+
+
+@contextmanager
+def session_key(parent: Path | None, keygen: KeyGen = ssh_keygen) -> Iterator[Path]:
+    """One session's throwaway SSH key, in a 0700 folder of its own under ``parent`` (the run's
+    private ``ssh`` folder; the user's temporary folder when ``None``), the key 0600. Both halves
+    and the folder are deleted on the way out, however the session ended."""
+    if parent is not None:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix="apd-key-", dir=parent))  # 0700
+    key = folder / SESSION_KEY
+    try:
+        keygen(key)
+        key.chmod(0o600)
+        yield key
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def ssh_command(session: str, local_port: int, remote_port: int, known_hosts: Path, identity: Path,
@@ -213,13 +254,15 @@ class SshTunnel:
             self._process.wait(timeout=TUNNEL_CLOSE_S)
 
 
-def ssh_tunnel(known_hosts_dir: Path) -> TunnelOpener:
-    """The real opener: one ``SshTunnel`` per session, its host keys in their own file."""
+def ssh_tunnel(known_hosts_dir: Path,
+               popen: Callable[[list[str]], subprocess.Popen[bytes]] | None = None) -> TunnelOpener:
+    """The real opener: one ``SshTunnel`` per session, on that session's own key, its host keys in
+    their own file."""
 
-    def open_tunnel(session: str, local_port: int, remote_port: int, timeout_s: float) -> Tunnel:
-        known_hosts_dir.mkdir(parents=True, exist_ok=True)
+    def open_tunnel(session: str, local_port: int, remote_port: int, timeout_s: float, identity: Path) -> Tunnel:
+        known_hosts_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         return SshTunnel(ssh_command(session, local_port, remote_port, known_hosts_dir / f"{session}.known_hosts",
-                                     colab_identity()), timeout_s)
+                                     identity), timeout_s, popen)
 
     return open_tunnel
 
@@ -420,32 +463,36 @@ def serve(
     clock: Callable[[], float] = time.time, key: Callable[[], str] = new_key,
     port: Callable[[], int] = free_port, session: str | None = None,
     wait: Callable[[ColabSession], bool] = ready, sleep: Callable[[float], None] = time.sleep,
+    keygen: KeyGen = ssh_keygen, key_dir: Path | None = None,
 ) -> Iterator[ColabSession]:
-    """One Glimmer server on a Colab A100, held, health-checked, and stopped on the way out."""
+    """One Glimmer server on a Colab A100 on a throwaway key, held, health-checked, and stopped on
+    the way out; the key is deleted last."""
     check_timeout(timeout_s)
     settings.pinned_revision()  # no server starts unpinned
     name = session or session_name()
-    reservation = None if ledger is None else hold(ledger, f"colab_serve:{name}", (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
-    started, vm = clock(), _Vm()
-    tunnel: Tunnel | None = None
-    handle: ColabSession | None = None
-    try:
-        secret = key()
-        _boot(cli, name, settings, secret, timeout_s - (clock() - started), vm)
-        local = port()
-        tunnel = tunnels(name, local, config.PORT, timeout_s - (clock() - started))
-        handle = ColabSession(name, local, secret, cli, tunnel.transport)
-        if not wait(handle):
-            raise NotReady(f"Glimmer on {name} didn't answer through the tunnel in time")
-        handle._state.deadline = started + timeout_s - STOP_TIMEOUT_S
-        handle._state.tunnel, handle._state.clock, handle._state.sleep = tunnel, clock, sleep
-        handle._state.up = True
-        yield handle
-    finally:
-        if handle is not None:
-            handle._state.up = False
+    with session_key(key_dir, keygen) as identity:  # before anything is held or started
+        reservation = None if ledger is None else hold(ledger, f"colab_serve:{name}", (POOL,),
+                                                       Bound(A100_CU_PER_HOUR, timeout_s))
+        started, vm = clock(), _Vm()
+        tunnel: Tunnel | None = None
+        handle: ColabSession | None = None
         try:
-            if tunnel is not None:
-                tunnel.close()
+            secret = key()
+            _boot(cli, name, settings, secret, timeout_s - (clock() - started), vm)
+            local = port()
+            tunnel = tunnels(name, local, config.PORT, timeout_s - (clock() - started), identity)
+            handle = ColabSession(name, local, secret, cli, tunnel.transport)
+            if not wait(handle):
+                raise NotReady(f"Glimmer on {name} didn't answer through the tunnel in time")
+            handle._state.deadline = started + timeout_s - STOP_TIMEOUT_S
+            handle._state.tunnel, handle._state.clock, handle._state.sleep = tunnel, clock, sleep
+            handle._state.up = True
+            yield handle
         finally:
-            _finish(cli, name, vm, reservation, max(0.0, clock() - started))
+            if handle is not None:
+                handle._state.up = False
+            try:
+                if tunnel is not None:
+                    tunnel.close()
+            finally:
+                _finish(cli, name, vm, reservation, max(0.0, clock() - started))

@@ -5,6 +5,7 @@
 Colab CLI, the tunnel and Glimmer are fakes: no VM, no network."""
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import subprocess
@@ -31,7 +32,25 @@ KEYS = {"ANJO_BASETEN_API_KEY": "baseten-secret-1", "ANJO_META_API_KEY": "meta-s
 def _serve(vm: fakes.FakeColab, ledger: Ledger | None) -> AbstractContextManager[ColabSession]:
     wait = functools.partial(colab_vllm.ready, clock=fakes.Ticks(), sleep=lambda _s: None)
     return serve(ColabCli(Path("/fake/colab"), run=vm), ledger, SETTINGS, timeout_s=TIMEOUT_S,
-                 tunnels=fakes.fake_tunnels(vm), clock=fakes.Ticks(), wait=wait)
+                 tunnels=fakes.fake_tunnels(vm), clock=fakes.Ticks(), wait=wait, keygen=fakes.fake_keygen)
+
+
+class _Proc:
+    """An ``ssh`` child that never exits on its own."""
+
+    killed = terminated = 0
+
+    def poll(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        _Proc.killed += 1
+
+    def terminate(self) -> None:
+        _Proc.terminated += 1
+
+    def wait(self, timeout: float) -> int:
+        return 0
 
 
 def test_colab_vllm_holds_before_start_and_stops_in_finally(tmp_path: Path) -> None:
@@ -129,36 +148,89 @@ def test_the_tunnel_is_one_local_forward_through_the_colab_proxy(tmp_path: Path)
         "IdentityAgent": "none", "ForwardAgent": "no", "ControlMaster": "no", "ControlPath": "none",
         "ClearAllForwardings": "no", "ExitOnForwardFailure": "yes", "ServerAliveInterval": "15"}
     assert argv.count("-L") == 1 and "-R" not in argv and "-D" not in argv  # the one forward, nothing else
-    with pytest.raises(ColabError, match="SSH key"):
-        colab_vllm.colab_identity(tmp_path)
-    (tmp_path / ".ssh").mkdir()
-    (tmp_path / ".ssh" / "id_ecdsa").write_text("key")
-    assert colab_vllm.colab_identity(tmp_path) == tmp_path / ".ssh" / "id_ecdsa"
-    (tmp_path / ".ssh" / "id_ed25519").write_text("key")
-    assert colab_vllm.colab_identity(tmp_path) == tmp_path / ".ssh" / "id_ed25519"  # the CLI's own order
-
-    class Proc:
-        killed = terminated = 0
-
-        def poll(self) -> None:
-            return None
-
-        def kill(self) -> None:
-            Proc.killed += 1
-
-        def terminate(self) -> None:
-            Proc.terminated += 1
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    tunnel = colab_vllm.SshTunnel(argv, 0.05, popen=lambda _: Proc())  # type: ignore[arg-type, return-value]
+    killed = _Proc.killed
+    tunnel = colab_vllm.SshTunnel(argv, 0.05, popen=lambda _: _Proc())  # type: ignore[arg-type, return-value]
     import time
     time.sleep(0.2)
-    assert Proc.killed == 1  # the hard timeout fired
+    assert _Proc.killed == killed + 1  # the hard timeout fired
     tunnel.close()
     with pytest.raises(ValueError, match="finite"):
-        colab_vllm.SshTunnel(argv, float("inf"), popen=lambda _: Proc())  # type: ignore[arg-type, return-value]
+        colab_vllm.SshTunnel(argv, float("inf"), popen=lambda _: _Proc())  # type: ignore[arg-type, return-value]
+
+
+def test_each_session_tunnels_with_a_throwaway_key_made_before_new_and_deleted_after(tmp_path: Path) -> None:
+    """No key of the user's: a fresh ed25519 pair per session, made before ``new`` in a 0700 folder
+    of the run's own, passed to ``ssh -i`` and the proxy's ``-i`` only, and gone after the session
+    however it ended. It never reaches a CLI call: the one upload is vLLM's key."""
+    made: list[Path] = []
+    started: list[list[str]] = []
+
+    def keygen(path: Path) -> None:
+        fakes.fake_keygen(path)
+        made.append(path)
+
+    class Watching(fakes.FakeColab):
+        def _new(self, argv: list[str], session: str) -> str:
+            key = made[-1]
+            assert key.is_file() and key.stat().st_mode & 0o777 == 0o600
+            assert key.parent.stat().st_mode & 0o777 == 0o700
+            return super()._new(argv, session)
+
+    def popen(argv: list[str]) -> _Proc:
+        started.append(argv)
+        return _Proc()
+
+    opener = colab_vllm.ssh_tunnel(tmp_path / "ssh", popen=popen)  # type: ignore[arg-type]
+    for vm, broke in ((Watching(), None), (Watching(), "arm broke"), (Watching(fail="new"), "colab new failed")):
+        with pytest.raises((RuntimeError, ColabError)) if broke else contextlib.nullcontext():
+            with serve(ColabCli(Path("/fake/colab"), run=vm), None, SETTINGS, timeout_s=TIMEOUT_S, tunnels=opener,
+                       clock=fakes.Ticks(), wait=lambda _session: True, keygen=keygen, key_dir=tmp_path / "ssh"):
+                argv = started[-1]
+                proxy = next(opt for opt in argv if opt.startswith("ProxyCommand="))
+                assert argv[argv.index("-i") + 1] == str(made[-1]) and proxy.endswith(f" -i {made[-1]}")
+                if broke:
+                    raise RuntimeError(broke)
+        key = made[-1]
+        assert not key.exists() and not key.with_name(f"{key.name}.pub").exists() and not key.parent.exists()
+        assert not any(str(key.parent) in part for args, _ in vm.calls for part in args)
+        assert [args[-1] for args, _ in vm.calls if args[3] == "upload"] == ([colab_vllm.KEY_FILE] if vm.fail is None
+                                                                               else [])
+        assert vm.commands()[-1] == "stop"
+    assert len(set(made)) == 3 and len(started) == 2  # a fresh key per session; no tunnel when `new` failed
+
+
+def test_preflight_refuses_before_new_when_a_tool_is_missing(tmp_path: Path) -> None:
+    binary = tmp_path / "colab"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    colab_vllm.preflight(binary, which=lambda tool: f"/usr/bin/{tool}")
+    with pytest.raises(colab_vllm.PreflightError, match="ssh-keygen"):
+        colab_vllm.preflight(binary, which=lambda tool: None if tool == "ssh-keygen" else f"/usr/bin/{tool}")
+    with pytest.raises(colab_vllm.PreflightError, match="colab"):
+        colab_vllm.preflight(tmp_path / "missing", which=lambda tool: f"/usr/bin/{tool}")
+
+    def no_keygen(path: Path) -> None:
+        raise colab_vllm.PreflightError("ssh-keygen isn't on this machine")
+
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    vm = fakes.FakeColab(ledger=ledger)
+    with pytest.raises(colab_vllm.PreflightError):
+        with serve(ColabCli(Path("/fake/colab"), run=vm), ledger, SETTINGS, timeout_s=TIMEOUT_S,
+                   tunnels=fakes.fake_tunnels(vm), clock=fakes.Ticks(), keygen=no_keygen, key_dir=tmp_path / "ssh"):
+            raise AssertionError("nothing serves without a key")
+    assert vm.calls == [] and ledger.open_holds() == () and ledger.used("colab_cu") == 0  # nothing held or started
+    assert list((tmp_path / "ssh").iterdir()) == []
+
+
+def test_the_real_keygen_makes_a_bare_ed25519_pair(tmp_path: Path) -> None:
+    import shutil
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("no ssh-keygen here")
+    with colab_vllm.session_key(tmp_path, colab_vllm.ssh_keygen) as key:
+        public = key.with_name(f"{key.name}.pub").read_text(encoding="utf-8").split()
+        assert public[0] == "ssh-ed25519" and len(public) == 2  # no comment: no user or host name
+        assert key.stat().st_mode & 0o777 == 0o600 and "PRIVATE KEY" in key.read_text(encoding="utf-8")
+    assert not key.parent.exists()
 
 
 def test_adapters_upload_only_checked_and_under_the_servers_rendering(tmp_path: Path) -> None:

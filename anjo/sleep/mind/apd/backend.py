@@ -2,7 +2,9 @@
 
 Live, and only after ``--live --yes``:
 
-- **Glimmer:** Colab vLLM behind an SSH tunnel (``colab_vllm``), every CLI call under its timeout;
+- **Glimmer:** Colab vLLM behind an SSH tunnel (``colab_vllm``), every CLI call under its timeout,
+  each session on a throwaway key made in the data dir's ``ssh`` folder, after a ``preflight`` of
+  the CLI, ``ssh`` and ``ssh-keygen``;
 - **Spark Open** (Baseten): the life writer and extractor, the gates' readers, the screen, the
   resolver and 17b's labels;
 - **Muse Spark** (Meta's API): the gates' auditor and the APD judge;
@@ -42,7 +44,7 @@ from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.probes import second_judge
 from anjo.sleep.spark_inquiry import ChatFn, spark_open
-from anjo.sleep.train.runners.colab import ColabCli
+from anjo.sleep.train.runners.colab import COLAB_BIN, ColabCli
 
 GEN_WRITE_CALLS: Final = 2 * LIFE_DAYS  # the writer and the extractor, once a day
 GEN_READ_CALLS: Final = MAX_PREVALENCE * (2 * (2 * LIFE_DAYS - 1) + 1)  # each item's leak windows and discovery
@@ -77,6 +79,9 @@ class Backend:
     vm: fakes.FakeColab | None = field(default=None, compare=False)
     clock: Callable[[], float] = time.time  # the session's wall clock: its deadline and its CU
     sleep: Callable[[float], None] = time.sleep
+    keygen: colab_vllm.KeyGen = colab_vllm.ssh_keygen  # each session's throwaway SSH key
+    key_dir: Path | None = None  # where it is made and deleted (live: the data dir's ``ssh`` folder)
+    preflight: Callable[[], None] = lambda: None  # live: the CLI, ``ssh`` and ``ssh-keygen`` are here
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -94,7 +99,7 @@ def fake_backend() -> Backend:
         spark=fakes.FakeSparkChat(), life_chat=fakes.FakeLifeChat(), reader=fakes.FakeGateReader(),
         auditor=fakes.FakeGateAuditor(), muse=_text(fakes.fake_judge(strict=False)),
         gemini=_text(fakes.fake_judge(strict=True)), fake=True, claude=fakes.fake_judge(strict=False), vm=vm,
-        clock=fakes.Ticks(1.0), sleep=lambda _s: None,
+        clock=fakes.Ticks(1.0), sleep=lambda _s: None, keygen=fakes.fake_keygen,
     )
 
 
@@ -140,7 +145,8 @@ def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str,
     return Backend(
         cli=ColabCli(), tunnels=colab_vllm.ssh_tunnel(root / "ssh"), wait=colab_vllm.ready, spark=spark_open,
         life_chat=_brief_chat, reader=_brief_chat, auditor=_brief_chat, muse=_muse, gemini=_gemini,
-        ledger=ledger, prices=prices, rates=rates,
+        ledger=ledger, prices=prices, rates=rates, key_dir=root / "ssh",
+        preflight=functools.partial(colab_vllm.preflight, COLAB_BIN),
     )
 
 

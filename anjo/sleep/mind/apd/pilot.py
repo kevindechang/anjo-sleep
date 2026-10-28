@@ -155,7 +155,8 @@ def serving(backend: Backend, settings_: ServeConfig, timeout_s: float, out: Out
     """One Glimmer session, stopped on the way out. MIND's leftovers were stopped by the command's
     sweep (``mind.sweep.swept_mind``), under MIND's lock."""
     with colab_vllm.serve(backend.cli, backend.ledger, settings_, timeout_s=timeout_s, tunnels=backend.tunnels,
-                          wait=backend.wait, clock=backend.clock, sleep=backend.sleep) as session:
+                          wait=backend.wait, clock=backend.clock, sleep=backend.sleep, keygen=backend.keygen,
+                          key_dir=backend.key_dir) as session:
         out(f"serving Glimmer on {session.session}")
         yield session
 

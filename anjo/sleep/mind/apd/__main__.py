@@ -16,9 +16,10 @@ MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessio
 runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
 with exit code 4. SIGTERM and SIGHUP end a command as Ctrl-C does, through its cleanup, so its
 session is stopped and its holds settled. On a Mac, a live command keeps the machine awake
-(``caffeinate -i -w <pid>``) for as long as it runs. A command that serves first checks Glimmer's
-revision, vLLM's version, the precision and the reasoning strength against the pilot's first
-session (``DataDir.pin_serving``), and 17b's adapters before the VM boots.
+(``caffeinate -i -w <pid>``) for as long as it runs. A command that serves first checks the Colab
+CLI, ``ssh`` and ``ssh-keygen`` are here (``colab_vllm.preflight``), then Glimmer's revision,
+vLLM's version, the precision and the reasoning strength against the pilot's first session
+(``DataDir.pin_serving``), and 17b's adapters before the VM boots.
 """
 from __future__ import annotations
 
@@ -204,13 +205,15 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
     """One command under MIND's lock, after its sweep; a failed call or a session that can't carry
     the next run stops it cleanly."""
     try:
+        if args.command in SERVING_COMMANDS:
+            backend.preflight()  # the CLI, ssh and ssh-keygen, before the sweep, a hold or a VM
         with _swept(data, backend) as swept:
             _say_swept(swept, out)
             return _step(args, data, backend, out)
     except MindBusy as error:
         out(f"{error}.")
         return BUSY
-    except (pilot.FreezeError, LedgerError, StoreError, ServeConfigError) as error:
+    except (pilot.FreezeError, LedgerError, StoreError, ServeConfigError, colab_vllm.PreflightError) as error:
         out(f"Refused: {error}.")
         return REFUSED_CODE
     except (RunFailed, colab_vllm.SessionEnding) as error:
