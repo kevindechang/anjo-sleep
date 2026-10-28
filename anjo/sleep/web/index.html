@@ -14,6 +14,7 @@
 <script src="/sleep/demo/app.js" defer></script>
 <script src="/sleep/demo/nights.js" defer></script>
 <script src="/sleep/demo/mind.js" defer></script>
+<script src="/sleep/demo/night.js" defer></script>
 <script src="/sleep/demo/dailies.js" defer></script>
 </head>
 <body>
@@ -124,6 +125,13 @@
     <p id="mind-glance" class="mind-glance">{{mind_loading}}</p>
     <p class="note">{{mind_note}}</p>
   </header>
+  <section id="mind-night" class="night-loop" aria-labelledby="night-loop-heading">
+    <p class="kicker">{{story_kicker}}</p>
+    <h3 id="night-loop-heading">{{story_heading}}</h3>
+    <p class="night-lede">{{story_lede}}</p>
+    <p id="night-loop-asof" class="note mind-asof" aria-live="polite">{{story_loading}}</p>
+    <div id="night-loop-body"></div>
+  </section>
   <div id="mind-sections" class="mind-sections"></div>
 </section>
 

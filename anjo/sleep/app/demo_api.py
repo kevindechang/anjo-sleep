@@ -23,8 +23,8 @@ The full step, under the same prefixes (the carve-out is unchanged):
 - with the visit token: ``GET /api/sleep/demo/dailies`` and ``/api/sleep/demo/dailies/<night>``
   (Dailies, the morning card for her latest night or night ``<night>``, filtered the same way; 404
   for a night she hasn't run). No GPU, no model;
-- ``GET /sleep/demo/nights.js``, ``/sleep/demo/mind.js``, ``/sleep/demo/mind.css``,
-  ``/sleep/demo/dailies.js``, ``/sleep/demo/dailies.css``: their files.
+- ``GET /sleep/demo/nights.js``, ``/sleep/demo/mind.js``, ``/sleep/demo/night.js``,
+  ``/sleep/demo/mind.css``, ``/sleep/demo/dailies.js``, ``/sleep/demo/dailies.css``: their files.
 
 The page is public: there is no account, no cookie and no stored message. ``PUBLIC_PREFIXES`` are
 the only paths ``register_sleep`` opens to anonymous visitors (the app's auth middleware reads them

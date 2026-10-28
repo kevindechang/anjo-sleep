@@ -387,3 +387,67 @@ def test_night_phase_force_deep_reaches_the_night(monkeypatch: pytest.MonkeyPatc
         daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28", *flags])
         assert seen[0]["force_deep"] is expected
         assert json.loads(capsys.readouterr().out)["force_deep"] is expected
+
+
+# ── the night's line says how the morning went ──
+
+
+def _night_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                status: str, score: Any) -> tuple[int, dict[str, Any]]:
+    import json
+
+    folder = tmp_path / "night"
+    folder.mkdir()
+    night = NightResult(status, "practice" if status == "failed" else None, None, {}, (), 0.0, {},  # type: ignore[arg-type]
+                        folder / "log.jsonl")
+    monkeypatch.setenv(daily.USERS_ENV, "founder=acct")
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    daily.write_marker(daily.marker_dir(), "founder", date(2026, 10, 28), 0, DayRun((AT_2PM, AT_2PM), 4, 0, ()))
+    real = daily.run_night_phase
+    monkeypatch.setattr(daily, "run_night_phase", lambda *a, **kw: real(
+        *a, **kw, nights=lambda **_: {"acct": night}, morning=lambda *_: None, score=score, dailies=lambda *_: None))
+    code = daily.main(["--phase", "night", "--persona", "founder", "--for-date", "2026-10-28"])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _unreadable(*args: Any, **kw: Any) -> None:
+    from anjo.sleep.probes.morning import TooManyNoVerdicts
+
+    raise TooManyNoVerdicts("the judge gave no readable verdict on 3 of 3 probes", no_verdict=3)
+
+
+UNREAD = "failed (TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes)"
+
+
+@pytest.mark.parametrize(("status", "score", "morning", "code"), [
+    ("promoted", lambda *a, **kw: None, "ok", 0),
+    ("promoted", _unreadable, UNREAD, 3),  # new weights went live unscored: the schedule must hear it
+    ("rejected", _unreadable, UNREAD, 0),  # yesterday's weights still serve: said, not an alarm
+    ("napped", _unreadable, "skipped (nap)", 0),
+    ("failed", _unreadable, "skipped (night failed)", 1),
+])
+def test_the_night_line_says_how_the_morning_went_and_a_failed_morning_after_a_promotion_exits_3(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    status: str, score: Any, morning: str, code: int,
+) -> None:
+    exit_code, line = _night_main(monkeypatch, tmp_path, capsys, status, score)
+    assert (line["status"], line["morning"], exit_code) == (status, morning, code)
+
+
+def test_the_morning_tells_the_nights_story_again_with_its_wake(tmp_path: Path) -> None:
+    import json
+
+    from anjo.sleep.night import story as st
+    from anjo.sleep.night.nightlog import STORY
+    from anjo.sleep.probes.morning import MorningResult
+
+    told = {}
+    for label, score in (("ok", lambda *a, **kw: MorningResult(tmp_path, 28, 14, 1)), ("unread", _unreadable)):
+        result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label),
+                                       nights=_promoted(tmp_path / label), morning=lambda *a: None, score=score,
+                                       dailies=lambda *a: None)
+        told[label] = st.story_from(json.loads((result.log_path.parent / STORY).read_text()))
+    assert told["ok"].wake == st.Wake(st.Morning(28, 1), st.NotRun(st.SELF_MODEL_NOT_YET))
+    assert told["unread"].wake.morning == st.Failed(  # type: ignore[union-attr]
+        "morning", "TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes")
+    assert told["ok"].night == date(2026, 10, 29)
