@@ -83,6 +83,17 @@ def own_turn_count(user_id: str, window: tuple[datetime, datetime]) -> int:
     return sum(1 for row in rows if row["role"] == "user")
 
 
+def synthetic_day_text(user_id: str, window: tuple[datetime, datetime]) -> list[str]:
+    """Every line of a synthetic person's simulated day inside ``window`` (their cleared sessions, both
+    sides, oldest first): what the knowledge scorer (``tools.knowledge_score``) checks its items against,
+    by word overlap. A real person's account is refused, so their words never leave."""
+    require_sleep_host()
+    if not is_synthetic(user_id):
+        raise PermissionError("only a synthetic person's simulated days are read for the knowledge scorer")
+    start, end = window
+    return [row["content"] for row in get_history_between(user_id, start, end, session_ids=cleared_sessions(user_id))]
+
+
 class HistorySource:
     """Extracts and records one day of a person's evidence. ``chat`` is Spark Open by default."""
 

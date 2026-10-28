@@ -497,3 +497,20 @@ def test_turns_counts_the_persons_own_turns_in_the_window() -> None:
     _message(SYNTHETIC, "user", "filmed", at=noon, session_id="s-film")
     cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=noon)
     assert own_turn_count(SYNTHETIC, WINDOW) == 1  # a synthetic person's cleared sessions only
+
+
+def test_day_text_reads_only_a_synthetic_persons_cleared_sessions() -> None:
+    from anjo.sleep.app import cleared_sessions
+    from anjo.sleep.app.history_source import synthetic_day_text
+
+    noon = START + timedelta(hours=12)
+    _message(REAL, "user", "a real person's words", at=noon)
+    with pytest.raises(PermissionError):
+        synthetic_day_text(REAL, WINDOW)  # a real person's words never leave for the knowledge scorer
+    cleared_sessions.register_synthetic(SYNTHETIC, at=START)
+    _message(SYNTHETIC, "user", "simulated line", at=noon, session_id="s-sim")
+    _message(SYNTHETIC, "assistant", "her reply", at=noon + timedelta(seconds=1), session_id="s-sim")
+    _message(SYNTHETIC, "user", "filmed", at=noon, session_id="s-film")
+    _message(SYNTHETIC, "user", "the day after", at=END + timedelta(hours=1), session_id="s-sim")
+    cleared_sessions.mark_cleared(SYNTHETIC, "s-sim", at=noon)
+    assert synthetic_day_text(SYNTHETIC, WINDOW) == ["simulated line", "her reply"]  # both sides, inside the window
