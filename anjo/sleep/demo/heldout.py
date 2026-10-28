@@ -16,6 +16,13 @@ A shown text is withheld when it carries one of them by the engine's own deconta
 together), or when the two share any run of ``SHARED_RUN`` words in either direction. Both rules err
 toward withholding. The sealed probe files themselves are never opened here: the web process has no
 business reading them, and what they are written from is covered above.
+
+**What it doesn't catch: paraphrase.** It catches held-out text copied or quoted, not the same point
+in other words. A short gist ("She dislikes voiceover narration") or a restatement that shares fewer
+than ``SHARED_RUN`` words in a row passes. That is out of scope on purpose. No source the panel reads
+is built from a held-out item, so held-out content could reach it only through her own inference
+from what she did see, and that is what the panel exists to show. Catching paraphrase would mean
+judging meaning, and withholding her own words on a guess; this filter adds no fuzzy matching.
 """
 from __future__ import annotations
 

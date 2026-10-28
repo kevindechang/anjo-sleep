@@ -13,6 +13,10 @@ makes its section ``unavailable``; it never fails the page.
   carries free text is unavailable: the panel fails closed. The sealed probe files are never read.
 - **The stops** are ``slider.plan_stops`` over her night logs and the registry's history, checked
   against the rendering Glimmer serves now (``framing.rendering`` at the configured strength).
+- **The panel is kept** (``PanelCache``) until a file it reads changes, by modification time and
+  size, or ``PANEL_TTL_S`` passes: built, it costs most of a second at full size (the held-out filter
+  against every shown text), while a stat of each file costs little. A panel that failed closed is
+  never kept: each request tries again, and fails closed again, cheaply.
 - **The demo's files** (``<data dir>/sleep/demo/``): ``night_answers.json`` (the slider's and the
   toggle's answers, written by ``demo_pairs --nights``), ``swap_pairs.json`` (the swap
   measurement's pairs, if it ran and saved any) and ``mind.md`` (MIND's report, ``reports.mind``,
@@ -22,16 +26,26 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from functools import partial
 from collections.abc import Callable, Iterator
 from datetime import date, datetime, time, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any, Final, TypeVar, cast
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.demo_live import DEMO_PERSONA, demo_dir
 from anjo.sleep.app.ownership import night_logs, person_results, results_trees
-from anjo.sleep.app.storage import SLEEP_DIR, checkpoint_registry, data_root, evidence_store, target_store, workspace_log
+from anjo.sleep.app.storage import (
+    SLEEP_DIR,
+    checkpoint_registry,
+    data_root,
+    evidence_store,
+    sleep_dir,
+    target_store,
+    workspace_log,
+)
 from anjo.sleep.demo.heldout import HeldOutText, persona_texts
 from anjo.sleep.demo.night_answers import NightAnswers
 from anjo.sleep.demo.night_answers import load as load_answers
@@ -42,7 +56,7 @@ from anjo.sleep.demo.toggles import SwapSet, load_swaps
 from anjo.sleep.mind import expect
 from anjo.sleep.night.nightlog import LOG, SUMMARY
 from anjo.sleep.personas.model import load_person_file
-from anjo.sleep.prereg.ledger import LedgerError, read_entries, read_pushed_head
+from anjo.sleep.prereg.ledger import LedgerError, head_path, read_entries, read_pushed_head
 from anjo.sleep.probes.judge_brief import PERSONAS_DIR
 from anjo.sleep.reports import results
 from anjo.sleep.serving import config, framing
@@ -56,7 +70,9 @@ LEDGER_FILE: Final = "ledger.jsonl"  # the pre-registration ledger, beside the b
 READ_ERRORS: Final = (ValueError, OSError)  # every store's read error is a ValueError (LogError, CodecError, ...)
 TEXT_SECTIONS: Final = ("questions", "targets", "wants", "choices", "expectations", "gates")
 UNAVAILABLE: Final = {"state": "unavailable"}
+PANEL_TTL_S: Final = 60.0  # the longest a kept panel is served, even when no file it reads changed
 T = TypeVar("T")
+Fingerprint = tuple[tuple[str, int, int], ...]
 
 
 def _folders(root: Path) -> Iterator[Path]:
@@ -103,7 +119,10 @@ def night_answers() -> NightAnswers | None:
     return load_answers(demo_dir() / NIGHT_ANSWERS_FILE)
 
 
-def swaps() -> SwapSet | None:
+def swaps(user: str | None) -> SwapSet | None:
+    """The swap measurement's pairs, for the demo's synthetic account only, like every other source."""
+    if user is None or not is_synthetic(user):
+        return None
     return load_swaps(demo_dir() / SWAP_FILE)
 
 
@@ -191,17 +210,76 @@ def _task16(held: HeldOutText) -> dict[str, Any]:
     return task16_view(text, held)
 
 
-def mind_payload(user: str | None) -> dict[str, Any]:
-    """Her mind panel, filtered. Every section with free text is unavailable when the account isn't
-    synthetic or the held-out filter can't be built."""
-    held = None if user is None or not is_synthetic(user) else held_out(user)
-    if user is None or held is None:
-        view = mind_view(MindSources(), HeldOutText(()))
-        return {**view, "chart": {**UNAVAILABLE, "final": None}, "task16": {**UNAVAILABLE, "lines": []},
-                "ledger": {**UNAVAILABLE, "entries": []}}
+def _closed() -> dict[str, Any]:
+    """The panel with every section unavailable: what a non-synthetic account or a failed filter gets."""
+    view = mind_view(MindSources(), HeldOutText(()))
+    return {**view, "chart": {**UNAVAILABLE, "final": None}, "task16": {**UNAVAILABLE, "lines": []},
+            "ledger": {**UNAVAILABLE, "entries": []}}
+
+
+def _built(user: str, held: HeldOutText) -> dict[str, Any]:
     try:
         chart = _chart(user)
     except READ_ERRORS as error:
         logger.error("the demo's results chart can't be read: %s", type(error).__name__)
         chart = {**UNAVAILABLE, "final": None}
     return {**mind_view(_sources(user), held), "chart": chart, "task16": _task16(held), "ledger": _ledger(held)}
+
+
+def mind_payload(user: str | None) -> dict[str, Any]:
+    """Her mind panel, filtered. Every section with free text is unavailable when the account isn't
+    synthetic or the held-out filter can't be built."""
+    held = None if user is None or not is_synthetic(user) else held_out(user)
+    return _closed() if user is None or held is None else _built(user, held)
+
+
+def _files(root: Path) -> Iterator[Path]:
+    if root.is_file():
+        yield root
+    elif root.is_dir():
+        yield from (path for path in root.rglob("*") if path.is_file())
+
+
+def _fingerprint(user: str) -> Fingerprint:
+    """Every file the panel reads, by path, modification time and size: her own folder, the
+    published results (her nights and every other life's), the persona file, the ledger and its
+    pushed head, and MIND's report."""
+    published, _private = results_trees()
+    ledger = data_root() / SLEEP_DIR / LEDGER_FILE
+    roots = (sleep_dir(user), published, PERSONAS_DIR / f"{DEMO_PERSONA}.json", ledger, head_path(ledger),
+             demo_dir() / MIND_REPORT_FILE)
+    found = []
+    for root in roots:
+        for path in _files(root):
+            stat = path.stat()
+            found.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(sorted(found))
+
+
+class PanelCache:
+    """``mind_payload`` for one account, kept until a file it reads changes or ``PANEL_TTL_S``
+    passes. One build at a time: requests that arrive during a build wait for it, then share it."""
+
+    def __init__(self, user: str | None, *, clock: Callable[[], float] = monotonic) -> None:
+        self._user = user
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._kept: tuple[Fingerprint, float, dict[str, Any]] | None = None
+
+    def payload(self) -> dict[str, Any]:
+        user = self._user
+        if user is None or not is_synthetic(user):
+            return _closed()
+        with self._lock:
+            key = _read("the panel's files", lambda: _fingerprint(user))
+            kept = self._kept
+            if kept is not None and kept[0] == key and self._clock() - kept[1] < PANEL_TTL_S:
+                return kept[2]
+            self._kept = None
+            held = held_out(user)
+            if held is None:
+                return _closed()  # never kept: the next request tries the filter again
+            built = _built(user, held)
+            if key is not None:
+                self._kept = (key, self._clock(), built)
+            return built
