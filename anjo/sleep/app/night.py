@@ -25,8 +25,8 @@ it off the serving path). Everything else is here:
   revision that root names), never on this host's settings alone.
 
 Who plays practice's roles is ``ANJO_SLEEP_PRACTICE_ROLES`` (``practice.roles``; unset, Spark Open plays
-all three). ``critic=gemini`` scores a synthetic person's candidates with Gemini 3.8 Flash through the APD
-judge's Vertex call, each call held on ``vertex_usd``; a real person's critic stays Spark Open.
+all three). ``critic=deepseek`` scores a synthetic person's candidates with DeepSeek V4.1 Flash on
+Fireworks, each call held on ``fireworks_sleep_usd``; a real person's critic stays Spark Open.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -34,7 +34,6 @@ estimator stays ``None`` until its coefficients are registered, so no expectatio
 """
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
@@ -92,7 +91,7 @@ from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
-from anjo.sleep.practice.critics import ThirdPartyCritic, TextModel, gemini_critic, held_critic
+from anjo.sleep.practice.critics import ThirdPartyCritic, deepseek_critic, held_critic
 from anjo.sleep.practice.full import CappedChat, FullPractice
 from anjo.sleep.practice.roles import practice_roles
 from anjo.sleep.probes.decontam import OverlapDecontaminator
@@ -222,20 +221,10 @@ def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
                      serving=_Served(serving.name, client))
 
 
-APD_BACKEND: Final = "anjo.sleep.mind.apd.backend"  # loaded by name: it carries the Colab runner, which the
-# import contract keeps off the app's import graph; the night that asks for a Gemini critic has it loaded anyway
-
-
-def _vertex_judge() -> TextModel:
-    """The APD judge's Gemini call on Vertex (thinking low, its reply cap): no second Vertex client."""
-    ask: TextModel = importlib.import_module(APD_BACKEND)._gemini
-    return ask
-
-
-def gemini_practice_critic(night: date, ledger: Ledger | None) -> ThirdPartyCritic:
-    """Gemini as the critic of a synthetic person's practice, each call held on ``vertex_usd``; also
-    ``tools.practice_ab``'s, by name."""
-    return held_critic(gemini_critic(_vertex_judge()), ledger, f"night:practice:{night.isoformat()}")
+def deepseek_practice_critic(night: date, ledger: Ledger | None) -> ThirdPartyCritic:
+    """DeepSeek V4.1 Flash as the critic of a synthetic person's practice, each call held on
+    ``fireworks_sleep_usd``."""
+    return held_critic(deepseek_critic(), ledger, f"night:practice:{night.isoformat()}")
 
 
 def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...]]:
@@ -266,7 +255,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
     def practice(chat: CappedChat, night: date) -> FullPractice:
-        critic = gemini_practice_critic(night, ledger) if roles.critic == "gemini" else None
+        critic = deepseek_practice_critic(night, ledger) if roles.critic == "deepseek" else None
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
                             teacher=night_settings.practice_teacher, concurrency=calls,

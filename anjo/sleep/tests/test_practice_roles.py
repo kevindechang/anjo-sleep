@@ -1,10 +1,11 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """Who plays practice's roles (``ANJO_SLEEP_PRACTICE_ROLES``): Spark Open plays all three unless set.
-Glimmer may play the person; a third-party critic (Gemini 3.8 Flash on Vertex) may score a synthetic
-person's candidates, never a real person's; the teacher (always Spark Open) may be asked only where it
-could become the target (``teacher=lazy``). The critic's words never reach a transcript, the teacher
-or anything that trains, so its model never enters a training row's ancestry."""
+Glimmer may play the person; a third-party critic (DeepSeek V4.1 Flash on Fireworks) may score a
+synthetic person's candidates, never a real person's; the teacher (always Spark Open) may be asked only
+where it could become the target (``teacher=lazy``). The critic's words never reach a transcript, the
+teacher or anything that trains, so its model never enters a training row's ancestry, and a cut
+verdict drops its scene."""
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ import pytest
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.practice import roles
+from anjo.sleep.practice import critics
 from anjo.sleep.practice.critics import ThirdPartyCritic
 from anjo.sleep.practice.full import SCENES_ASKED, VISIBLE_TOKENS, FullPractice
 from anjo.sleep.provenance import CLEARED, GLIMMER, may_train
@@ -33,22 +35,23 @@ from anjo.sleep.tests.test_full_practice import (
     scored,
 )
 
-GEMINI = "gemini-3.8-flash"
-CRITIC_WORDS = "GEMINI-SAYS-candidate-B-is-sloppy"  # free text a critic might add: it must never travel
+DEEPSEEK = "accounts/fireworks/models/deepseek-v4p1-flash"
+CRITIC_WORDS = "DEEPSEEK-SAYS-candidate-B-is-sloppy"  # free text a critic might add: it must never travel
 
 
-class Gemini:
-    """A third-party critic: the critic prompt in, JSON scores out (with free text it was never asked for)."""
+class DeepSeek:
+    """A third-party critic: the critic prompt in, JSON scores and the category out (with free text it
+    was never asked for); ``cut`` says which calls reach the cap."""
 
-    def __init__(self, critic: Any, *, raw: str | None = None) -> None:
-        self.critic, self.raw = critic, raw
+    def __init__(self, critic: Any, *, cut: Any = lambda n: False) -> None:
+        self.critic, self.cut = critic, cut
         self.prompts: list[str] = []
 
-    def __call__(self, prompt: str) -> tuple[str, int, int]:
+    def __call__(self, prompt: str) -> ChatResult:
         self.prompts.append(prompt)
-        if self.raw is not None:
-            return self.raw, 900, 40
-        return json.dumps({**self.critic(candidates_of(prompt)), "why": CRITIC_WORDS}), 900, 40
+        text = json.dumps({**self.critic(candidates_of(prompt)), "why": CRITIC_WORDS})
+        return ChatResult(text=text, tool_calls=(), model=DEEPSEEK, input_tokens=900, output_tokens=40,
+                          finish_reason="length" if self.cut(len(self.prompts) - 1) else "stop")
 
 
 class PersonGlimmer(Glimmer):
@@ -68,8 +71,8 @@ class PersonGlimmer(Glimmer):
         return super().complete(adapter, messages, temperature=temperature, seed=seed)
 
 
-def _critic(gemini: Gemini) -> ThirdPartyCritic:
-    return ThirdPartyCritic(model=GEMINI, ask=gemini, usd_per_m_in=0.75, usd_per_m_out=3.75)
+def _critic(deepseek: DeepSeek) -> ThirdPartyCritic:
+    return ThirdPartyCritic(model=DEEPSEEK, ask=deepseek, usd_per_m_in=0.30, usd_per_m_out=1.20)
 
 
 def _run(spark: Spark, glimmer: Glimmer | None = None, uid: str = "p1", **kw: Any) -> Any:
@@ -82,10 +85,10 @@ def test_practice_roles_default_is_today() -> None:
     assert roles.practice_roles({}) == roles.TODAY == roles.Roles("spark", "spark", "always")
     assert roles.practice_roles({roles.ROLES_ENV: " "}) == roles.TODAY
     assert roles.practice_roles({roles.ROLES_ENV: "glimmer"}) == roles.Roles("glimmer", "spark", "always")
-    assert roles.practice_roles({roles.ROLES_ENV: "person=glimmer, critic=gemini,teacher=lazy"}) == roles.Roles(
-        "glimmer", "gemini", "lazy")
-    for wrong in ("teacher=glimmer", "critic=glimmer", "person=gemini", "critic", "person=glimmer,person=spark",
-                  "judge=gemini"):
+    assert roles.practice_roles({roles.ROLES_ENV: "person=glimmer, critic=deepseek,teacher=lazy"}) == roles.Roles(
+        "glimmer", "deepseek", "lazy")
+    for wrong in ("teacher=glimmer", "critic=glimmer", "critic=gemini", "person=deepseek", "critic",
+                  "person=glimmer,person=spark", "judge=gemini"):
         with pytest.raises(roles.RolesError, match=roles.ROLES_ENV):
             roles.practice_roles({roles.ROLES_ENV: wrong})
 
@@ -99,22 +102,24 @@ def test_practice_roles_default_is_today() -> None:
     assert run.spark["person"]["calls"] == 1 and run.spark["critic"]["calls"] == 16
 
 
-def test_third_party_critic_never_enters_training_ancestry(tmp_path: Path) -> None:
+def test_deepseek_critic_verdict_never_enters_training_text(tmp_path: Path) -> None:
     """The teacher writes its candidate from F and the message alone, before any critic runs (and, lazy,
-    from those alone after one did); the critic's reply is read for scores and letters only. So a
-    critic that may not train is in no transcript, no evidence item, no training row and no ancestry."""
+    from those alone after one did); the critic's reply is read for its scores and its fixed category
+    (the letters that miss a constraint) only. So DeepSeek, which may not train Glimmer, is in no
+    transcript, no evidence item, no training row and no ancestry; and a cut verdict drops its scene."""
     misses = scored(9, (5, 6, 7), lambda text: text.startswith("GLIMMER") and call_no(text) // 3 % 2 == 0)
     for teacher in ("always", "lazy"):
-        gemini, spark = Gemini(misses), Spark(_scenes())
-        practice, run = _run(spark, critic=_critic(gemini), third_party=lambda uid: True, lazy_teacher=teacher == "lazy")
-        assert len(gemini.prompts) >= 16 and spark.critic_prompts() == []  # the scores came from the third party
-        assert run.roles["critic"] == GEMINI and run.critic_usd == pytest.approx(
-            len(gemini.prompts) * (900 * 0.75 + 40 * 3.75) / 1e6)
+        deepseek, spark = DeepSeek(misses), Spark(_scenes())
+        practice, run = _run(spark, critic=_critic(deepseek), third_party=lambda uid: True,
+                             lazy_teacher=teacher == "lazy")
+        assert len(deepseek.prompts) >= 16 and spark.critic_prompts() == []  # the scores came from the third party
+        assert run.roles["critic"] == DEEPSEEK and run.critic_usd == pytest.approx(
+            len(deepseek.prompts) * (900 * 0.30 + 40 * 1.20) / 1e6)
         assert any(t.target == "teacher" for t in run.transcripts)  # its scores still choose
         for transcript in run.transcripts:
             assert transcript.ancestry is not None and transcript.ancestry <= CLEARED
             assert may_train(transcript.ancestry, hosted_in_training=False)
-            assert GEMINI not in transcript.ancestry
+            assert DEEPSEEK not in transcript.ancestry
             fields = (transcript.message, transcript.reply, transcript.rejected or "", transcript.context or "",
                       transcript.evidence().text)
             assert not any(CRITIC_WORDS in field or '"scores"' in field for field in fields)
@@ -126,11 +131,30 @@ def test_third_party_critic_never_enters_training_ancestry(tmp_path: Path) -> No
         assert all(CRITIC_WORDS not in json.dumps(e.prompt) + e.completion for e in data.examples)
         assert all(CRITIC_WORDS not in json.dumps(p.prompt) + p.chosen + p.rejected for p in data.pairs)
 
+    # A verdict cut at its cap is never read: its scene is dropped, as a cut Spark Open verdict's is.
+    cut = DeepSeek(misses, cut=lambda n: n % 4 == 0)
+    _, run = _run(Spark(_scenes()), critic=_critic(cut), third_party=lambda uid: True)
+    assert len(run.transcripts) == 16 - 4 and run.third_party["cut"] == 4
+
+
+def test_the_deepseek_critic_is_the_generator_call_held_on_its_own_pool() -> None:
+    sent: list[dict[str, Any]] = []
+
+    def generate(model: str, messages: Any, tools: Any, timeout_s: float, **kw: Any) -> ChatResult:
+        sent.append({"model": model, "messages": messages, **kw})
+        return ChatResult(text="{}", tool_calls=(), model=model, input_tokens=100, output_tokens=10, finish_reason="stop")
+
+    critic = critics.deepseek_critic(generate)
+    critic.ask("# critic_v1 prompt")
+    assert sent == [{"model": DEEPSEEK, "messages": [{"role": "user", "content": "# critic_v1 prompt"}],
+                     "temperature": 0.0, "max_tokens": critics.MAX_TOKENS, "reasoning_effort": "none"}]
+    assert critic.pool == "fireworks_sleep_usd" and (critic.usd_per_m_in, critic.usd_per_m_out) == (0.30, 1.20)
+
 
 def test_a_real_persons_candidates_never_reach_a_third_party_critic() -> None:
-    gemini, spark = Gemini(scored(5, (6, 7, 8), lambda text: False)), Spark(_scenes())
-    _, run = _run(spark, critic=_critic(gemini), third_party=lambda uid: uid.startswith("synthetic-"))
-    assert gemini.prompts == [] and len(spark.critic_prompts()) == 16  # Vertex sees synthetic people only
+    deepseek, spark = DeepSeek(scored(5, (6, 7, 8), lambda text: False)), Spark(_scenes())
+    _, run = _run(spark, critic=_critic(deepseek), third_party=lambda uid: uid.startswith("synthetic-"))
+    assert deepseek.prompts == [] and len(spark.critic_prompts()) == 16  # synthetic people only
     assert run.roles["critic"] == "spark" and run.critic_usd == 0.0
 
 
@@ -167,9 +191,9 @@ def test_the_night_prices_a_third_party_critic_into_practice(tmp_path: Path) -> 
     from anjo.sleep.tests.night_fakes import step
     from anjo.sleep.tests.test_full_practice import _full_night
 
-    gemini = Gemini(scored(4, (5, 6, 8), lambda text: False))
+    deepseek = DeepSeek(scored(4, (5, 6, 8), lambda text: False))
     result, _, _ = _full_night(tmp_path, Spark(_scenes(), scored(4, (5, 6, 8), lambda text: False)),
-                               practice_kw={"critic": _critic(gemini), "third_party": lambda uid: True})
+                               practice_kw={"critic": _critic(deepseek), "third_party": lambda uid: True})
     done = step(result.log_path, "practice")
-    assert done["roles"]["critic"] == GEMINI and done["critic_usd"] == pytest.approx(16 * (900 * 0.75 + 40 * 3.75) / 1e6)
+    assert done["roles"]["critic"] == DEEPSEEK and done["critic_usd"] == pytest.approx(16 * (900 * 0.30 + 40 * 1.20) / 1e6)
     assert result.cost_parts["practice"] >= done["critic_usd"]

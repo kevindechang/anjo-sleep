@@ -4,16 +4,17 @@ as every night has. The setting is comma-separated ``role=player`` pairs:
 - ``person=glimmer``: Glimmer's base model writes the scenes (the person's messages) on the serving
   GPU that is awake for the night anyway, at the person's cap, instead of a Spark Open call. ``glimmer``
   alone means this.
-- ``critic=gemini``: Gemini 3.8 Flash on Vertex scores the candidates, for a synthetic person only (Vertex
-  sees synthetic people only, spec §12.1); a real person's critic stays Spark Open. A critic that may not
-  train is safe here because its words never travel: the teacher writes from F and the message alone,
-  and the critic's reply is read for scores and letters only (``critics``).
+- ``critic=deepseek``: DeepSeek V4.1 Flash on Fireworks, non-thinking, scores the candidates of a
+  synthetic person only; a real person's critic stays Spark Open. A critic that may not train is safe
+  here because its words never travel: the teacher writes from F and the message alone, and the
+  critic's reply is read for its scores and the fixed category (the letters that miss a constraint)
+  only (``critics``). A cut verdict drops its scene. Gemini is never a critic: it is the A/B's judge.
 - ``teacher=lazy``: Spark Open stays the teacher, asked only for a scene where every Glimmer candidate
   misses a constraint, the only scene where it can become the target; the critic then judges again with
   it in. A (best, worst) pair with the teacher as the worst is lost where it is never asked.
 
-Glimmer never grades its own replies: the critic is Spark Open or Gemini (Kevin, 2026-10-28). Each switch
-becomes a default only after ``tools.practice_ab`` shows it isn't worse.
+Glimmer never grades its own replies: the critic is Spark Open or DeepSeek (Kevin, 2026-10-28; the
+coordinator, 2026-10-29). Each switch becomes a default only after ``tools.practice_ab`` shows it isn't worse.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from typing import Final, Literal, get_args
 
 ROLES_ENV: Final = "ANJO_SLEEP_PRACTICE_ROLES"
 Person = Literal["spark", "glimmer"]
-Critic = Literal["spark", "gemini"]
+Critic = Literal["spark", "deepseek"]
 Teacher = Literal["always", "lazy"]
 _CHOICES: Final[Mapping[str, tuple[str, ...]]] = {
     "person": get_args(Person), "critic": get_args(Critic), "teacher": get_args(Teacher)}

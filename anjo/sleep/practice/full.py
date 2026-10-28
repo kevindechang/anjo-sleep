@@ -50,10 +50,10 @@ bound among them) and ``capped_scenes`` the scenes a cap dropped; the night log 
 
 - ``glimmer_person``: Glimmer's base model (no adapter) writes the scenes on the serving GPU, seeded per
   night, at the person's visible cap (it answers directly, with no reasoning to make room for).
-- ``critic``: a third-party critic (``critics.ThirdPartyCritic``) scores the candidates of a person
-  ``third_party`` allows (synthetic people only); anyone else's critic is Spark Open. Its reply is read
-  for scores and letters only, as Spark Open's is, and priced into ``PracticeRun.critic_usd``. It can't
-  say it was cut, so a reply cut at its cap is an unreadable one: the first Glimmer candidate, no pair.
+- ``critic``: a third-party critic (``critics.ThirdPartyCritic``, DeepSeek V4.1 Flash) scores the
+  candidates of a person ``third_party`` allows (synthetic people only); anyone else's critic is Spark
+  Open. Its reply is read for scores and letters only, as Spark Open's is, and priced into
+  ``PracticeRun.critic_usd``. A reply cut at its cap is never read, as Spark Open's: its scene is dropped.
 - ``lazy_teacher``: the teacher is asked only where the critic found every Glimmer candidate missing a
   constraint, the only scene where it can become the target; the critic then judges the four again.
   Neither the teacher nor anything that trains ever reads a verdict: the teacher's prompt is F and the
@@ -145,18 +145,20 @@ class _ThirdParty:
 
     def __init__(self, critic: ThirdPartyCritic) -> None:
         self.critic = critic
-        self.counts = {"calls": 0, "in": 0, "out": 0}
+        self.counts = {"calls": 0, "in": 0, "out": 0, "cut": 0}
         self.usd = 0.0
         self._lock = threading.Lock()
 
     def ask(self, prompt: str) -> _Said:
-        text, tokens_in, tokens_out = self.critic.ask(prompt)
+        reply = self.critic.ask(prompt)
+        cut = reply.finish_reason == CUT
         with self._lock:
             self.counts["calls"] += 1
-            self.counts["in"] += tokens_in
-            self.counts["out"] += tokens_out
-            self.usd += self.critic.usd(tokens_in, tokens_out)
-        return _Said(text, False)
+            self.counts["in"] += reply.input_tokens
+            self.counts["out"] += reply.output_tokens
+            self.counts["cut"] += cut
+            self.usd += self.critic.usd(reply.input_tokens, reply.output_tokens)
+        return _Said(reply.text, cut)  # a cut verdict is never read: its scene is dropped
 
 
 class CappedChat(Protocol):

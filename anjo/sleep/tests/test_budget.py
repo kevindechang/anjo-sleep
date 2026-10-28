@@ -271,8 +271,8 @@ def test_the_module_reserve_uses_the_data_dir(tmp_path: Path, monkeypatch: pytes
 def test_the_caps_and_time_limits_are_section_12_1s() -> None:
     assert dict(budget.CAPS) == {
         "modal_usd": 500.0, "colab_cu": 100.0, "meta_usd": 140.0, "baseten_sleep_usd": 60.0,
-        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 90.0, "vertex_usd": 50.0, "vertex_mind_usd": 150.0,
-        "judge_usd": 100.0,
+        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 90.0, "fireworks_sleep_usd": 20.0, "vertex_usd": 50.0,
+        "vertex_mind_usd": 150.0, "judge_usd": 100.0,
     }
     assert budget.UNITS["colab_cu"] == "cu" and budget.BASETEN_TOTAL == 100.0
     assert (budget.TRAINING_TIMEOUT_S, budget.EVAL_TIMEOUT_S) == (7200, 3600)

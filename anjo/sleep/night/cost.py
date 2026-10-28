@@ -54,7 +54,7 @@ from typing import Any, Final
 
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.practice.critics import GEMINI_IN_PER_M, GEMINI_OUT_PER_M
+from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
 from anjo.sleep.practice.full import SPARK_CAPS
 from anjo.sleep.practice.roles import Roles
 from anjo.sleep.probes.generate import COUNTS
@@ -131,7 +131,7 @@ class Units:
     spark_share: tuple[tuple[str, float], ...] = (("person", 0.04), ("teacher", 0.48), ("critic", 0.48))
     person_reply_tokens: int = 1_500  # estimate: twenty scenes as JSON, when Glimmer writes them
     critic_in_tokens: int = 6_000  # estimate: F, the message and four candidates
-    critic_out_tokens: int = 700  # estimate: Gemini's low thinking and the JSON
+    critic_out_tokens: int = 300  # estimate: DeepSeek's JSON, non-thinking
     all_miss_share: float = 0.25  # estimate: scenes whose three Glimmer candidates all miss (the A/B measures it)
     encode_load_s: float = 370.0  # estimate (mind.core.latents.LOAD_S): an A100 start, 56 GB of bf16, 10 s idle
     encode_s: float = 33.0  # estimate: a day's ~120k tokens to layer 35, at latents' 2,500 tokens/s full depth
@@ -148,12 +148,12 @@ UNITS: Final = Units()
 ANCHOR: Final = Settings("2026-10-28.4", practice_concurrency=8, gate_concurrency=8, base_cached=False,
                          spark_capped=True, morning=DAILY, safety=True)
 ONE_SYSTEM: Final = replace(CURRENT, name="one system", one_system=True)
-ALL: Final = replace(ONE_SYSTEM, name="all", roles=Roles("glimmer", "gemini", "lazy"), batch=5, idle_tail=False,
+ALL: Final = replace(ONE_SYSTEM, name="all", roles=Roles("glimmer", "deepseek", "lazy"), batch=5, idle_tail=False,
                      encode_in_training=True, encode_people=5)
 SCENARIOS: Final[tuple[Settings, ...]] = (
     ANCHOR, replace(ANCHOR, name="+ base cache", base_cached=True), replace(CURRENT, name="+ safety off"),
     ONE_SYSTEM,
-    replace(ONE_SYSTEM, name="critic=gemini", roles=Roles(critic="gemini")),
+    replace(ONE_SYSTEM, name="critic=deepseek", roles=Roles(critic="deepseek")),
     replace(ONE_SYSTEM, name="person=glimmer", roles=Roles(person="glimmer")),
     replace(ONE_SYSTEM, name="teacher=lazy", roles=Roles(teacher="lazy")),
     replace(ONE_SYSTEM, name="H100 at 32", gpu="H100", max_inputs=32, gate_concurrency=32, practice_concurrency=16),
@@ -344,8 +344,8 @@ def _practice(settings: Settings, units: Units, serve: float) -> dict[str, float
         (0.0 if roles.person == "glimmer" else share["person"])
         + share["teacher"] * (units.all_miss_share if lazy else 1.0)
         + (share["critic"] * critic_calls if roles.critic == "spark" else 0.0))
-    per_call = (units.critic_in_tokens * GEMINI_IN_PER_M + units.critic_out_tokens * GEMINI_OUT_PER_M) / 1e6
-    critic = units.practice_scenes * critic_calls * per_call if roles.critic == "gemini" else 0.0
+    per_call = (units.critic_in_tokens * DEEPSEEK_IN_PER_M + units.critic_out_tokens * DEEPSEEK_OUT_PER_M) / 1e6
+    critic = units.practice_scenes * critic_calls * per_call if roles.critic == "deepseek" else 0.0
     gpu = gpus.GPUS[settings.gpu]
     slower = gpus.L40S.stream_tokens_s / gpu.stream_tokens_s
     waves = math.ceil(units.practice_scenes / min(settings.practice_concurrency, settings.max_inputs))

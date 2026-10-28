@@ -104,8 +104,9 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     assert one.trained["training"] == pytest.approx(2.88 / 60 * 2.5 * (1 + units.joint_training_share))
 
     # Practice by role: a third-party critic is priced apart; Glimmer as the person moves its call to the GPU.
-    gemini, glimmer = by_name["critic=gemini"], by_name["person=glimmer"]
-    assert gemini.trained["practice_critic"] > 0 and gemini.trained["practice_spark"] < one.trained["practice_spark"]
+    deepseek, glimmer = by_name["critic=deepseek"], by_name["person=glimmer"]
+    assert deepseek.trained["practice_critic"] > 0
+    assert deepseek.trained["practice_spark"] < one.trained["practice_spark"]
     assert glimmer.trained["practice_gpu"] > one.trained["practice_gpu"]
     total = {name: math.fsum(p.trained.values()) for name, p in by_name.items()}
     assert total["all"] < min(t for name, t in total.items() if name != "all")
