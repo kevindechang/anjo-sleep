@@ -8,7 +8,8 @@ night's recipe into the library settings offline, which the tests check.
 The recipe (``anjo.sleep.train.lora``): Glimmer in 4-bit NF4 with double quantization and bf16
 compute, a LoRA of rank r (at most 32) and alpha 2r on the attention and MLP projections, the loss
 on the completion (her reply) only, no packing, and every row longer than ``max_seq_length``
-dropped and counted rather than cut. A warm start loads the previous adapter as trainable.
+dropped and counted rather than cut; a recipe with ``keep_every_row`` (Task 17b) instead stops
+before the model loads if any row would be dropped (``check_every_row_kept``). A warm start loads the previous adapter as trainable.
 
 **Train as served.** Each row goes to TRL as plain text, rendered the way the server renders a
 request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` (or the
@@ -139,6 +140,8 @@ def load_config(raw: str) -> dict[str, Any]:
         raise ValueError(f"packing stays off and the objective is one of {', '.join(OBJECTIVES)}")
     if "max_steps" in cfg:
         _int(cfg, "max_steps", 1, 100_000)
+    if not isinstance(cfg.get("keep_every_row", False), bool):
+        raise ValueError("keep_every_row is true or false")
     if cfg["objective"] == "sft_dpo":
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
@@ -296,6 +299,14 @@ def _rendered(tokenizer: Any, rows: list[dict[str, Any]], max_length: int,
     return [(row, plain) for row, plain in both if _fits(tokenizer, plain, max_length)]
 
 
+def check_every_row_kept(cfg: dict[str, Any], rows: int, kept: int) -> None:
+    """A recipe with ``keep_every_row`` (Task 17b, whose rows are whole trajectories) trains on
+    every row or not at all: a row too long for ``max_seq_length``, counted with the real
+    tokenizer, stops the run here, before the model loads or a step is taken."""
+    if cfg.get("keep_every_row") and kept != rows:
+        raise ValueError(f"{rows - kept} of {rows} rows are longer than max_seq_length, and this run keeps every row")
+
+
 def _check_tokens(tokenizer: Any, row: dict[str, Any], side: str, prompt_ids: Sequence[int],
                   reply_ids: Sequence[int], template: dict[str, str]) -> None:  # pragma: no cover - needs the training stack
     """What TRL prepared for one side of ``row`` is what the server renders: the prompt is the
@@ -427,6 +438,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     template = template_kwargs(cfg)
     rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
+    check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
     pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
     model = _load_model(cfg, settings, smoke)
     peft_config = None

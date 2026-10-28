@@ -451,7 +451,7 @@ def test_sampling_skips_nothing_it_was_given_and_counts_tokens() -> None:
 
     def factory(seed: int, night: date) -> sample.RecordingThinker:
         calls.append(seed)
-        assert night == sample.branch_night(starts[0])  # dated on the branch's own night
+        assert night == starts[0].night  # dated on the night its tools are masked to
         return fakes.FakeGlimmer(seed, 0.8)
 
     models = dataclasses.replace(fakes.fake_replay_models(), thinker_for=factory)
@@ -493,7 +493,7 @@ def test_only_applied_turns_that_ended_at_a_stop_token_train() -> None:
     for branch in clean:
         rejected = [t.seq for t in branch.turns if t.seq not in branch.applied]
         assert set(branch.applied) <= {t.seq for t in branch.turns}
-        assert {t.seq for t in branch.targets} == set(branch.applied) and branch.day == sample.branch_night(starts[0])
+        assert {t.seq for t in branch.targets} == set(branch.applied) and branch.day == starts[0].night
         assert not set(rejected) & {t.seq for t in branch.targets}
     cut = _branches(starts[0], life, dataclasses.replace(fakes.fake_replay_models(), thinker_for=lambda s, n: Cut(s)))
     for branch in cut:

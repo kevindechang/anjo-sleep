@@ -6,10 +6,11 @@
   hypotheses there is one start state, with its hypothesis set frozen, the catch-all last.
 - **Branches** (``run_branches``): ``REPLAY_K`` per start state, each on a fresh copy of the log
   with its own thinker (``ReplayModels.thinker_for``: Glimmer at ``BRANCH_TEMPERATURE``, one seed
-  per branch, its prompts dated on the branch's night). Each runs one night's inquiry budget on the real loop, focused on the start state's
+  per branch). Each runs one night's inquiry budget on the real loop, focused on the start state's
   question, with every tool masked to the start state's night (``as_of``, m = 0): a branch can
-  never see what came later. The branch's ``RunStart`` names the next night, so K5's stall count
-  starts afresh, as a new night's would; ``as_of`` stays the start state's. Nothing arrives, so
+  never see what came later. Its prompts are dated on that night too, the night whose evidence it
+  sees, as an arm's are (``served.dated_core``). Only the branch's ``RunStart`` names the next night
+  (``branch_night``), so K5's stall count starts afresh, as a new night's would. Nothing arrives, so
   there is no notice pass. Each branch ends with its credence vector over the frozen set, a
   hypothesis it added counted in the catch-all (``frozen_credences``), and how each of its
   thinker's calls ended (its thinker records them: ``RecordingThinker``), so only applied turns
@@ -176,7 +177,8 @@ def frozen_credences(hypotheses: Sequence[Hypothesis], start: StartState) -> dic
 
 
 def branch_night(start: StartState) -> date:
-    """The night a branch's ``RunStart`` names: the next one, so K5 counts afresh."""
+    """The night a branch's ``RunStart`` names: the next one, so K5 counts afresh. Its prompts
+    stay dated on the start state's night."""
     return start.night + timedelta(days=1)
 
 
@@ -214,7 +216,7 @@ class _SeenWorld:
 def _branch(start: StartState, life: Life, models: ReplayModels, index: int, seed: int, budget: Budget,
             core: MindCore, brief: str) -> Branch:
     world, resolver = _SeenWorld(models.world), _SeenChat(models.resolver_chat)
-    thinker = models.thinker_for(seed, branch_night(start))
+    thinker = models.thinker_for(seed, start.night)
     ports = InquiryPorts(
         thinker=BriefedThinker(thinker, brief), screen=models.screen,
         search=LifeSearch(life.evidence), world=world, resolver=SparkResolver(chat=resolver),
@@ -239,7 +241,7 @@ def _branch(start: StartState, life: Life, models: ReplayModels, index: int, see
         start.id, index, seed, ended or frozen_credences(begun.hypotheses_of(start.question_id), start) or {},
         run.budget.tokens_used, turns, False, ancestry, ends={seq: ends[seq] for seq in on_question if seq in ends},
         applied=frozenset(e.step.seq for e in run.events if e.step.applied and e.step.seq in on_question),
-        failed=sum(1 for end in thinker.calls if end.failed), day=branch_night(start),
+        failed=sum(1 for end in thinker.calls if end.failed), day=start.night,
     )
     return dataclasses.replace(branch, complete=ended is not None and not branch.failed and bool(branch.targets))
 

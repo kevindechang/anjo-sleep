@@ -6,12 +6,13 @@ their rendering. The tokenizer, the vLLM server and the Colab CLI are fakes: no 
 network."""
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ import pytest
 
 from anjo.sleep.budget import CAPS, Ledger, Pool
 from anjo.sleep.mind.apd.types import Life
-from anjo.sleep.mind.apd.arms import load_brief, run_arm
+from anjo.sleep.mind.apd.arms import load_brief, mind_core, run_arm
 from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, served, settings, spend
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.mind.replay.types import Branch, CallEnd, ReplayRefused, StartState
@@ -81,11 +82,13 @@ class _Server:
     def __init__(self, tokenizer: _Glimmer) -> None:
         self.tokenizer = tokenizer
         self.served: dict[str, list[int]] = {}
+        self.dates: list[str] = []  # each prompt's current_date, in order
         self._message = ""
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         if path == "/tokenize" and "messages" in body:
             self._message = str(body["messages"][-1]["content"])
+            self.dates.append(str(body["chat_template_kwargs"]["current_date"]))
             ids = self.tokenizer.apply_chat_template(
                 body["messages"], add_generation_prompt=body["add_generation_prompt"], **body["chat_template_kwargs"])
             return {"tokens": ids}
@@ -183,8 +186,8 @@ class FakeColab:
     """The ``colab`` CLI: every call recorded; ``download`` writes the adapter (recording
     ``rendering``) and the receipt."""
 
-    def __init__(self, rendering: str, dropped: int = 0) -> None:
-        self.rendering, self.dropped = rendering, dropped
+    def __init__(self, rendering: str) -> None:
+        self.rendering = rendering
         self.calls: list[list[str]] = []
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
@@ -193,7 +196,7 @@ class FakeColab:
             local = Path(args[-1])
             if local.name == colab_train.RECEIPT:
                 local.write_text(json.dumps({"steps": 9, "epochs": 1, "train_minutes": 40.0, "examples": 3,
-                                             "dropped_truncated": self.dropped, "gpu": "A100-SXM4-80GB"}))
+                                             "dropped_truncated": 0, "gpu": "A100-SXM4-80GB"}))
             elif local.name == "adapter_config.json":
                 local.write_text(json.dumps({"peft_type": "LORA", "r": 16, framing.RENDERING_KEY: self.rendering}))
             else:
@@ -261,6 +264,7 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
                 for arg in args if arg.startswith("ANJO_TRAIN_CONFIG=")]
     assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both, max_steps too
     assert settings[0]["max_steps"] == found.adapters[0].steps == found.adapters[1].steps
+    assert settings[0]["keep_every_row"] is True  # the VM stops before training if a row would be dropped
     assert colab_train.build_settings(colab_train.load_config(json.dumps(settings[0])))["sft"]["max_steps"] == (
         settings[0]["max_steps"])
     assert settings[0]["current_date"] == thinker.render_night(data).isoformat() and settings[0]["warm_start"] is False
@@ -288,12 +292,24 @@ def test_replay_training_refuses_a_real_person_unequal_data_and_a_pool_without_r
         thinker.train_thinkers(data, runner, ledger, workdir=tmp_path / "w", adapter_cache=tmp_path / "c",
                                publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
     assert cli.calls == []  # stopped before any VM
-    cut = FakeColab(framing.rendering(config.reasoning_strength()), dropped=1)
-    ledger = Ledger(tmp_path / "cut.jsonl", caps=CAPS)
-    runner = thinker.colab_runner(ColabCli(Path("/fake/colab"), run=cut), ledger, clock=Clock())
-    with pytest.raises(TrainError, match="cutting a trajectory"):  # the script dropped a row on the VM
-        thinker.train_thinkers(data, runner, ledger, workdir=tmp_path / "w2", adapter_cache=tmp_path / "c2",
-                               publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
+
+
+def test_the_script_stops_before_the_model_loads_if_any_row_would_be_dropped() -> None:
+    tokenizer = _Glimmer()
+    data = _replay()
+    rows = [json.loads(line) for line in data.thinker1.to_jsonl().splitlines()]
+    long = {**rows[0], "id": "long", "prompt": [{"role": "user", "content": "word " * 9_000}]}
+    cfg = colab_train.load_config(json.dumps(training_config(
+        LoraCfg(), len(rows), warm=False, revision="a" * 40, night=thinker.render_night(data), keep_every_row=True)))
+    template = colab_train.template_kwargs(cfg)
+    kept = colab_train._rendered(tokenizer, [*rows, long], cfg["max_seq_length"], template)
+    assert len(kept) == len(rows)  # the real tokenizer's count drops the long row
+    with pytest.raises(ValueError, match="keeps every row"):
+        colab_train.check_every_row_kept(cfg, len(rows) + 1, len(kept))
+    colab_train.check_every_row_kept(cfg, len(rows), len(rows))
+    colab_train.check_every_row_kept({**cfg, "keep_every_row": False}, len(rows) + 1, len(kept))  # the night's rule
+    main = inspect.getsource(colab_train.main)
+    assert main.index("check_every_row_kept(") < main.index("_load_model(") < main.index(".train()")
 
 
 def test_a_typical_development_set_plans_inside_the_spec() -> None:
@@ -371,3 +387,35 @@ def test_the_dry_run_prices_the_labels_and_bounds_the_gpu_time() -> None:
     text = estimate.describe(found)
     assert "A100 minutes" in text and "$" in text and "colab_cu" in text and "baseten_mind_usd" in text
     assert "unpriced" in estimate.describe(estimate.estimate(starts, [life], held_out, None))
+
+
+def test_a_branch_row_and_an_arm_prompt_masked_to_the_same_night_carry_its_date() -> None:
+    server = _Server(_Glimmer())
+    colab = _Colab(VllmClient.over(server))
+    data = _replay(replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(colab)))
+    rows = [json.loads(line) for d in (data.thinker1, data.shuffled) for line in d.to_jsonl().splitlines()]
+    for row in rows:  # a start state's id is "<life>:<night>:<question>", its tools masked to that night
+        assert row["current_date"] == row["id"].split(":")[1]
+    real, masks = mind_core(), list[tuple[str, int]]()
+
+    def notice(ws: Any, new: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
+        masks.append((as_of.date().isoformat(), len(server.dates)))
+        return real.notice(ws, new, ports, budget, night=night, as_of=as_of, **rest)
+
+    def run_inquiry(ws: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
+        masks.append((as_of.date().isoformat(), len(server.dates)))
+        return real.run_inquiry(ws, ports, budget, night=night, as_of=as_of, **rest)
+
+    clock = served.NightClock()
+    arm = served.arm_thinker(colab, None, clock)
+    thinkers = compare.ArmThinkers(arm, served.arm_thinker(colab, None, clock), served.arm_thinker(colab, None, clock), clock)
+    held_out = fakes.fake_life(100, split="held_out")
+    compare.run_replay_arms([held_out], fakes.fake_models(), thinkers, brief=BRIEF,
+                            core=replace(real, notice=notice, run_inquiry=run_inquiry))
+    ends = [start for _, start in masks[1:]] + [len(server.dates)]
+    called = [(night, server.dates[start:end]) for (night, start), end in zip(masks, ends, strict=True)]
+    assert any(dates for _, dates in called)
+    for night, dates in called:  # each arm prompt carries the night its evidence is masked to
+        assert set(dates) <= {night}
+    shared = {row["current_date"] for row in rows} & {night for night, dates in called if dates}
+    assert shared  # the same nights, dated the same: a branch's row and an arm's prompt agree

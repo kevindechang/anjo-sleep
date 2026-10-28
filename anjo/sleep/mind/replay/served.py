@@ -8,9 +8,10 @@ the same message, and the training script renders each row the same way, on its 
 trained adapter sees the prompt it is served.
 
 - **The date:** the night dates its prompts on the night's clock (``app/night.py``), so every
-  call here is dated on the night of the run it belongs to (its ``RunStart``'s): a branch on
-  ``sample.branch_night``, and an arm on each night of the life in turn (``dated_core`` sets the
-  ``NightClock`` before each loop call). A call with no night set is refused, never dated today.
+  call here is dated on the night whose evidence it sees: an arm on each night of the life in turn
+  (``dated_core`` sets the ``NightClock`` before each loop call), and a branch on its start state's
+  night, which its tools are masked to (its ``RunStart`` names the next night only to restart the
+  stall count). A call with no night set is refused, never dated today.
 - **Sampling:** branches at ``BRANCH_TEMPERATURE``, one seed each; the arms (M on base Glimmer,
   M+replay and M+shuffled on their adapters) at temperature 0, as the night does.
 - **Failures are counted, never turned into text:** a failed call is empty text charged its cap,

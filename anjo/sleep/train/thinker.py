@@ -5,7 +5,9 @@
   of the same start states, so their rows and tokens may differ; one step plan serves both
   (``shared_steps``: the larger set's accumulation and step count, sent as ``max_steps``), so each
   takes the same updates and sees every row at least once. The plan records each set's rows and
-  tokens, and a run whose script dropped a row (cutting a trajectory) is refused.
+  tokens. No trajectory is ever cut: the dataset drops a start state whose rows are too long by the
+  host's estimate, and the script, counting with the real tokenizer, stops before the model loads
+  if any row would still be dropped (``keep_every_row``), so only the VM's boot is spent.
 - **Colab only, never Modal:** ``train_thinkers`` takes a ``ColabRunner``, which ``colab_runner``
   builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else. The runner holds
   each job's worst case on the ``colab_cu`` pool before its VM starts; ``train_thinkers`` first
@@ -176,12 +178,10 @@ def train_thinkers(
     refs: tuple[CheckpointRef, ...] = ()
     for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
         name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
-        ref, receipt = train_lora_with_receipt(
+        ref, _ = train_lora_with_receipt(
             None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
             workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
-            timeout_s=timeout_s, steps=steps,
+            timeout_s=timeout_s, steps=steps, keep_every_row=True,
         )
-        if receipt.dropped_truncated:
-            raise TrainError(f"{label}'s training dropped {receipt.dropped_truncated} rows, cutting a trajectory")
         used, refs = used | {name}, (*refs, ref)
     return found, refs
