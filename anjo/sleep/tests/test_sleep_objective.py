@@ -291,7 +291,9 @@ def test_the_script_feeds_each_term_the_rows_the_server_would_render(tmp_path: P
 
 def _tiny(torch: Any, vocab: int = 12, dim: int = 6, rank: int = 2) -> Any:
     """A causal toy with a LoRA on its head: the logits read a running mean of the tokens so far, so
-    a context changes them, and ``disable_adapter`` switches the LoRA off as PEFT's does."""
+    a context changes them, and ``disable_adapter`` switches the LoRA off as PEFT's does. Each forward
+    pass records its ids, whether the adapter was on, whether a gradient was, whether it was in train
+    mode, and the LoRA's B as it stood."""
     nn = torch.nn
 
     Module: Any = nn.Module
@@ -307,7 +309,7 @@ def _tiny(torch: Any, vocab: int = 12, dim: int = 6, rank: int = 2) -> Any:
             for p in (*self.emb.parameters(), *self.head.parameters()):
                 p.requires_grad_(False)
             self.enabled = True
-            self.calls: list[tuple[tuple[int, ...], bool, bool]] = []
+            self.calls: list[tuple[tuple[int, ...], bool, bool, bool, Any]] = []
 
         @contextmanager
         def disable_adapter(self) -> Iterator[None]:
@@ -318,7 +320,8 @@ def _tiny(torch: Any, vocab: int = 12, dim: int = 6, rank: int = 2) -> Any:
                 self.enabled = True
 
         def forward(self, input_ids: Any, logits_to_keep: int = 0, **kw: Any) -> Any:
-            self.calls.append((tuple(input_ids[0].tolist()), self.enabled, torch.is_grad_enabled()))
+            self.calls.append((tuple(input_ids[0].tolist()), self.enabled, torch.is_grad_enabled(), self.training,
+                               self.lora_B.detach().clone()))
             h = self.emb(input_ids)
             h = h.cumsum(dim=1) / torch.arange(1, h.shape[1] + 1).view(1, -1, 1)
             logits = self.head(h)
@@ -343,26 +346,53 @@ def _plan(**changes: Any) -> Any:
     return replace(sleep_loss.Plan(lr=0.05, min_steps=2, beta=0.1, seed=3, eot=11, pad=0, dpo_lr=1e-4), **changes)
 
 
-def test_seeding_teacher_is_base_plus_context_adapter_off() -> None:
+def test_seeding_teacher_is_the_long_term_adapter_plus_context() -> None:
+    """The teacher is the adapter the night started from (the long-term one), with the day in
+    context, no gradient and no dropout; the student is tonight's adapter on the message alone."""
     torch = _torch()
     model = _tiny(torch)
+    long_term = model.lora_B.detach().clone()
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    with torch.no_grad():
+        model.lora_B.add_(0.5)  # what tonight's training has done so far
+    tonight = model.lora_B.detach().clone()
+    model.train()
     row = sleep_loss.SeedSeq(prompt=(1, 2), teacher=(7, 8, 9, 1, 2), reply=(3, 4, 11))
-    kl = sleep_loss.seed_kl(model, row)
-    teacher, student = model.calls
-    assert teacher == ((7, 8, 9, 1, 2, 3, 4, 11), False, False)  # adapter off, the day first, no gradient
-    assert student == ((1, 2, 3, 4, 11), True, True)  # her adapter on, no context, trained
-    # Reverse KL(student || teacher) over the reply's positions, by hand:
-    with torch.no_grad(), model.disable_adapter():
-        t = torch.log_softmax(model(torch.tensor([[7, 8, 9, 1, 2, 3, 4, 11]])).logits[0, 4:7], -1)
-    s = torch.log_softmax(model(torch.tensor([[1, 2, 3, 4, 11]])).logits[0, 1:4], -1)
-    assert torch.allclose(kl, (s.exp() * (s - t)).sum(-1).mean(), atol=1e-6) and float(kl.detach()) > 0
+    kl = sleep_loss.seed_kl(model, row, teacher)
+    (t_ids, t_on, t_grad, t_train, t_b), (s_ids, s_on, s_grad, s_train, s_b) = model.calls
+    assert (t_ids, t_on, t_grad, t_train) == ((7, 8, 9, 1, 2, 3, 4, 11), True, False, False)  # the day first
+    assert torch.equal(t_b, long_term)  # the long-term adapter, not the base and not tonight's
+    assert (s_ids, s_on, s_grad, s_train) == ((1, 2, 3, 4, 11), True, True, True) and torch.equal(s_b, tonight)
+    assert torch.equal(model.lora_B, tonight) and model.training  # tonight's adapter is back, training resumes
     kl.backward()
     assert model.lora_B.grad is not None and model.head.weight.grad is None
-    # With no context and the adapter's effect zeroed, teacher and student agree: nothing to learn.
+    # Reverse KL(student || teacher) over the reply's positions, by hand:
     with torch.no_grad():
-        model.lora_B.zero_()
+        model.lora_B.copy_(long_term)
+        t = torch.log_softmax(model(torch.tensor([[7, 8, 9, 1, 2, 3, 4, 11]])).logits[0, 4:7], -1)
+        model.lora_B.copy_(tonight)
+        s = torch.log_softmax(model(torch.tensor([[1, 2, 3, 4, 11]])).logits[0, 1:4], -1)
+    assert torch.allclose(kl.detach(), (s.exp() * (s - t)).sum(-1).mean(), atol=1e-6) and float(kl.detach()) > 0
+    # Tonight's adapter still the night's start and no context: teacher and student agree, nothing to learn.
     same = sleep_loss.SeedSeq(prompt=(1, 2), teacher=(1, 2), reply=(3, 4))
-    assert float(sleep_loss.seed_kl(model, same).detach()) == pytest.approx(0.0, abs=1e-7)
+    start = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    assert float(sleep_loss.seed_kl(model, same, start).detach()) == pytest.approx(0.0, abs=1e-7)
+
+
+def test_with_the_fold_the_teacher_has_the_long_term_ranks_on_and_tonights_slot_off() -> None:
+    torch = _torch()
+    model = _tiny(torch, rank=3)
+    sleep_loss.load_leading(model, {"lora_A.weight": model.lora_A[:2].detach().clone(),
+                                    "lora_B.weight": model.lora_B[:, :2].detach().clone()}, rank=2, adapter="")
+    long_term = model.lora_B.detach().clone()
+    assert not long_term[:, 2:].any()  # the fresh slot starts empty
+    seeds = tuple(sleep_loss.SeedSeq((1, i), (9, 9, 1, i), (4, 5, 11)) for i in range(2, 6))
+    sleep_loss.train_terms(model, sleep_loss.Batch(seeds=seeds), _plan(long_term_rank=2))
+    taught = [b for ids, on, grad, _, b in model.calls if ids[:2] == (9, 9) and on and not grad]
+    trained = [b for ids, on, grad, _, b in model.calls if ids[:2] != (9, 9) and on and grad]
+    assert len(taught) >= len(seeds) and all(torch.equal(b, long_term) for b in taught)
+    assert any(b[:, 2:].any() for b in trained)  # the student had tonight's slot on
+    assert model.lora_B[:, 2:].any() and torch.equal(model.lora_B[:, :2], long_term[:, :2])
 
 
 def test_seeding_trains_only_the_adapter() -> None:

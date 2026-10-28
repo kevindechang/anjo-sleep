@@ -1,8 +1,8 @@
 """``sft_dpo_seed``'s extra rows, built on the host from what the night already holds (2026-10-29).
 
 **Knowledge seeding** (``seed_rows``). The paper's consolidation: the teacher is the model with the
-short-term memory in context, the student the model without it. Here the teacher is Glimmer with the
-adapter off and the consolidated day before the message: her notes on the person (the pre-practice
+short-term memory in context, the student the model without it. Here the teacher is Glimmer with her
+long-term adapter (the one the night starts from) and the consolidated day before the message: her notes on the person (the pre-practice
 snapshot of C) and what they told her today (the day's own evidence: lessons, corrections,
 preferences, tone requests). The student is Glimmer with tonight's adapter and the message alone.
 Both score the same reply: tonight's practice reply from her own Glimmer, already a sample of the

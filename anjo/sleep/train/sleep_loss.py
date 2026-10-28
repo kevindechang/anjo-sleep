@@ -11,8 +11,12 @@ One job trains every term, with these weights (``WEIGHTS``):
   block as today it follows SFT. Inside the main block's optimizer its step would be set by the SFT
   rate (2e-4), some 20x today's at any weight Adam leaves unscaled, so it never shares it;
 - ``seed`` 1.0, knowledge seeding: per token, over the full vocabulary, the reverse KL from the
-  student (her adapter on, the message alone) to the teacher (the same base with the adapter off and
-  the consolidated day before the message), on her own replies. A share ``ON_POLICY_SHARE`` of the
+  student (her adapter as it trains tonight, the message alone) to the teacher (her long-term adapter,
+  the one the night started from, with the consolidated day before the message), on her own replies.
+  The teacher is the night-start adapter (``Teacher``): with the fold, the long-term leading ranks and
+  tonight's slot empty; warm without it, last night's adapter; cold, a zero B, so the base. Only the
+  day in context separates teacher from student, so the KL moves the day into tonight's weights and
+  never pulls her back toward the base. A share ``ON_POLICY_SHARE`` of the
   rows is scored on a fresh sample of the student instead of tonight's practice reply (GKD's lambda).
   **Reverse, not forward:** the teacher holds privileged context, so forward KL would make the
   context-free student cover every mode the context made possible and hedge or guess between them;
@@ -28,7 +32,7 @@ One job trains every term, with these weights (``WEIGHTS``):
 - ``dream`` 0.5: dreams, self-generated and so down-weighted. The candidates are ranked by the norm of
   their SFT gradient on the adapter; the top ``DREAM_TOP_K`` and ``DREAM_RANDOM`` more at random train
   in a block after the rest, at half the peak rate, and the block is undone unless the anchor check
-  (the general gate's items, scored as the gate scores them, smoothed) holds (``ANCHOR_TOLERANCE``).
+  (``sets/anchors.jsonl``, disjoint from every gate, scored as the general gate scores, smoothed) holds (``ANCHOR_TOLERANCE``).
   The main block's optimizer and schedule train ``sft``, ``seed``, ``imitate`` and ``dream``.
   Each dream carries its seed's kind (``Batch.dream_groups``: ``boundary``, a state at the edge of a
   decision, or ``random``, the control), and the receipt gives the filter's choices by kind: whether
@@ -230,16 +234,43 @@ def dpo_loss(model: Any, pair: PairSeq, beta: float) -> Any:
     return -torch.nn.functional.logsigmoid(beta * ((chosen - rejected) - reference))
 
 
-def seed_kl(model: Any, row: SeedSeq) -> Any:
+class Teacher:
+    """The seeding teacher's adapter: the adapter's values when the night began (the long-term
+    adapter). A pass under it swaps those values in, runs without a gradient or dropout, and puts
+    tonight's back exactly; the optimizer's state is untouched."""
+
+    def __init__(self, params: Sequence[Any]) -> None:
+        import torch
+
+        self._params = list(params)
+        self._start = [p.detach().clone() for p in self._params]
+        self._live = [torch.empty_like(p) for p in self._params]
+
+    @contextmanager
+    def __call__(self, model: Any) -> Iterator[None]:
+        import torch
+
+        with torch.no_grad(), _evaluating(model):
+            for p, live, start in zip(self._params, self._live, self._start, strict=True):
+                live.copy_(p)
+                p.copy_(start)
+            try:
+                yield
+            finally:
+                for p, live in zip(self._params, self._live, strict=True):
+                    p.copy_(live)
+
+
+def seed_kl(model: Any, row: SeedSeq, teacher: Teacher) -> Any:
     """Knowledge seeding: reverse KL(student || teacher) a reply position, averaged. The teacher is
-    the base with the adapter off and the day in context, scored without a gradient; the student is
-    her adapter on the message alone."""
+    the night-start adapter with the day in context, scored without a gradient; the student is
+    tonight's adapter on the message alone."""
     import torch
 
-    with torch.no_grad(), model.disable_adapter():
-        teacher = torch.log_softmax(reply_logits(model, row.teacher, row.reply), dim=-1)
+    with teacher(model):
+        target = torch.log_softmax(reply_logits(model, row.teacher, row.reply), dim=-1)
     student = torch.log_softmax(reply_logits(model, row.prompt, row.reply), dim=-1)
-    return (student.exp() * (student - teacher)).sum(dim=-1).mean()
+    return (student.exp() * (student - target)).sum(dim=-1).mean()
 
 
 @contextmanager
@@ -393,6 +424,7 @@ class _Run:
     params: list[Any]
     optimizer: Any
     rate: Any
+    teacher: Teacher
     clock: _Clock
     rng: random.Random
     fresh: set[int]
@@ -409,7 +441,7 @@ class _Run:
             index, seq = row
             if index in self.fresh and (fresh := sample(self.model, seq.prompt, FRESH_TOKENS, self.plan)):
                 seq, self.sampled = replace(seq, reply=fresh), self.sampled + 1
-            return seed_kl(self.model, seq)
+            return seed_kl(self.model, seq, self.teacher)
         if term == "imitate":
             loss, reward = imitation_loss(self.model, row, self.rng, self.plan)
             if reward is not None:
@@ -522,17 +554,18 @@ def by_group(groups: Sequence[str], norms: Sequence[float], kept: Sequence[int],
     return out
 
 
-def _probe(model: Any, row: SeedSeq | None) -> tuple[Any, float | None]:
-    """The teacher's logits on ``row`` (adapter off, context on) and the seeding KL there, without
-    dropout or a gradient: taken before and after training, the first must not move and the second should."""
+def _probe(model: Any, row: SeedSeq | None, teacher: Teacher) -> tuple[Any, float | None]:
+    """The teacher's logits on ``row`` (night-start adapter, context on) and the seeding KL there,
+    without dropout or a gradient: taken before and after training, the first must not move and the
+    second should."""
     import torch
 
     if row is None:
         return None, None
+    with teacher(model):
+        logits = reply_logits(model, row.teacher, row.reply)
     with _evaluating(model), torch.no_grad():
-        with model.disable_adapter():
-            teacher = reply_logits(model, row.teacher, row.reply)
-        return teacher, float(seed_kl(model, row))
+        return logits, float(seed_kl(model, row, teacher))
 
 
 def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], float] = time.monotonic) -> dict[str, Any]:
@@ -556,13 +589,14 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
     if main + len(batch.pairs) + dream_steps == 0:
         raise ValueError("a night trains at least one row")
     params = [p for _, p in named]
+    teacher = Teacher(params)  # the night-start adapter: the long-term one, before anything trains
     optimizer = torch.optim.AdamW(params, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
     run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
-               _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [])
+               teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [])
     hooks = freeze_leading(named, plan.long_term_rank) if plan.long_term_rank else []
     held = leading(named, plan.long_term_rank) if plan.long_term_rank else []
     probe = batch.seeds[0] if batch.seeds else None
-    teacher_before, kl_before = _probe(model, probe)
+    teacher_before, kl_before = _probe(model, probe, teacher)
     model.train()
     try:
         for _ in range(epochs):
@@ -573,7 +607,7 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
     finally:
         for hook in hooks:
             hook.remove()
-    teacher_after, kl_after = _probe(model, probe)
+    teacher_after, kl_after = _probe(model, probe, teacher)
     drift = None if probe is None else float((teacher_after - teacher_before).abs().max())
     moved = max((float((now - was).abs().max()) for now, was in zip(leading(named, plan.long_term_rank), held,
                                                                      strict=True)), default=0.0) if held else None

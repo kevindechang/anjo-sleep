@@ -35,8 +35,8 @@ downloaded):
 
 7. runs ``sft_dpo_seed`` (2026-10-29) for two more nights on the same rows plus seeding, dream and
    anchor rows: night 3 cold with the fold and dreams on, night 4 warm from night 3 with the fold on.
-   Each receipt must show gradients on the adapter only, the teacher's logits (adapter off, the day in
-   context) unmoved by the adapter's updates, the seeding KL moved, the DPO block at today's rate, and
+   Each receipt must show gradients on the adapter only, the teacher's logits (the night-start adapter,
+   the day in context) unmoved by the adapter's updates, the seeding KL moved, the DPO block at today's rate, and
    the adapter folded: night 3 to its own rank, night 4 (the long-term rank plus the night's) to the
    set rank, 32, which PEFT then loads as a plain LoRA with the file's weights (``smoke_model --load``).
 
@@ -113,7 +113,7 @@ TODAY_RECEIPT: Final = frozenset({
     "steps", "epochs", "train_minutes", "examples", "dropped_truncated", "gpu", "objective", "dpo_steps", "pairs",
     "pairs_dropped_truncated", "rows_checked", "dpo_reference", "rendering",
 })
-TEACHER_TOLERANCE: Final = 1e-5  # fp32 on the CPU: the adapter-off teacher's logits don't move at all
+TEACHER_TOLERANCE: Final = 1e-5  # fp32 on the CPU: the night-start teacher's logits don't move at all
 _LORA_KEY: Final = re.compile(
     rf"base_model\.model\.(?P<module>{colab_train.TEXT_DECODER}\.(?P<name>[a-z0-9_]+))\.lora_[AB]\.weight")
 
