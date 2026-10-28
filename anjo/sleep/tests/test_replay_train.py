@@ -1,0 +1,256 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
+"""Training replay's thinkers (Task 17b): the rows are the prompts the thinker is served, token for
+token; a dry run spends nothing; both adapters train on the Colab runner from one recipe and record
+their rendering. The tokenizer, the vLLM server and the Colab CLI are fakes: no model, no VM, no
+network."""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from anjo.sleep.budget import CAPS, Ledger, Pool
+from anjo.sleep.mind.apd.types import Life
+from anjo.sleep.mind.apd.arms import load_brief, run_arm
+from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, served
+from anjo.sleep.mind.replay.dataset import ReplayData
+from anjo.sleep.mind.replay.types import RENDER_DAY, Branch, StartState
+from anjo.sleep.serving import config, framing
+from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.stops import BudgetStop
+from anjo.sleep.train import colab_train, thinker
+from anjo.sleep.train.dataset import Dataset
+from anjo.sleep.train.lora import LoraCfg, TrainError, plan_steps, training_config
+from anjo.sleep.train.runners.colab import ColabCli, RealPersonRefused
+
+BRIEF = load_brief()
+_PIECE = re.compile(r"<\|[a-z_]+\|>|[^\s<]+|<")
+
+
+class _Glimmer:
+    """A tokenizer with a chat template framed like Glimmer's: special tokens and words are
+    pieces, and an assistant turn carries the reply's channel header, so the prompt's ids and the
+    reply's add up to the whole conversation's, as the real template's do."""
+
+    bos_token = "<|begin_of_text|>"
+
+    def __init__(self) -> None:
+        self.vocab: dict[str, int] = {}
+
+    def _ids(self, text: str) -> list[int]:
+        return [self.vocab.setdefault(piece, len(self.vocab)) for piece in _PIECE.findall(text)]
+
+    @staticmethod
+    def _turn(message: Mapping[str, Any]) -> str:
+        if message["role"] == "assistant":
+            return f"<|start|>assistant{colab_train.USER_CHANNEL}{message['content']}{colab_train.REPLY_END}"
+        return f"<|start|>{message['role']}<|message|>{message['content']}<|eot|>"
+
+    def apply_chat_template(self, messages: Sequence[Mapping[str, Any]], *, add_generation_prompt: bool = False,
+                            tokenize: bool = True, return_dict: bool = False, reasoning_strength: str,
+                            current_date: str) -> Any:
+        assert not return_dict
+        text = (f"{self.bos_token}<|start|>system<|message|>{reasoning_strength} {current_date}<|eot|>"
+                + "".join(self._turn(m) for m in messages) + ("<|start|>assistant" if add_generation_prompt else ""))
+        return self._ids(text) if tokenize else text
+
+    def __call__(self, text: str, add_special_tokens: bool = True) -> dict[str, list[int]]:
+        bos = [self.convert_tokens_to_ids(self.bos_token)] if add_special_tokens else []
+        return {"input_ids": bos + self._ids(text)}
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return self.vocab.setdefault(token, len(self.vocab))
+
+
+class _Server:
+    """vLLM as the night's client reaches it (a ``Poster``): ``/tokenize`` answered by the fake
+    tokenizer, and ``/v1/completions`` by the fake thinker reading the message it was sent, at the
+    request's temperature and seed. It keeps each message's prompt ids."""
+
+    def __init__(self, tokenizer: _Glimmer) -> None:
+        self.tokenizer = tokenizer
+        self.served: dict[str, list[int]] = {}
+        self._message = ""
+
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        if path == "/tokenize" and "messages" in body:
+            self._message = str(body["messages"][-1]["content"])
+            ids = self.tokenizer.apply_chat_template(
+                body["messages"], add_generation_prompt=body["add_generation_prompt"], **body["chat_template_kwargs"])
+            return {"tokens": ids}
+        if path == "/tokenize":
+            return {"tokens": self.tokenizer(body["prompt"], add_special_tokens=body["add_special_tokens"])["input_ids"]}
+        self.served[self._message] = list(body["prompt"])
+        reply = fakes.FakeGlimmer(body["seed"], body["temperature"]).propose(self._message, body["max_tokens"])
+        return {"model": body["model"], "choices": [{"text": reply.text, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": len(body["prompt"]), "completion_tokens": reply.tokens}}
+
+    def close(self) -> None:
+        return None
+
+
+def _replay(models: sample.ReplayModels | None = None, seeds: Sequence[int] = (0,)) -> ReplayData:
+    lives: list[Life] = []
+    starts: list[StartState] = []
+    branches: dict[str, tuple[Branch, ...]] = {}
+    book = resolve.LabelBook()
+    for seed in seeds:
+        life = fakes.fake_life(seed)
+        found = sample.start_states(life, run_arm("M", life, fakes.fake_models()))
+        labels = resolve.label_all(found, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeLabelChat()))
+        for label in labels.labels.values():
+            book = book.with_label(label)
+        branches.update(sample.sample_all([(life, found)], models or fakes.fake_replay_models(), labels, brief=BRIEF))
+        lives.append(life)
+        starts.extend(found)
+    return dataset.build(lives, starts, branches, book, brief=BRIEF)
+
+
+def test_thinker_rows_match_the_served_rendering_token_for_token() -> None:
+    tokenizer = _Glimmer()
+    server = _Server(tokenizer)
+    client = VllmClient.over(server)
+    models = replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(client))
+    data = _replay(models)
+    cfg = training_config(LoraCfg(), len(data.thinker1.examples), warm=False, revision="a" * 40, night=RENDER_DAY)
+    template = colab_train.template_kwargs(cfg)
+    assert template["current_date"] == RENDER_DAY.isoformat() and cfg["rendering"] == client.rendering
+    rows = [json.loads(line) for d in (data.thinker1, data.shuffled) for line in d.to_jsonl().splitlines()]
+    assert rows and all(row["provenance"] == "glimmer" for row in rows)
+    for row in rows:
+        plain = colab_train.plain_row(tokenizer, row, template)
+        prompt_ids = tokenizer(plain["prompt"])["input_ids"]
+        reply_ids = tokenizer(plain["completion"], add_special_tokens=False)["input_ids"]
+        assert server.served.get(row["prompt"][-1]["content"]) == prompt_ids  # what the thinker was sent
+        colab_train._check_tokens(tokenizer, row, "completion", prompt_ids, reply_ids, template)
+
+
+def test_branch_and_arm_thinkers_are_served_as_the_night_serves_mind() -> None:
+    server = _Server(_Glimmer())
+    client = VllmClient.over(server)
+    branch = served.branch_thinkers(client)(7)
+    assert (branch.temperature, branch.seed, branch.adapter) == (0.8, 7, None)
+    base = served.arm_thinker(client, None)
+    assert (base.temperature, base.adapter) == (0.0, None)
+    reply = branch.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
+    assert reply.model == "meta-models/Muse-Glimmer-30B"
+    assert branch.propose("anything", 0).tokens == 0 and not server.served.get("anything")
+
+
+class FakeColab:
+    """The ``colab`` CLI: every call recorded; ``download`` writes the adapter (recording
+    ``rendering``) and the receipt."""
+
+    def __init__(self, rendering: str) -> None:
+        self.rendering = rendering
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(args))
+        if args[3] == "download":
+            local = Path(args[-1])
+            if local.name == colab_train.RECEIPT:
+                local.write_text(json.dumps({"steps": 9, "epochs": 1, "train_minutes": 40.0, "examples": 3,
+                                             "dropped_truncated": 0, "gpu": "A100-SXM4-80GB"}))
+            elif local.name == "adapter_config.json":
+                local.write_text(json.dumps({"peft_type": "LORA", "r": 16, framing.RENDERING_KEY: self.rendering}))
+            else:
+                local.write_bytes(b"weights")
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    def commands(self) -> list[str]:
+        return [args[3] for args in self.calls]
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += 2400.0  # every reading is 40 minutes on
+        return self.now
+
+
+def _setup(tmp_path: Path, caps: Mapping[Pool, float] = CAPS) -> tuple[FakeColab, Ledger, Any]:
+    cli = FakeColab(framing.rendering(config.reasoning_strength()))
+    ledger = Ledger(tmp_path / "ledger.jsonl", caps=caps)
+    return cli, ledger, thinker.colab_runner(ColabCli(Path("/fake/colab"), run=cli), ledger, clock=Clock())
+
+
+def test_the_dry_run_plan_spends_nothing(tmp_path: Path) -> None:
+    data = _replay()
+    cli, ledger, runner = _setup(tmp_path)
+    printed: list[str] = []
+    published: list[str] = []
+    found, refs = thinker.train_thinkers(
+        data, runner, ledger, workdir=tmp_path / "work", adapter_cache=tmp_path / "cache",
+        publish=lambda folder, name: published.append(name), revision="a" * 40, out=printed.append,
+    )
+    assert refs == () and cli.calls == [] and published == []
+    assert ledger.open_holds() == () and ledger.used("colab_cu") == 0.0
+    assert not (tmp_path / "work").exists() and not (tmp_path / "ledger.jsonl").exists()
+    (text,) = printed
+    rows = len(data.thinker1.examples)
+    for needed in (f"{rows} rows", f"{data.thinker1.tokens:,} tokens", "optimizer steps", "A100 minutes",
+                   "compute units", "thinker-1", "thinker-shuffled"):
+        assert needed in text
+    assert [a.steps for a in found.adapters] == [plan_steps(rows, LoraCfg()).steps] * 2
+
+
+def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering(tmp_path: Path) -> None:
+    data = _replay()
+    cli, ledger, runner = _setup(tmp_path)
+    published: list[str] = []
+    found, refs = thinker.train_thinkers(
+        data, runner, ledger, workdir=tmp_path / "work", adapter_cache=tmp_path / "cache",
+        publish=lambda folder, name: published.append(name), revision="a" * 40, dry_run=False, out=lambda _: None,
+    )
+    assert [ref.rendering for ref in refs] == [framing.rendering(config.reasoning_strength())] * 2
+    assert [ref.person_id for ref in refs] == [thinker.REPLAY_OWNER] * 2 and [r.parent_id for r in refs] == [None, None]
+    assert len({ref.id for ref in refs}) == 2 and published == [ref.id for ref in refs]
+    for ref in refs:
+        config.check_adapter_name(ref.id)
+        assert ref.night == RENDER_DAY
+    settings = [json.loads(arg.split("=", 1)[1]) for args in cli.calls if args[3] == "exec"
+                for arg in args if arg.startswith("ANJO_TRAIN_CONFIG=")]
+    assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both
+    assert settings[0]["current_date"] == RENDER_DAY.isoformat() and settings[0]["warm_start"] is False
+    assert cli.commands().count("new") == 2 and cli.commands().count("stop") == 2
+    assert ledger.open_holds() == () and ledger.used("colab_cu") > 0
+    assert found.hold_cu == pytest.approx(15.0)
+
+
+def test_replay_training_refuses_a_real_person_unequal_data_and_a_pool_without_room(tmp_path: Path) -> None:
+    data = _replay()
+    cli, ledger, runner = _setup(tmp_path)
+    with pytest.raises(RealPersonRefused):
+        runner.run("train_lora", {"person_id": "u-4f2a", "adapter_name": "p-0123456789ab-n0"}, timeout_s=7200)
+    short = replace(data, shuffled=Dataset(examples=data.shuffled.examples[1:], tokens=1, dropped={}))
+    with pytest.raises(TrainError, match="same number"):
+        thinker.plan(short)
+    with pytest.raises(TrainError, match="Colab"):
+        thinker.train_thinkers(data, object(), ledger, workdir=tmp_path, adapter_cache=tmp_path / "c",  # type: ignore[arg-type]
+                               publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
+    tight: dict[Pool, float] = {**CAPS, "colab_cu": 20.0}
+    cli, ledger, runner = _setup(tmp_path / "tight", caps=tight)
+    with pytest.raises(BudgetStop):
+        thinker.train_thinkers(data, runner, ledger, workdir=tmp_path / "w", adapter_cache=tmp_path / "c",
+                               publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
+    assert cli.calls == []  # stopped before any VM
+
+
+def test_a_typical_development_set_plans_inside_the_spec() -> None:
+    rows = tuple(replace(example, id=f"r{n}", tokens=2_600) for n, example in
+                 enumerate([*_replay().thinker1.examples] * 100))[:560]
+    full = Dataset(examples=rows, tokens=2_600 * len(rows), dropped={})
+    found = thinker.plan(ReplayData(thinker1=full, shuffled=full, starts=70, dropped={}))
+    for adapter in found.adapters:
+        assert (adapter.examples, adapter.steps, adapter.accumulation, adapter.epochs) == (560, 35, 16, 1)
+        assert 30 <= adapter.minutes - thinker.SETUP_MINUTES <= 60  # the spec's 30-60 A100 minutes
