@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from anjo.sleep.budget import CAPS, Ledger
+from anjo.sleep.budget import CAPS, Ledger, Reservation
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import batch, fakes, generate, journal, live, pilot
@@ -22,7 +22,7 @@ from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import ArmRun, Life
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.night.holds import spark_usd, spark_worst_usd
+from anjo.sleep.night.holds import spark_usd, spark_worst_usd, usd
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.stops import BudgetStop
 
@@ -113,6 +113,68 @@ def test_a_night_waits_for_room_another_night_holds_and_stops_when_none_will_com
     with pytest.raises(BudgetStop):  # nothing else holds: no room is coming, so it stops at once
         live.SparkCalls(fakes.FakeSparkChat(), PRICES, starved, "never", wait=wait)(MESSAGES, 10)
     assert len(waits) == 1
+
+
+def _sleep_holds(ledger: Ledger, amount: float) -> Reservation:
+    """A Sleep night's open hold on its own Baseten pool."""
+    found = ledger.reserve("night:sleep:a1", ("baseten_sleep_usd",), usd(amount))
+    assert found is not None
+    return found
+
+
+def test_a_night_waits_up_to_ten_minutes_on_sleeps_open_holds_then_stops_cleanly(tmp_path: Path) -> None:
+    """Sleep has priority on the shared Baseten credit, so its open holds can leave MIND's night
+    no room though MIND's own cap has plenty: the night waits for them, at most ``SHARED_WAIT_S``."""
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    total = CAPS["baseten_sleep_usd"] + CAPS["baseten_mind_usd"]
+    sleep_night = _sleep_holds(ledger, total - NIGHT / 2)
+    waits: list[float] = []
+
+    def wait(seconds: float) -> None:
+        waits.append(seconds)
+        sleep_night.settle(1.0)  # Sleep's night ends while MIND's waits
+
+    calls = live.SparkCalls(fakes.FakeSparkChat(), PRICES, ledger, "waits", wait=wait)
+    calls(MESSAGES, 10)
+    assert waits == [live.ROOM_POLL_S] and calls.calls == 1
+    calls.close()
+
+    stuck = Ledger(tmp_path / "stuck.jsonl", caps=CAPS)
+    _sleep_holds(stuck, total - NIGHT / 2)  # never ends
+    waits.clear()
+    never = live.SparkCalls(fakes.FakeSparkChat(), PRICES, stuck, "stuck", wait=waits.append)
+    with pytest.raises(BudgetStop, match="Sleep's open Baseten holds left MIND's night no room for 10 minutes"):
+        never(MESSAGES, 10)
+    assert sum(waits) == live.SHARED_WAIT_S and [held.job for held in stuck.open_holds()] == ["night:sleep:a1"]
+
+
+@pytest.mark.parametrize("why", ["mind_cap", "settled"])
+def test_a_night_stops_at_once_when_sleeps_holds_are_not_what_blocks_it(tmp_path: Path, why: str) -> None:
+    total = CAPS["baseten_sleep_usd"] + CAPS["baseten_mind_usd"]
+    if why == "mind_cap":  # MIND's own cap binds: nothing Sleep releases makes room
+        ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "baseten_mind_usd": NIGHT / 2})
+        _sleep_holds(ledger, 1.0)
+    else:  # Sleep's spend is settled: its small open hold can't free enough
+        ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+        _sleep_holds(ledger, total - NIGHT / 2).settle(total - NIGHT / 2)
+        assert ledger.reserve("night:sleep2:a1", ("baseten_sleep_usd",), usd(NIGHT / 8)) is not None
+    waits: list[float] = []
+    with pytest.raises(BudgetStop):
+        live.SparkCalls(fakes.FakeSparkChat(), PRICES, ledger, "never", wait=waits.append)(MESSAGES, 10)
+    assert waits == []
+
+
+def test_a_budget_stop_ends_the_command_cleanly(tmp_path: Path) -> None:
+    from anjo.sleep.mind.apd import __main__ as cli
+
+    lines: list[str] = []
+    assert cli.main(["--fake", "--data", str(tmp_path), "--only", "1", "generate"], out=lines.append) == 0
+    ledger = Ledger(tmp_path / "fake-budget.jsonl", caps=CAPS)
+    _sleep_holds(ledger, ledger.remaining("baseten_sleep_usd") - NIGHT / 2)  # Sleep's night holds the rest
+    lines.clear()
+    assert cli.main(["--fake", "--data", str(tmp_path), "--only", "1", "run"], out=lines.append) == cli.STOPPED
+    assert any(line.startswith("Stopped: Sleep's open Baseten holds") for line in lines)
+    assert [held.job for held in ledger.open_holds()] == ["night:sleep:a1"]  # MIND's own all settled
 
 
 def _nap(_seconds: float) -> None:

@@ -12,8 +12,9 @@ plan (its Colab session and hard timeout, and every hold on every pool) and stop
 ``--live --yes`` runs it. Glimmer's pinned revision comes from the serving settings
 (``ServeConfig.from_env``), the ledger from the data dir (``budget.default_ledger``).
 
-A run with a failed model call, or a session that can't carry the next run, stops the command
-with exit code 3: what finished is kept, and a rerun goes on from there. Every command runs under
+A run whose model call still fails after its retries fails alone, recorded; the others go on, and
+the command then stops with exit code 3. So does a session that can't carry the next run, or a
+hold with no room coming (``BudgetStop``): what finished is kept, and a rerun goes on from there. Every command runs under
 MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
 runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
 with exit code 4. SIGTERM and SIGHUP end a command as Ctrl-C does, through its cleanup, so its
@@ -65,6 +66,7 @@ from anjo.sleep.prereg.ledger import (
 )
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.config import ServeConfig, ServeConfigError
+from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, stop_leftover_sessions
 from anjo.sleep.types import CheckpointRef
 
@@ -222,8 +224,8 @@ def _say_swept(swept: MindSweep | None, out: Out) -> None:
 
 
 def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend, out: Out) -> int:
-    """One command under MIND's lock, after its sweep; a failed call or a session that can't carry
-    the next run stops it cleanly."""
+    """One command under MIND's lock, after its sweep; failed runs, a session that can't carry the
+    next run, or a hold with no room coming stop it cleanly."""
     try:
         if args.command in SERVING_COMMANDS:
             backend.preflight()  # the CLI, ssh and ssh-keygen, before the sweep, a hold or a VM
@@ -237,7 +239,7 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
             intervene.DrawRefused) as error:
         out(f"Refused: {error}.")
         return REFUSED_CODE
-    except (RunFailed, colab_vllm.SessionEnding) as error:
+    except (RunFailed, colab_vllm.SessionEnding, BudgetStop) as error:
         out(f"Stopped: {error}. What finished is kept, and a rerun goes on from there.")
         return STOPPED
 

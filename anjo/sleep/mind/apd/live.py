@@ -22,10 +22,13 @@
 
 ``SparkCalls`` holds each night's Spark Open worst case before that night's first call and settles
 what it priced, as the night's MIND step does, and journals every call before it returns
-(``journal``), so a night its process never closed is settled from the journal. When other runs'
-nights hold the pool's room, a night waits for one of them to settle (runs go in parallel); with
-nothing else holding, no room is coming and it stops. The GPU is held once, by the serving session
-itself (``colab_vllm.serve``). ``Meter`` sums what a batch of runs used, for timing.
+(``journal``), so a night its process never closed is settled from the journal. A night refused
+its hold waits for room (``room_wait``): for one of the other runs' nights to settle (runs go in
+parallel), up to ``ROOM_WAIT_S``; for Sleep's open holds on the shared Baseten credit, which has
+Sleep's priority, up to ``SHARED_WAIT_S``, then stops cleanly (``BudgetStop``); and when neither
+holds what it needs (MIND's own cap binds, or nothing open would free enough), no room is coming
+and it stops at once. The GPU is held once, by the serving session itself (``colab_vllm.serve``).
+``Meter`` sums what a batch of runs used, for timing.
 """
 from __future__ import annotations
 
@@ -62,7 +65,10 @@ from anjo.sleep.types import CheckpointRef
 TEMPERATURE: Final = 0.0
 SEED: Final = 0
 ROOM_POLL_S: Final = 5.0  # how often a night waiting for room looks again
-ROOM_WAIT_S: Final = 3600.0  # and how long it waits before it stops
+ROOM_WAIT_S: Final = 3600.0  # and how long it waits on other MIND nights before it stops
+SHARED_WAIT_S: Final = 600.0  # or on Sleep's open holds on the shared Baseten credit
+SLEEP_POOL: Final = "baseten_sleep_usd"
+_EPSILON: Final = 1e-9
 
 
 class RunFailed(RuntimeError):
@@ -216,15 +222,18 @@ class SparkCalls:
                 self.journal.held(self._held.job)
 
     def _hold(self, ledger: Ledger, prices: Prices, day: date | None) -> Reservation:
-        """The night's hold; while other nights hold the room it needs, wait for one to settle."""
-        waited = 0.0
+        """The night's hold; while other holds take the room it needs, wait for them (``room_wait``)."""
+        need, waited = usd(spark_worst_usd(prices, self.per_night)), 0.0
         while True:
             try:
-                return hold(ledger, f"apd:{self.key}:{day}", (SPARK_POOL,),
-                            usd(spark_worst_usd(prices, self.per_night)))
+                return hold(ledger, f"apd:{self.key}:{day}", (SPARK_POOL,), need)
             except BudgetStop:
-                others = any(SPARK_POOL in held.pools for held in ledger.open_holds())
-                if not others or waited >= ROOM_WAIT_S:
+                limit = room_wait(ledger, need.amount)
+                if limit is None or waited >= limit:
+                    if limit == SHARED_WAIT_S:
+                        raise BudgetStop(
+                            f"Sleep's open Baseten holds left MIND's night no room for {SHARED_WAIT_S / 60:.0f} "
+                            "minutes; nothing past it was held. Rerun once Sleep's night is done") from None
                     raise
             self.wait(ROOM_POLL_S)
             waited += ROOM_POLL_S
@@ -251,6 +260,21 @@ class SparkCalls:
             return result
 
         return chat
+
+
+def room_wait(ledger: Ledger, need: float) -> float | None:
+    """How long a night refused ``need`` on MIND's Baseten pool may wait for room: ``ROOM_WAIT_S``
+    while other MIND nights hold the pool (one settles soon); ``SHARED_WAIT_S`` when only Sleep's
+    open holds stand in the way (the shared credit binds, not MIND's own cap, and what Sleep holds
+    would free enough); else ``None``, since no room is coming."""
+    holds = ledger.open_holds()
+    if any(SPARK_POOL in held.pools for held in holds):
+        return ROOM_WAIT_S
+    sleep_held = sum(held.bound.amount for held in holds if SLEEP_POOL in held.pools)
+    mind_room, shared_room = ledger.remaining(SPARK_POOL), ledger.remaining(SLEEP_POOL)
+    if sleep_held <= 0 or mind_room + _EPSILON < shared_room or need > shared_room + sleep_held + _EPSILON:
+        return None
+    return SHARED_WAIT_S
 
 
 def arm_models(session: ColabSession, spark: SparkCalls, *, adapter: CheckpointRef | None = None) -> ArmModels:
