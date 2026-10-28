@@ -29,6 +29,7 @@ from anjo.sleep.night.nightlog import summaries
 from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, owed_days
 from anjo.sleep.night.sleep_pressure import (
     CORE_ENV,
+    DEEP_FLOOR_USD,
     FRESH_NIGHT_USD,
     GPU_ENV,
     MAX_CATCH_UP_DAYS,
@@ -269,19 +270,30 @@ def test_an_owed_day_stays_owed_until_an_extract_settles_it(tmp_path: Path) -> N
     assert owed_days(summaries(world.logs(UID)), later + timedelta(days=1)) == []
 
 
-def test_a_night_catches_up_at_most_a_weeks_owed_days_and_holds_back_the_rest(tmp_path: Path) -> None:
-    """Owed days are held back under the cap like naps; one night extracts the oldest
-    ``MAX_CATCH_UP_DAYS`` of them, and the rest stay owed for the nights after."""
-    world, days = World(tmp_path), [NIGHT - timedelta(days=n) for n in range(MAX_CATCH_UP_DAYS + 2, 0, -1)]
-    for day in days:  # capped naps, each leaving its day unextracted
+def _logged(world: World, day: date, status: str, sleep: Mapping[str, Any]) -> None:
+    """An earlier night's summary in her log, as a finished night leaves it."""
+    folder = world.logs(UID) / day.isoformat()
+    folder.mkdir(parents=True)
+    (folder / "summary.json").write_text(json.dumps({"night": day.isoformat(), "status": status,
+                                                     "trained": status == "promoted", "sleep": dict(sleep)}))
+
+
+def _owing(world: World, count: int) -> list[date]:
+    """``count`` capped naps before ``NIGHT``, each leaving its day unextracted (owed), oldest first."""
+    days = [NIGHT - timedelta(days=n) for n in range(count, 0, -1)]
+    for day in days:
         start = datetime.combine(day, time.min, tzinfo=timezone.utc)
         deferred = {"window": [start.isoformat(), (start + timedelta(days=1)).isoformat()],
                     "as_of": (start + timedelta(days=1)).isoformat()}
-        folder = world.logs(UID) / day.isoformat()
-        folder.mkdir(parents=True)
-        (folder / "summary.json").write_text(json.dumps({
-            "night": day.isoformat(), "status": "napped", "trained": False,
-            "sleep": {"kind": "nap", "capped": True, "extract_deferred": deferred}}))
+        _logged(world, day, "napped", {"kind": "nap", "capped": True, "extract_deferred": deferred})
+    return days
+
+
+def test_a_night_catches_up_at_most_a_weeks_owed_days_and_holds_back_the_rest(tmp_path: Path) -> None:
+    """Owed days are held back under the cap like naps; one night extracts the oldest
+    ``MAX_CATCH_UP_DAYS`` of them, and the rest stay owed for the nights after."""
+    world = World(tmp_path)
+    days = _owing(world, MAX_CATCH_UP_DAYS + 2)
     assert [day for day, _, _ in owed_days(summaries(world.logs(UID)), NIGHT)] == days
     world.plan(UID, NIGHT, count=1)
     result = _night(world, turns=_turns(4))
@@ -293,6 +305,48 @@ def test_a_night_catches_up_at_most_a_weeks_owed_days_and_holds_back_the_rest(tm
     room = POLICY.month_usd - 3.0 - 10 * POLICY.nap_usd - POLICY.nap_usd  # Wonder's $3, 10 later nights, tonight
     state = _state(month_spent_usd=room, nights_left=10, wonder_left_usd=3.0)
     assert fits(state, POLICY, POLICY.nap_usd) and not fits(replace(state, owed_days=1), POLICY, POLICY.nap_usd)
+
+
+@pytest.mark.parametrize(("spent", "capped", "owed"), [(11.0, True, 9), (9.15, False, 2)])
+def test_the_nights_hold_back_every_owed_day(tmp_path: Path, spent: float, capped: bool, owed: int) -> None:
+    """Nine days owed: before extract (``at_cap``) all nine are held back like naps; tonight's decision,
+    the two its catch-up leaves. At $11.00 spent a nap fits only without the nine, so the night is
+    capped; at $9.15 a deep night fits only without the two, so it naps at the cap."""
+    world = World(tmp_path)
+    _owing(world, MAX_CATCH_UP_DAYS + 2)  # 9 days since her first night: deep sleep is due (max_days)
+    ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": 1000.0})
+    _settle(ledger, f"night:practice:{UID}:{date(2026, 10, 2).isoformat()}:a1", spent)
+    room = POLICY.month_usd - spent - 3 * POLICY.nap_usd - 3.0  # October 28th: 3 later nights and Wonder's $3 held back
+    tonight = POLICY.nap_usd if capped else deep_night_usd()  # nothing measured: the model's deep night
+    assert tonight <= room < tonight + owed * POLICY.nap_usd  # it fits only without the owed days held back
+    world.plan(UID, NIGHT, count=1)
+    sleep = step(_night(world, turns=_turns(60), ledger=ledger).log_path, "sleep")
+    assert (sleep["kind"], sleep["reason"], sleep["capped"], sleep["owed_days"]) == ("nap", "month_cap", capped, owed)
+
+
+def test_a_capped_night_never_sleeps_deep_and_a_deep_night_is_never_priced_under_a_nap(tmp_path: Path) -> None:
+    """A gated night that settled almost nothing (a ledger that missed its spend) can't price a deep
+    night under a nap: it is floored, so a night capped before extract is a capped nap, wakes no
+    Glimmer and runs no probe; and a capped night is a nap whatever the decision would want."""
+    world = World(tmp_path)
+    cheap = NIGHT - timedelta(days=POLICY.max_days)  # deep sleep is due again tonight (max_days)
+    _logged(world, cheap, "promoted", {"kind": "deep", "gpu": POLICY.gpu, "core": False, "channel": False,
+                                       "practice_fresh": True})
+    ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": 1000.0})
+    _settle(ledger, f"night:gates:{UID}:{cheap.isoformat()}:a1", 0.01)
+    # 3 later nights and Wonder's $3 held back: room for a $0.0115 deep night, none for a nap
+    _settle(ledger, f"night:practice:{UID}:{date(2026, 10, 2).isoformat()}:a1", POLICY.month_usd - 3.3 - 0.05 - 0.01)
+    world.plan(UID, NIGHT, count=1)
+    result = _night(world, turns=_turns(60), ledger=ledger)
+    sleep = step(result.log_path, "sleep")
+    assert (sleep["kind"], sleep["reason"], sleep["capped"]) == ("nap", "month_cap", True)
+    assert sleep["measured_deep_usd"] == [pytest.approx(0.01)] and sleep["deep_usd"] >= max(POLICY.nap_usd, DEEP_FLOOR_USD)
+    assert step(result.log_path, "probes")["status"] == "skipped" and world.glimmer.calls == 0
+    assert step(result.log_path, "extract")["why"] == CAPPED_WHY and result.status == "napped"
+    floored = _state(days_since_deep=POLICY.max_days, measured_deep_usd=(0.01,))
+    assert deep_estimate(floored, POLICY) == DEEP_FLOOR_USD > POLICY.nap_usd
+    capped = decide(floored, POLICY, pressure=1.0, force_deep=True, at_cap=True)  # room or not: capped wins
+    assert (capped.kind, capped.reason, capped.capped) == ("nap", "month_cap", True)
 
 
 def test_a_deep_night_is_priced_on_her_measured_ones() -> None:
@@ -413,6 +467,10 @@ def test_the_deep_night_estimate_covers_the_cost_model_at_every_setting() -> Non
             assert NAP_USD >= math.fsum(p.quiet.values())
     assert deep_night_usd() >= 2.42 and deep_night_usd(core=True) >= 2.63  # a cache miss and the core's night, as reviewed
     assert deep_night_usd(practice_fresh=False) >= MEASURED_REUSED_USD  # 2026-10-29's night as measured, practice reused
+    cheapest = min(cost.project(replace(setting, mind_core=core, base_cached=hit), cost.UNITS, cost.DEFAULT_PRICES,
+                                measured).practice_reused().deep
+                   for setting, core, hit in itertools.product(settings, (False, True), (False, True)))
+    assert NAP_USD < DEEP_FLOOR_USD <= cheapest  # a floor no modelled deep night is under, practice reused and all savings on
 
 
 # ── her past and her month ───────────────────────────────────────────────────
