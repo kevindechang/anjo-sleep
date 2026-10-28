@@ -226,7 +226,7 @@ def test_dreams_through_the_channel_reply_from_each_imagined_state_and_carry_its
     assert soft.messages[0][0]["content"].endswith(f"{HYPOTHETICAL}: {SPEAK}")  # the seed stays her system turn
     snaps = [CoreSnapshot.from_json(json.loads(row.core)) for row in rows.rows]
     assert len(snaps) == 6 and [s.state_sha for s in snaps] == [b1] * 3 + [d1] * 3
-    assert {s.arm for s in snaps} == {arm} and all(s.core_model == "core-abc" for s in snaps)
+    assert {s.arm for s in snaps} == {arm} and all(s.core_model == "core-abc" and s.dreamt for s in snaps)
     assert step(result.log_path, "dataset")["terms"]["dreams"] == step(result.log_path, "dataset")["terms"]["dreams_in_channel"] == 6
 
 

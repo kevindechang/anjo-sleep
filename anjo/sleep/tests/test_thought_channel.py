@@ -98,6 +98,49 @@ def test_snapshot_is_the_row_field_and_the_zero_arm_keeps_the_state_id() -> None
         core_snapshot.channel_arm({core_snapshot.CHANNEL_ENV: "loud"}, synthetic=True)
 
 
+def test_a_dreamt_snapshot_says_so_and_every_reader_of_a_real_state_refuses_it(tmp_path: Path) -> None:
+    from anjo.sleep.practice.transcripts import PracticeTranscript
+    from anjo.sleep.train import dataset
+
+    state = _state()
+    preds = _predictions(state, (0.1, 0.4, 0.2, 0.3, 0.0, 0.0))
+    real = core_snapshot.snapshot(state, preds, arm="state", k=K)
+    dreamt = core_snapshot.snapshot(state, preds, arm="state", k=K, dreamt=True)
+    # The mark is on the snapshot itself; a real state's row field is as it was
+    assert "dreamt" not in real.to_json() and dreamt.to_json()["dreamt"] is True
+    assert core_snapshot.CoreSnapshot.from_json(json.loads(json.dumps(dreamt.to_json()))).dreamt
+    assert not core_snapshot.CoreSnapshot.from_json(real.to_json()).dreamt
+    with pytest.raises(ValueError, match="dreamt"):
+        core_snapshot.CoreSnapshot.from_json({**real.to_json(), "dreamt": "yes"})
+
+    # Practice never stamps a dreamt state on what it made, and the dataset never takes one as a real reply's
+    lens = Projector.fresh(anchor_rows=_anchors(), k=K, d=D, width=16)
+    with pytest.raises(ValueError, match="dreamt"):
+        core_snapshot.Channel(dreamt, lens, object()).stamp([])  # type: ignore[arg-type]
+    made = PracticeTranscript(id="t1", person_id="p1", night=date(2026, 10, 28), scene=0, message="Hi.", reply="Hello.",
+                              context=None, f_ids=(), ancestry=frozenset(), created_at=datetime(2026, 10, 28, tzinfo=timezone.utc))
+    assert dataset._example(made.__class__(**{**made.__dict__, "core": json.dumps(real.to_json())}), new=True,
+                            drop_context=False).core is not None
+    with pytest.raises(ValueError, match="dreamt"):
+        dataset._example(made.__class__(**{**made.__dict__, "core": json.dumps(dreamt.to_json())}), new=True,
+                         drop_context=False)
+
+    # The pretraining's readings are generated lives' real states
+    reader_data.write_readings(tmp_path / "readings.jsonl", {"k1": (dreamt, ())})
+    with pytest.raises(ValueError, match="dreamt"):
+        reader_data.read_readings(tmp_path / "readings.jsonl")
+
+    # The training job reads a dreamt state only as a dream row's own, and a dream row's only as dreamt
+    found = channel_train.readings_of([{"id": "d1", "kind": "dream", "core": dreamt.to_json()},
+                                       {"id": "s1", "core": real.to_json()}], "state", K, D)
+    assert {"d1/own", "s1/own", "empty"} <= set(found)
+    for refused in ({"id": "s1", "core": dreamt.to_json()}, {"id": "p1", "kind": "seed", "core": dreamt.to_json()},
+                    {"id": "c1", "core": real.to_json(), "contrast": {"core": dreamt.to_json()}},
+                    {"id": "d1", "kind": "dream", "core": real.to_json()}):
+        with pytest.raises(ValueError, match="dreamt"):
+            channel_train.readings_of([refused], "state", K, D)
+
+
 # ── Pretraining rows and their targets ────────────────────────────────────────
 
 

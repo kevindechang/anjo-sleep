@@ -298,6 +298,9 @@ def test_her_dreams_through_the_channel_reply_from_the_states_her_dream_kept(tmp
     dreamt = step(night.log_path, "dream")
     kept = {d["state"] for key in ("dreams", "boundaries") for d in dreamt[key]}
     assert night.status == "promoted" and trainer.dream_rows and len(glimmer.calls) == len(trainer.dream_rows)
+    assert all(CoreSnapshot.from_json(json.loads(row.core)).dreamt for row in trainer.dream_rows)
+    assert all(not CoreSnapshot.from_json(json.loads(t.core)).dreamt for t in world.transcripts(UID).for_night(NIGHT)
+               if t.core is not None)  # practice's own rows carry her real state
     snaps = {CoreSnapshot.from_json(json.loads(row.core)).state_sha for row in trainer.dream_rows}
     assert snaps <= kept and dreamt["state"] not in snaps
     for ref in snaps:
