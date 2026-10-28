@@ -16,7 +16,8 @@ it off the serving path). Everything else is here:
   a real person's are written from the day's evidence by Muse Spark and sealed before training;
 - the safety gate on Anjo's crisis corpus and reply check (``safety_gate``);
 - the held note through outreach (``delivery``), its final text through the reply check;
-- every paid step's hold on the sleep host's budget ledger.
+- every paid step's hold on the sleep host's budget ledger;
+- practice's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default, ``parallel``).
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -33,7 +34,7 @@ from datetime import date
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep import baseten_api, meta_api
+from anjo.sleep import baseten_api, meta_api, parallel
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
@@ -169,11 +170,12 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
+    calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
 
     def practice(chat: ChatFn, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
-                            teacher=night_settings.practice_teacher)
+                            teacher=night_settings.practice_teacher, concurrency=calls)
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)

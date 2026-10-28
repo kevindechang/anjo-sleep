@@ -9,7 +9,8 @@ stores for one synthetic person.
   ``$ANJO_SLEEP_DONORS`` (``user=donor,user=donor``: the registered donor account of each life);
 - probes: the person's sealed file, ``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``, re-keyed to the
   account that plays the persona;
-- judge: Muse Spark with the persona's judge brief (``MuseJudge``), which only the judge reads.
+- judge: Muse Spark with the persona's judge brief (``MuseJudge``), which only the judge reads;
+- the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default).
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep import meta_api
+from anjo.sleep import meta_api, parallel
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
 from anjo.sleep.app.flags import require_sleep_host
@@ -67,4 +68,4 @@ def build(user_id: str, persona: str, night: date) -> Morning:
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
     return Morning(arms=arms, sealed=probes, judge=MuseJudge(meta_api.chat, lambda _person: judge_brief(persona)),
                    prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
-                   wake=serving.wake, sleep=serving.sleep_now)
+                   wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ))

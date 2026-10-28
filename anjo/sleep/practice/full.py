@@ -18,6 +18,13 @@ read keeps the first Glimmer candidate and no pair. ``teacher=False`` switches t
 nothing, under the dataset's dropout), and the transcript records whether it is the teacher's.
 The (best, worst) pair is kept when the critic preferred one, for the ``sft_dpo`` objective. The
 dataset decontaminates both sides. Selecting the teacher's reply doesn't make it on-policy.
+
+**Side by side.** With ``concurrency`` above 1 the scenes run at once, and so do each scene's three
+Glimmer candidates and its teacher; its critic waits for them. At most ``concurrency`` calls are in
+flight (``parallel.Calls``), and every result is gathered by scene and place, never by when it came
+back, so the run is the serial one given the same replies. Every snapshot of C is taken first, on
+the calling thread. ``concurrency`` 1 runs as before: one call at a time, the teacher only after a
+Glimmer candidate survived.
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Final
 
@@ -33,6 +41,7 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import union
 from anjo.sleep.context.template import render
+from anjo.sleep.parallel import Calls
 from anjo.sleep.practice.run import (
     NORMAL_STOPS,
     PRACTICE_F_CAP,
@@ -76,6 +85,14 @@ class _Verdict:
     best: _Candidate
     worst: _Candidate | None  # None: no preference, so no pair
     unreadable: bool = False
+
+
+@dataclass(frozen=True)
+class _Scene:
+    index: int
+    message: str
+    context: str | None  # the snapshot of C, taken before any candidate exists
+    c_ancestry: frozenset[str] | None
 
 
 @dataclass(frozen=True)
@@ -129,10 +146,12 @@ class FullPractice:
     def __init__(
         self, *, chat: ChatFn, client: ModelClient, adapter: Adapter, snapshot: Snapshot, seed: int,
         scenes: int = MIN_SCENES, teacher: bool = True, hosted_in_training: bool = False,
-        f_cap: int = PRACTICE_F_CAP,
+        f_cap: int = PRACTICE_F_CAP, concurrency: int = 1,
     ) -> None:
         if not MIN_SCENES <= scenes <= MAX_SCENES:
             raise ValueError(f"full practice runs {MIN_SCENES} to {MAX_SCENES} scenes a night, not {scenes}")
+        if concurrency < 1:
+            raise ValueError("practice runs at least one call at a time")
         self._chat = chat
         self._client = client
         self._adapter = adapter
@@ -142,6 +161,7 @@ class FullPractice:
         self._teacher = teacher
         self._hosted = hosted_in_training
         self._f_cap = f_cap
+        self._workers = concurrency
 
     @property
     def max_spark_calls(self) -> int:
@@ -166,7 +186,10 @@ class FullPractice:
         cue_free = [message for message in messages if not has_cue(message)]
         ctx = _Night(user_id, night, _known(f), "## What you know about this person\n" + _known(f),
                      tuple(item.id for item in f), union(item.ancestry for item in f), self._adapter(user_id), at)
-        done = [self._scene(ctx, index, message) for index, message in enumerate(cue_free[: self._count])]
+        scenes = [_Scene(index, message, *self._snapshot(user_id, message))  # C before any candidate
+                  for index, message in enumerate(cue_free[: self._count])]
+        calls = Calls(self._workers)
+        done = calls.map(partial(self._scene, ctx, calls), scenes)
         kept = [(t, v) for t, v in done if t is not None and v is not None]
         return PracticeRun(
             tuple(t for t, _ in kept), ctx.f_ids, len(messages) - len(cue_free),
@@ -175,23 +198,33 @@ class FullPractice:
             critic_unreadable=sum(v.unreadable for _, v in kept),
         )
 
-    def _candidates(self, ctx: _Night, index: int, prefix: list[dict[str, str]]) -> list[_Candidate]:
-        glimmer = []
-        for place in range(GLIMMER_CANDIDATES):
-            answer = self._client.complete(
-                ctx.adapter, prefix, temperature=CANDIDATE_TEMPERATURE,
-                seed=_seed(self._seed, ctx.user_id, ctx.night.isoformat(), index, place),
-            )
-            if answer.finish_reason in NORMAL_STOPS:  # a cut reply is never a candidate
-                glimmer.append(_Candidate("glimmer", answer.text.strip(), place))
-        if not glimmer or not self._teacher:
-            return glimmer
+    def _glimmer(self, ctx: _Night, index: int, place: int, prefix: list[dict[str, str]]) -> _Candidate | None:
+        answer = self._client.complete(
+            ctx.adapter, prefix, temperature=CANDIDATE_TEMPERATURE,
+            seed=_seed(self._seed, ctx.user_id, ctx.night.isoformat(), index, place),
+        )
+        if answer.finish_reason not in NORMAL_STOPS:  # a cut reply is never a candidate
+            return None
+        return _Candidate("glimmer", answer.text.strip(), place)
+
+    def _taught(self, prefix: list[dict[str, str]]) -> _Candidate | None:
         taught = self._chat(SPARK_OPEN, prefix, None, SCENE_TIMEOUT_S, temperature=CANDIDATE_TEMPERATURE)
         if taught.finish_reason not in NORMAL_STOPS:
-            return glimmer
-        return [*glimmer, _Candidate("teacher", taught.text.strip(), GLIMMER_CANDIDATES)]
+            return None
+        return _Candidate("teacher", taught.text.strip(), GLIMMER_CANDIDATES)
 
-    def _judge(self, ctx: _Night, index: int, message: str, candidates: list[_Candidate]) -> _Verdict:
+    def _candidates(self, ctx: _Night, calls: Calls, index: int, prefix: list[dict[str, str]]) -> list[_Candidate]:
+        """The kept candidates by place: Glimmer's, then the teacher's when a Glimmer one survived."""
+        asks = [partial(self._glimmer, ctx, index, place, prefix) for place in range(GLIMMER_CANDIDATES)]
+        alongside = self._teacher and calls.workers > 1  # in series the teacher waits for a survivor, as before
+        found = calls.map(calls.call, [*asks, partial(self._taught, prefix)] if alongside else asks)
+        glimmer = [c for c in found[:GLIMMER_CANDIDATES] if c is not None]
+        if not glimmer or not self._teacher:
+            return glimmer
+        taught = found[GLIMMER_CANDIDATES] if alongside else calls.call(partial(self._taught, prefix))
+        return glimmer if taught is None else [*glimmer, taught]
+
+    def _judge(self, ctx: _Night, calls: Calls, index: int, message: str, candidates: list[_Candidate]) -> _Verdict:
         if len(candidates) == 1:
             return _Verdict(candidates[0], None)
         order = sorted(candidates, key=lambda c: _seed(self._seed, ctx.user_id, ctx.night.isoformat(), index, "critic", c.place))
@@ -199,25 +232,25 @@ class FullPractice:
         block = "\n".join(f"[{label}]\n{candidate.text}" for label, candidate in labels.items())
         prompt = render(CRITIC_PATH.read_text(encoding="utf-8"), {
             "COUNT": str(len(labels)), "KNOWN": ctx.known, "MESSAGE": message, "CANDIDATES": block})
-        reply = self._chat(SPARK_OPEN, [{"role": "user", "content": prompt}], None, SCENE_TIMEOUT_S,
-                           temperature=CRITIC_TEMPERATURE)
+        reply = calls.call(partial(self._chat, SPARK_OPEN, [{"role": "user", "content": prompt}], None,
+                                   SCENE_TIMEOUT_S, temperature=CRITIC_TEMPERATURE))
         marks = _marks(reply.text, labels)
         if marks is None:
             return _Verdict(candidates[0], None, unreadable=True)
         return _pick(candidates, *marks)
 
-    def _scene(self, ctx: _Night, index: int, message: str) -> tuple[PracticeTranscript | None, _Verdict | None]:
-        context, c_ancestry = self._snapshot(ctx.user_id, message)  # before any candidate exists
+    def _scene(self, ctx: _Night, calls: Calls, scene: _Scene) -> tuple[PracticeTranscript | None, _Verdict | None]:
+        index, message = scene.index, scene.message
         prefix = [{"role": "system", "content": ctx.f_text}, {"role": "user", "content": message}]
-        candidates = self._candidates(ctx, index, prefix)
+        candidates = self._candidates(ctx, calls, index, prefix)
         if not any(c.source == "glimmer" for c in candidates):
             return None, None
-        verdict = self._judge(ctx, index, message, candidates)
+        verdict = self._judge(ctx, calls, index, message, candidates)
         digest = hashlib.sha256(f"{ctx.user_id}\x1f{ctx.night.isoformat()}\x1f{index}".encode()).hexdigest()[:16]
         return PracticeTranscript(
             id=f"pr-{digest}", person_id=ctx.user_id, night=ctx.night, scene=index, message=message,
-            reply=verdict.best.text, context=context, f_ids=ctx.f_ids,
-            ancestry=union((frozenset({SPARK_OPEN, GLIMMER}), ctx.f_ancestry, c_ancestry)),
+            reply=verdict.best.text, context=scene.context, f_ids=ctx.f_ids,
+            ancestry=union((frozenset({SPARK_OPEN, GLIMMER}), ctx.f_ancestry, scene.c_ancestry)),
             created_at=ctx.at + timedelta(seconds=index), target=verdict.best.source,
             rejected=verdict.worst.text if verdict.worst else None,
             rejected_from=verdict.worst.source if verdict.worst else None,

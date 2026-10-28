@@ -7,10 +7,15 @@ retries and failed calls included, so the second offer at step 10 sees what step
 Spark Open tokens of extraction, the brief and practice's scenes, the training GPU's minutes, and
 the serving GPU's time spent on that person's practice and gates. ``mind`` stays 0 until Task 17
 runs thinker cycles.
+
+Both are shared by calls running side by side (``parallel.Calls``): every counter changes, and is
+read together with the others, under the meter's lock, so the totals are exact whatever order the
+calls end in.
 """
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Callable
 from typing import Any, Final, get_args
 
@@ -35,6 +40,7 @@ class WonderMeter:
         self._usd_left = usd_left
         self.calls = 0
         self.usd = 0.0
+        self._lock = threading.Lock()
 
     @property
     def calls_left(self) -> int:
@@ -45,7 +51,8 @@ class WonderMeter:
         return self._usd_left
 
     def can_call(self) -> bool:
-        return self._calls_left > 0 and self._usd_left > 0
+        with self._lock:
+            return self._calls_left > 0 and self._usd_left > 0
 
     def require(self) -> None:
         """Before a call: raise ``WonderSpent`` when none is left (the study records ``budget``)."""
@@ -56,13 +63,15 @@ class WonderMeter:
         """After every call, a retry or a failed one included: one call and what it cost."""
         if usd < 0 or not math.isfinite(usd):
             raise ValueError("a call's cost is not negative")
-        self.calls += 1
-        self.usd += usd
-        self._calls_left = max(0, self._calls_left - 1)
-        self._usd_left = max(0.0, self._usd_left - usd)
+        with self._lock:
+            self.calls += 1
+            self.usd += usd
+            self._calls_left = max(0, self._calls_left - 1)
+            self._usd_left = max(0.0, self._usd_left - usd)
 
     def allowance(self, actions_left: int) -> NightAllowance:
-        return NightAllowance(actions_left=actions_left, calls_left=self._calls_left, usd_left=self._usd_left)
+        with self._lock:
+            return NightAllowance(actions_left=actions_left, calls_left=self._calls_left, usd_left=self._usd_left)
 
 
 class SpendMeter:
@@ -72,16 +81,20 @@ class SpendMeter:
         self._in = spark_in_per_m / 1_000_000
         self._out = spark_out_per_m / 1_000_000
         self._usd: dict[CostPart, float] = dict.fromkeys(COST_PARTS, 0.0)
-        self.part: CostPart = "extract"
+        self._lock = threading.Lock()
+        self.part: CostPart = "extract"  # set by the night between steps, never while a step's calls run
 
     def charge(self, result: ChatResult) -> ChatResult:
-        self._usd[self.part] += result.input_tokens * self._in + result.output_tokens * self._out
+        cost = result.input_tokens * self._in + result.output_tokens * self._out
+        with self._lock:
+            self._usd[self.part] += cost
         return result
 
     def add(self, part: CostPart, usd: float) -> None:
         if usd < 0 or not math.isfinite(usd):
             raise ValueError("a cost is not negative")
-        self._usd[part] += usd
+        with self._lock:
+            self._usd[part] += usd
 
     def wrap_extract(self, inner: ExtractChat) -> ExtractChat:
         return lambda messages: self.charge(inner(messages))
@@ -95,4 +108,5 @@ class SpendMeter:
         return chat
 
     def parts(self) -> dict[CostPart, float]:
-        return dict(self._usd)
+        with self._lock:
+            return dict(self._usd)

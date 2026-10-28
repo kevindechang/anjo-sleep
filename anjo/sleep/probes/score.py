@@ -350,19 +350,25 @@ def pair_outcomes(
         raise ValueError("probes, replies_a and replies_b must align one to one")
     if neutral and any(p.kind not in NEUTRAL_KINDS for p in probes):
         raise ValueError("neutral re-judging runs on new_work and vocab only")
-    found: list[ProbeOutcome] = []
-    for probe, reply_a, reply_b in zip(probes, replies_a, replies_b, strict=True):
-        if probe.kind == "taste_ab":
-            flip = reply_a.choice is not None and reply_b.choice is not None and (
-                reply_a.choice.flipped or reply_b.choice.flipped)
-            found.append(ProbeOutcome(probe.id, probe.kind, taste_outcome(probe, reply_a, reply_b), flip))
-            continue
-        text_a, text_b = reply_a.text, reply_b.text
-        if neutral:
-            text_a, text_b = rewrite(text_a), rewrite(text_b)
-        outcome, flip = judge_orders(judge, probe, text_a, text_b)
-        found.append(ProbeOutcome(probe.id, probe.kind, outcome, flip))
-    return found
+    return [probe_outcome(probe, reply_a, reply_b, judge, neutral=neutral, rewrite=rewrite)
+            for probe, reply_a, reply_b in zip(probes, replies_a, replies_b, strict=True)]
+
+
+def probe_outcome(
+    probe: Probe, reply_a: ArmReply, reply_b: ArmReply, judge: PairwiseJudge, *, neutral: bool = False,
+    rewrite: Callable[[str], str] = neutral_rewrite,
+) -> ProbeOutcome:
+    """One probe's outcome for arm A against arm B: forced choice for ``taste_ab``, else the judge
+    in both orders."""
+    if probe.kind == "taste_ab":
+        flip = reply_a.choice is not None and reply_b.choice is not None and (
+            reply_a.choice.flipped or reply_b.choice.flipped)
+        return ProbeOutcome(probe.id, probe.kind, taste_outcome(probe, reply_a, reply_b), flip)
+    text_a, text_b = reply_a.text, reply_b.text
+    if neutral:
+        text_a, text_b = rewrite(text_a), rewrite(text_b)
+    outcome, flip = judge_orders(judge, probe, text_a, text_b)
+    return ProbeOutcome(probe.id, probe.kind, outcome, flip)
 
 
 def score(
