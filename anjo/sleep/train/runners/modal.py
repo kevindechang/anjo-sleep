@@ -31,6 +31,9 @@ adapter name (a hash) and a Modal call id, nothing else, under ``<data dir>/slee
 the folder exists once this host has trained on Modal, which tells a delete to clean the adapters
 volume too. MIND never trains here (Tasks 17 and 17b stay on Colab).
 
+A thought-channel recipe sends ``prev_projector`` (when given) up beside a warm start's files, and
+its trained projector comes back to ``<workdir>/channel/projector.npz`` (``projector_path``).
+
 The adapter comes back as its two files and the receipt, written where the Colab runner writes
 them (``<workdir>/out``), so ``train_lora`` checks and caches it the same way; ``landed`` says it is
 on the volume already. ``modal`` is imported only when a real call is made (``SdkCalls``).
@@ -50,7 +53,7 @@ from typing import Any, Final, Literal, Protocol
 from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
-from anjo.sleep.train import colab_train, modal_job
+from anjo.sleep.train import channel_train, colab_train, modal_job
 from anjo.sleep.train.lora import DATASET_FILE, JOB, VOLUME_URI
 from anjo.sleep.train.runners.colab import RealPersonRefused
 
@@ -60,6 +63,7 @@ A100_USD_PER_HOUR: Final = 2.50
 POOL: Final = "modal_usd"
 HOLD_KIND: Final = "modal_train"
 CALLS_DIR: Final = "modal_calls"  # under <data dir>/sleep/
+CHANNEL_DIR: Final = "channel"  # under the workdir: a thought-channel run's projector
 _CALL_ID: Final = re.compile(r"fc-[A-Za-z0-9]{1,64}")
 
 
@@ -162,9 +166,11 @@ class CallRecords:
         return [(name, str(call)) for name, call in found]
 
 
-def hold_base(night: str, person_id: str) -> str:
-    """The training's hold key before its attempt number: one night, one person."""
-    return f"{HOLD_KIND}:{night}:{person_id}"
+def hold_base(night: str, person_id: str, kind: str = HOLD_KIND) -> str:
+    """The training's hold key before its attempt number: one night, one person. ``kind`` is the
+    night's own (``modal_train``, swept by the night command) unless a caller with its own sweep names
+    another (the thought channel's pretraining)."""
+    return f"{kind}:{night}:{person_id}"
 
 
 def _cancel_each(records: CallRecords, calls: ModalCalls, found: Iterable[tuple[str, str]]) -> int:
@@ -209,9 +215,10 @@ class ModalRunner:
     def __init__(
         self, *, calls: ModalCalls, ledger: Ledger, records: CallRecords, is_synthetic: Callable[[str], bool],
         allow_real: Collection[str] = (), clock: Callable[[], float] = time.monotonic,
-        usd_per_hour: float = A100_USD_PER_HOUR,
+        usd_per_hour: float = A100_USD_PER_HOUR, hold_kind: str = HOLD_KIND,
     ) -> None:
         self.allow_real = frozenset(allow_real)
+        self._hold_kind = hold_kind
         self._calls = calls
         self._ledger = ledger
         self._records = records
@@ -231,7 +238,8 @@ class ModalRunner:
         except modal_job.ModalJobError as error:
             raise ModalTrainError(str(error)) from None
         remote = _remote_job(inputs, name, exec_s)
-        reservation = hold(self._ledger, hold_base(str(inputs["night"]), person), (POOL,), Bound(self._rate, timeout_s))
+        base = hold_base(str(inputs["night"]), person, self._hold_kind)
+        reservation = hold(self._ledger, base, (POOL,), Bound(self._rate, timeout_s))
         started = self._clock()
         call = _Call()
         try:
@@ -292,9 +300,18 @@ class ModalRunner:
                 raise ModalTrainError(f"the training call returned no {file}")
             (out / file).write_bytes(data)
         (out / colab_train.RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+        projector = result.get("projector")
+        channel: dict[str, object] = {}
+        if projector is not None:  # a thought-channel run: its projector, beside the adapter, never inside it
+            if not isinstance(projector, bytes):
+                raise ModalTrainError("the training call returned a projector that isn't a file")
+            path = Path(str(inputs["workdir"])) / CHANNEL_DIR / channel_train.PROJECTOR_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(projector)
+            channel = {"projector_path": str(path)}
         return {
             **receipt, "adapter_dir": str(out), "gpu_minutes": elapsed / 60.0, "compute_units": 0.0,
-            "usd": elapsed / 3600.0 * self._rate, "landed": f"{VOLUME_URI}/{name}",
+            "usd": elapsed / 3600.0 * self._rate, "landed": f"{VOLUME_URI}/{name}", **channel,
         }
 
 
@@ -308,5 +325,8 @@ def _remote_job(inputs: Mapping[str, object], name: str, exec_s: float) -> Remot
     prev = {} if prev_dir is None else {
         file: (Path(str(prev_dir)) / file).read_bytes() for file in config.ADAPTER_FILES
     }
+    projector = inputs.get("prev_projector")
+    if projector is not None:  # the thought channel's warm start: the person's projector, or the shared one
+        prev[channel_train.PROJECTOR_FILE] = Path(str(projector)).read_bytes()
     return RemoteJob(dataset=dataset.read_text(encoding="utf-8"), config_json=json.dumps(inputs["config"], sort_keys=True),
                      prev=prev, name=name, exec_s=exec_s)

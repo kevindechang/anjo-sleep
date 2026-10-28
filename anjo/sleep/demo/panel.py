@@ -8,7 +8,8 @@ show yet) or ``unavailable`` (its source couldn't be read):
 - ``targets``: her open targets, with her heuristic confidence that she understood each;
 - ``wants``: the wants her latest night considered, as its receipt recorded them, the winner first;
 - ``choices``: what each night chose and what it beat, nights she chose nothing included, with what
-  became of the winner and of the night's note;
+  became of the winner and of the night's note, and how the night slept (a nap or a deep sleep,
+  its pressure, threshold and reason);
 - ``expectations``: her expectations (Task 16) and how they resolved: the stored outcome, else what
   the person's side shows so far (the topic came back, still open, or past its horizon and
   waiting for the scorer, whose held-out half the page never reads);
@@ -29,6 +30,7 @@ from typing import Any, Final
 
 from anjo.sleep.demo.heldout import HeldOutText
 from anjo.sleep.mind.inquiry.types import LIVE_STATUSES, Question, Workspace
+from anjo.sleep.night.sleep_pressure import SleepMark, SleepRecordError, sleep_mark
 from anjo.sleep.types import Expectation, Target
 
 SHOWN_STATUSES: Final = (*sorted(LIVE_STATUSES), "parked")  # a question's statuses the panel shows
@@ -61,7 +63,8 @@ class Candidate:
 @dataclass(frozen=True)
 class NightRecord:
     """One night as its log recorded it: ids, codes and numbers only. ``outcome`` is what became
-    of the chosen action (the choose step's receipt), ``note`` the note step's outcome."""
+    of the chosen action (the choose step's receipt), ``note`` the note step's outcome, ``sleep`` a
+    nap or a deep sleep with its pressure and reason (None for a night from before naps)."""
 
     night: date
     status: str
@@ -71,6 +74,7 @@ class NightRecord:
     gates: tuple[GateMark, ...]
     outcome: str | None
     note: str | None
+    sleep: SleepMark | None = None
 
 
 @dataclass(frozen=True)
@@ -126,14 +130,23 @@ def night_record(summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]])
         raise PanelError("a night's choices are not a list")
     first = choices[0] if choices and isinstance(choices[0], dict) else {}  # step 4's choice
     receipt = _step(steps, "choose").get("receipt")
+    try:
+        sleep = sleep_mark(summary.get("sleep"))
+    except SleepRecordError as error:
+        raise PanelError(str(error)) from None
     return NightRecord(
         night=night, status=str(summary.get("status", "")), action=_text(first.get("action")),
         target_id=_text(first.get("target_id")),
         candidates=tuple(_candidate(c) for c in first.get("considered") or []),
         gates=_gates(summary.get("gates") or {}),
         outcome=_text(receipt.get("outcome")) if isinstance(receipt, dict) else None,
-        note=_text(_step(steps, "note").get("outcome")),
+        note=_text(_step(steps, "note").get("outcome")), sleep=sleep,
     )
+
+
+def slept(record: NightRecord) -> dict[str, Any] | None:
+    """How the night slept, as the page shows it; None for a night from before naps."""
+    return None if record.sleep is None else record.sleep.view()
 
 
 def numbered(nights: Sequence[NightRecord]) -> list[tuple[int, NightRecord]]:
@@ -198,7 +211,7 @@ def _wants(nights: Sequence[NightRecord] | None, labels: Mapping[str, str], held
 def _choices(nights: Sequence[NightRecord] | None, labels: Mapping[str, str], held: HeldOutText) -> list[dict[str, Any]] | None:
     if nights is None:
         return None
-    return [{"night": n, "date": r.night.isoformat(), "status": r.status, "action": r.action,
+    return [{"night": n, "date": r.night.isoformat(), "status": r.status, "sleep": slept(r), "action": r.action,
              "target": held.item(labels.get(r.target_id or "")), "outcome": r.outcome, "note": r.note,
              "beat": [candidate_view(c, labels, held) for c in r.candidates if c.status != "won"]}
             for n, r in numbered(nights)]

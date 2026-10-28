@@ -14,7 +14,8 @@ from typing import Any
 import pytest
 
 from anjo.sleep.night import cost
-from anjo.sleep.night.deps import Prices
+from anjo.sleep.night.deps import NightSettings, Prices
+from anjo.sleep.night.sleep_pressure import SleepPolicy
 from anjo.sleep.probes.morning import JUDGE_USD_PER_CALL
 
 PRICES = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.8)
@@ -68,11 +69,16 @@ def test_cost_model_sums_a_night_log(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert current.trained["gates"] < before.trained["gates"]  # the base's side is read back, not recomputed
     assert current.morning < before.morning / 10  # the light daily morning
     assert set(current.quiet) == {"extract", "brief", "mind", "latent_encode"} and current.quiet["latent_encode"] == 0.0
+    # The morning: today's measured arms (165 s for the daily subset) scaled to the subset, its judge calls
+    # at the placeholder the ledger settles at too, and the dailies.
+    assert current.morning == pytest.approx(22 * JUDGE_USD_PER_CALL + 165.0 / 3600 * PRICES.serve_gpu_per_hour + 0.005)
 
-    assert cost.main(["--from", str(folder), "--prices", "1.25,4.25,2.5,1.8", "--trained-share", "0.5"]) == 0
+    assert cost.main(["--from", str(folder), "--prices", "1.25,4.25,2.5,1.8"]) == 0
     out = capsys.readouterr().out
     assert "practice_spark" in out and "projected month" in out and "worst case" in out
-    assert "placeholder" in out  # the judge's price per call is not measured yet, and says so
+    assert "month, active" in out and "month, quiet" in out  # one projection, from the pressure traces
+    assert "placeholder" in out and "not tokens" in out  # the judge's price per call is not measured, and says so
+    assert cost.WONDER_MONTH_USD == NightSettings.__dataclass_fields__["wonder_usd_month"].default
     assert "$0.6000" in out.split("projected")[0]  # the logged gates line, as measured
 
 
@@ -90,14 +96,15 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     assert batch.trained["serve_overhead"] == pytest.approx(((units.wake_s + 600) / 5 + units.train_idle_s) * serve)
     assert batch.trained["gates"] == one.trained["gates"]  # each person's checkpoint side; the base side cached
 
-    # The anchor night (both sides, safety on) is the 77 measured minutes; safety off is its own step, and
-    # cuts most of it; the cache then halves what is left.
-    names = ("10-28.4 (safety on)", "+ safety off", "+ base cache")
-    assert [s.name for s in cost.SCENARIOS[:3]] == list(names)
-    anchor, off, cached = (by_name[n].trained["gates"] for n in names)
-    assert anchor == pytest.approx(units.gates_anchor_s * serve) and cached == pytest.approx(off / 2)
+    # Today's night (2026-10-29: safety off, the base cache missed, so both sides) is its measured gates;
+    # the cache halves them; turning the safety gate on would add more than they cost.
+    names = ("today (10-29)", "+ base cache")
+    assert [s.name for s in cost.SCENARIOS[:2]] == list(names) and not cost.ANCHOR.safety_gate
+    anchor, cached = (by_name[n].trained["gates"] for n in names)
+    assert anchor == pytest.approx(units.gates_anchor_s * serve) and cached == pytest.approx(anchor / 2)
+    assert units.gates_anchor_s * 1.96 / 3600 == pytest.approx(0.214, abs=0.001)  # $0.214 at $1.96/h
     adds = cost.safety_adds(cost.ONE_SYSTEM, units, PRICES, night)  # one side: the base side is cached
-    assert off < anchor / 4 and off + 2 * adds == pytest.approx(anchor)
+    assert adds > anchor
 
     # MIND's lines: the encode on its own A100 start, or in the training container; training grows by the joint share.
     a100 = PRICES.train_gpu_per_hour / 3600
@@ -117,24 +124,28 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     assert cost.main(["--from", str(tmp_path / "2026-10-29"), "--prices", "1.25,4.25,2.5,1.8", "--scenarios"]) == 0
     out = capsys.readouterr().out
     assert "batch of 5" in out and "safety on adds" in out and "latent_encode" in out
-    assert "10-28.4 (safety on)" in out and "H100 rows: $3.95/h is Modal's list price, unverified" in out
+    assert "today (10-29)" in out and "H100 rows: $3.95/h is Modal's list price, unverified" in out
+    assert "active month" in out and "quiet month" in out and " deep)" in out
 
 
 def test_cost_model_projects_a_month_from_a_pressure_trace(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Every night naps (CPU, plus the day's latent encode, its one GPU cost); a deep sleep comes when
-    pressure crosses its threshold, at least every 7th night. A month is a trace of the two."""
+    """One month projection: the headline's days go through the nights' own nap-or-deep decision. A nap
+    wakes no Glimmer: extract, the brief, MIND on the CPU and, with MIND's core on, a share of one batched
+    latent encode. A deep sleep comes when pressure crosses its threshold, at least every 7th night."""
     folder = _night(tmp_path / "2026-10-29")
     summary, steps = cost.read_night(folder)
     night = cost.measured(summary, steps, PRICES)
-    one = cost.project(cost.ONE_SYSTEM, cost.UNITS, PRICES, night)
-    deep, nap = math.fsum(one.trained.values()) + one.morning, math.fsum(one.quiet.values())
+    current, one = (cost.project(s, cost.UNITS, PRICES, night) for s in (cost.CURRENT, cost.ONE_SYSTEM))
     assert set(one.quiet) == {"extract", "brief", "mind", "latent_encode"}  # no practice, training or gates on a nap
-    assert cost.ACTIVE.deep_share == pytest.approx(2.5 / 7) and cost.QUIET.deep_share == pytest.approx(1 / 7)
-    assert cost.trace_month(one, cost.QUIET) == pytest.approx(30 * (deep / 7 + nap * 6 / 7))
-    assert cost.trace_month(one, cost.QUIET) < cost.trace_month(one, cost.ACTIVE) < 30 * deep
-    for wrong in ("", "DNNNNNNN", "DXN"):  # seven naps running break the 7-day cap
-        with pytest.raises(ValueError):
-            cost.Trace("bad", wrong)
+    assert current.quiet["latent_encode"] == 0.0 < one.quiet["latent_encode"]  # the encode only with the core on
+    policy = SleepPolicy()
+    active, quiet = (cost.month_from_trace(u.days, policy, current) for u in (cost.ACTIVE, cost.QUIET))
+    assert len(active.nights) == len(quiet.nights) == 30
+    assert [n.reason for n in quiet.nights if n.kind == "deep"] == ["max_days"] * quiet.deep  # too little for pressure
+    assert any(n.reason == "pressure" for n in active.nights) and active.deep > quiet.deep
+    assert quiet.usd < active.usd
+    deep, nap = math.fsum(current.trained.values()) + current.morning, math.fsum(current.quiet.values())
+    assert quiet.usd == pytest.approx(quiet.deep * deep + quiet.naps * nap)
 
     # The nap's encode: one A100 start a person, shared by five, restored from a snapshot, or deferred.
     a100, units = PRICES.train_gpu_per_hour / 3600, cost.UNITS
@@ -147,11 +158,14 @@ def test_cost_model_projects_a_month_from_a_pressure_trace(tmp_path: Path, capsy
     assert nap_encode(encode_snapshot=True) == pytest.approx((units.snapshot_load_s + units.encode_s) * a100)
     assert nap_encode(encode_deferred=True) == pytest.approx(units.encode_s * a100)  # paid at the next deep wake
 
-    assert cost.main(["--from", str(folder), "--scenarios", "--trace", "DNNDNNN"]) == 0
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps([{"turns": 60, "evidence": 12}] * 30))
+    assert cost.main(["--from", str(folder), "--scenarios", "--pressure-trace", str(trace)]) == 0
     out = capsys.readouterr().out
-    assert "active 2.5/wk" in out and "quiet 1.0/wk" in out and "trace 2.0/wk" in out and "encode deferred" in out
+    assert "active month" in out and "quiet month" in out and "trace month" in out and "encode deferred" in out
+    assert "--trace" not in out and "month_cap" in out  # one projection: the pattern traces are gone
     with pytest.raises(SystemExit):
-        cost.main(["--from", str(folder), "--scenarios", "--trace", "NNNNNNN"])
+        cost.main(["--from", str(folder), "--trace", "DNNNNNN"])
 
 
 def test_a_night_without_cost_parts_is_refused(tmp_path: Path) -> None:
@@ -161,3 +175,16 @@ def test_a_night_without_cost_parts_is_refused(tmp_path: Path) -> None:
     (folder / "summary.json").write_text(json.dumps(summary))
     with pytest.raises(SystemExit):
         cost.main(["--from", str(folder)])
+
+
+def test_a_month_from_a_pressure_trace_prints_each_nights_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = _night(tmp_path / "night")
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps([{"turns": 60, "evidence": 12}, {"turns": 2, "evidence": 1}] * 15))
+    assert cost.main(["--from", str(folder), "--pressure-trace", str(trace), "--month-usd", "10"]) == 0
+    out = capsys.readouterr().out
+    assert "a month from the pressure trace" in out and "of the month's $10 cap" in out
+    assert "deep  pressure" in out and "nap   below_threshold" in out
+    trace.write_text("[1, 2]")
+    with pytest.raises(SystemExit, match="pressure trace"):
+        cost.main(["--from", str(folder), "--pressure-trace", str(trace)])

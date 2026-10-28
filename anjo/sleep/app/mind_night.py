@@ -2,7 +2,8 @@
 
 - **The thinker and ``world_query``:** base Glimmer on the night's vLLM server, in its own requests
   (``adapter=None``, never a personal adapter), each capped at the smaller of its ceiling and the
-  loop's allowance. The server is woken before the first call (the GPU job wakes it later anyway).
+  loop's allowance. The server is woken before the first call (the GPU job wakes it later anyway); a
+  nap makes no call, so it wakes nothing (``night/sleep_night.py``).
   A failed call is empty text charged its cap, as on Spark Open (``spark_inquiry.call``).
 - **The screen and the blind resolver:** Spark Open (``app/screen.py``, ``SparkResolver``), every
   call through the step's wrapper, which counts it for the ``baseten_mind_usd`` hold and prices it.

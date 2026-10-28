@@ -9,7 +9,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -42,13 +44,18 @@ PRICES = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=1.
 LIVE = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
 MESSAGES: list[dict[str, Any]] = [{"role": "user", "content": "hello"}]
 ROOT = Path(__file__).parents[1]
-# Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment.
+# Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment
+# (the thought channel's pretraining targets included: generated lives, on MIND's Spark pool, never a night).
 FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
                    "mind/replay/", "tests/", "deploy/")
 # Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) is the one Sleep file
 # that may name Fireworks, and never MIND's pool, Spark Open provider or setting: Sleep's Spark Open stays
 # on Baseten.
 CRITIC_HOME = "practice/critics.py"
+# Per-file allowances: the thought channel's tool asks MIND's provider which Spark Open to use, and may
+# name that module alone; Fireworks, the provider's setting and MIND's pool stay forbidden there.
+ALLOWED: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {"tools/thought_channel.py": frozenset({"spark_provider"})})
 
 
 def _ok(model: str) -> dict[str, Any]:
@@ -252,7 +259,7 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         text = path.read_text(encoding="utf-8").casefold()
         terms = ("spark_provider", SETTING.casefold(), "fireworks_mind_usd") + (
             () if name == CRITIC_HOME else ("fireworks",))
-        for term in terms:
+        for term in (t for t in terms if t not in ALLOWED.get(name, frozenset())):
             assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten"
     monkeypatch.setenv(SETTING, "fireworks")
     posted: list[str] = []

@@ -1,7 +1,7 @@
 """One night's cost by step, and a person-month projected at the night's settings (spec §5.5).
 
     python -m anjo.sleep.night.cost --from <night folder> [--prices in,out,train,serve]
-        [--trained-share S] [--concurrency N]
+        [--concurrency N] [--pressure-trace FILE] [--month-usd D] [--max-days N] [--scenarios]
 
 **The night as logged** reads the folder's ``summary.json`` and ``log.jsonl`` (counts, steps, costs
 and seconds; no conversation text) and prints a line a step, the biggest first:
@@ -12,8 +12,17 @@ and seconds; no conversation text) and prints a line a step, the biggest first:
 - what the summary never holds, outside the ceiling: Wonder's homework (``wonder_usd``) and the
   morning run (its GPU seconds and its judge calls at ``JUDGE_USD_PER_CALL``).
 
-**The month projected** is 30 × (trained share × a trained night + the rest × a quiet night, which
-runs extraction and the brief, and with MIND its inquiry and the day's latent encode), at two settings:
+**The month** is one projection, from pressure traces: a month of days, each the day's new turns, new
+trainable items and open high-risk targets (``DayLoad``), run through the nights' own nap-or-deep
+decision (``night/sleep_pressure.py``). Turns and items build up from one deep sleep to the next, and
+the month's spend raises the threshold and holds the cap (``--month-usd``, ``--max-days``). A deep night
+costs the setting's trained night and its morning. A nap wakes no Glimmer, so it costs what the live
+ledger counts on one: extract, the brief, MIND on the CPU and, with MIND's core on
+(``ANJO_SLEEP_MIND_CORE``), its share of one batched latent encode. The headline is a person-month at
+``ACTIVE`` and ``QUIET`` usage; ``--pressure-trace FILE`` (a JSON list of days, ``{"turns": 40,
+"evidence": 8, "high_risk": 1}``) adds one, printed night by night with its pressure, threshold, kind
+and reason. Wonder's homework sits outside: at most its $3 a month (``NightSettings.wonder_usd_month``).
+The night and the month are projected at two settings:
 
 - ``BEFORE``, the first live nights (2026-10-28): practice's scenes one at a time, the generation
   gates at the server's 16 with both sides asked every night, Spark Open uncapped, the full morning;
@@ -24,25 +33,21 @@ runs extraction and the brief, and with MIND its inquiry and the day's latent en
   runs, with no model and no GPU; ``--safety-gate on`` costs it). A night whose log shows the gate
   skipped says so; it is never costed as passed.
 
-``--scenarios`` adds the whole night loop under sleep pressure (``SCENARIOS``). Every night naps (on CPU:
-MIND's consolidation, dreams, inquiry and note, with extraction and the brief) and reads the day's
-events through Glimmer (``latent_encode``, the nap's one GPU cost). A deep sleep (practice, training,
-gates and the morning, on GPU) comes only when MIND's pressure crosses its threshold, and at least
-every 7th night. A month is a pressure trace (``Trace``): an active person deep-sleeps 2 to 3 times a
-week (``ACTIVE``), a quiet one about once (``QUIET``); ``--trace DNNDN...`` costs a real one. The rows:
-the 2026-10-28.4 night as measured (its safety gate on), the safety gate off, the base cache, the one system (MIND's latent
-encode and the joint training beside the LoRA), then each cost proposal on it alone and all of them
-together, with what turning the safety gate on adds. Every deep night also pays the serving GPU's
-``serve_overhead``, which the summary never logs: the cold start and Modal's idle window after the last
-request (shared by every person a wake serves, ``Settings.batch``), and its wait while the dataset is
-built and training runs.
+``--scenarios`` costs the whole loop at each cost proposal, a row a setting (``SCENARIOS``): today's
+night as measured (``ANCHOR``: 2026-10-29, the first night on the trunk, safety gate off and the base
+cache missed), the base cache, the one system (MIND's core on: the day's latent encode and the joint
+training beside the LoRA), then each proposal on it alone and all of them together, with what turning
+the safety gate on adds. Every deep night also pays the serving GPU's ``serve_overhead``, which the
+summary never logs: the cold start and Modal's idle window after the last request (shared by every
+person a wake serves, ``Settings.batch``), and its wait while the dataset is built and training runs.
 
 Extraction, the brief, MIND's inquiry and training are the night's own numbers. What a setting
-changes is estimated from ``UNITS``, each with its source: the 2026-10-28 measurements anchor
-practice (its serial seconds and Spark dollars) and the gates (the 77 L40S minutes of the night
-before the base cache, which scale the gates' estimate). The caps bound practice's Spark Open at its
-worst; they don't lower a night that stays under them. Numbers only: nothing here reads a clock, the
-environment or any file but the night's two.
+changes is estimated from ``UNITS``, each with its source: the 2026-10-29 night anchors the gates (their
+measured dollars, which scale the gates' estimate), the morning's arms and the cold start; the
+2026-10-28 measurements anchor practice (its serial seconds and Spark dollars; night 1 reused its
+practice). The caps bound practice's Spark Open at its worst; they don't lower a night that stays under
+them. Numbers only: nothing here reads a clock, the environment or any file but the night's two (and a
+pressure trace's).
 """
 from __future__ import annotations
 
@@ -57,6 +62,7 @@ from typing import Any, Final
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
 from anjo.sleep.gates.safety import SKIPPED_REASON
 from anjo.sleep.night.deps import Prices
+from anjo.sleep.night.sleep_pressure import Kind, Reason, SleepPolicy, SleepPolicyError, SleepState, decide, sleep_pressure
 from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
 from anjo.sleep.practice.full import SPARK_CAPS
 from anjo.sleep.practice.roles import Roles
@@ -73,8 +79,9 @@ SUMMARY_LINES: Final = ("extract", "brief", "practice_spark", "practice_gpu", "t
 TRAINED_LINES: Final = ("extract", "brief", "mind", "practice_spark", "practice_critic", "practice_gpu", "training",
                         "latent_encode", "gates", "serve_overhead")
 QUIET_LINES: Final = ("extract", "brief", "mind", "latent_encode")
-JUDGE_NOTE: Final = (f"the morning judge's ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL) is a placeholder"
-                     " estimate, not yet measured")
+WONDER_MONTH_USD: Final = 3.0  # NightSettings.wonder_usd_month, Wonder's rolling cap (a test keeps them equal)
+JUDGE_NOTE: Final = (f"the morning judge is counted at ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL), a placeholder"
+                     " the ledger settles at too: 2026-10-29's $0.44 is the daily subset's 22 calls at it, not tokens")
 
 
 class CostError(ValueError):
@@ -103,7 +110,7 @@ class Settings:
     roles: Roles = Roles()  # ANJO_SLEEP_PRACTICE_ROLES
     batch: int = 1  # people one wake serves (run_night_batch): the cold start and the idle window shared
     idle_tail: bool = True  # Modal bills its idle window after the last request (False: retired at the end)
-    one_system: bool = False  # MIND's nightly lines: the day's latent encode and the joint training
+    mind_core: bool = False  # ANJO_SLEEP_MIND_CORE=1: the day's latent encode and the joint training
     encode_in_training: bool = False  # a deep night's encode in the training container, which loads Glimmer anyway
     encode_people: int = 1  # people whose day goes up in one nap encode call (latents encode takes many lives)
     encode_snapshot: bool = False  # Modal's GPU memory snapshot restores the encoder instead of loading it
@@ -120,14 +127,17 @@ class Units:
     collapse_reply_tokens: int = 400  # estimate
     safety_cases: int = 2015  # the app's crisis corpus, every case each night
     safety_reply_tokens: int = 150  # estimate
-    gates_anchor_s: float = 4620.0  # measured 2026-10-28.4: 77 L40S minutes ($2.50 at $1.95/h), at ANCHOR
+    gates_anchor_s: float = 393.0  # measured 2026-10-29 (night 1 on the trunk): $0.214 at $1.96/h, at ANCHOR
     practice_scenes: int = 16
     practice_serial_s: float = 1174.0  # measured 2026-10-28: 16 scenes one at a time
     practice_spark_usd: float = 0.83  # measured 2026-10-28, uncapped
     practice_spark_in_tokens: int = 150_000  # estimate: F and the scene in each of 33 calls
-    training_usd: float = 0.12  # measured 2026-10-28 (2.83 A100 minutes); a night's receipt replaces it
-    morning_reply_tokens: int = 400  # estimate
-    wake_s: float = 180.0  # estimate: the serving app's cold start (weights off the volume, vLLM up)
+    training_usd: float = 0.107  # measured 2026-10-29; a night's receipt replaces it
+    morning_reply_tokens: int = 400  # estimate: scales the measured arms to another subset or GPU
+    morning_arms_s: float = 165.0  # measured 2026-10-29: the daily subset's arms, $0.09 at $1.96/h
+    dailies_usd: float = 0.005  # measured 2026-10-29
+    homework_usd: float = 0.227  # measured 2026-10-29: one Wonder study (Muse Wonder), outside the nights
+    wake_s: float = 225.0  # measured 2026-10-29: the night's GPU wake (weights off the volume, vLLM up)
     train_idle_s: float = 230.0  # estimate: the serving GPU awake while the dataset is built and training runs
     # estimate: the measured $0.83 by role (one scenes call, 16 teacher and 16 critic calls of about the
     # same size); a night's log carries the real split (``spark`` by role)
@@ -147,14 +157,15 @@ BEFORE: Final = Settings("before", practice_concurrency=1, gate_concurrency=CONC
 CURRENT: Final = Settings("current", practice_concurrency=8, gate_concurrency=8, base_cached=True,
                           spark_capped=True, morning=DAILY, safety_gate=False)
 UNITS: Final = Units()
-# The night the gates are anchored on, and the loop's settings from it to every proposal at once.
-ANCHOR: Final = Settings("10-28.4 (safety on)", practice_concurrency=8, gate_concurrency=8, base_cached=False,
-                         spark_capped=True, morning=DAILY, safety_gate=True)
-ONE_SYSTEM: Final = replace(CURRENT, name="one system", one_system=True)
+# Today's night, the one the gates and the morning are anchored on (2026-10-29: the safety gate off and the
+# base cache missed, so both sides asked), and the loop's settings from it to every proposal at once.
+ANCHOR: Final = Settings("today (10-29)", practice_concurrency=8, gate_concurrency=8, base_cached=False,
+                         spark_capped=True, morning=DAILY, safety_gate=False)
+ONE_SYSTEM: Final = replace(CURRENT, name="one system", mind_core=True)
 ALL: Final = replace(ONE_SYSTEM, name="all", roles=Roles("glimmer", "deepseek", "lazy"), batch=5, idle_tail=False,
                      encode_in_training=True, encode_people=5)
 SCENARIOS: Final[tuple[Settings, ...]] = (
-    ANCHOR, replace(ANCHOR, name="+ safety off", safety_gate=False), replace(CURRENT, name="+ base cache"),
+    ANCHOR, replace(CURRENT, name="+ base cache"),
     ONE_SYSTEM,
     replace(ONE_SYSTEM, name="critic=deepseek", roles=Roles(critic="deepseek")),
     replace(ONE_SYSTEM, name="person=glimmer", roles=Roles(person="glimmer")),
@@ -168,27 +179,6 @@ SCENARIOS: Final[tuple[Settings, ...]] = (
     replace(ONE_SYSTEM, name="encode deferred", encode_deferred=True, encode_in_training=True),
     ALL,
 )
-
-
-@dataclass(frozen=True)
-class Trace:
-    """A month of nights as sleep pressure schedules them: ``D`` a deep sleep, ``N`` a nap. A trace
-    never naps 7 nights running (the scheduler's 7-day cap); it repeats to fill a month."""
-
-    name: str
-    nights: str
-
-    def __post_init__(self) -> None:
-        if not self.nights or set(self.nights) - {"D", "N"} or "N" * 7 in self.nights + self.nights:
-            raise ValueError("a trace is D (deep) and N (nap) nights, with a deep sleep at least every 7th night")
-
-    @property
-    def deep_share(self) -> float:
-        return self.nights.count("D") / len(self.nights)
-
-
-ACTIVE: Final = Trace("active", "DNNDNDN" + "NDNNDNN")  # 5 deep in 14 nights: 2.5 a week
-QUIET: Final = Trace("quiet", "DNNNNNN")  # one a week, the cap
 
 
 @dataclass(frozen=True)
@@ -277,12 +267,6 @@ def month(trained: float, quiet: float, *, trained_share: float) -> float:
     return MONTH_NIGHTS * (trained_share * trained + (1.0 - trained_share) * quiet)
 
 
-def trace_month(found: Projection, trace: Trace) -> float:
-    """A person-month on a pressure trace: its deep nights and its naps."""
-    return month(math.fsum(found.trained.values()) + found.morning, math.fsum(found.quiet.values()),
-                 trained_share=trace.deep_share)
-
-
 # ── the month projected ──────────────────────────────────────────────────────
 
 
@@ -363,20 +347,22 @@ def project(settings: Settings, units: Units, prices: Prices, night: Measured) -
     gates_s = _gate_s(settings, units) * units.gates_anchor_s / _gate_s(ANCHOR, units)
     training = units.training_usd if night.training is None else night.training
     train_s = prices.train_gpu_per_hour / 3600.0
-    encode = _nap_encode_s(settings, units) * train_s if settings.one_system else 0.0
+    encode = _nap_encode_s(settings, units) * train_s if settings.mind_core else 0.0
     overhead = (units.wake_s + (SCALEDOWN_S if settings.idle_tail else 0.0)) / settings.batch + units.train_idle_s
     trained = {
         "extract": night.extract, "brief": night.brief, "mind": night.mind,
         **_practice(settings, units, serve),
-        "training": training * (1.0 + (units.joint_training_share if settings.one_system else 0.0)),
-        "latent_encode": units.encode_s * train_s if settings.encode_in_training and settings.one_system else encode,
+        "training": training * (1.0 + (units.joint_training_share if settings.mind_core else 0.0)),
+        "latent_encode": units.encode_s * train_s if settings.encode_in_training and settings.mind_core else encode,
         "gates": gates_s * serve, "serve_overhead": overhead * serve,
     }
     replies, judge = _morning_calls(settings.morning)
-    morning_s = replies * units.morning_reply_tokens / _rate(settings.practice_concurrency, settings)
+    model_s = replies * units.morning_reply_tokens / _rate(settings.practice_concurrency, settings)
+    anchor_s = _morning_calls(ANCHOR.morning)[0] * units.morning_reply_tokens / _rate(ANCHOR.practice_concurrency, ANCHOR)
+    morning_s = units.morning_arms_s * model_s / anchor_s  # today's measured arms, scaled by the estimate
     return Projection(settings, trained, {"extract": night.extract, "brief": night.brief, "mind": night.mind,
                                           "latent_encode": encode},
-                      judge * JUDGE_USD_PER_CALL + morning_s * serve,
+                      judge * JUDGE_USD_PER_CALL + morning_s * serve + units.dailies_usd,
                       _spark_bound(units, prices) if settings.spark_capped else None)
 
 
@@ -393,6 +379,104 @@ def safety_adds(settings: Settings, units: Units, prices: Prices, night: Measure
     """What turning the safety gate on adds to a trained night at ``settings``."""
     on = project(replace(settings, safety_gate=True), units, prices, night).trained["gates"]
     return on - project(replace(settings, safety_gate=False), units, prices, night).trained["gates"]
+
+
+# ── the month from a pressure trace ──────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class DayLoad:
+    """One day of a trace: the person's new turns, new trainable items and open high-risk targets."""
+
+    turns: int
+    evidence: int
+    high_risk: int = 0
+
+
+@dataclass(frozen=True)
+class TracedNight:
+    kind: Kind
+    reason: Reason
+    pressure: float
+    threshold: float
+    usd: float
+
+
+@dataclass(frozen=True)
+class MonthTrace:
+    nights: tuple[TracedNight, ...]
+
+    @property
+    def deep(self) -> int:
+        return sum(night.kind == "deep" for night in self.nights)
+
+    @property
+    def naps(self) -> int:
+        return len(self.nights) - self.deep
+
+    @property
+    def usd(self) -> float:
+        return math.fsum(night.usd for night in self.nights)
+
+
+def read_trace(text: str) -> list[DayLoad]:
+    """A trace file's days; anything but a list of whole, non-negative counts is refused."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raise CostError("the pressure trace is not JSON") from None
+    days: list[DayLoad] = []
+    for entry in raw if isinstance(raw, list) else [None]:
+        counts = [entry.get(key, 0) for key in ("turns", "evidence", "high_risk")] if isinstance(entry, dict) else [None]
+        whole = [n for n in counts if isinstance(n, int) and not isinstance(n, bool) and n >= 0]
+        if len(whole) != 3:
+            raise CostError("a pressure trace is a list of days, each with whole, non-negative turns, evidence and high_risk")
+        days.append(DayLoad(*whole))
+    return days
+
+
+@dataclass(frozen=True)
+class Usage:
+    """A named month of days: the headline's people, or a ``--pressure-trace`` file."""
+
+    name: str
+    days: tuple[DayLoad, ...]
+
+
+# The headline's two people, steady months (estimates until real traces replace them): an active one
+# talks every day and leaves about half a day's worth of items, so pressure builds to a deep sleep in a
+# few days; a quiet one leaves too little for pressure, and sleeps deep only at ``max_days``.
+ACTIVE: Final = Usage("active", (DayLoad(turns=30, evidence=5),) * MONTH_NIGHTS)
+QUIET: Final = Usage("quiet", (DayLoad(turns=4, evidence=1),) * MONTH_NIGHTS)
+
+
+def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: Projection) -> MonthTrace:
+    """Each day's night, decided as the nights decide it, at the projection's deep and quiet costs."""
+    deep_usd = math.fsum(projection.trained.values()) + projection.morning
+    nap_usd = math.fsum(projection.quiet.values())
+    spent, turns, evidence, last_deep = 0.0, 0, 0, None
+    nights: list[TracedNight] = []
+    for i, day in enumerate(trace):
+        turns, evidence = turns + day.turns, evidence + day.evidence
+        since = None if i == 0 else i - (0 if last_deep is None else last_deep)
+        state = SleepState(new_turns=turns, new_evidence=evidence, open_high_risk=day.high_risk,
+                           days_since_deep=since, month_spent_usd=spent)
+        made = decide(state, policy, pressure=sleep_pressure(state))
+        usd = deep_usd if made.kind == "deep" else nap_usd
+        nights.append(TracedNight(made.kind, made.reason, made.pressure, made.threshold, usd))
+        spent += usd
+        if made.kind == "deep":
+            turns, evidence, last_deep = 0, 0, i
+    return MonthTrace(tuple(nights))
+
+
+def _trace_report(found: MonthTrace, policy: SleepPolicy, name: str) -> list[str]:
+    out = [f"a month from the pressure trace, at {name}", f"  {'night':<7}{'pressure':>9}{'threshold':>10}  {'kind':<6}reason"]
+    for n, night in enumerate(found.nights, start=1):
+        out.append(f"  {n:<7}{night.pressure:>9.2f}{night.threshold:>10.2f}  {night.kind:<6}{night.reason}")
+    out.append(f"  {found.deep} deep, {found.naps} naps: {_usd(found.usd)} of the month's ${policy.month_usd:g} cap"
+               f" (deep sleep after at most {policy.max_days} days)")
+    return out
 
 
 # ── the report ───────────────────────────────────────────────────────────────
@@ -419,7 +503,11 @@ def _night_report(folder: Path, summary: Mapping[str, Any], lines: Sequence[Line
     return out
 
 
-def _projection_report(found: Sequence[Projection], share: float) -> list[str]:
+def _months(p: Projection, usages: Sequence[Usage], policy: SleepPolicy) -> list[MonthTrace]:
+    return [month_from_trace(u.days, policy, p) for u in usages]
+
+
+def _projection_report(found: Sequence[Projection], usages: Sequence[Usage], policy: SleepPolicy) -> list[str]:
     out = ["projected month, per step of a trained night", "  " + f"{'':<16}" + "".join(
         f"{p.settings.name:>14}" for p in found)]
     for step in TRAINED_LINES:
@@ -430,31 +518,37 @@ def _projection_report(found: Sequence[Projection], share: float) -> list[str]:
 
     out.append(row("trained night", lambda p: math.fsum(p.trained.values())))
     out.append(row("quiet night", lambda p: math.fsum(p.quiet.values())))
-    out.append(row(f"month at {share:.2f}", lambda p: month(math.fsum(p.trained.values()),
-                                                         math.fsum(p.quiet.values()), trained_share=share)))
+    months = {p.settings.name: _months(p, usages, policy) for p in found}
+    for i, usage in enumerate(usages):
+        out.append(row(f"month, {usage.name}", lambda p, i=i: months[p.settings.name][i].usd))
+        out.append(f"  {'  deep nights':<16}" + "".join(f"{months[p.settings.name][i].deep:>14}" for p in found))
     out.append(row("worst case", lambda p: month(math.fsum(p.trained.values()), 0.0, trained_share=1.0)))
     out.append(row("morning (out)", lambda p: p.morning))
     out.append(row("spark cap bound", lambda p: p.spark_bound))
-    out.append(f"  month = {MONTH_NIGHTS} x (trained share x trained + rest x quiet); worst case: every night "
-               f"trained; ceiling ${CEILING_USD:g}. The morning run and MIND are outside the ceiling.")
-    out.append("  measured: extract, brief, training (this night); practice and gates anchored on 2026-10-28;"
-               " the rest estimated (night.cost.UNITS)")
+    out.append(f"  a month: its days through the nap-or-deep decision (a deep night with its morning, a nap its "
+               f"quiet night), under the ${policy.month_usd:g} cap; worst case: every night trained, no cap "
+               f"(ceiling ${CEILING_USD:g}). The morning run and MIND are outside the ceiling; Wonder's homework adds "
+               f"at most ${WONDER_MONTH_USD:g} a month (${UNITS.homework_usd:g} a study on 2026-10-29).")
+    out.append("  measured: extract, brief, training (this night); gates, the morning's arms and the cold start "
+               "anchored on 2026-10-29, practice on 2026-10-28; the rest estimated (night.cost.UNITS)")
     out.append(f"  morning (out): {JUDGE_NOTE}")
     if off := [p.settings.name for p in found if not p.settings.safety_gate]:
         out.append(f"  safety gate: skipped in {', '.join(off)} ({SKIPPED_REASON}); no case sent, never counted as passed")
     return out
 
 
-def _scenario_report(found: Sequence[Projection], traces: Sequence[Trace], safety_on: float) -> list[str]:
-    """One row a setting of the whole loop: a deep night (the morning in it), a nap, a month per trace."""
-    head = "".join(f"{t.name + ' ' + format(t.deep_share * 7, '.1f') + '/wk':>16}" for t in traces)
+def _scenario_report(found: Sequence[Projection], usages: Sequence[Usage], policy: SleepPolicy,
+                     safety_on: float) -> list[str]:
+    """One row a setting of the whole loop: a deep night (the morning in it), a nap, a month per usage."""
     out = ["the night loop under sleep pressure, a setting a row (each proposal alone on the one system, then all)",
-           f"  {'setting':<18}{'deep':>9}{'nap':>9}{head}  biggest deep line"]
+           f"  {'setting':<18}{'deep':>9}{'nap':>9}" + "".join(f"{u.name + ' month':>22}" for u in usages)
+           + "  biggest deep line"]
     for p in found:
         deep, nap = math.fsum(p.trained.values()) + p.morning, math.fsum(p.quiet.values())
-        top = max(p.trained, key=lambda step: p.trained[step])
-        out.append(f"  {p.settings.name:<18}{_usd(deep):>9}{_usd(nap):>9}"
-                   + "".join(f"{_usd(trace_month(p, t)):>16}" for t in traces) + f"  {top} {_usd(p.trained[top])}")
+        lines = {**p.trained, "morning": p.morning}
+        top = max(lines, key=lambda step: lines[step])
+        cells = "".join(f"{_usd(m.usd) + f' ({m.deep} deep)':>22}" for m in _months(p, usages, policy))
+        out.append(f"  {p.settings.name:<18}{_usd(deep):>9}{_usd(nap):>9}{cells}  {top} {_usd(lines[top])}")
     out.append(f"  safety on adds {_usd(safety_on)} a deep night to the one system")
     if off := [p.settings.name for p in found if not p.settings.safety_gate]:
         out.append(f"  safety gate: skipped in {len(off)} of {len(found)} rows ({SKIPPED_REASON}): no case sent, never"
@@ -462,8 +556,10 @@ def _scenario_report(found: Sequence[Projection], traces: Sequence[Trace], safet
     for gpu in sorted({gpus.GPUS[p.settings.gpu] for p in found} - {gpus.L40S}, key=lambda g: g.name):
         out.append(f"  {gpu.name} rows: ${gpu.usd_per_hour:.2f}/h is {gpu.price_note}, scaled from the L40S's"
                    " billed rate")
-    out.append("  measured: the anchor night's gates, practice and training; the rest estimated (night.cost.UNITS);"
-               f" the morning's judge is {JUDGE_NOTE.split(' is ', 1)[1]}")
+    out.append("  measured: today's (2026-10-29) gates, training, morning arms and cold start; practice 2026-10-28's"
+               f" (night 1 reused its practice); the rest estimated (night.cost.UNITS); {JUDGE_NOTE}")
+    out.append(f"  a month at the ${policy.month_usd:g} cap: a deep sleep that would pass it naps (month_cap); naps"
+               " still pay their own lines")
     return out
 
 
@@ -478,19 +574,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One night's cost by step, and a person-month projected.")
     parser.add_argument("--from", dest="folder", type=Path, required=True, help="the night's log folder")
     parser.add_argument("--prices", type=_prices, default=DEFAULT_PRICES, help="in,out,train,serve")
-    parser.add_argument("--trained-share", type=float, default=1.0, help="the share of nights that train")
     parser.add_argument("--concurrency", type=int, default=CURRENT.gate_concurrency,
                         help="ANJO_SLEEP_CONCURRENCY for the current projection (8 by default)")
     parser.add_argument("--scenarios", action="store_true", help="also the whole loop under each cost proposal")
-    parser.add_argument("--trace", help="a pressure trace to cost beside the active and quiet ones, such as DNNDNNN")
     parser.add_argument("--safety-gate", choices=("on", "off"), default="off",
                         help="ANJO_SLEEP_SAFETY_GATE for the current projection (off for the hackathon)")
+    parser.add_argument("--pressure-trace", type=Path,
+                        help="a JSON list of days, costed beside the active and quiet months and printed night by night")
+    parser.add_argument("--month-usd", type=float, default=SleepPolicy().month_usd, help="ANJO_SLEEP_MONTH_USD")
+    parser.add_argument("--max-days", type=int, default=SleepPolicy().max_days, help="ANJO_SLEEP_MAX_DAYS")
     args = parser.parse_args(argv)
-    if not 0.0 <= args.trained_share <= 1.0 or args.concurrency < 1:
-        parser.error("--trained-share is from 0 to 1 and --concurrency at least 1")
+    if args.concurrency < 1:
+        parser.error("--concurrency is at least 1")
     try:
         summary, steps = read_night(args.folder)
-    except CostError as error:
+        trace = None if args.pressure_trace is None else read_trace(args.pressure_trace.read_text(encoding="utf-8"))
+        policy = SleepPolicy(month_usd=args.month_usd, max_days=args.max_days)
+    except (CostError, OSError, SleepPolicyError) as error:
         raise SystemExit(f"cost: {error}") from None
     night = measured(summary, steps, args.prices)
     current = replace(CURRENT, name=f"current@{args.concurrency}", practice_concurrency=args.concurrency,
@@ -500,15 +600,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings.append(replace(current, name=f"current@{CONCURRENT_REQUESTS}",
                                 practice_concurrency=CONCURRENT_REQUESTS, gate_concurrency=CONCURRENT_REQUESTS))
     found = [project(s, UNITS, args.prices, night) for s in settings]
+    usages = [ACTIVE, QUIET, *([Usage("trace", tuple(trace))] if trace is not None else [])]
+    traced = [] if trace is None else ["", *_trace_report(month_from_trace(trace, policy, found[1]), policy, current.name)]
     print("\n".join([*_night_report(args.folder, summary, night_lines(summary, steps, args.prices)), "",
-                     *_projection_report(found, args.trained_share)]))
+                     *_projection_report(found, usages, policy), *traced]))
     if args.scenarios:
-        try:
-            traces = [ACTIVE, QUIET, *([Trace("trace", args.trace)] if args.trace else [])]
-        except ValueError as error:
-            parser.error(str(error))
         loop = [project(s, UNITS, args.prices, night) for s in SCENARIOS]
-        print("\n".join(["", *_scenario_report(loop, traces, safety_adds(ONE_SYSTEM, UNITS, args.prices, night))]))
+        safety_on = safety_adds(ONE_SYSTEM, UNITS, args.prices, night)
+        print("\n".join(["", *_scenario_report(loop, usages, policy, safety_on)]))
     return 0
 
 

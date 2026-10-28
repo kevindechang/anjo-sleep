@@ -23,6 +23,11 @@ POOL: Final = "modal_usd"
 DEFAULT_HOLD_PER_PERSON_S: Final = 3 * 3600.0  # practice, the training's hard timeout, gates
 
 
+def batch_digest(due: Sequence[str]) -> str:
+    """The batch's people in its hold key, hashed: never an account id."""
+    return hashlib.sha256("\x1f".join(sorted(due)).encode()).hexdigest()[:12]
+
+
 class ReservedGpu:
     """A ``GpuSession`` that reserves ``modal_usd`` for the batch."""
 
@@ -37,8 +42,7 @@ class ReservedGpu:
         self._timer = timer
 
     def job(self, due: Sequence[str], attempt: int) -> str:
-        digest = hashlib.sha256("\x1f".join(sorted(due)).encode()).hexdigest()[:12]
-        return attempt_key(f"night_gpu:{self._night.isoformat()}:{digest}", attempt)
+        return attempt_key(f"night_gpu:{self._night.isoformat()}:{batch_digest(due)}", attempt)
 
     @contextmanager
     def _held(self, due: tuple[str, ...]) -> Iterator[None]:

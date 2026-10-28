@@ -48,6 +48,7 @@ class PracticeTranscript:
     target: Candidate = "glimmer"
     rejected: str | None = None
     rejected_from: Candidate | None = None
+    core: str | None = None  # the core state the reply was made under (``night.core_snapshot``, as JSON), channel on
 
     def evidence(self) -> Evidence:
         """The transcript as a ``practice`` evidence item."""
@@ -67,6 +68,7 @@ def transcript_record(item: PracticeTranscript) -> dict[str, Any]:
         "ancestry": None if item.ancestry is None else sorted(item.ancestry),
         "created_at": item.created_at.isoformat(),
         "target": item.target, "rejected": item.rejected, "rejected_from": item.rejected_from,
+        **({} if item.core is None else {"core": item.core}),
     }
 
 
@@ -95,6 +97,7 @@ def transcript_from_record(record: Mapping[str, Any]) -> PracticeTranscript:
             target=_candidate(record.get("target", "glimmer"), optional=False),
             rejected=None if rejected is None else str(rejected),
             rejected_from=_candidate(record.get("rejected_from"), optional=True),
+            core=None if record.get("core") is None else str(record["core"]),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise LogError(f"not a practice transcript ({type(error).__name__})") from None

@@ -5,6 +5,7 @@ serves at, and ``build`` over the sleep host's stores. Offline: the serving clie
 called."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -231,6 +232,44 @@ def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice
     assert chosen.practice(lambda *a, **k: None, date(2026, 10, 28)).max_spark_calls == 1 + 20  # type: ignore[arg-type]
 
 
+def test_the_thought_channel_is_off_unless_asked_and_stops_the_build_when_not_wired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.practice.full import FullPractice
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    deps = night.build(NoTrainer(), options)
+    assert deps.channel is None and deps.mind_state is None  # off: today's night
+    assert deps.gpu._rate == deps.prices.serve_gpu_per_hour  # type: ignore[attr-defined]
+    channel = object()
+    practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28), channel)  # type: ignore[call-arg, arg-type]
+    assert isinstance(practice, FullPractice) and practice._client is channel  # practice over the channel
+
+    monkeypatch.setenv("ANJO_SLEEP_CHANNEL", "state")
+    with pytest.raises(ValueError, match="no MIND state is wired"):
+        night.build(NoTrainer(), options)
+
+    class Client:
+        def with_soft_tokens(self, rows: Any) -> str:
+            return "soft client"
+
+    shared = tmp_path / "shared.projector.npz"
+    env = {"ANJO_SLEEP_CHANNEL": "zero", night.CHANNEL_PROJECTOR_ENV: str(shared)}
+    with pytest.raises(ValueError, match="projector file"):
+        night.channel_setup(env, Client(), deps.practice, lambda uid, day: None)  # type: ignore[arg-type]
+    shared.write_bytes(b"npz")
+    setup = night.channel_setup(env, Client(), deps.practice, lambda uid, day: None)  # type: ignore[arg-type]
+    assert setup is not None and setup.arm == "zero" and setup.shared_projector == shared
+    assert setup.soft_client == "soft client"  # type: ignore[comparison-overlap]
+    with pytest.raises(ValueError, match="ANJO_SLEEP_CHANNEL is one of"):
+        night.channel_setup({"ANJO_SLEEP_CHANNEL": "on"}, Client(), deps.practice, None)  # type: ignore[arg-type]
+
+
 def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import night
     from anjo.sleep.night.deps import NightOptions
@@ -344,3 +383,35 @@ def test_the_morning_counts_requests_the_judge_and_glimmer_sent_again(
     assert ports.retries() == 0
     judge.chat.keywords["retries"].counted()  # the Meta API answered 429, and the judge's call went again
     assert ports.retries() == 1 and ports.concurrency == 8
+
+
+def test_the_night_naps_or_sleeps_deep_under_the_environments_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.app.history_source import own_turn_count
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepPolicyError
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    deps = night.build(NoTrainer(), options)
+    assert deps.sleep_policy == SleepPolicy(month_usd=15.0, max_days=7) and deps.turns is own_turn_count
+    assert deps.settings.force_deep is False
+    monkeypatch.setenv("ANJO_SLEEP_MONTH_USD", "10")
+    monkeypatch.setenv("ANJO_SLEEP_MAX_DAYS", "3")
+    forced = night.build(NoTrainer(), replace(options, force_deep=True))
+    assert forced.sleep_policy == SleepPolicy(month_usd=10.0, max_days=3) and forced.settings.force_deep is True
+    monkeypatch.setenv("ANJO_SLEEP_MAX_DAYS", "never")
+    with pytest.raises(SleepPolicyError):  # a setting it can't use stops the night before it starts
+        night.build(NoTrainer(), options)
+    monkeypatch.setenv("ANJO_SLEEP_PRESSURE", "0")  # off: no policy, so every night sleeps deep, as before naps
+    assert night.build(NoTrainer(), options).sleep_policy is None
+
+
+def test_the_month_command_finds_her_nights_where_the_night_keeps_them() -> None:
+    from anjo.sleep.app.ownership import night_logs
+    from anjo.sleep.night import past
+
+    module, _, name = past.NIGHTS.partition(":")
+    assert getattr(__import__(module, fromlist=[name]), name) is night_logs
