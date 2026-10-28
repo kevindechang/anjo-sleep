@@ -38,7 +38,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from typing import Final
+from typing import Final, Protocol
 
 from anjo.sleep.mind.inquiry import controller, kernel, parse, render
 from anjo.sleep.mind.inquiry.ports import InquiryPorts
@@ -343,6 +343,16 @@ def _wake(run: _Run, ctx: _Context, arrived: Retrieved) -> _Run:
     return run
 
 
+class Decide(Protocol):
+    """Who picks each cycle's question: ``controller.decide``, or MIND's core in its place
+    (``anjo.sleep.mind.core.bridge.CoreController``)."""
+
+    def __call__(
+        self, ws: Workspace, budget: Budget, *, focus: str | None, targets: Sequence[Target], as_of: datetime,
+        control: ControlMode = "priority",
+    ) -> Decision: ...
+
+
 def run_inquiry(
     ws: Workspace,
     ports: InquiryPorts,
@@ -357,13 +367,34 @@ def run_inquiry(
     wipe: bool = False,
 ) -> InquiryRun:
     """Night step 4 (and each APD night): cycles under ``controller.decide`` until it stops."""
+    return run_decided(
+        controller.decide, ws, ports, budget, night=night, targets=targets, as_of=as_of, focus=focus, rules=rules,
+        control=control, wipe=wipe,
+    )
+
+
+def run_decided(
+    decide: Decide,
+    ws: Workspace,
+    ports: InquiryPorts,
+    budget: Budget,
+    *,
+    night: date,
+    targets: Sequence[Target],
+    as_of: datetime,
+    focus: str | None = None,
+    rules: KernelRules = FULL_RULES,
+    control: ControlMode = "priority",
+    wipe: bool = False,
+) -> InquiryRun:
+    """``run_inquiry`` with ``decide`` picking each cycle's question."""
     ctx = _context(ports, as_of, targets)
     run = _Run(ws, budget, rules)
     start = RunStart(night, as_of, "inquiry", rules, control, focus, budget, wipe, kernel.DENYLIST_VERSION)
     run = _settle_expired(_log(run, ctx, _step(run, ctx, start)), ctx)
     cycle, current = budget.cycles_used, focus
     while True:
-        decision = controller.decide(run.ws, run.budget, focus=current, targets=targets, as_of=as_of, control=control)
+        decision = decide(run.ws, run.budget, focus=current, targets=targets, as_of=as_of, control=control)
         run = replace(run, decisions=(*run.decisions, decision))
         if decision.question_id is None:
             return _result(run)
