@@ -179,7 +179,7 @@ def test_generate_pairs_and_export_them(tmp_path: Path) -> None:
     # Assert: three pairs saved once, each exported with both streams and its expectations
     saved = DataDir(data).pairs()
     assert len(saved) == 3 and len([line for line in lines if line.startswith("generated pair-")]) == 3
-    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tmp_path / "out" / labels.PAIRS_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["pairs"] == [pair.id for pair in saved]
     for pair in saved:
         failed = labels.read_events(tmp_path / "out" / "events" / f"{pair.id}.failed.jsonl")
@@ -202,3 +202,22 @@ def test_the_pairs_plan_prints_worst_case_and_expected(tmp_path: Path) -> None:
     assert "generate 20 pairs" in text and f"Expected: about ${expected:,.2f} for 20 pairs" in text
     assert "Worst case: $" in text
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_pairs_manifest_sits_beside_a_splits_own(tmp_path: Path) -> None:
+    # Arrange: a development life and a pair, generated on the fakes
+    data, out = tmp_path / "pilot", tmp_path / "out"
+    lines: list[str] = []
+    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate"], out=lines.append) == 0
+    assert cli.main(["--fake", "--data", str(data), "generate-pairs", "--n", "1"], out=lines.append) == 0
+
+    # Act: both exported to one folder, the split first
+    assert cli.main(["--data", str(data), "labels", "--split", "development", "--out", str(out)], out=lines.append) == 0
+    assert cli.main(["--data", str(data), "labels", "--pairs", "--out", str(out)], out=lines.append) == 0
+
+    # Assert: neither manifest overwrote the other
+    split = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    paired = json.loads((out / labels.PAIRS_MANIFEST).read_text(encoding="utf-8"))
+    assert split["split"] == "development"
+    assert [entry["life_id"] for entry in split["lives"]] == [life.id for life in DataDir(data).lives("development")]
+    assert paired["pairs"] == [pair.id for pair in DataDir(data).pairs()] != []

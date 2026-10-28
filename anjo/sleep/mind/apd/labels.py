@@ -19,7 +19,8 @@ resolution, the events it arises from (``origin_ids``) and the one that settles 
 one from which it is resolvable (its last origin or disambiguating event), its surface day and the
 judge's cutoff (the day before). ``actionable`` is a problem family's (``PROBLEM_FAMILIES``).
 
-**Pairs** (``export_pairs``): each counterfactual pair's two histories as event streams
+**Pairs** (``export_pairs``): ``pairs_manifest.json`` (``PAIRS_MANIFEST``, so a split's export in
+the same folder keeps its own), each counterfactual pair's two histories as event streams
 (``events/<pair>.failed.jsonl`` and ``.kept.jsonl``) and ``pairs/<pair>.json``: the fork days, the
 slot's events, each history's outcome events, the shared last day's events, the decision each
 history should take about the slot, and the events of the item that should not move. No topic or
@@ -57,6 +58,7 @@ from anjo.sleep.types import Evidence
 
 SCHEMA: Final = "mind-core-events-v1"
 EXPORT_SPLITS: Final[tuple[LifeSplit, ...]] = ("development", *CORE_SPLITS)
+PAIRS_MANIFEST: Final = "pairs_manifest.json"  # beside a split's manifest.json, never over it
 
 
 def events(life: Life) -> tuple[dict[str, Any], ...]:
@@ -172,7 +174,7 @@ def export_pairs(data: DataDir, out: Path) -> tuple[str, ...]:
         for name, life in (("failed", pair.failed), ("kept", pair.kept)):
             write_text(out / "events" / f"{pair.id}.{name}.jsonl", _lines(events(life)))
         write_text(out / "pairs" / f"{pair.id}.json", json.dumps(pair_record(pair), ensure_ascii=False, sort_keys=True))
-    write_text(out / "manifest.json", json.dumps({
+    write_text(out / PAIRS_MANIFEST, json.dumps({
         "schema": SCHEMA, "pairs": [pair.id for pair in found], "sealed": False,
         "note": "counterfactual pairs in core-test's fields: test material, never trained on",
     }, ensure_ascii=False, sort_keys=True, indent=1))
