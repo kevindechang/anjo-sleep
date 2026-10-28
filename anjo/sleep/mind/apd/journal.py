@@ -4,7 +4,8 @@ A run's ``SparkCalls`` (``live``) writes one line per event to its journal, each
 the file's lock and fsynced before the call that made it returns (``append_records``):
 
 - ``held``: a night's hold was taken, under its ledger key;
-- ``call``: one Spark Open call came back, with its real tokens and their price;
+- ``call``: one Spark Open call came back, with its real tokens and their price; a failed try
+  (``failed``) is priced at one call's worst case, since what it cost is unknown;
 - ``closed``: the night was settled at what its calls priced;
 - ``recovered``: ``recover`` settled a night its process never closed.
 
@@ -33,6 +34,7 @@ class Call:
     tokens_in: int
     tokens_out: int
     usd: float
+    failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,8 +67,9 @@ class SpendJournal:
     def held(self, job: str) -> None:
         self._write({"op": "held", "job": job})
 
-    def call(self, job: str, tokens_in: int, tokens_out: int, usd: float) -> None:
-        self._write({"op": "call", "job": job, "in": tokens_in, "out": tokens_out, "usd": usd})
+    def call(self, job: str, tokens_in: int, tokens_out: int, usd: float, *, failed: bool = False) -> None:
+        record: dict[str, object] = {"op": "call", "job": job, "in": tokens_in, "out": tokens_out, "usd": usd}
+        self._write({**record, "failed": True} if failed else record)
 
     def closed(self, job: str) -> None:
         self._write({"op": "closed", "job": job})
@@ -86,7 +89,8 @@ class SpendJournal:
             if op == "held":
                 calls.setdefault(job, [])
             elif op == "call":
-                calls.setdefault(job, []).append(Call(int(record["in"]), int(record["out"]), float(record["usd"])))
+                calls.setdefault(job, []).append(Call(int(record["in"]), int(record["out"]), float(record["usd"]),
+                                                      record.get("failed") is True))
             elif op == "closed":
                 closed.add(job)
             else:

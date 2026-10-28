@@ -15,7 +15,8 @@ fixed: both twins read the life's evidence as of the snapshot.
   worst case and journaled (``SparkCalls``), as the runs are held.
 - **Never twice:** each finished item is stored (``interventions/<n>.<edit>.json``) and skipped on a
   rerun; items run in parallel against the one server (``batch.in_parallel``). An item starts only
-  when the session can carry ``run_s`` more, and one with a failed call is never stored.
+  when the session can carry ``run_s`` more. One with a failed call (after ``retry``'s tries) fails
+  alone: recorded (``DataDir.record_failed``), never stored, run again on a rerun; the others go on.
 
 The section of the report is ``reports.apd.intervention_section``.
 """
@@ -31,10 +32,10 @@ from typing import Final
 from anjo.sleep.mind.apd import interventions
 from anjo.sleep.mind.apd.arms import date_night, mind_core
 from anjo.sleep.mind.apd.backend import Backend
-from anjo.sleep.mind.apd.batch import Out, fresh_journal, in_parallel, serial
+from anjo.sleep.mind.apd.batch import Out, check_failed, failed_alone, fresh_journal, in_parallel, serial
 from anjo.sleep.mind.apd.colab_vllm import MIN_SERVE_S, ColabSession
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS, InterventionResult, Skipped, Snapshot
-from anjo.sleep.mind.apd.live import Meter, SparkCalls, arm_models, held_run
+from anjo.sleep.mind.apd.live import Meter, RunFailed, SparkCalls, arm_models, held_run
 from anjo.sleep.mind.apd.resume import resume_point
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, ProblemFile
@@ -87,19 +88,23 @@ def item_name(n: int, kind: EditKind) -> str:
 def _item(
     data: DataDir, n: int, snap: Snapshot, kind: EditKind, session: ColabSession, backend: Backend, out: Out,
     meter: Meter | None, keep: bool, run_s: float,
-) -> Done:
+) -> Done | None:
     session.check_room(run_s)
     life = data.life(snap.life_id)
     name = item_name(n, kind)
     spend = fresh_journal(data, f"{'' if keep else 'timing-'}intervene-{name}", backend, out, life_id=life.id,
                           arm=f"intervention {name}")
     spark = SparkCalls(backend.spark, backend.prices, backend.ledger, f"intervene:{name}",
-                       per_night=EDIT_SPARK_CALLS, journal=spend)
+                       per_night=EDIT_SPARK_CALLS, journal=spend, wait=backend.sleep)
     models = arm_models(session, spark)
     date_night(models.clock, resume_point(snap.events).start.night)
-    with held_run(spark):
-        done = interventions.intervention_test([snap], {life.id: life}, models,
-                                               SparkWrong(spark, data.development_problems(life.id)), kinds=(kind,))
+    try:
+        with held_run(spark):
+            done = interventions.intervention_test([snap], {life.id: life}, models,
+                                                   SparkWrong(spark, data.development_problems(life.id)), kinds=(kind,))
+    except RunFailed as error:
+        failed_alone(data, out, f"intervention {name}", life.id, error)
+        return None
     if meter is not None:
         meter.add(models, spark, 0)
     if keep:
@@ -121,7 +126,9 @@ def intervene(
             if not keep or data.intervention(item_name(n, kind)) is None]
     ran = in_parallel([partial(_item, data, n, snap, kind, session, backend, say, meter, keep, run_s)
                        for n, snap, kind in todo], parallel)
-    found = ran if not keep else [stored(data, n, kind) for n in range(len(snaps)) for kind in EDIT_KINDS]
+    check_failed([f"intervention {item_name(n, kind)}" for (n, _snap, kind), done in zip(todo, ran, strict=True)
+                  if done is None])
+    found = [done for done in ran if done is not None] if not keep else [stored(data, n, kind) for n in range(len(snaps)) for kind in EDIT_KINDS]
     return (tuple(r for results, _ in found for r in results), tuple(s for _, skipped in found for s in skipped))
 
 

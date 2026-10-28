@@ -37,7 +37,8 @@ uses (Tasks 17 and 17b; spec: "APD runs Glimmer on Colab vLLM at one precision f
 
 The yielded ``ColabSession`` is the only server replay and the APD arms accept
 (``replay.spend.colab_client``): it is live only inside ``serve``, and its client points at its own
-tunnel's loopback end. Adapters go up to its LoRA directory by ``upload_adapter``, checked first.
+tunnel's loopback end, a transient failure tried again (``retry``). Adapters go up to its LoRA
+directory by ``upload_adapter``, checked first.
 
 A run killed hard runs no ``finally``: the next APD command's sweep, under MIND's lock
 (``mind.sweep``), stops every ``anjo-mind-`` session left over, and vLLM on the VM exits at the
@@ -67,6 +68,7 @@ from typing import ClassVar, Final, Protocol
 import httpx
 
 from anjo.sleep.budget import Bound, Ledger, Reservation
+from anjo.sleep.mind.apd.retry import RetryTransport
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import VllmClient
@@ -317,10 +319,12 @@ class ColabSession:
                                 f"the {need_s / 60:.0f} a whole life-arm needs")
 
     def client(self) -> VllmClient:
-        """A client of this session's own tunnel; refused once the session has ended."""
+        """A client of this session's own tunnel, a transient failure tried again
+        (``retry.RetryTransport``); refused once the session has ended."""
         if not self.live:
             raise ColabError(f"session {self.session} isn't serving")
-        return VllmClient(self.base_url, self.key, transport=self.transport)
+        transport = RetryTransport(self.transport or httpx.HTTPTransport(), sleep=self._state.sleep)
+        return VllmClient(self.base_url, self.key, transport=transport)
 
     def upload_adapter(self, folder: Path, name: str) -> None:
         """Put one adapter into the server's LoRA directory, where vLLM's resolver loads it by

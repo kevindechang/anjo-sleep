@@ -1,9 +1,10 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
-"""What keeps a live APD command honest when things go wrong (Task 17 review): a run with any
-failed model call is never saved, a batch stops cleanly before a run its session can't finish,
-nothing calls Spark Open once the session stopped, and an interrupted batch starts nothing more.
-Fakes only: no model, no VM, no network."""
+"""What keeps a live APD command honest when things go wrong (Task 17 review): a transient failure
+is tried again, a run with a call that still fails is never saved and fails alone while the others
+go on, a batch stops cleanly before a run its session can't finish, nothing calls Spark Open once
+the session stopped, and an interrupted batch starts nothing more. Fakes only: no model, no VM, no
+network."""
 from __future__ import annotations
 
 import dataclasses
@@ -17,6 +18,7 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import batch, colab_vllm, fakes, generate, live, pilot
+from anjo.sleep.mind.apd.journal import SpendJournal
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import ArmRun, Life
 from anjo.sleep.model_api import ChatResult, ModelApiError
@@ -40,14 +42,29 @@ class _FailingSpark(fakes.FakeSparkChat):
         return super().__call__(messages, max_tokens)
 
 
+class _FlakySpark(fakes.FakeSparkChat):
+    """Spark Open failing with ``errors`` in turn, then answering as the fake does."""
+
+    def __init__(self, *errors: str) -> None:
+        super().__init__()
+        self.errors = list(errors)
+        self.tries = 0
+
+    def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        self.tries += 1
+        if self.errors:
+            raise ModelApiError(self.errors.pop(0))
+        return super().__call__(messages, max_tokens)
+
+
 @pytest.mark.parametrize("broken", ["think", "world", "spark"])
-def test_a_run_with_any_failed_call_is_never_saved_and_the_batch_stops(tmp_path: Path, broken: str) -> None:
+def test_a_run_with_a_call_that_still_fails_is_never_saved_and_fails_alone(tmp_path: Path, broken: str) -> None:
     data = DataDir(tmp_path)
     lives = _lives(data, 2)
     ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
     backend = dataclasses.replace(backends.fake_backend(), ledger=ledger, prices=PRICES)
     if broken == "spark":
-        backend = dataclasses.replace(backend, spark=_FailingSpark())
+        backend = dataclasses.replace(backend, spark=_FailingSpark())  # its third call, in the first run
     started: list[str] = []
     real = live.run_live
 
@@ -60,12 +77,60 @@ def test_a_run_with_any_failed_call_is_never_saved_and_the_batch_stops(tmp_path:
         with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:
             assert backend.vm is not None
             if broken != "spark":
-                backend.vm.live[session.session].failing = {broken}
-            with pytest.raises(live.RunFailed, match="failed"):
+                backend.vm.live[session.session].failing = {broken}  # every try: past retry's three
+            with pytest.raises(live.RunsFailed, match="weren't saved"):
                 batch.run_lives(data, lives, ("M",), session, backend, lambda _line: None, parallel=1)
-    assert all(data.run(life.id, "M") is None for life in lives)  # never saved, so never judged
-    assert started == [lives[0].id]  # and the batch stopped: the next run never began
+    failed = {record["life"] for record in data.failed()}
+    assert lives[0].id in failed and all(data.run(life.id, "M") is None for life in lives if life.id in failed)
+    assert all(data.run(life.id, "M") is not None for life in lives if life.id not in failed)
+    assert started == [life.id for life in lives]  # the batch went on past the failed run
     assert ledger.open_holds() == ()  # what the failed run held is settled
+
+
+def test_a_transient_failure_recovers_and_its_run_is_saved(tmp_path: Path) -> None:
+    data = DataDir(tmp_path)
+    lives = _lives(data, 1)
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    spark = _FlakySpark("Baseten chat with spark-open returned HTTP 429")
+    backend = dataclasses.replace(backends.fake_backend(), ledger=ledger, prices=PRICES, spark=spark)
+    with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:
+        assert backend.vm is not None
+        backend.vm.live[session.session].flaky = {"think": 1, "world": 1}  # Glimmer answers 503 once each
+        (run,) = batch.run_lives(data, lives, ("M",), session, backend, lambda _line: None, parallel=1)
+        assert backend.vm.live[session.session].flaky == {"think": 0, "world": 0}
+    assert data.run(lives[0].id, "M") == run and data.failed() == []
+    nights = SpendJournal(data.journal(f"{lives[0].id}.M")).jobs()
+    calls = [call for night in nights for call in night.calls]
+    assert [call.failed for call in calls].count(True) == 1 and spark.tries == len(calls)  # each try journaled
+    assert ledger.open_holds() == ()
+
+
+def test_a_hard_failure_at_parallel_2_fails_only_its_own_run(tmp_path: Path) -> None:
+    data = DataDir(tmp_path)
+    lives = _lives(data, 3)
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    backend = dataclasses.replace(backends.fake_backend(), ledger=ledger, prices=PRICES)
+    real = live.run_live
+    broken = lives[1].id
+
+    def run_live(arm: Any, life: Life, session: Any, spark_chat: Any, **kwargs: Any) -> ArmRun:
+        chat = _FlakySpark(*["Baseten chat with spark-open returned HTTP 400"] * 99) if life.id == broken else spark_chat
+        return real(arm, life, session, chat, **kwargs)
+
+    lines: list[str] = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(batch, "run_live", run_live)
+        with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:
+            with pytest.raises(live.RunsFailed, match=f"1 failed and weren't saved \\(M on {broken}\\)"):
+                batch.run_lives(data, lives, ("M",), session, backend, lines.append, parallel=2)
+    assert data.run(broken, "M") is None and [record["life"] for record in data.failed()] == [broken]
+    assert all(data.run(life.id, "M") is not None for life in lives if life.id != broken)  # the others saved
+    assert any(line.startswith(f"FAILED M on {broken}") for line in lines) and ledger.open_holds() == ()
+
+    with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:  # the rerun
+        rerun = batch.run_lives(data, lives, ("M",), session, backend, lines.append, parallel=2)
+    assert len(rerun) == 3 and data.run(broken, "M") is not None
+    assert sum(line.startswith("ran M") for line in lines) == 3  # two the first time, the failed one now
 
 
 def test_the_batch_stops_before_a_run_the_session_cannot_finish(tmp_path: Path) -> None:

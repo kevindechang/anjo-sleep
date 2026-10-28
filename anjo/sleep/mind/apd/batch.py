@@ -11,12 +11,15 @@
   settled from its journal (``journal.recover``, for a night its process never closed), recorded
   in ``spend/discarded.jsonl`` and the journal moved aside (``fresh_journal``), so the ledger stays
   true.
-- **A failure:** a run with any failed model call stops and is never saved (``live.RunFailed``).
-  Before each run starts, the session is checked (``ColabSession.check_room``): its tunnel up,
-  vLLM answering, and ``run_s``, a whole life-arm's time, left before its deadline; if not, the
-  run doesn't start (``colab_vllm.SessionEnding``). Either way the life-arms not started are
-  cancelled, the ones running finish (their spend is real and their runs are kept), and the first
-  failure is raised.
+- **A failed run fails alone:** a transient failure is tried again first (``retry``); a run whose
+  call still fails stops and is never saved (``live.RunFailed``). It is recorded
+  (``DataDir.record_failed``) and the batch goes on; at its end ``live.RunsFailed`` names every
+  failed run, and a rerun runs only those again.
+- **A session ending stops the batch:** before each run starts, the session is checked
+  (``ColabSession.check_room``): its tunnel up, vLLM answering, and ``run_s``, a whole life-arm's
+  time, left before its deadline; if not, the run doesn't start (``colab_vllm.SessionEnding``).
+  Then the life-arms not started are cancelled, the ones running finish (their spend is real and
+  their runs are kept), and the failure is raised. Anything else unexpected stops it the same way.
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ from typing import Final, TypeVar
 from anjo.sleep.mind.apd.backend import Backend
 from anjo.sleep.mind.apd.colab_vllm import MIN_SERVE_S, ColabSession
 from anjo.sleep.mind.apd.journal import SpendJournal, recover
-from anjo.sleep.mind.apd.live import Meter, run_live
+from anjo.sleep.mind.apd.live import Meter, RunFailed, RunsFailed, run_live
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import ArmName, ArmRun, Life
 from anjo.sleep.types import CheckpointRef
@@ -116,14 +119,31 @@ def fresh_journal(data: DataDir, name: str, backend: Backend, out: Out, *, life_
     return spend
 
 
+def failed_alone(data: DataDir, out: Out, what: str, life_id: str, error: RunFailed) -> None:
+    """Record one run or snapshot-edit that failed alone; the batch goes on without it."""
+    data.record_failed({"what": what, "life": life_id, "error": str(error)})
+    out(f"FAILED {what} on {life_id}: {error}. Not saved; a rerun runs it again")
+
+
+def check_failed(failed: Sequence[str]) -> None:
+    """At a batch's end: ``RunsFailed`` naming what failed alone, if anything did."""
+    if failed:
+        raise RunsFailed(f"{len(failed)} failed and weren't saved ({', '.join(failed)})")
+
+
 def _run_one(
     data: DataDir, life: Life, arm: ArmName, session: ColabSession, backend: Backend, out: Out,
     adapter: CheckpointRef | None, meter: Meter | None, prefix: str, run_s: float,
-) -> ArmRun:
+) -> ArmRun | None:
     session.check_room(run_s)
     spend = fresh_journal(data, f"{prefix}{life.id}.{arm}", backend, out, life_id=life.id, arm=arm)
-    found = run_live(arm, life, session, backend.spark, ledger=backend.ledger, prices=backend.prices,
-                     adapter=adapter, key=f"{prefix}run:{life.id}:{arm}", journal=spend, meter=meter)
+    try:
+        found = run_live(arm, life, session, backend.spark, ledger=backend.ledger, prices=backend.prices,
+                         adapter=adapter, key=f"{prefix}run:{life.id}:{arm}", journal=spend, meter=meter,
+                         wait=backend.sleep)
+    except RunFailed as error:
+        failed_alone(data, out, f"{prefix}{arm}", life.id, error)
+        return None
     if data.run(life.id, arm) is None:
         data.save_run(found)
     out(f"ran {arm} on {life.id}: {len(found.reports)} report(s)")
@@ -138,7 +158,7 @@ def run_lives(
     """Every arm on every life, ``parallel`` life-arms at a time, each run stored as it ends. A run
     already on disk is kept and not run again, except to ``measure`` (timing), which runs every one
     under journals of its own and stores only the new. Each run starts only when the session can
-    carry ``run_s`` more."""
+    carry ``run_s`` more. A run that fails alone is recorded, and the batch ends in ``RunsFailed``."""
     say, prefix = serial(out), "timing-" if measure else ""
     todo = [(life, arm) for life in lives for arm in arms if measure or data.run(life.id, arm) is None]
     done = in_parallel([
@@ -146,6 +166,7 @@ def run_lives(
                 meter, prefix, run_s)
         for life, arm in todo
     ], parallel)
-    ran = {(run.life_id, run.arm): run for run in done}
+    check_failed([f"{arm} on {life.id}" for (life, arm), run in zip(todo, done, strict=True) if run is None])
+    ran = {(run.life_id, run.arm): run for run in done if run is not None}
     found = [ran.get((life.id, arm)) or data.run(life.id, arm) for life in lives for arm in arms]
     return tuple(run for run in found if run is not None)

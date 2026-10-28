@@ -12,10 +12,13 @@
   ``baseten_mind_usd`` (no call past it) and priced as it returns.
 - **Provenance:** the model each world answer's and resolver verdict's reply named, as its API
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
-- **No run with a failed call:** a failed Glimmer call (the thinker's or the world query's) or a
-  failed Spark Open call stops its run there (``RunFailed``), and so does any Spark Open call once
-  the session has stopped serving, so a run with a failed call is never saved and never judged.
-  Only the refusal past a night's held calls stays inside the run, as the night's MIND step has it.
+- **No run with a failed call:** a transient failure (a 429, a 5xx, a timeout or a reset) is
+  tried again at most ``retry.ATTEMPTS`` times in all (``retry``: under the session's client for
+  Glimmer, here for Spark Open, each try a call of its own, held and journaled). A Glimmer call
+  (the thinker's or the world query's) or a Spark Open call that still fails stops its run there
+  (``RunFailed``), and so does any Spark Open call once the session has stopped serving, so a run
+  with a failed call is never saved and never judged. Only the refusal past a night's held calls
+  stays inside the run, as the night's MIND step has it.
 
 ``SparkCalls`` holds each night's Spark Open worst case before that night's first call and settles
 what it priced, as the night's MIND step does, and journals every call before it returns
@@ -26,6 +29,7 @@ itself (``colab_vllm.serve``). ``Meter`` sums what a batch of runs used, for tim
 """
 from __future__ import annotations
 
+import random
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -35,6 +39,7 @@ from datetime import date
 from typing import Any, Final
 
 from anjo.sleep.budget import Ledger, Reservation
+from anjo.sleep.mind.apd import retry
 from anjo.sleep.mind.apd.arms import MindCore, run_arm
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
 from anjo.sleep.mind.apd.journal import SpendJournal
@@ -63,6 +68,11 @@ ROOM_WAIT_S: Final = 3600.0  # and how long it waits before it stops
 class RunFailed(RuntimeError):
     """A model call of a run failed, or the session stopped under it: the run stops and is never
     saved. It is no ``ModelApiError``, so no port absorbs it."""
+
+
+class RunsFailed(RunFailed):
+    """A batch ended with runs that failed alone: each recorded (``DataDir.failed``), none saved,
+    every other run kept; a rerun runs only those again."""
 
 
 @dataclass(frozen=True)
@@ -127,10 +137,12 @@ class SparkCalls:
     at a night's first call (``clock``), its worst case of ``per_night`` calls is held on
     ``baseten_mind_usd`` (the night before settled at what it priced), and a call past that count
     is refused (the port then refuses or says undetermined). Each call is journaled with its real
-    tokens before it returns. A failed call, or any call once ``serving`` has stopped, stops the run
-    (``RunFailed``); a failed call is priced at one call's worst case, since what it cost is
-    unknown. Without a ledger nothing is held; without prices nothing is priced. ``total_calls``
-    and ``total_usd`` count every night's."""
+    tokens before it returns. A transient failure is tried again (``retry``), ``wait``-ing its
+    backoff, each try a call of its own under the night's count; a failed try is priced at one
+    call's worst case, since what it cost is unknown, and journaled as failed. A call that still
+    fails, or any call once ``serving`` has stopped, stops the run (``RunFailed``). Without a
+    ledger nothing is held; without prices nothing is priced. ``total_calls`` and ``total_usd``
+    count every night's."""
 
     chat: ChatFn
     prices: Prices | None
@@ -140,6 +152,7 @@ class SparkCalls:
     clock: NightClock | None = None
     journal: SpendJournal | None = None
     wait: Callable[[float], None] = time.sleep
+    rand: Callable[[], float] = random.random  # the backoff's jitter
     serving: ColabSession | None = None  # the run's session: no call once it stops
     night: date | None = None
     calls: int = 0  # this night's
@@ -149,27 +162,45 @@ class SparkCalls:
     _held: Reservation | None = field(default=None, repr=False)
 
     def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
-        if self.serving is not None and not self.serving.live:
-            raise RunFailed(f"session {self.serving.session} stopped serving; no Spark Open call after it")
+        self._check_serving()
         self._turn()
         if self.calls >= self.per_night:
             raise ModelApiError("past the Spark Open calls this night holds")
+        attempt = 1
+        while True:
+            try:
+                return self._try(messages, max_tokens)
+            except ModelApiError as error:
+                if attempt >= retry.ATTEMPTS or not retry.transient(error):
+                    raise RunFailed(f"a Spark Open call failed: {error}") from None
+                if self.calls >= self.per_night:
+                    raise RunFailed(f"a Spark Open call failed and the night holds no call to retry it: {error}") from None
+            self.wait(retry.backoff(attempt, self.rand))
+            attempt += 1
+
+    def _try(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        """One try: a call of its own under the night's count, journaled before it returns."""
+        self._check_serving()
         self.calls += 1
         self.total_calls += 1
         try:
             result = self.chat(messages, max_tokens)
-        except ModelApiError as error:
-            self._spent(0, 0, 0.0 if self.prices is None else spark_worst_usd(self.prices, 1))
-            raise RunFailed(f"a Spark Open call failed: {error}") from None
+        except ModelApiError:
+            self._spent(0, 0, 0.0 if self.prices is None else spark_worst_usd(self.prices, 1), failed=True)
+            raise
         self._spent(result.input_tokens, result.output_tokens,
                     0.0 if self.prices is None else spark_usd(self.prices, result.input_tokens, result.output_tokens))
         return result
 
-    def _spent(self, tokens_in: int, tokens_out: int, price: float) -> None:
+    def _check_serving(self) -> None:
+        if self.serving is not None and not self.serving.live:
+            raise RunFailed(f"session {self.serving.session} stopped serving; no Spark Open call after it")
+
+    def _spent(self, tokens_in: int, tokens_out: int, price: float, *, failed: bool = False) -> None:
         self.usd += price
         self.total_usd += price
         if self.journal is not None and self._held is not None:
-            self.journal.call(self._held.job, tokens_in, tokens_out, price)
+            self.journal.call(self._held.job, tokens_in, tokens_out, price, failed=failed)
 
     def _turn(self) -> None:
         day = None if self.clock is None else self.clock.day
@@ -270,11 +301,11 @@ def run_live(
     arm: ArmName, life: Life, session: ColabSession, spark_chat: ChatFn, *, ledger: Ledger | None,
     prices: Prices | None, adapter: CheckpointRef | None = None, budget: Budget = Budget(),
     core: MindCore | None = None, brief: str | None = None, key: str | None = None,
-    journal: SpendJournal | None = None, meter: Meter | None = None,
+    journal: SpendJournal | None = None, meter: Meter | None = None, wait: Callable[[float], None] = time.sleep,
 ) -> ArmRun:
     """One arm through ``life`` on the live models, its Spark Open calls held a night at a time
-    under ``key`` and journaled."""
-    spark = SparkCalls(spark_chat, prices, ledger, key or f"run:{life.id}:{arm}", journal=journal)
+    under ``key`` and journaled; ``wait`` is how a call waits for room or a retry."""
+    spark = SparkCalls(spark_chat, prices, ledger, key or f"run:{life.id}:{arm}", journal=journal, wait=wait)
     models = arm_models(session, spark, adapter=adapter)
     with held_run(spark):
         found = run_arm(arm, life, models, budget=budget, core=core, brief=brief)

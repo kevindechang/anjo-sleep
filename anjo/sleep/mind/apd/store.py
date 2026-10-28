@@ -7,6 +7,7 @@
     <data>/runs/<life>.<arm>.json     each finished run (``ArmRun``), written once
     <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
     <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
+    <data>/failed.jsonl               each run or snapshot-edit that failed alone, never saved
     <data>/kill/<life>.result.json    each finished kill-resume (``resume.KillResume``)
     <data>/interventions/<n>.<edit>.json  each finished snapshot-edit of the intervention test
     <data>/timing.json                the last timing's measurements
@@ -249,6 +250,13 @@ class DataDir:
 
     def discarded(self) -> list[dict[str, Any]]:
         return read_records(self.spend / "discarded.jsonl", PLAIN)
+
+    def record_failed(self, record: Mapping[str, object]) -> None:
+        """A run or snapshot-edit that failed alone and was never saved; a rerun runs it again."""
+        append_records(self.root / "failed.jsonl", PLAIN, [record])
+
+    def failed(self) -> list[dict[str, Any]]:
+        return read_records(self.root / "failed.jsonl", PLAIN)
 
     def save_life(self, life: Life, problems: ProblemFile) -> None:
         """A life and its sealed problem file, the problem file first."""

@@ -174,6 +174,7 @@ class FakeVllm:
     adapters: set[str] = field(default_factory=set)
     healthy: bool = True
     failing: set[str] = field(default_factory=set)  # completion kinds (think, world) that answer 503
+    flaky: dict[str, int] = field(default_factory=dict)  # and those answering 503 that many times first
     chats: list[tuple[list[dict[str, Any]], str]] = field(default_factory=list)
     served: list[tuple[str, str, str]] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
@@ -205,7 +206,9 @@ class FakeVllm:
         messages, day = self.chats[body["prompt"][1]]
         system = messages[0]["content"] if messages[0]["role"] == "system" else None
         prompt = str(messages[-1]["content"])
-        if ("world" if system == WORLD_PROMPT else "think") in self.failing:
+        kind = "world" if system == WORLD_PROMPT else "think"
+        if kind in self.failing or self.flaky.get(kind, 0) > 0:
+            self.flaky[kind] = max(0, self.flaky.get(kind, 0) - 1)
             return httpx.Response(503, json={"error": "preempted"})
         self.served.append(("world" if system == WORLD_PROMPT else "think", day, prompt))
         self.models.append(model)
