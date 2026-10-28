@@ -94,6 +94,7 @@ def session_state(session_id: str, user_id: str = Depends(flagged_user)) -> Sess
 class GateOut(BaseModel):
     gate: str
     passed: bool
+    skipped: bool = False  # switched off that night: judged nothing, never passed
 
 
 class StepOut(BaseModel):
@@ -128,7 +129,7 @@ class UndoOut(BaseModel):
 def _night_out(view: NightView) -> NightOut:
     return NightOut(
         night=view.night, status=view.status, failed_at=view.failed_at, checkpoint=view.checkpoint,
-        gates=[GateOut(gate=name, passed=passed) for name, passed in view.gates],
+        gates=[GateOut(gate=name, passed=passed, skipped=name in view.skipped) for name, passed in view.gates],
         steps=[StepOut(step=s.step, status=s.status, uses=s.uses, system=s.system) for s in view.steps],
         action=view.action, note=view.note,
     )

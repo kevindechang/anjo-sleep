@@ -49,7 +49,7 @@ def _settled(data: Path, prefix: str) -> float:
 
 def test_run_stops_before_new_unit_at_ceiling(tmp_path: Path) -> None:
     data = tmp_path / "pilot"
-    code, text = _main(["--fake", "--data", str(data), "--only", "2", "generate", "--max-usd", TINY])
+    code, text = _main(["--fake", "--data", str(data), "--only", "2", "--parallel", "1", "generate", "--max-usd", TINY])
     assert code == cli.CEILING, text
     assert "Ceiling: this run settled $" in text and "after 1 of 2 life(s) generated" in text
     assert len(DataDir(data).lives("development")) == 1

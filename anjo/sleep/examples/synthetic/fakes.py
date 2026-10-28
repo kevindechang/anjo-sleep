@@ -184,7 +184,7 @@ def fake_spark(
 
 def fake_judge(
     model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-    timeout_s: float, *, temperature: float | None = None,
+    timeout_s: float, *, temperature: float | None = None, max_tokens: int | None = None,
 ) -> ChatResult:
     """A judge that prefers one reply text over another by a fixed hash, whatever the order."""
     prompt = str(messages[0]["content"])

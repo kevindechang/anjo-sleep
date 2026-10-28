@@ -23,7 +23,8 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    The last trained night is the night of the checkpoint that serves (the one the next night
    trains from), so a failed or rejected night's evidence stays new. Every due person in a batch
    runs inside one GPU session. Below it, the night is ``nothing_new`` and those items carry over.
-9. ``promote``: every gate passed, or the night is rejected and the previous checkpoint serves.
+9. ``promote``: every gate that ran passed (a switched-off gate, ``skipped``, is left out), or the
+   night is rejected and the previous checkpoint serves.
 10. ``note``: a ``hold_note`` choice, or a second offer (``allowed_actions={"hold_note"}``) after a
     result with a verified source, or an inquiry's anchored one (with ``mind_inquiry`` on, each finding
     with an unconsumed anchor shares here); at most one note, which the writer may decline. A synthetic life
@@ -598,13 +599,14 @@ class NightRunner(CoreSteps):
 
     def _promote(self, p: _Night) -> Mapping[str, Any]:
         assert p.checkpoint is not None
-        failed = sorted(name for name, result in p.gates.items() if not result.passed)
-        if failed or not p.gates:
+        off = sorted(name for name, result in p.gates.items() if result.skipped)  # switched off: left out
+        failed, noted = sorted(n for n, r in p.gates.items() if not (r.passed or r.skipped)), {"skipped": off} if off else {}
+        if failed or len(off) == len(p.gates):
             p.status = "rejected"
-            return {"promoted": None, "rejected_by": failed, "serving": _id(self.deps.registry.last_promoted(p.uid))}
+            return {"promoted": None, "rejected_by": failed, "serving": _id(self.deps.registry.last_promoted(p.uid)), **noted}
         self.deps.registry.promote(p.uid, p.checkpoint)
         p.status = "promoted"
-        return {"promoted": p.checkpoint.id, "serving": p.checkpoint.id}
+        return {"promoted": p.checkpoint.id, "serving": p.checkpoint.id, **noted}
 
     # ── step 10, the note, and step 11 ──────────────────────────────────────
 

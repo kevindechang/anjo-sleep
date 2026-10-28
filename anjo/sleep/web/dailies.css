@@ -77,6 +77,7 @@
 .slate-morning dd { font-family: var(--mono); font-weight: 500; font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem); padding-top: 0.2em; }
 .status-promoted dd { color: var(--product); }
 .status-failed dd { color: var(--alert); }
+.slate-cell dd.slate-note { font: 500 0.75rem/1.4 var(--mono); letter-spacing: 0.02em; color: var(--ink-soft); }
 
 /* ── the takes ─────────────────────────────────────────────────────────── */
 

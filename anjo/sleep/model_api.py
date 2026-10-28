@@ -19,7 +19,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -109,10 +109,14 @@ def post_chat(
     transport: httpx.BaseTransport | None,
     max_tokens: int | None = None,
     retries: Retries | None = None,
+    extra: Mapping[str, Any] | None = None,
+    count_reasoning: bool = False,
 ) -> ChatResult:
     """POST one chat completion to ``url`` and parse the reply. ``max_tokens`` caps the reply
-    (sent as ``max_completion_tokens``); ``retries`` sends a busy provider's 429 or 5xx again."""
-    body: dict[str, Any] = {"model": model, "messages": messages}
+    (sent as ``max_completion_tokens``); ``retries`` sends a busy provider's 429 or 5xx again.
+    ``extra`` adds fields to the request (a reasoning model's effort); ``count_reasoning`` counts
+    every generated token as output, reasoning included however the provider reports it."""
+    body: dict[str, Any] = {**(extra or {}), "model": model, "messages": messages}
     if tools is not None:
         body["tools"] = tools
     if temperature is not None:
@@ -138,7 +142,7 @@ def post_chat(
         raise ModelApiError(f"{where} failed before a reply ({type(exc).__name__})") from None
     if response.is_error:
         raise ModelApiError(f"{where} returned HTTP {response.status_code}")
-    result = _parse(response, where)
+    result = _parse(response, where, count_reasoning=count_reasoning)
     logger.info(
         "%s: HTTP %d, %d tokens in, %d out",
         where, response.status_code, result.input_tokens, result.output_tokens,
@@ -146,7 +150,7 @@ def post_chat(
     return result
 
 
-def _parse(response: httpx.Response, where: str) -> ChatResult:
+def _parse(response: httpx.Response, where: str, *, count_reasoning: bool = False) -> ChatResult:
     try:
         data = response.json()
     except ValueError:
@@ -160,11 +164,21 @@ def _parse(response: httpx.Response, where: str) -> ChatResult:
             tool_calls=tuple(_tool_call(call) for call in message.get("tool_calls") or ()),
             model=_str(data["model"]),
             input_tokens=_count(usage["prompt_tokens"]),
-            output_tokens=_count(usage["completion_tokens"]),
+            output_tokens=_generated(usage) if count_reasoning else _count(usage["completion_tokens"]),
             finish_reason=choice.get("finish_reason"),
         )
     except (KeyError, IndexError, TypeError, AttributeError, ValueError):
         raise ModelApiError(f"{where} sent a malformed reply") from None
+
+
+def _generated(usage: Mapping[str, Any]) -> int:
+    """Every token generated, reasoning included: inside ``completion_tokens`` (OpenAI's way), or
+    reported apart from it, in ``total_tokens`` or as more reasoning than the completion holds."""
+    completion = _count(usage["completion_tokens"])
+    reasoning = _count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+    total = usage.get("total_tokens")
+    beyond = 0 if total is None else _count(total) - _count(usage["prompt_tokens"])
+    return max(completion, beyond, completion + reasoning if reasoning > completion else 0)
 
 
 def _text(content: object) -> str:

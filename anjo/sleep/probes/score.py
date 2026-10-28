@@ -25,10 +25,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, runtime_checkable
 
-from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.template import render
+from anjo.sleep.model_api import ChatResult
 from anjo.sleep.probes.arms import ArmReply
 from anjo.sleep.probes.neutral import rewrite as neutral_rewrite
 from anjo.sleep.types import Probe
@@ -39,6 +39,11 @@ THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
 JUDGE_MODEL: Final = "muse-spark"
 JUDGE_TEMPERATURE: Final = 0.0
 JUDGE_TIMEOUT_S: Final = 180.0
+# A judge answer that can't be read is asked once more with this cap (sent as max_completion_tokens).
+# The first call sends none, so the provider's default applies. Teo's night 1 (2026-10-28, 257 calls
+# of muse-spark-1.3) wrote 797 to 8,944 tokens (p50 2,558, p99 7,233); its one unreadable answer came
+# among calls of 1.8k to 4.5k, nowhere near a cap. 16,384 is 1.8 times the longest seen.
+JUDGE_RETRY_MAX_TOKENS: Final = 16_384
 NEUTRAL_KINDS: Final = frozenset({"new_work", "vocab"})
 REPORTED: Final = "reported"
 _POINTS: Final = {"win": 1.0, "tie": 0.5, "loss": 0.0}
@@ -49,12 +54,32 @@ class JudgeError(RuntimeError):
     """A judge's answer was not one of A, B or tie."""
 
 
+class NoVerdict(JudgeError):
+    """A probe the judge gave no readable verdict on, after its one retry: counted and shown, never
+    scored, never a crash."""
+
+
 # ── Judges ────────────────────────────────────────────────────────────────────
 
 
 class PairwiseJudge(Protocol):
     def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
         """Which of the two replies, shown in this order, is more useful to this person."""
+
+
+@runtime_checkable
+class RoomyJudge(PairwiseJudge, Protocol):
+    def again(self, probe: Probe, first: str, second: str) -> Verdict:
+        """``verdict`` asked once more, with more room to answer (``JUDGE_RETRY_MAX_TOKENS``)."""
+
+
+class JudgeChat(Protocol):
+    """``meta_api.chat`` fits this: a chat whose reply can be capped (``max_tokens``)."""
+
+    def __call__(
+        self, model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, timeout_s: float, *,
+        temperature: float | None = None, max_tokens: int | None = None,
+    ) -> ChatResult: ...
 
 
 def judge_prompt(probe: Probe, brief: str, first: str, second: str) -> str:
@@ -83,16 +108,27 @@ def parse_verdict(text: str) -> Verdict:
 class MuseJudge:
     """Muse Spark with ``judge_v1.md``. ``brief_for`` gives the judge brief (``judge_brief``)."""
 
-    chat: ChatFn
+    chat: JudgeChat
     brief_for: Callable[[str], str]
 
     def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
+        return self._ask(probe, first, second, None)
+
+    def again(self, probe: Probe, first: str, second: str) -> Verdict:
+        return self._ask(probe, first, second, JUDGE_RETRY_MAX_TOKENS)
+
+    def _ask(self, probe: Probe, first: str, second: str, max_tokens: int | None) -> Verdict:
+        """One judge call; an unreadable answer's error names how it ended and its length, never its words."""
         prompt = judge_prompt(probe, self.brief_for(probe.person_id), first, second)
-        result = self.chat(
-            JUDGE_MODEL, [{"role": "user", "content": prompt}], None, JUDGE_TIMEOUT_S,
-            temperature=JUDGE_TEMPERATURE,
-        )
-        return parse_verdict(result.text)
+        messages = [{"role": "user", "content": prompt}]
+        result = (self.chat(JUDGE_MODEL, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE)
+                  if max_tokens is None else
+                  self.chat(JUDGE_MODEL, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE,
+                            max_tokens=max_tokens))
+        try:
+            return parse_verdict(result.text)
+        except JudgeError as error:
+            raise JudgeError(f"{error} (finish {str(result.finish_reason)[:16]}, {result.output_tokens} tokens out)") from None
 
 
 Outcome = Literal["win", "tie", "loss"]

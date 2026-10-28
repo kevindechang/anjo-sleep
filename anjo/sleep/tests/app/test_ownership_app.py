@@ -137,7 +137,7 @@ def test_routes_refuse_other_users(api: Any, monkeypatch: pytest.MonkeyPatch) ->
     api.who["user"] = ALICE
     nights = api.get("/api/sleep/nights").json()
     assert [(n["night"], n["status"]) for n in nights] == [("2026-10-28", "promoted"), ("2026-10-29", "rejected")]
-    assert nights[0]["checkpoint"] == first.id and nights[1]["gates"] == [{"gate": "collapse", "passed": False}]
+    assert nights[0]["checkpoint"] == first.id and nights[1]["gates"] == [{"gate": "collapse", "passed": False, "skipped": False}]
     assert nights[0]["action"] == "revisit_thread" and nights[0]["note"] == "held"
     assert api.get("/api/sleep/nights/2026-10-29").json()["status"] == "rejected"
     assert api.get("/api/sleep/nights/2026-10-30").status_code == 404

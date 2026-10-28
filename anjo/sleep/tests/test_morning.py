@@ -6,6 +6,7 @@ is held first. Fakes only."""
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -215,3 +216,121 @@ def test_a_promoted_night_must_give_its_own_checkpoint(tmp_path: Path) -> None:
     with pytest.raises(MorningError, match="promoted"):
         rig.run(serving=None, promoted=True)
     assert rig.model.calls == []
+
+
+class UnreadableChat:
+    """Muse Spark that answers prose (no JSON) on PROMPT-NEVER always and on PROMPT-ONCE on its first call
+    only; every other answer is a JSON verdict. Every call's cap is recorded, in order (the run is serial)."""
+
+    def __init__(self) -> None:
+        self.caps: list[tuple[str, int | None]] = []
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None, max_tokens: int | None = None) -> Any:
+        from anjo.sleep.model_api import ChatResult
+
+        content = messages[-1]["content"]
+        asked = next(word for word in ("NEVER", "ONCE", "PLAIN") if f"PROMPT-{word}" in content)
+        first_once = asked == "ONCE" and all(seen != "ONCE" for seen, _ in self.caps)
+        self.caps.append((asked, max_tokens))
+        unreadable = asked == "NEVER" or first_once
+        text = "Reply A reads better here." if unreadable else json.dumps({"verdict": "A", "reason": "x"})
+        return ChatResult(text, (), "m", 2900, 2200, "stop")
+
+
+def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
+    from anjo.sleep.probes.morning import JUDGE_RETRY_SHARE
+    from anjo.sleep.probes.score import JUDGE_RETRY_MAX_TOKENS, MuseJudge
+
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    rig = Rig(tmp_path, ledger=ledger)
+    rig.probes = [probe("q1", "new_work", prompt="PROMPT-ONCE"), probe("q2", "vocab", prompt="PROMPT-NEVER"),
+                  probe("q3", "tone_hold", prompt="PROMPT-PLAIN"), probe("q4", "new_work", prompt="PROMPT-PLAIN"),
+                  probe("q5", "tone_hold", prompt="PROMPT-PLAIN"), taste("t1")]  # 1 of 5 judged unreadable: under a quarter
+    chat = UnreadableChat()
+    rig.morning = replace(rig.morning, judge=MuseJudge(chat=chat, brief_for=lambda pid: "brief"))
+    done = rig.run()  # the run ends and writes its file: an unreadable verdict never crashes the morning
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    comparisons = {f"{a}_vs_1" for a in ARMS - {"1"}} | {"3_vs_3x", "4_vs_2C"}
+    # q1's first answer was unreadable, and its one retry, with more room, gave the verdict.
+    assert chat.caps[:2] == [("ONCE", None), ("ONCE", JUDGE_RETRY_MAX_TOKENS)]
+    assert {r["outcome"] for r in record["outcomes"] if r["probe"] == "q1"} <= {"win", "tie", "loss"}
+    # q2 never gave one: no verdict in every comparison, counted, shown, and left out of the score.
+    assert record["no_verdict"] == dict.fromkeys(comparisons, 1) and done.no_verdict == len(comparisons)
+    assert [r["outcome"] for r in record["outcomes"] if r["probe"] == "q2"] == ["no_verdict"] * len(comparisons)
+    assert record["pairs"]["4_vs_2C"]["overall"]["n"] == 5  # every probe but q2
+    # Retries are a share of the run's judge calls (70 here: 7): q1's, then q2's until they ran out.
+    retried = [asked for asked, cap in chat.caps if cap == JUDGE_RETRY_MAX_TOKENS]
+    assert retried == ["ONCE"] + ["NEVER"] * 6 and math.ceil(70 * JUDGE_RETRY_SHARE) == 7
+    assert {cap for asked, cap in chat.caps if asked == "PLAIN"} == {None}  # a readable answer: one call, the provider's cap
+    assert JUDGE_RETRY_MAX_TOKENS >= 8_944  # the longest judge answer seen (Teo's night 1, 257 calls)
+    # Every call, retries included, is counted, and the judge's hold covers them all: no overage.
+    assert done.judge_calls == len(chat.caps)
+    events = read_records(ledger.path, PLAIN)
+    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd"])
+    settled = next(e for e in events if e["op"] == "settle" and e["job"] == held["job"])
+    assert settled["amount"] <= held["amount"] and not ledger.open_holds()
+
+
+def test_all_no_verdict_is_missing_not_a_tie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.demo.record import chart_view
+    from anjo.sleep.probes import morning as morning_module
+    from anjo.sleep.probes.morning import NO_VERDICT_MAX_SHARE, TooManyNoVerdicts
+    from anjo.sleep.probes.score import MuseJudge
+    from anjo.sleep.reports.results import load, table
+
+    def run(folder: Path) -> Any:
+        ledger = Ledger(folder / "budget.jsonl")
+        rig = Rig(folder, ledger=ledger)
+        rig.probes = [probe("q1", "new_work", prompt="PROMPT-NEVER"), probe("q2", "vocab", prompt="PROMPT-NEVER"),
+                      probe("q3", "tone_hold", prompt="PROMPT-NEVER")]  # no taste_ab: the judge decides every probe
+        rig.morning = replace(rig.morning, judge=MuseJudge(chat=UnreadableChat(), brief_for=lambda pid: "brief"))
+        return rig, ledger
+
+    # A judge whose format changed fails loudly: past a quarter of a comparison's probes the morning stops,
+    # writes no score (a rerun may score the night) and settles what it spent.
+    rig, ledger = run(tmp_path / "loud")
+    with pytest.raises(TooManyNoVerdicts, match=r"no readable verdict on 3 of 3 probes in 2C_vs_1") as stopped:
+        rig.run()
+    assert NO_VERDICT_MAX_SHARE == 0.25 and "PROMPT" not in str(stopped.value)
+    assert not rig.scores.exists() and not ledger.open_holds()
+    # Even let through, a comparison with no verdict at all is written as missing, never as a 0.50 tie.
+    monkeypatch.setattr(morning_module, "NO_VERDICT_MAX_SHARE", 1.0)
+    rig, _ = run(tmp_path / "quiet")
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    assert record["arms"] == {} and record["pairs"] == {} and set(record["no_verdict"].values()) == {3}
+    # Readers show a stat with no probe behind it as missing too, never as an exact tie.
+    path = rig.scores / "night-01.json"
+    tie = {"n": 0, "wins": 0, "ties": 0, "losses": 0, "score": 0.5, "decisive_share": None, "ci": [0.5, 0.5]}
+    path.write_text(json.dumps({**record, "arms": {"3": {"overall": tie, "knowledge": tie}}}), encoding="utf-8")
+    nights_dir = tmp_path / "quiet" / "results" / "p1" / "nights" / NIGHT.isoformat()
+    nights_dir.mkdir(parents=True)
+    (nights_dir / "summary.json").write_text(json.dumps({"night": NIGHT.isoformat(), "label": "development",
+                                                         "status": "promoted"}), encoding="utf-8")
+    night = load("p1", tmp_path / "quiet" / "results")[0]
+    assert night.arms == {} and night.no_verdict["3_vs_1"] == 3
+    assert "0.50" not in table(["p1"], root=tmp_path / "quiet" / "results")
+    assert chart_view([night], [], name="Teo")["development"]["lives"][0]["nights"][0]["scores"] == {}
+
+
+def test_no_verdict_counts_show_beside_their_scores(tmp_path: Path) -> None:
+    from anjo.sleep.demo.dailies import DailySources, NightFiles, dailies_view
+    from anjo.sleep.demo.heldout import HeldOutText
+    from anjo.sleep.demo.record import chart_view
+    from anjo.sleep.reports.results import Night, Stat, _section
+
+    stat = Stat(0.6, n=3, wins=2, ties=0, losses=1, decisive_share=1.0, ci=(0.2, 0.9))
+    night = Night(person="p1", night="2026-11-03", label="development", status="promoted", cost_usd=0.0, gates={},
+                  arms={"3": {"overall": stat, "knowledge": stat}}, pairs={"4_vs_2C": {"overall": stat}},
+                  no_verdict={"3_vs_1": 1, "4_vs_2C": 2})
+    lines = _section("development", ["p1"], {"p1": [night]})  # the rows table() prints
+    assert any("0.60 [0.20,0.90] (1 no verdict)" in line for line in lines)  # the arm's cell
+    assert any("pair 4_vs_2C" in line and "2 no verdict" in line for line in lines)
+    assert chart_view([night], [], name="Teo")["development"]["lives"][0]["nights"][0]["no_verdict"] == {"3": 1}
+    summary = {"night": "2026-11-03", "status": "promoted", "label": "development", "gates": {}}
+    files = NightFiles(summary, [{"step": "morning", "status": "ok", "judge_calls": 22, "no_verdict": 2}])
+    card = dailies_view(DailySources(person="p1", nights=[files]), HeldOutText([]), passes=lambda text: True)
+    assert card["no_verdict"] == 2
+    quiet = dailies_view(DailySources(person="p1", nights=[NightFiles(summary, [])]), HeldOutText([]),
+                         passes=lambda text: True)
+    assert quiet["no_verdict"] == 0

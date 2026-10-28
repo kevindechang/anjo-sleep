@@ -4,8 +4,9 @@
 development runs, the intervention test, a fake freeze, the held-out lives and runs with 17b's arms,
 kill-resume, judge and report), on offline fakes: no key, no network, no spend. Their numbers mean
 nothing. ``--parallel N`` (default 8) runs that many life-arms at once against the one server, for
-``run`` and ``timing``. The intervention test and kill-resume run one at a time and refuse any
-other value (``SERIAL_COMMANDS``).
+``run`` and ``timing``; for ``generate`` it is the lives generated at once (default 4), given
+before the command or after it. The intervention test and kill-resume run one at a time and refuse
+any other value (``SERIAL_COMMANDS``).
 
 A real run makes paid calls, so it is refused without ``--live``; ``--live`` prints the command's
 plan (its Colab session and hard timeout, every hold on every pool, and its ceiling) and stops, and
@@ -16,7 +17,8 @@ it spent (``ceiling``). Glimmer's pinned revision comes from the serving setting
 (``ServeConfig.from_env``), the ledger from the data dir (``budget.default_ledger``).
 
 A run whose model call still fails after its retries fails alone, recorded; the others go on, and
-the command then stops with exit code 3. So does a session that can't carry the next run, or a
+the command then stops with exit code 3. A life whose generation still fails is skipped the same
+way (``gen_batch``). So does a session that can't carry the next run, or a
 hold with no room coming (``BudgetStop``): what finished is kept, and a rerun goes on from there. Every command runs under
 MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
 runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
@@ -26,6 +28,15 @@ session is stopped and its holds settled. On a Mac, a live command keeps the mac
 CLI, ``ssh`` and ``ssh-keygen`` are here (``colab_vllm.preflight``), then Glimmer's revision,
 vLLM's version, the precision and the reasoning strength against the pilot's first session
 (``DataDir.pin_serving``), and 17b's adapters before the VM boots.
+
+MIND core's lives (``core_splits``): ``generate --split core-train`` (or ``core-val``, ``core-test``)
+writes a split; ``run --split core-test --subset b12`` runs B alone (``--arms B,M`` adds M) on the
+pinned subset, and ``judge`` takes the same flags. ``labels --split S --out DIR`` exports a split's
+event streams, with training labels for a labelled split only (``labels``); it reads the data dir
+and calls nothing, so it needs no ``--live``. A core split and the pairs are written by DeepSeek
+V4.1 Flash and read by Gemini unless ``--generator`` and ``--reader`` say otherwise (``gen_args``);
+APD's own splits stay Spark Open's. ``calls`` prints where the generated lives' calls went, per
+gate, days read and item, with their tokens (``calls``); it too reads the data dir only.
 
 Spark Open runs on the one provider ``ANJO_SLEEP_MIND_SPARK`` names (``mind.spark_provider``:
 Fireworks by default, or Baseten), read once per command, its calls held on that provider's pool.
@@ -50,11 +61,25 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import date
 from functools import partial
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
+from anjo.sleep.mind.apd import (
+    calls,
+    colab_vllm,
+    core_splits,
+    fakes,
+    gen_args,
+    generate,
+    intervene,
+    labels,
+    pairs,
+    pilot,
+    plan,
+    timing,
+)
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
 from anjo.sleep.mind.apd.ceiling import DEFAULT_MAX_USD, UNITS, Ceiling, CeilingReached, RunLedger, max_usd
 from anjo.sleep.mind.apd.journal import SpendJournal
@@ -62,7 +87,16 @@ from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.live import RunFailed
 from anjo.sleep.mind.apd.pilot import Out
 from anjo.sleep.mind.apd.store import DataDir, StoreError
-from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, ArmName, Life, Split
+from anjo.sleep.mind.apd.types import (
+    CORE_SPLITS,
+    HELD_OUT_LIVES,
+    KILL_RESUME_LIVES,
+    LIFE_DAYS,
+    MAX_PREVALENCE,
+    ArmName,
+    Life,
+    LifeSplit,
+)
 from anjo.sleep.mind.spark_provider import SparkProvider, from_env
 from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
@@ -93,11 +127,15 @@ BUSY: Final = 4
 CEILING: Final = 5  # the run's settled spend reached --max-usd
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
-SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that call Spark Open
+SPARK_COMMANDS: Final = ("generate", "generate-pairs", *SERVING_COMMANDS)  # the commands that call Spark Open
 # vLLM at temperature 0 isn't batch-invariant: a reply can change with what else is in its batch.
 # The intervention test's twins and kill-resume's runs are compared token for token, so they run
 # one at a time; mind.lock already keeps every other MIND command off the session.
 SERIAL_COMMANDS: Final = ("intervene", "kill-resume")
+GEN_COMMANDS: Final = ("generate", "generate-pairs")  # their --parallel is the lives (pairs) generated at once
+CORE_COMMANDS: Final = ("generate", "run", "judge", "labels")  # the commands that take --split
+SUBSET_COMMANDS: Final = ("run", "judge", "labels")
+CORE_ARMS: Final[tuple[ArmName, ...]] = ("B",)  # a core split's runs, unless --arms says otherwise
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
 
 
@@ -112,7 +150,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hours", type=float, default=DEFAULT_HOURS, help="the Colab session's hard timeout")
     parser.add_argument("--only", type=int, help="run a step on its first N lives only")
     parser.add_argument("--parallel", type=int, help=f"life-arms at once against the one server, for run and timing "
-                        f"(default {PARALLEL}); intervene and kill-resume run one at a time")
+                        f"(default {PARALLEL}); lives at once for generate (default {GEN_PARALLEL}); intervene and "
+                        "kill-resume run one at a time")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("pilot", help="the whole chain (--fake only)")
     made = commands.add_parser("generate", help="the development lives; --held-out only at the freeze")
@@ -120,6 +159,12 @@ def _parser() -> argparse.ArgumentParser:
     made.add_argument("--draw-seed", help="the pre-committed draw seed, revealed at the freeze")
     made.add_argument("--lives", type=int, default=HELD_OUT_LIVES)
     made.add_argument("--prereg", type=Path, help="with --fake only: a stand-in prereg ledger (default: the data dir's)")
+    paired = commands.add_parser("generate-pairs", help="counterfactual pairs of histories, in core-test's fields")
+    paired.add_argument("--n", type=int, default=pairs.PAIR_COUNT, help=f"how many (default {pairs.PAIR_COUNT})")
+    for name in GEN_COMMANDS:  # --parallel after the command too; SUPPRESS keeps one given before it
+        commands.choices[name].add_argument("--parallel", type=int, default=argparse.SUPPRESS,
+                                            help=f"lives generated at once (default {GEN_PARALLEL})")
+        gen_args.add(commands.choices[name])
     ran = commands.add_parser("run", help="every arm on every life of a split")
     ran.add_argument("--held-out", action="store_true")
     ran.add_argument("--adapters", type=Path, help="17b's adapter cache: runs M+replay and M+shuffled")
@@ -130,6 +175,18 @@ def _parser() -> argparse.ArgumentParser:
     judged = commands.add_parser("judge", help="judge every run of a split, blind")
     judged.add_argument("--held-out", action="store_true")
     commands.add_parser("report", help="the APD report, with 17b's section")
+    commands.add_parser("calls", help="where the generated lives' and pairs' calls went: per gate, days read, item")
+    exported = commands.add_parser("labels", help="a split's event streams, and a labelled split's labels")
+    exported.add_argument("--out", type=Path, required=True, help="the export's folder")
+    exported.add_argument("--pairs", action="store_true", help="the counterfactual pairs instead of a split")
+    ran.add_argument("--arms", help=f"a core split's arms, comma-separated, of {', '.join(pilot.DEV_ARMS)} "
+                     f"(default {','.join(CORE_ARMS)})")
+    for name in CORE_COMMANDS:
+        commands.choices[name].add_argument("--split", choices=("development", *CORE_SPLITS),
+                                            help="the split (APD's held-out lives take --held-out)")
+    for name in SUBSET_COMMANDS:
+        commands.choices[name].add_argument("--subset", choices=sorted(core_splits.SUBSETS),
+                                            help="a pinned subset of a core split's lives")
     killed = commands.add_parser("kill-resume", help="kill-resume on held-out lives")
     killed.add_argument("--kill-at", type=int, required=True)
     for name in CEILING_COMMANDS:
@@ -162,24 +219,64 @@ def _provider(parser: argparse.ArgumentParser) -> SparkProvider:
 
 
 def _parallel(args: argparse.Namespace) -> int:
-    """Life-arms at once: one for ``SERIAL_COMMANDS``, else ``--parallel`` or ``PARALLEL``."""
+    """Units at once: one for ``SERIAL_COMMANDS``, else ``--parallel``, or ``GEN_PARALLEL`` lives
+    for ``GEN_COMMANDS`` and ``PARALLEL`` life-arms for the rest."""
     if args.command in SERIAL_COMMANDS:
         return 1
-    return PARALLEL if args.parallel is None else int(args.parallel)
+    if args.parallel is not None:
+        return int(args.parallel)
+    return GEN_PARALLEL if args.command in GEN_COMMANDS else PARALLEL
 
 
 def _check_parallel(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.parallel is not None and args.parallel < 1:
+        parser.error("--parallel is at least 1")
     if args.command in SERIAL_COMMANDS and args.parallel not in (None, 1):
         parser.error(f"{args.command} runs one at a time (--parallel 1): vLLM at temperature 0 isn't batch-invariant, "
                      "and its runs are compared token for token")
 
 
-def _split(args: argparse.Namespace) -> Split:
-    return "held_out" if getattr(args, "held_out", False) else "development"
+def _split(args: argparse.Namespace) -> LifeSplit:
+    if getattr(args, "held_out", False):
+        return "held_out"
+    found: LifeSplit = getattr(args, "split", None) or "development"
+    return found
 
 
-def _lives(data: DataDir, split: Split, only: int | None) -> tuple[Life, ...]:
+def _check_split(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    split, subset = getattr(args, "split", None), getattr(args, "subset", None)
+    if split is not None and getattr(args, "held_out", False):
+        parser.error("--held-out and --split name two splits; give one")
+    if subset is not None and core_splits.SUBSETS[subset] != split:
+        parser.error(f"--subset {subset} is of --split {core_splits.SUBSETS[subset]}")
+    if args.command == "labels" and (split is None) == (not args.pairs):
+        parser.error("labels exports one --split, or --pairs")
+    if args.command == "generate-pairs" and args.n < 1:
+        parser.error("--n is at least 1")
+    if getattr(args, "arms", None) is not None and split not in CORE_SPLITS:
+        parser.error("--arms is for a core split's runs; APD's splits run their protocol's arms")
+    if args.command in ("labels", "calls") and args.data is None:
+        parser.error(f"{args.command} needs --data, the data dir to read")
+
+
+def _arms(args: argparse.Namespace) -> tuple[ArmName, ...]:
+    """A core split's arms: ``--arms``, or ``CORE_ARMS``; never an arm outside development's."""
+    text = getattr(args, "arms", None)
+    if text is None:
+        return CORE_ARMS
+    arms = tuple(arm for arm in pilot.DEV_ARMS if arm in text.split(","))
+    if not arms or set(text.split(",")) - set(arms):
+        raise SystemExit(f"--arms takes {', '.join(pilot.DEV_ARMS)}, comma-separated")
+    return arms
+
+
+def _specs(split: LifeSplit) -> tuple[generate.LifeSpec, ...]:
+    return core_splits.core_specs(split) if split in CORE_SPLITS else generate.development_specs()
+
+
+def _lives(data: DataDir, split: LifeSplit, only: int | None, subset: str | None = None) -> tuple[Life, ...]:
     found = data.lives(split)
+    found = found if subset is None else core_splits.in_subset(found, subset)
     return found if only is None else found[:only]
 
 
@@ -190,13 +287,16 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
           provider: SparkProvider) -> plan.Plan:
     session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
-    on_disk = len(_lives(data, split, args.only))
-    if args.command == "generate":
-        count = args.lives if split == "held_out" else len(generate.development_specs())
-        return plan.generate_plan(count if args.only is None else min(count, args.only), prices, rates, split,
-                                  provider=provider)
+    on_disk = len(_lives(data, split, args.only, getattr(args, "subset", None)))
+    if args.command == "generate":  # the held-out lives' items are drawn at the freeze: at the most, surfacing last
+        found = ([(LIFE_DAYS - 1,) * MAX_PREVALENCE] * args.lives if split == "held_out"
+                 else [plan.surface_days(spec) for spec in _specs(split)])
+        return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider, **_choice(args))
+    if args.command == "generate-pairs":
+        return plan.pairs_plan(args.n, prices, rates, provider=provider, **_choice(args))
     if args.command == "run":
-        arms = pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()) if split == "held_out" else pilot.DEV_ARMS
+        arms = (_arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development"
+                else pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()))
         return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured, provider=provider)
     if args.command == "timing":
         return plan.timing_plan(prices, session_s, parallel, provider=provider)
@@ -209,10 +309,16 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     return plan.Plan("report: reads what is on disk", None, ())
 
 
+def _choice(args: argparse.Namespace) -> dict[str, Any]:
+    """The command's writer and reader, and their prices (``gen_args``)."""
+    return {"generator": gen_args.generator(args), "generator_rate": gen_args.generator_rate(args),
+            "reader": gen_args.reader(args), "reader_rate": gen_args.reader_rate(args)}
+
+
 def _plan_with_ceiling(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
     if args.command not in CEILING_COMMANDS:
         return found
-    parallel = _parallel(args) if args.command in ("run", "timing") else 1
+    parallel = _parallel(args) if args.command in ("run", "timing", *GEN_COMMANDS) else 1
     return dataclasses.replace(found, ceiling_usd=args.max_usd, ceiling_unit=UNITS[args.command], parallel=parallel)
 
 
@@ -270,7 +376,7 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
     """One command under MIND's lock, after its sweep; failed runs, a session that can't carry the
     next run, a hold with no room coming, or the run's ceiling stop it cleanly."""
     ceiling = _ceiling(args, backend)
-    backend = dataclasses.replace(backend, ceiling=ceiling)
+    backend = dataclasses.replace(gen_args.apply(args, backend), ceiling=ceiling)
     try:
         if args.command in SERVING_COMMANDS:
             backend.preflight()  # the CLI, ssh and ssh-keygen, before the sweep, a hold or a VM
@@ -338,14 +444,18 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         data.pin_spark(backend.provider.name, backend.provider.model)
     if args.command in SERVING_COMMANDS:
         data.pin_serving(_pins(settings_))
+    subset = getattr(args, "subset", None)
     if args.command == "generate":
-        specs = generate.development_specs()
+        specs = _specs(split)
         if split == "held_out":
             specs = pilot.held_out_specs(_entries(args, data, backend.fake), args.draw_seed or "", args.lives)
             data.save_drawn(pilot.seed_digest(args.draw_seed or ""), args.lives)
-        pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out)
+        pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out,
+                             parallel=_parallel(args))
+    elif args.command == "generate-pairs":
+        pairs.generate_pairs(data, pairs.pair_specs(args.n), backend, out, parallel=_parallel(args))
     elif args.command == "run":
-        arms = pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
+        arms = _arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
         replay = _adapters(args) if args.adapters is not None and split == "held_out" else None  # before the VM
         with pilot.serving(backend, settings_, session_s, out) as session:
             adapters = None
@@ -353,7 +463,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
                 publisher, adapters = replay
                 publisher.upload(session)
                 arms = (*arms, *pilot.REPLAY_ARMS)
-            pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters,
+            pilot.run_lives(data, _lives(data, split, args.only, subset), arms, session, backend, out, adapters=adapters,
                             parallel=_parallel(args), run_s=run_s)
     elif args.command == "timing":
         started = time.monotonic()
@@ -369,7 +479,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
             results, skipped = intervene.intervene(data, session, backend, out, snapshots=snaps, run_s=run_s)
         out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
-        pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
+        pilot.judge_lives(data, _lives(data, split, args.only, subset), backend, out)
     elif args.command == "report":
         judged = pilot.judge_lives(data, _lives(data, "held_out", args.only), _no_new_calls(backend), out)
         out(pilot.report(judged, intervene.on_disk(data)))
@@ -466,6 +576,18 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
     return 0
 
 
+def _labels(args: argparse.Namespace, out: Out) -> int:
+    if args.pairs:
+        found = labels.export_pairs(DataDir(args.data), args.out)
+        out(f"exported {len(found)} pair(s), both histories' events and what should differ, to {args.out}")
+        return 0
+    done = labels.export(DataDir(args.data), _split(args), args.out, subset=args.subset)
+    sealed = "labels sealed: streams only" if done.sealed else "with labels"
+    out(f"exported {len(done.lives)} li{'fe' if len(done.lives) == 1 else 'ves'} of {_split(args)}"
+        f"{'' if args.subset is None else ' (' + args.subset + ')'}, {done.events} events, {sealed}, to {args.out}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
     with _signals_exit():
         return _main(argv, out)
@@ -475,7 +597,16 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     _check_parallel(parser, args)
+    _check_split(parser, args)
+    if args.command == "labels":  # reads the data dir and writes the export; no call, no spend
+        return _labels(args, out)
+    if args.command == "calls":  # reads the data dir's call logs; no call, no spend
+        for line in calls.breakdown({made: [calls.Call.from_json(raw) for raw in found]
+                                     for made, found in DataDir(args.data).call_logs().items()}):
+            out(line)
+        return 0
     provider = _provider(parser)
+    gen_args.check(parser, args, provider)
     if args.fake:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
         out(f"APD on fakes in {data.root}. The numbers mean nothing.")
