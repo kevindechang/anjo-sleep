@@ -47,7 +47,7 @@ from types import TracebackType
 from typing import Final, TypeVar
 
 from anjo.sleep.mind.apd import failures, gates, generate, readers, retry
-from anjo.sleep.mind.apd.backend import Backend, Flight, cool_down, held_attempt, life_calls
+from anjo.sleep.mind.apd.backend import Backend, Flight, Halted, cool_down, held_attempt, life_calls
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
@@ -206,9 +206,16 @@ def failed_at(log: CallLog | None, *found: failures.AttemptFailure) -> None:
 def failing(log: CallLog | None, attempt: int) -> Iterator[None]:
     """An attempt ended by a call that still failed or a reply that couldn't be read: kept in
     ``log`` at its last call. A transient failure (``retry.transient``) ends the attempt
-    (``CallFailed``); any other is raised on (the life is skipped)."""
+    (``CallFailed``); any other is raised on (the life is skipped). An attempt a kill cut short
+    after its first call (``Halted``, ``Abandoned`` with a call in flight) is kept marked killed,
+    and the kill raised on."""
     try:
         yield
+    except Halted as error:
+        last = None if log is None else log.last()
+        if last is not None:
+            failed_at(log, dataclasses.replace(failures.of_error(attempt, error, last), killed=True))
+        raise
     except (ModelApiError, gates.GateError) as error:
         failed_at(log, failures.of_error(attempt, error, None if log is None else log.last()))
         if isinstance(error, ModelApiError) and retry.transient(error):

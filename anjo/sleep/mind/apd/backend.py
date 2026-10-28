@@ -300,12 +300,16 @@ class Abandoned(Halted):
     priced at its worst case (``CountedChat``)."""
 
 
-def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None = None) -> BriefChat:
+def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None = None,
+            limiter: Limiter | None = None) -> BriefChat:
     """``chat`` with a deadline that fires and a kill that reaches a call in flight. Each call runs
     on a daemon thread of its own, its timeout capped at ``cap_s``; the caller waits for its reply
     no longer than that timeout and ``CALL_GRACE_S`` (then a timeout, as ``model_api``'s, which
     ``retry.transient`` tries again) and only until ``halt`` is set (``Abandoned``). A thread given
-    up on ends with its own transport's timeout and never holds the process open."""
+    up on ends with its own transport's timeout and never holds the process open. With
+    ``limiter``, the caller takes a place before the call (its wait there no part of the deadline)
+    and the call's own thread gives it back once the call really ends, so a call given up on but
+    still in flight keeps counting against the limit."""
 
     def call(model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, timeout_s: float, *,
              temperature: float | None = None) -> ChatResult:
@@ -319,9 +323,20 @@ def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None =
             except BaseException as error:  # noqa: BLE001 - handed to the caller, raised there
                 found.append(error)
             finally:
-                done.set()
+                try:
+                    if limiter is not None:
+                        limiter.release()
+                finally:
+                    done.set()
 
-        threading.Thread(target=run, name="apd-call", daemon=True).start()
+        if limiter is not None:
+            limiter.acquire(halt)
+        try:
+            threading.Thread(target=run, name="apd-call", daemon=True).start()
+        except BaseException:
+            if limiter is not None:
+                limiter.release()
+            raise
         deadline = time.monotonic() + wait + CALL_GRACE_S
         while not done.wait(max(0.0, min(CALL_POLL_S, deadline - time.monotonic()))):
             if halt is not None and halt.is_set():
@@ -375,27 +390,39 @@ class Flight:
 
 
 @dataclass
+class WaitBudget:
+    """What one attempt may still wait on 429s, in seconds, shared by its calls (``Retries``)."""
+
+    left_s: float = retry.RATE_LIMIT_BUDGET_S
+
+
+@dataclass
 class Retries:
     """The extra tries one attempt holds for transient failures (a 5xx, a timeout or a reset),
     shared by its writer's and reader's calls and held at their worst case; each waits first
-    (``wait``). A 429 is billed nothing and held nothing, so its tries never spend ``left``: only
-    its own call's ``retry.RATE_LIMIT_ATTEMPTS`` bound them. With ``rate_limits_only`` (the
-    auditor's, whose hold has no extra tries) only a 429 is tried again."""
+    (``wait``). A 429 is billed nothing and held nothing, so its tries never spend ``left``: the
+    call's ``retry.RATE_LIMIT_ATTEMPTS`` tries in all and the attempt's ``budget`` of 429 waits
+    bound them. With ``rate_limits_only`` (the auditor's, whose hold has no extra tries) only a 429
+    is tried again."""
 
     left: int = GEN_SPARK_RETRIES
     sleep: Callable[[float], None] = time.sleep
     rand: Callable[[], float] = random.random
     halt: threading.Event | None = None
     rate_limits_only: bool = False
+    budget: WaitBudget = field(default_factory=WaitBudget)
 
     def wait(self, error: ModelApiError, attempt: int) -> float | None:
         """The wait before trying again a call whose try ``attempt`` failed with ``error``;
-        ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, up to
-        ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call; another transient failure
-        ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
+        ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, taken from
+        the attempt's budget, up to ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all; another
+        transient failure ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
         if retry.rate_limited(error):
-            return None if attempt >= retry.RATE_LIMIT_ATTEMPTS else retry.rate_limit_wait(attempt, retry.hint(error),
-                                                                                          self.rand)
+            wait = retry.rate_limit_wait(attempt, retry.hint(error), self.rand)
+            if attempt >= retry.RATE_LIMIT_ATTEMPTS or wait > self.budget.left_s:
+                return None
+            self.budget.left_s -= wait
+            return wait
         if self.rate_limits_only or self.left < 1 or attempt >= retry.ATTEMPTS or not retry.transient(error):
             return None
         self.left -= 1
@@ -546,15 +573,15 @@ def held_attempt(backend: Backend, key: str, calls: GenCalls = WORST_LIFE,
     waits ``GEMINI_READ_TIMEOUT_S`` at most; a hold without room waits (``_room``)."""
     halted(backend.halt)
     halt, cap = backend.halt, None if backend.read_by.model is None else GEMINI_READ_TIMEOUT_S
-    retries = Retries(calls.retries, sleep=backend.sleep, halt=halt)
+    budget = WaitBudget(retry.RATE_LIMIT_BUDGET_S)  # the attempt's 429 waits, its auditor's included
+    retries = Retries(calls.retries, sleep=backend.sleep, halt=halt, budget=budget)
     spark = CountedChat(bounded(backend.life_chat, halt), calls.writes, write_rate(backend), retries, halt=halt,
                         log=log)
-    reads = bounded(backend.reader, halt, cap)
-    reads = reads if backend.read_limit is None else backend.read_limit.limit(reads, halt)
+    reads = bounded(backend.reader, halt, cap, backend.read_limit)
     reader = CountedChat(reads, calls.reads, read_rate(backend), retries, halt=halt, log=log)
     auditor = CountedChat(bounded(backend.auditor, halt), calls.muse,
                           None if backend.rates is None else backend.rates[MUSE],
-                          Retries(calls.retries, sleep=backend.sleep, halt=backend.halt, rate_limits_only=True),
+                          Retries(calls.retries, sleep=backend.sleep, halt=halt, rate_limits_only=True, budget=budget),
                           halt=backend.halt, log=log)
     if backend.ledger is None:
         yield spark, reader, auditor

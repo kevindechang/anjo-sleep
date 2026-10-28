@@ -6,8 +6,9 @@ all, ``backoff`` apart (doubling, jittered). Anything else fails at once.
 **A 429** (``rate_limited``: the provider was busy, and billed nothing) waits longer: the
 provider's hint (``Retry-After``, Vertex's ``RetryInfo``) plus up to ``HINT_JITTER`` of it, so
 calls given the same hint don't all try again together, or ``RATE_BACKOFF_S`` doubling, jittered;
-never more than ``MAX_WAIT_S`` a wait before a hint's jitter, at most ``RATE_LIMIT_ATTEMPTS``
-tries of the call. In
+never more than ``MAX_WAIT_S`` a wait before a hint's jitter. A call answered 429 is tried at most
+``RATE_LIMIT_ATTEMPTS`` times in all, its timeouts and 5xx included (at most ``ATTEMPTS`` of
+those), and an attempt waits out at most ``RATE_LIMIT_BUDGET_S`` of 429s in all. In
 generation, a call that still fails on any transient failure ends its attempt, not its life, and
 the next attempt starts after ``ATTEMPT_COOL_DOWN_S``.
 
@@ -23,7 +24,8 @@ the next attempt starts after ``ATTEMPT_COOL_DOWN_S``.
   transient failure again inside the attempt's own hold, from ``GEN_SPARK_RETRIES`` extra tries the
   attempt holds; a failed try is priced at one call's worst case. A 429 is priced at nothing (it
   was billed nothing) and never spends those tries, so a burst of 429s across an attempt's reads
-  is waited out; only one call answered 429 ``RATE_LIMIT_ATTEMPTS`` times ends the attempt. The Muse auditor tries again only on a
+  is waited out; the attempt ends only on a call past its ``RATE_LIMIT_ATTEMPTS`` tries in all or
+  a 429 wait past what is left of the attempt's ``RATE_LIMIT_BUDGET_S``. The Muse auditor tries again only on a
   429.
 
 **How long a reply may take.** A generation call goes out capped at ``REPLY_MAX_TOKENS``
@@ -56,7 +58,8 @@ ATTEMPTS: Final = 3  # tries in all, the first included
 BACKOFF_S: Final = 2.0  # before the second try; doubled before each next one
 JITTER: Final = (0.5, 1.5)  # each wait is its backoff times a uniform draw in this range
 RETRIED: Final = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)  # timeouts and resets
-RATE_LIMIT_ATTEMPTS: Final = 5  # tries in all of a call answered 429; they never spend the billed extra tries
+RATE_LIMIT_ATTEMPTS: Final = 5  # a call's tries in all once one is answered 429, its timeouts and 5xx included
+RATE_LIMIT_BUDGET_S: Final = 1200.0  # the most one attempt waits on 429s in all, inside its hold's hour
 RATE_BACKOFF_S: Final = 5.0  # before a 429's second try, without a hint; doubled before each next one
 MAX_WAIT_S: Final = 60.0  # the longest any one wait for a 429 lasts, a hint included (before its jitter)
 HINT_JITTER: Final = 0.2  # a hinted wait is the hint plus up to this share of it

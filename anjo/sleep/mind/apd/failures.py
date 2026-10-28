@@ -2,7 +2,8 @@
 
 An attempt fails at a rule (``generate.GenerationFailed``: the writer's day, the extractor's
 reply, a planted fact, a pair), at a gate (a verdict that didn't pass), or on a call that still
-fails after its tries or a reader's reply that can't be read (an error out of the attempt). Each
+fails after its tries or a reader's reply that can't be read (an error out of the attempt), or is
+cut short by a kill (``killed``). Each
 becomes one ``AttemptFailure``: the step, the day (1 to ``LIFE_DAYS``) and the item (its number in
 the life) where known, the error's class or the gate's verdict, the code's own reason, and for a
 reply that couldn't be read the field it lacked, the rule that refused it (``generators.Refused``),
@@ -46,6 +47,7 @@ class AttemptFailure:
     finish_reason: str | None = None
     rate_limits: int = 0  # the attempt's tries answered 429
     waits_s: tuple[float, ...] = ()  # the waits they were tried again after
+    killed: bool = False  # cut short by a kill (``backend.Halted``), not failed
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -55,7 +57,7 @@ class AttemptFailure:
         return cls(int(raw["attempt"]), str(raw["step"]), str(raw["error"]), str(raw["reason"]), _int(raw.get("day")),
                    _int(raw.get("item")), _str(raw.get("field")), _str(raw.get("rule")), _int(raw.get("reply_chars")),
                    _int(raw.get("answer_chars")), _str(raw.get("finish_reason")), int(raw.get("rate_limits") or 0),
-                   tuple(float(wait) for wait in raw.get("waits_s") or ()))
+                   tuple(float(wait) for wait in raw.get("waits_s") or ()), bool(raw.get("killed", False)))
 
 
 def _int(found: object) -> int | None:
@@ -113,6 +115,7 @@ def line(name: str, failure: AttemptFailure) -> str:
     rule = "" if failure.rule is None else f" [rule {failure.rule}]"
     waited = ", ".join(f"{wait:g}" for wait in failure.waits_s) or "nothing"
     limits = "" if not failure.rate_limits else f"; {failure.rate_limits} x HTTP 429, waited {waited} s"
+    limits += "; killed" if failure.killed else ""
     at = ", ".join(part for part in where if part)
     return (f"FAILED attempt {failure.attempt + 1} of {name} at the {failure.step}"
             f"{' (' + at + ')' if at else ''}: {failure.error}: {failure.reason}{rule}{reply}{limits}")
