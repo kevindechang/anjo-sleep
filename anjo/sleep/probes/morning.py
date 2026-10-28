@@ -10,7 +10,8 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
 
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
   before any call, and the score file records ``wake_seconds``.
-- A night that already has a score file is refused before any call: the first score stands.
+- A night that already has a score file is refused before any call: the first score stands. A pinned
+  backfill is refused only by one on its own probe set (``subset``), so a full score can follow a daily one.
 - The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run. A
   backfill (``tools.morning_backfill``) passes ``pinned``: a past checkpoint its night promoted is scored
   though a later one serves, and its file says ``pinned``; what serves never changes.
@@ -263,12 +264,13 @@ def _judge_spend(judge: _Counting, morning: Morning, before: tuple[int, int, int
     return tokens + estimated * JUDGE_USD_PER_CALL, estimated
 
 
-def _next_file(folder: Path, night: date) -> Path:
-    """The score file for ``night``, refusing a night that is already scored."""
+def _next_file(folder: Path, night: date, subset: str | None = None, *, any_set: bool = True) -> Path:
+    """The score file for ``night``, refusing a night that is already scored: on any probe set, or with
+    ``any_set=False`` (a pinned backfill) on ``subset`` only (a name; None: the full set)."""
     taken = 0
     for path in folder.glob("night-*.json") if folder.is_dir() else ():
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("night") == night.isoformat():
+        if record.get("night") == night.isoformat() and (any_set or record.get("subset") == subset):
             raise MorningError(f"{night.isoformat()} is already scored ({path.name}); the first score stands")
         taken = max(taken, int(path.stem.rsplit("-", 1)[1]))
     return folder / f"night-{taken + 1:02d}.json"
@@ -373,7 +375,7 @@ def _run_morning(
     if subset is not None and label == "final":
         raise MorningError("a final run asks the full set of probes and arms, never a subset")
     folder = results.results_root(morning.root) / user_id / SCORES
-    target = _next_file(folder, night)
+    target = _next_file(folder, night, None if subset is None else subset.name, any_set=not pinned)
     serving = morning.arms.adapters.last_promoted(user_id)
     if promoted:
         if checkpoint is None:

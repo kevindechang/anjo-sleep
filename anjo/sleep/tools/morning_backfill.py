@@ -23,7 +23,8 @@ accelerated runner does after a morning. A backfill that fails is logged too: a 
 step marked ``backfilled``, with its reason.
 
 **Refused** before anything is called or held: a night that wasn't promoted, one whose morning
-already succeeded (an ``ok`` morning step, or a score file for the night), a checkpoint that isn't in
+already succeeded on the probe set asked (an ``ok`` morning step on it, or a score file for the night on
+it: a full backfill may follow a daily-v1 morning, never a second daily-v1 one), a checkpoint that isn't in
 the person's promoted history, an account not registered synthetic unless ``--real`` (the default
 builder refuses a real account itself), and whenever the night lock is held: the run holds it
 throughout, so no night or simulated day starts under it.
@@ -58,6 +59,7 @@ from anjo.sleep.probes.morning import (
     JUDGE_RETRY_SHARE,
     JUDGE_USD_PER_CALL,
     SCORES,
+    SUBSETS,
     Morning,
     MorningError,
     MorningResult,
@@ -76,7 +78,6 @@ MORNING: Final = "anjo.sleep.app.morning:build"  # the live comparison's and the
 SYNTHETIC: Final = "anjo.sleep.app.cleared_sessions:is_synthetic"
 LOGS: Final = "anjo.sleep.app.ownership:night_logs"
 REGISTRY: Final = "anjo.sleep.app.storage:checkpoint_registry"
-SUBSETS: Final = {DAILY.name: DAILY}
 PROMOTED: Final = "promoted"
 
 
@@ -130,9 +131,12 @@ def _night(logs: Path, night: date) -> tuple[Path, dict[str, Any]]:
     return promoted[0]
 
 
-def _scored(folder: Path) -> bool:
+def _scored(folder: Path, asked: str | None, own: str | None) -> bool:
+    """An ``ok`` morning step on the set ``asked`` (a name; None: the full set). A step that names no
+    ``subset`` asked the night's own set, ``own``: the receipt names a subset only when one was asked."""
     steps = NightLog(folder).steps() if (folder / LOG).is_file() else []
-    return any(step.get("step") == "morning" and step.get("status") == "ok" for step in steps)
+    return any(step.get("step") == "morning" and step.get("status") == "ok" and step.get("subset", own) == asked
+               for step in steps)
 
 
 def _checkpoint(summary: dict[str, Any], user: str, registry: CheckpointRegistry) -> CheckpointRef:
@@ -153,6 +157,10 @@ def _subset(summary: dict[str, Any], label: str, chosen: ProbeSubset | None) -> 
     return None if summary.get("accelerated") or label != "development" else DAILY
 
 
+def _set(subset: ProbeSubset | None) -> str:
+    return "the full set" if subset is None else f"the {subset.name} subset"
+
+
 def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = False,
          subset: ProbeSubset | None = None) -> Plan:
     """The backfill of ``user``'s ``night``, or ``Refused``: no model call, no hold, nothing written."""
@@ -161,14 +169,15 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
     if not real and not ports.is_synthetic(user):
         raise Refused("the account isn't registered synthetic (--real to score a real person's night)")
     folder, summary = _night(ports.logs(user), night)
-    if _scored(folder):
-        raise Refused(f"the morning of {night.isoformat()} already succeeded")
-    checkpoint = _checkpoint(summary, user, ports.registry)
     label = str(summary.get("label") or "development")
-    asked = _subset(summary, label, subset)
+    asked, own = _subset(summary, label, subset), _subset(summary, label, None)
+    name = None if asked is None else asked.name
+    if _scored(folder, name, None if own is None else own.name):
+        raise Refused(f"the morning of {night.isoformat()} already succeeded on {_set(asked)}")
+    checkpoint = _checkpoint(summary, user, ports.registry)
     try:
         morning = ports.morning(user, persona, night)
-        target = _next_file(results_root(morning.root) / user / SCORES, night)
+        target = _next_file(results_root(morning.root) / user / SCORES, night, name, any_set=False)
     except (MorningError, ValueError) as error:  # already scored, or the builder's own refusal
         raise Refused(str(error)) from None
     probes = list(morning.sealed(user))
@@ -188,7 +197,7 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
 def describe(chosen: Plan) -> list[str]:
     serve = chosen.morning.prices.serve_gpu_per_hour
     judge, gpu = chosen.judge_calls * JUDGE_USD_PER_CALL, chosen.gpu_s * serve / 3600.0
-    asked = "the full set" if chosen.subset is None else f"the {chosen.subset.name} subset"
+    asked = _set(chosen.subset)
     serving = "the base model" if chosen.serving is None else chosen.serving.id
     return [
         f"morning backfill: plan only, nothing run, nothing held (night {chosen.night.isoformat()}, "

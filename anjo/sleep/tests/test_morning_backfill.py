@@ -118,7 +118,7 @@ def test_go_scores_the_nights_own_adapter_while_a_later_one_keeps_serving(tmp_pa
     last = [s for s in world.steps(NIGHTS[0]) if s["step"] == "morning"][-1]
     assert (last["status"], last["backfilled"], last["checkpoint"]) == ("ok", True, "p-abc-n1")
     assert last["judge_calls"] == world.judge.calls > 0
-    assert world.run(NIGHTS[0], "--go")[1] == ["refused: the morning of 2026-10-24 already succeeded"]
+    assert world.run(NIGHTS[0], "--go")[1] == ["refused: the morning of 2026-10-24 already succeeded on the full set"]
 
 
 def test_the_live_comparisons_report_reads_backfilled_mornings_in_night_order(tmp_path: Path) -> None:
@@ -192,3 +192,47 @@ def test_the_probe_set_is_the_nights_own_unless_a_subset_is_named(
     assert record.get("subset") == subset
     last = [s for s in world.steps(NIGHTS[0]) if s["step"] == "morning"][-1]
     assert last.get("subset") == subset
+
+
+
+def test_a_morning_on_one_probe_set_leaves_the_other_owed(tmp_path: Path) -> None:
+    """A daily-v1 morning that succeeded leaves the full set owed, in its own file; each set once."""
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go", "--subset", "daily-v1")[0] == 0
+    assert world.run(NIGHTS[0], "--go", "--subset", "daily-v1")[1] == [
+        "refused: the morning of 2026-10-24 already succeeded on the daily-v1 subset"]
+    code, said = world.run(NIGHTS[0], "--go")
+    assert code == 0 and said[-1].startswith(f"scored: {world.root / USER / 'scores' / 'night-02.json'} ")
+    files = sorted((world.root / USER / "scores").glob("night-*.json"))
+    assert [json.loads(p.read_text(encoding="utf-8")).get("subset") for p in files] == ["daily-v1", None]
+    assert [s.get("subset") for s in world.steps(NIGHTS[0]) if s["status"] == "ok" and s["step"] == "morning"] == [
+        "daily-v1", None]
+    assert world.run(NIGHTS[0], "--go")[1] == ["refused: the morning of 2026-10-24 already succeeded on the full set"]
+
+
+@pytest.mark.parametrize(("scored", "flag", "refused"), [
+    ("daily-v1", (), None), ("daily-v1", ("--subset", "daily-v1"), "already scored"),
+    (None, ("--subset", "daily-v1"), None), (None, (), "already scored")])
+def test_a_score_file_refuses_only_a_backfill_on_its_own_probe_set(
+    tmp_path: Path, scored: str | None, flag: tuple[str, ...], refused: str | None,
+) -> None:
+    world = World(tmp_path)  # the night's morning step failed: only the file speaks
+    (world.root / USER / "scores").mkdir(parents=True)
+    record = {"night": NIGHTS[0].isoformat(), **({"subset": scored} if scored else {})}
+    (world.root / USER / "scores" / "night-01.json").write_text(json.dumps(record), encoding="utf-8")
+    code, said = world.run(NIGHTS[0], *flag)
+    assert (code, said[-1].startswith("refused: ")) == ((1, True) if refused else (0, False))
+    assert refused in said[-1] if refused else any("night-02.json" in line for line in said)
+
+
+@pytest.mark.parametrize(("accelerated", "flag", "refused"), [
+    (True, (), True), (True, ("--subset", "daily-v1"), False), (False, (), True), (False, ("--subset", "daily-v1"), True)])
+def test_a_morning_step_that_names_no_subset_asked_the_nights_own_set(
+    tmp_path: Path, accelerated: bool, flag: tuple[str, ...], refused: bool,
+) -> None:
+    """An accelerated night's own set is the full one, a daily development night's daily-v1."""
+    world = World(tmp_path)
+    world.night(NIGHTS[0], {"status": "promoted", "checkpoint": ref_record(_ckpt(1)), "accelerated": accelerated,
+                            "label": "development"}, morning="ok")
+    code, said = world.run(NIGHTS[0], *flag)
+    assert (code == 1 and "already succeeded" in said[-1]) if refused else code == 0
