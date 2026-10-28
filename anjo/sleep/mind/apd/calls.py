@@ -45,6 +45,7 @@ class Call:
     rate_limited: bool = False  # a failed try answered 429
     wait_s: float | None = None  # the wait before the call was tried again, after this try failed
     leaked: bool = False  # given up on, and still in flight when its limiter place was freed for it
+    repair: int = 0  # the attempt's repair round it was made in (``repair``); 0: the attempt as first written
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,7 +57,7 @@ class Call:
                    None if raw["days"] is None else int(raw["days"]), int(raw["tokens_in"]), int(raw["tokens_out"]),
                    float(raw["usd"]), bool(raw.get("failed", False)), None if chars is None else int(chars),
                    None if finish is None else str(finish), bool(raw.get("rate_limited", False)),
-                   None if wait is None else float(wait), bool(raw.get("leaked", False)))
+                   None if wait is None else float(wait), bool(raw.get("leaked", False)), int(raw.get("repair") or 0))
 
 
 def kind_of(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -78,6 +79,7 @@ class CallLog:
     """One life's calls, every attempt's, as they are made (``backend.CountedChat`` adds them)."""
 
     attempt: int = 0
+    repair: int = 0  # the attempt's repair round now running (``repair``)
     calls: list[Call] = field(default_factory=list)
     failures: list[Any] = field(default_factory=list)  # ``failures.AttemptFailure``, one per failed attempt
     on_failure: Callable[[Any], None] | None = None  # each failure as it is kept (``gen_batch.recorder``)
@@ -88,7 +90,7 @@ class CallLog:
             rate_limited: bool = False, wait_s: float | None = None) -> None:
         kind, payload = kind_of(messages), _payload(messages)
         self.calls.append(Call(kind, self.attempt, self._item(kind, payload), _days(kind, payload), tokens_in,
-                               tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s))
+                               tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s, repair=self.repair))
 
     def mark_leaked(self, index: int) -> None:
         """Call ``index`` was still in flight when its limiter place was freed for it. A life saved
@@ -160,6 +162,13 @@ def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:
         for attempt, item in sorted({(c.attempt, c.item) for c in calls if c.kind in READS and c.item is not None}):
             lines.append(_line(f"{life_id} attempt {attempt + 1} item {item}",
                                (c for c in calls if c.kind in READS and (c.attempt, c.item) == (attempt, item))))
+    if any(c.repair for c in every):
+        lines.append("Repaired attempts, each as first written and by repair round:")
+    for life_id, calls in sorted(logs.items()):
+        for attempt in sorted({c.attempt for c in calls if c.repair}):
+            for round_ in sorted({c.repair for c in calls if c.attempt == attempt}):
+                lines.append(_line(f"{life_id} attempt {attempt + 1} {f'round {round_}' if round_ else 'as written'}",
+                                   (c for c in calls if (c.attempt, c.repair) == (attempt, round_))))
     lines.append("Per life:")
     for life_id, calls in sorted(logs.items()):
         lines.append(_line(life_id, calls))

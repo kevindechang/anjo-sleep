@@ -60,6 +60,7 @@ from anjo.sleep.types import Evidence, Target
 
 LIFE_PROMPT: Final = Path(__file__).parent / "prompts" / "life_v1.md"
 EXTRACT_PROMPT: Final = Path(__file__).parent / "prompts" / "extract_open_v1.md"
+REPAIR_PROMPT: Final = Path(__file__).parent / "prompts" / "repair_v1.md"  # a day written again (``repair``)
 # A core split's generator (DeepSeek) sometimes leaves ``placed`` out of a day with nothing to
 # place; told this line, and read leniently there (``_read_day``). Spark Open's prompt is unchanged.
 ALWAYS_PLACED: Final = "Always include `placed`, even on a day with nothing to place: then it is `{}`."
@@ -116,6 +117,7 @@ class Generated:
     problems: ProblemFile
     attempts: int
     verdicts: tuple[GateVerdict, ...]
+    repaired: int = 0  # the repair rounds its last attempt took (``repair``; ``--repair``)
 
 
 @dataclass(frozen=True)
@@ -237,10 +239,11 @@ def _check_model(reply: ChatResult, model: str) -> None:
 
 def writer_messages(
     field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat], *,
-    model: str,
+    model: str, repair: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The writer's call for day ``index`` (from 0): ``life_v1.md`` (and, for a core split's
-    generator, ``ALWAYS_PLACED``) and the day's payload."""
+    generator, ``ALWAYS_PLACED``) and the day's payload; a day written again (``repair``) adds
+    ``repair_v1.md`` and what the repair says (the day as it was, why, the days after it)."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
@@ -248,18 +251,21 @@ def writer_messages(
         "ask": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "ask"],
     }
     prompt = LIFE_PROMPT.read_text(encoding="utf-8")
+    system = f"{prompt.rstrip()}\n{ALWAYS_PLACED}\n" if model in BY_MODEL else prompt
+    if repair is not None:
+        system, payload = f"{system.rstrip()}\n\n{REPAIR_PROMPT.read_text(encoding='utf-8')}", {**payload, **repair}
     return [
-        {"role": "system", "content": f"{prompt.rstrip()}\n{ALWAYS_PLACED}\n" if model in BY_MODEL else prompt},
+        {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
 
 
 def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
-    beats: Sequence[Beat],
+    beats: Sequence[Beat], repair: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, int]]:
-    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model), None, TIMEOUT_S,
-                 temperature=WRITE_TEMPERATURE)
+    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair), None,
+                 TIMEOUT_S, temperature=WRITE_TEMPERATURE)
     _check_model(reply, model)
     text: str | None = None
     try:
@@ -364,11 +370,13 @@ class Draft:
     def spots(self) -> dict[str, str]:
         return {beat: source for day in self.written for beat, source in day.spots.items()}
 
-    def write(self, chat: ChatFn, index: int, day: date, beats: Sequence[Beat], *, branch: str = "") -> WrittenDay:
+    def write(self, chat: ChatFn, index: int, day: date, beats: Sequence[Beat], *, branch: str = "",
+              repair: Mapping[str, Any] | None = None) -> WrittenDay:
         """The next day, written and extracted on what the draft holds. ``branch`` tags its
-        messages' sources, so two branches' versions of one day never share an evidence id."""
+        messages' sources, so two branches' versions of one day never share an evidence id;
+        ``repair`` writes it again (``writer_messages``)."""
         earlier = [{"day": done.index + 1, "messages": list(done.texts)} for done in self.written]
-        texts, placed = _write_day(chat, self.model, self.field, index, day, self.seed, earlier, beats)
+        texts, placed = _write_day(chat, self.model, self.field, index, day, self.seed, earlier, beats, repair)
         turns = [Turn(f"{self.life_id}:d{index}{branch}:m{i}", "user", text, frozenset({self.model}))
                  for i, text in enumerate(texts)]
         found = _extract_day(chat, self.model, self.life_id, day, turns, tuple(self.held.values()),
@@ -418,6 +426,14 @@ def life(
     """One life of ``LIFE_DAYS`` days with ``prevalence`` planted items, and its sealed file.
     ``model`` is Spark Open's id on the experiment's provider (``mind.spark_provider``): every call
     asks for it, every reply must name it, and every session and item records it."""
+    return finished(*drafted(field, families, prevalence, seed, split=split, chat=chat, model=model), split)
+
+
+def drafted(
+    field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: LifeSplit, chat: ChatFn,
+    model: str = SPARK_OPEN,
+) -> tuple[Draft, tuple[ItemPlan, ...]]:
+    """``life``'s draft, every day written and extracted, and its plan."""
     if field not in fields(split):
         raise ValueError(f"{field!r} is not a {split} field")
     plans = plan(split, field, families, prevalence, seed)
@@ -425,6 +441,11 @@ def life(
     draft = Draft(life_id_for(split, field, seed), field, seed, model)
     for index, day in enumerate(life_days()):
         draft = draft.add(draft.write(chat, index, day, beats.get(index, [])))
+    return draft, plans
+
+
+def finished(draft: Draft, plans: Sequence[ItemPlan], split: LifeSplit) -> tuple[Life, ProblemFile]:
+    """The life a whole draft holds, and its sealed file."""
     built = draft.life(split)
     return built, problem_file(built, plans, draft.spots)
 

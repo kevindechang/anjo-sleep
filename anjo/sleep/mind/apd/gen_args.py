@@ -12,6 +12,10 @@ A Gemini reader's calls go through one ``limiter.Limiter`` for the whole command
 starts paced to ``--vertex-rpm`` a minute (default ``limiter.DEFAULT_PER_MINUTE``, a conservative
 one; 0 leaves them unpaced), so lives side by side don't send Vertex more than its quota takes.
 The fakes stand in for Vertex and aren't paced.
+
+``generate``'s ``--repair`` gives a core split's attempt that fails only a leak or the script audit
+up to ``repair.ROUNDS`` repair rounds (``repair``), and ``--keep-failed`` keeps each failed check's
+life under the data dir's ``quarantine``; APD's own splits take neither, as registered.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ import argparse
 import dataclasses
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import generators, readers, retry
+from anjo.sleep.mind.apd import generators, readers, repair, retry
 from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, DEFAULT_PER_MINUTE, Limiter
@@ -48,6 +52,14 @@ def add(command: argparse.ArgumentParser) -> None:
                          help=f"with --reader gemini: pace the reads' starts to this many a minute (default "
                               f"{DEFAULT_PER_MINUTE:g}, a conservative one: Vertex's shared quota has no fixed rate; "
                               f"0: unpaced)")
+
+
+def add_repair(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--repair", action="store_true",
+                         help=f"a core split's attempt failing only a leak or the script audit has the days named "
+                              f"written again, up to {repair.ROUNDS} rounds, each held as an attempt")
+    command.add_argument("--keep-failed", action="store_true",
+                         help="keep a core split's failed attempts' lives under the data dir's quarantine")
 
 
 def split_of(args: argparse.Namespace) -> str:
@@ -109,6 +121,9 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
         readers.check(split, reads)
     except ValueError as error:
         parser.error(str(error))
+    if (getattr(args, "repair", False) or getattr(args, "keep_failed", False)) and split in generators.APD_SPLITS:
+        parser.error(f"--repair and --keep-failed are for the core splits; APD's {split} lives are regenerated "
+                     "whole, as registered")
     if not args.fake and writes.model is not None and generator_rate(args) is None:
         parser.error(f"--generator {writes.name} needs --generator-prices in,out to price its holds")
     if getattr(args, "vertex_concurrency", DEFAULT_CONCURRENCY) < 1:
@@ -119,7 +134,8 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
 
 def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backend:
     """The backend writing with the command's generator and reading with its reader, at their
-    prices (the fakes' list-like); live, a Gemini reader calls Vertex (``backend.gemini_chat``)."""
+    prices (the fakes' list-like); live, a Gemini reader calls Vertex (``backend.gemini_chat``).
+    ``generate`` also takes ``--repair`` and ``--keep-failed``."""
     if args.command not in ("generate", "generate-pairs"):
         return backend
     writes, reads = generator(args), reader(args)
@@ -127,11 +143,24 @@ def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backe
     if writes.model is not None:
         found = dataclasses.replace(found, generator=writes,
                                     generator_rate=generator_rate(args) or (FAKE_GENERATOR_RATE if backend.fake else None))
+    if args.command == "generate":
+        found = dataclasses.replace(found, repair=getattr(args, "repair", False),
+                                    keep_failed=getattr(args, "keep_failed", False))
     if reads.model is not None:
         limit = Limiter(args.vertex_concurrency, None if backend.fake else args.vertex_rpm or None)  # the command's one
         found = dataclasses.replace(found, read_by=reads, reader_rate=reader_rate(args), read_limit=limit,
                                     reader=found.reader if backend.fake else backends.gemini_chat)
     return found
+
+
+def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
+    """The plan's note on ``--repair``, when it is given."""
+    if not getattr(args, "repair", False):
+        return ()
+    return (f"--repair: an attempt failing only a leak or the script audit takes up to {repair.ROUNDS} repair rounds, "
+            f"each writing at most {repair.REPAIR_DAYS} days again and held before it starts at most as an attempt "
+            f"is (a full read again; only changed or unread windows are paid for), so the worst case can reach "
+            f"{1 + repair.ROUNDS} times the one shown",)
 
 
 def pace_note(args: argparse.Namespace) -> str:

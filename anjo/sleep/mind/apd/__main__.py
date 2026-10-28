@@ -164,6 +164,7 @@ def _parser() -> argparse.ArgumentParser:
     made.add_argument("--draw-seed", help="the pre-committed draw seed, revealed at the freeze")
     made.add_argument("--lives", type=int, default=HELD_OUT_LIVES)
     made.add_argument("--prereg", type=Path, help="with --fake only: a stand-in prereg ledger (default: the data dir's)")
+    gen_args.add_repair(made)
     paired = commands.add_parser("generate-pairs", help="counterfactual pairs of histories, in core-test's fields")
     paired.add_argument("--n", type=int, default=pairs.PAIR_COUNT, help=f"how many (default {pairs.PAIR_COUNT})")
     for name in GEN_COMMANDS:  # --parallel after the command too; SUPPRESS keeps one given before it
@@ -331,7 +332,7 @@ def _noted(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
     """A generation plan, with how its Gemini reads are limited and its 429s waited out."""
     if args.command not in GEN_COMMANDS:
         return found
-    return dataclasses.replace(found, notes=(*found.notes, gen_args.pace_note(args)))
+    return dataclasses.replace(found, notes=(*found.notes, gen_args.pace_note(args), *gen_args.repair_note(args)))
 
 
 def _plan_with_ceiling(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:

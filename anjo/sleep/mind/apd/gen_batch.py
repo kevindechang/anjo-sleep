@@ -46,15 +46,16 @@ from functools import partial
 from types import TracebackType
 from typing import Final, TypeVar
 
-from anjo.sleep.mind.apd import failures, gates, generate, readers, retry
-from anjo.sleep.mind.apd.backend import Backend, Flight, Halted, cool_down, held_attempt, life_calls
+from anjo.sleep.context.brief import ChatFn
+from anjo.sleep.mind.apd import failures, gates, generate, readers, repair, retry
+from anjo.sleep.mind.apd.backend import Backend, Flight, GenCalls, Halted, cool_down, held_attempt, life_calls
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.batch import Out, check_failed
-from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
+from anjo.sleep.mind.apd.generate import Draft, GenerationError, GenerationFailed, Generated, ItemPlan, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
 from anjo.sleep.mind.apd.store import DataDir, StoreError
 from anjo.sleep.mind.apd.types import Life
-from anjo.sleep.model_api import ModelApiError
+from anjo.sleep.model_api import ChatResult, ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
 SKIPPED: Final = (GenerationError, ModelApiError, gates.GateError)  # a life failing with these is skipped
@@ -146,38 +147,78 @@ def side_by_side(backend: Backend, work: Sequence[Callable[[Backend], T]], paral
 # ── One life ──────────────────────────────────────────────────────────────────
 
 
-def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None) -> Generated:
+Keep = Callable[[repair.Tried, int, int], None]  # a failed check's life kept, by attempt and round (``--keep-failed``)
+
+
+def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None, keep: Keep | None = None) -> Generated:
     """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
     the backend's generator (``generators``), its gates read by its reader (``readers``), every
-    try logged to ``log`` when given."""
-    model, writes = backend.read_by.reads_with(backend.provider), backend.generator.writes_with(backend.provider)
+    try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak or
+    the script audit first takes up to ``repair.ROUNDS`` repair rounds, each held as an attempt
+    is; ``keep`` is handed each check that failed."""
     on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(generate.MAX_ATTEMPTS):
         if on_call is not None:
             cool_down(backend)
             on_call = None
-        if backend.ceiling is not None:
-            backend.ceiling.check()  # before the attempt's hold
         if log is not None:
             log.attempt = attempt
         try:
-            with failing(log, attempt), held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
-                                                     life_calls(spec.prevalence), log) as (writer, reader, auditor):
-                try:
-                    built, problems = generate.life(spec.field, spec.families, spec.prevalence,
-                                                    generate.attempt_seed(spec.seed, attempt), split=spec.split,
-                                                    chat=writer, model=writes)
-                except GenerationFailed as failed:
-                    failed_at(log, failures.of_rule(attempt, failed))
-                    continue
-                verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
+            made = _attempt(spec, backend, log, attempt, keep)
         except CallFailed as failed:
             on_call = failed
             continue
-        if gates.passed(verdicts):
-            return Generated(built, problems, attempt + 1, verdicts)
-        failed_at(log, *failures.of_verdicts(attempt, built, verdicts))
+        if made is not None:
+            return made
     raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts{last_call(on_call)}")
+
+
+def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int, keep: Keep | None) -> Generated | None:
+    """One attempt and its repair rounds: the life that passed, or ``None`` with why it failed
+    recorded (its last check's verdicts, or the rule a draft broke)."""
+    memo: dict[str, ChatResult] = {}  # the attempt's gate replies, by request, shared by its rounds
+    seed, writes = generate.attempt_seed(spec.seed, attempt), backend.generator.writes_with(backend.provider)
+    tried = _checked(spec, backend, log, attempt, 0, life_calls(spec.prevalence), memo,
+                     lambda chat: generate.drafted(spec.field, spec.families, spec.prevalence, seed, split=spec.split,
+                                                   chat=chat, model=writes))
+    round_ = 0
+    while tried is not None and not tried.passed:
+        if keep is not None:
+            keep(tried, attempt, round_)
+        found = tried.fixes() if backend.repair and round_ < repair.ROUNDS else None
+        if found is None:
+            failed_at(log, *failures.of_verdicts(attempt, tried.life, tried.verdicts))
+            return None
+        round_ += 1
+        tried = _checked(spec, backend, log, attempt, round_, repair.round_calls(spec.prevalence, len(found)), memo,
+                         partial(repair.rewritten, tried, found, round_))
+    return None if tried is None else Generated(tried.life, tried.problems, attempt + 1, tried.verdicts, round_)
+
+
+def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int, round_: int, calls: GenCalls,
+             memo: dict[str, ChatResult], make: Callable[[ChatFn], tuple[Draft, tuple[ItemPlan, ...]]]
+             ) -> repair.Tried | None:
+    """One hold's work, after the run's ceiling is checked: the draft ``make`` writes with the
+    writer, its life gated, a gate request sent before in the attempt answered from ``memo``;
+    ``None`` when the draft broke a rule (recorded)."""
+    if backend.ceiling is not None:
+        backend.ceiling.check()  # before the hold
+    if log is not None:
+        log.repair = round_
+    key = f"{spec.split}:{spec.seed}:{attempt}{f':r{round_}' if round_ else ''}"
+    with failing(log, attempt), held_attempt(backend, key, calls, log) as (writer, reader, auditor):
+        try:
+            draft, plans = make(writer)
+            built, problems = generate.finished(draft, plans, spec.split)
+        except GenerationFailed as failed:
+            failed_at(log, failures.of_rule(attempt, failed))
+            return None
+        read, audit = repair.Memo(reader, memo), repair.Memo(auditor, memo)
+        verdicts = gates.check(built, problems, reader=read, auditor=audit,
+                               model=backend.read_by.reads_with(backend.provider))
+        audited = all(verdict.passed for verdict in verdicts if verdict.gate == "script_audit")
+        issues = () if audited else gates.audit_issues(built, problems, audit)  # the audit's reply, from the memo
+        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues)
 
 
 class CallFailed(RuntimeError):
@@ -289,18 +330,25 @@ class Outcome:
 
 def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
     log, made = CallLog(on_failure=recorder(data, "generate-attempt", spec_name(spec))), None
+    keep = partial(quarantine, data) if backend.keep_failed else None
     try:
-        made = generate_life(spec, backend, log)
+        made = generate_life(spec, backend, log, keep)
     except SKIPPED as error:
         return Outcome(spec, Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
     finally:
         if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
             first = generate.life_id_for(spec.split, spec.field, spec.seed)
             data.save_calls(failed_log_id(first, data.call_log_ids()), [call.to_json() for call in log.calls])
-    data.save_made(made.life.id, made_record(backend))
+    data.save_made(made.life.id, {**made_record(backend), **({"repair_rounds": made.repaired} if made.repaired else {})})
     data.save_calls(made.life.id, [call.to_json() for call in log.calls])
     data.save_life(made.life, made.problems)
     return Outcome(spec, made, tuple(log.failures))
+
+
+def quarantine(data: DataDir, tried: repair.Tried, attempt: int, round_: int) -> None:
+    """A check that failed, its life kept apart under ``quarantine`` (``--keep-failed``), named by
+    its round (``r0``: as first written)."""
+    data.save_quarantined(f"{tried.life.id}.r{round_}", tried.life, tried.problems, tried.why(attempt, round_))
 
 
 def recorder(data: DataDir, what: str, name: str) -> Callable[[failures.AttemptFailure], None]:
@@ -340,7 +388,8 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
                 skipped.append(name)
                 continue
             made.append(found.life.id)
-            out(f"generated {found.life.id} ({found.attempts} attempt(s), {len(found.problems.items)} planted)")
+            rounds = f", {found.repaired} repair round(s)" if found.repaired else ""
+            out(f"generated {found.life.id} ({found.attempts} attempt(s){rounds}, {len(found.problems.items)} planted)")
             if backend.ceiling is not None:
                 out(backend.ceiling.life_generated())
     check_failed(skipped)
