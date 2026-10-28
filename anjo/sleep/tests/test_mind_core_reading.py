@@ -128,14 +128,18 @@ def test_with_the_channel_off_the_core_still_dreams_and_its_unit_keeps_no_projec
 
 def test_the_reading_is_tonights_dream_none_for_anyone_else_and_refused_before_it(tmp_path: Path) -> None:
     world, core = World(tmp_path), _core_night(tmp_path)
-    assert core.reading("someone-else", NIGHT) is None
-    with pytest.raises(ValueError, match="before the night's dream"):
-        core.reading(UID, NIGHT)
+    assert core.reading("someone-else", NIGHT) is None and core.dreamt("someone-else", NIGHT) is None
+    for asked in (core.reading, core.dreamt):
+        with pytest.raises(ValueError, match="before the night's dream"):
+            asked(UID, NIGHT)
     world.plan(UID, NIGHT)
-    run_night_batch_with(world.deps(core=core), {UID: NIGHT})
-    reading = core.reading(UID, NIGHT)
+    result = run_night_batch_with(world.deps(core=core), {UID: NIGHT})[UID]
+    reading, dreamt = core.reading(UID, NIGHT), core.dreamt(UID, NIGHT)
     assert reading is not None and reading.projector is None  # her first night: the shared projector
     assert reading.state_id == store.MindStore(tmp_path / store.STORE_DIR, UID).units()[-1].state
+    assert dreamt is not None and dreamt.reading() == reading
+    logged = step(result.log_path, "dream")  # its receipt is the dream's record: the states the dreams start from
+    assert {key: logged[key] for key in dreamt.receipt} == dict(dreamt.receipt) and "boundaries" in logged
 
 
 def test_a_nap_with_the_core_dreams_on_cpu_and_holds_nothing_on_modal(tmp_path: Path) -> None:

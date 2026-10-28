@@ -54,6 +54,9 @@ class FakeCore:
         return Dreamt(state_id=STATE, rehearse=picked, weights={item.id: n + 2.0 for n, item in enumerate(day)},
                       view=self.view, receipt={"state": STATE, "picked": list(picked)})
 
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None:
+        return None
+
     def reading(self, user_id: str, night: date) -> MindReading | None:
         return None
 

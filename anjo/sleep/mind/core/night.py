@@ -178,7 +178,7 @@ class CoreNight:
         self.curriculum, self.seed, self.budget = curriculum, seed, budget
         self.people, self.workspace, self.synthetic = people, workspace, synthetic
         self.fake_for_anyone, self.contradictions = fake_for_anyone, contradictions
-        self._tonight: dict[tuple[str, date], Dreamt] = {}  # each night's dream, for ``reading``
+        self._tonight: dict[tuple[str, date], Dreamt] = {}  # each night's dream, for ``dreamt`` and ``reading``
 
     @property
     def fake(self) -> bool:
@@ -219,13 +219,17 @@ class CoreNight:
             return f"skipped: fake latents serve only a synthetic person's night ({FAKE_LATENTS_ENV}=1 allows them)"
         return None
 
-    def reading(self, user_id: str, night: date) -> MindReading | None:
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None:
         if not self.serves(user_id):
             return None
-        dreamt = self._tonight.get((user_id, night))
-        if dreamt is None:
+        done = self._tonight.get((user_id, night))
+        if done is None:
             raise ValueError("MIND's state was asked for before the night's dream step")
-        return dreamt.reading()
+        return done
+
+    def reading(self, user_id: str, night: date) -> MindReading | None:
+        dreamt = self.dreamt(user_id, night)
+        return None if dreamt is None else dreamt.reading()
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         if (why := self._refusal(call.user_id)) is not None:

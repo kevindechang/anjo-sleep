@@ -214,14 +214,18 @@ class Dreamt:
 class MindCore(Protocol):
     """MIND's core in the night (the one system), for the people it ``serves`` only: ``dream``
     observes her evidence it hasn't yet, dreams, opens questions, picks what practice rehearses and
-    consolidates; ``reading`` is the thought channel's ``MindState`` (tonight's dream as the channel
-    reads it, None for anyone it doesn't serve; asked before the dream, it refuses); ``keep`` saves
+    consolidates; ``dreamt`` is tonight's dream (its receipt holds the imagined states the sleep
+    objective's dreams start from, ``night/core_dreams.py``) and ``reading`` the thought channel's
+    ``MindState`` (tonight's dream as the channel reads it), each None for anyone it doesn't serve
+    and refused when asked before the dream; ``keep`` saves
     the night's unit (her state, the thought channel's projector and her adapter). Ids only cross:
     no row's words."""
 
     def serves(self, user_id: str) -> bool: ...
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt: ...
+
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None: ...
 
     def reading(self, user_id: str, night: date) -> MindReading | None: ...
 
@@ -238,6 +242,9 @@ class NoCore:
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         return Dreamt()
+
+    def dreamt(self, user_id: str, night: date) -> Dreamt | None:
+        return None
 
     def reading(self, user_id: str, night: date) -> MindReading | None:
         return None
