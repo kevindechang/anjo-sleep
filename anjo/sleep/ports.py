@@ -156,10 +156,11 @@ class Notifier(Protocol):
 @runtime_checkable
 class SafetyGate(Protocol):
     """The nightly safety gate, which runs Anjo's crisis checks against a checkpoint (Task 5).
-    The case lists stay in the private app."""
+    The case lists stay in the private app. Switched off (the hackathon), it runs its floor only."""
 
     def check(self, ckpt: CheckpointRef) -> GateResult:
-        """Pass only with zero regressions against the base model on the same cases."""
+        """Pass only with zero regressions against the base model on the same cases; switched off,
+        ``skipped`` (never passed) while the floor holds."""
 
 
 @runtime_checkable

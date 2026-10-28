@@ -18,9 +18,11 @@ runs extraction and the brief, and with MIND its inquiry and the day's latent en
 - ``BEFORE``, the first live nights (2026-10-28): practice's scenes one at a time, the generation
   gates at the server's 16 with both sides asked every night, Spark Open uncapped, the full morning;
 - ``CURRENT``: practice and the generation gates at ``ANJO_SLEEP_CONCURRENCY`` (8 by default), the
-  gates' base side kept across nights (``gates.base_cache``), the safety gate off
-  (``ANJO_SLEEP_SAFETY_GATE``, off for the hackathon; the floor still runs), Spark Open capped per role
-  (``practice.full.SPARK_CAPS``), and the daily morning subset (``probes.morning.DAILY``).
+  gates' base side kept across nights (``gates.base_cache``), Spark Open capped per role
+  (``practice.full.SPARK_CAPS``), the daily morning subset (``probes.morning.DAILY``), and the safety
+  gate skipped (``ANJO_SLEEP_SAFETY_GATE`` off for the hackathon: no case is sent, and its floor still
+  runs, with no model and no GPU; ``--safety-gate on`` costs it). A night whose log shows the gate
+  skipped says so; it is never costed as passed.
 
 ``--scenarios`` adds the whole night loop under sleep pressure (``SCENARIOS``). Every night naps (on CPU:
 MIND's consolidation, dreams, inquiry and note, with extraction and the brief) and reads the day's
@@ -53,6 +55,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
+from anjo.sleep.gates.safety import SKIPPED_REASON
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
 from anjo.sleep.practice.full import SPARK_CAPS
@@ -94,7 +97,7 @@ class Settings:
     base_cached: bool
     spark_capped: bool
     morning: ProbeSubset | None  # None: the full set
-    safety: bool = False  # the safety gate's 2,015 cases (ANJO_SLEEP_SAFETY_GATE), off for the hackathon
+    safety_gate: bool = True  # False: switched off (ANJO_SLEEP_SAFETY_GATE): no case sent, the floor alone (no GPU)
     gpu: str = "L40S"  # ANJO_SLEEP_SERVE_GPU
     max_inputs: int = DEFAULT_MAX_INPUTS  # ANJO_SLEEP_SERVE_MAX_INPUTS: requests a container takes at once
     roles: Roles = Roles()  # ANJO_SLEEP_PRACTICE_ROLES
@@ -142,16 +145,16 @@ class Units:
 BEFORE: Final = Settings("before", practice_concurrency=1, gate_concurrency=CONCURRENT_REQUESTS,
                          base_cached=False, spark_capped=False, morning=None)
 CURRENT: Final = Settings("current", practice_concurrency=8, gate_concurrency=8, base_cached=True,
-                          spark_capped=True, morning=DAILY)
+                          spark_capped=True, morning=DAILY, safety_gate=False)
 UNITS: Final = Units()
 # The night the gates are anchored on, and the loop's settings from it to every proposal at once.
 ANCHOR: Final = Settings("10-28.4 (safety on)", practice_concurrency=8, gate_concurrency=8, base_cached=False,
-                         spark_capped=True, morning=DAILY, safety=True)
+                         spark_capped=True, morning=DAILY, safety_gate=True)
 ONE_SYSTEM: Final = replace(CURRENT, name="one system", one_system=True)
 ALL: Final = replace(ONE_SYSTEM, name="all", roles=Roles("glimmer", "deepseek", "lazy"), batch=5, idle_tail=False,
                      encode_in_training=True, encode_people=5)
 SCENARIOS: Final[tuple[Settings, ...]] = (
-    ANCHOR, replace(ANCHOR, name="+ safety off", safety=False), replace(CURRENT, name="+ base cache"),
+    ANCHOR, replace(ANCHOR, name="+ safety off", safety_gate=False), replace(CURRENT, name="+ base cache"),
     ONE_SYSTEM,
     replace(ONE_SYSTEM, name="critic=deepseek", roles=Roles(critic="deepseek")),
     replace(ONE_SYSTEM, name="person=glimmer", roles=Roles(person="glimmer")),
@@ -314,7 +317,7 @@ def _gate_s(settings: Settings, units: Units) -> float:
     prefill = units.prefill_call_s * gpus.L40S.bandwidth_gb_s / gpu.bandwidth_gb_s  # an estimate, as decoding
     general = units.general_calls * prefill / _at_once(settings.max_inputs, settings)
     collapse = units.collapse_prompts * (units.collapse_reply_tokens / rate + prefill / at_once)
-    safety = units.safety_cases * units.safety_reply_tokens / rate if settings.safety else 0.0
+    safety = units.safety_cases * units.safety_reply_tokens / rate if settings.safety_gate else 0.0
     sides = 1 if settings.base_cached else 2  # the checkpoint's side is asked every night, the base's once
     return sides * (general + collapse + safety)
 
@@ -388,8 +391,8 @@ def _nap_encode_s(settings: Settings, units: Units) -> float:
 
 def safety_adds(settings: Settings, units: Units, prices: Prices, night: Measured) -> float:
     """What turning the safety gate on adds to a trained night at ``settings``."""
-    on = project(replace(settings, safety=True), units, prices, night).trained["gates"]
-    return on - project(replace(settings, safety=False), units, prices, night).trained["gates"]
+    on = project(replace(settings, safety_gate=True), units, prices, night).trained["gates"]
+    return on - project(replace(settings, safety_gate=False), units, prices, night).trained["gates"]
 
 
 # ── the report ───────────────────────────────────────────────────────────────
@@ -410,6 +413,9 @@ def _night_report(folder: Path, summary: Mapping[str, Any], lines: Sequence[Line
                f" (ceiling ${CEILING_USD:g})")
     if any(line.step == "morning_judge" for line in lines):
         out.append(f"  {JUDGE_NOTE}")
+    safety = (summary.get("gates") or {}).get("safety")
+    if isinstance(safety, Mapping) and safety.get("skipped"):
+        out.append(f"  safety gate: skipped ({SKIPPED_REASON}); the gates line is general and collapse only")
     return out
 
 
@@ -434,6 +440,8 @@ def _projection_report(found: Sequence[Projection], share: float) -> list[str]:
     out.append("  measured: extract, brief, training (this night); practice and gates anchored on 2026-10-28;"
                " the rest estimated (night.cost.UNITS)")
     out.append(f"  morning (out): {JUDGE_NOTE}")
+    if off := [p.settings.name for p in found if not p.settings.safety_gate]:
+        out.append(f"  safety gate: skipped in {', '.join(off)} ({SKIPPED_REASON}); no case sent, never counted as passed")
     return out
 
 
@@ -448,6 +456,9 @@ def _scenario_report(found: Sequence[Projection], traces: Sequence[Trace], safet
         out.append(f"  {p.settings.name:<18}{_usd(deep):>9}{_usd(nap):>9}"
                    + "".join(f"{_usd(trace_month(p, t)):>16}" for t in traces) + f"  {top} {_usd(p.trained[top])}")
     out.append(f"  safety on adds {_usd(safety_on)} a deep night to the one system")
+    if off := [p.settings.name for p in found if not p.settings.safety_gate]:
+        out.append(f"  safety gate: skipped in {len(off)} of {len(found)} rows ({SKIPPED_REASON}): no case sent, never"
+                   " counted as passed; its floor still runs, with no model and no GPU")
     for gpu in sorted({gpus.GPUS[p.settings.gpu] for p in found} - {gpus.L40S}, key=lambda g: g.name):
         out.append(f"  {gpu.name} rows: ${gpu.usd_per_hour:.2f}/h is {gpu.price_note}, scaled from the L40S's"
                    " billed rate")
@@ -472,6 +483,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="ANJO_SLEEP_CONCURRENCY for the current projection (8 by default)")
     parser.add_argument("--scenarios", action="store_true", help="also the whole loop under each cost proposal")
     parser.add_argument("--trace", help="a pressure trace to cost beside the active and quiet ones, such as DNNDNNN")
+    parser.add_argument("--safety-gate", choices=("on", "off"), default="off",
+                        help="ANJO_SLEEP_SAFETY_GATE for the current projection (off for the hackathon)")
     args = parser.parse_args(argv)
     if not 0.0 <= args.trained_share <= 1.0 or args.concurrency < 1:
         parser.error("--trained-share is from 0 to 1 and --concurrency at least 1")
@@ -481,7 +494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"cost: {error}") from None
     night = measured(summary, steps, args.prices)
     current = replace(CURRENT, name=f"current@{args.concurrency}", practice_concurrency=args.concurrency,
-                      gate_concurrency=args.concurrency)
+                      gate_concurrency=args.concurrency, safety_gate=args.safety_gate == "on")
     settings = [BEFORE, current]
     if args.concurrency != CONCURRENT_REQUESTS:
         settings.append(replace(current, name=f"current@{CONCURRENT_REQUESTS}",

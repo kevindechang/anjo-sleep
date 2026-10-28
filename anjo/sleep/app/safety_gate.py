@@ -5,10 +5,28 @@ existing private sources, ``ALL_CASES`` (the pre-model crisis corpus) and ``REPL
 replies the reply check must trip on), and hands the gate the prompts by index, the reply check
 (``reply_crisis_reason``) and the floor: the existing checks that must still hold exactly as on
 main. It reads those modules and calls them; it never changes them.
+
+``gate_on`` reads the gate's switch, ``ANJO_SLEEP_SAFETY_GATE``: ``off`` (or unset) on the hackathon
+trunk, where the gate runs the floor only and is logged ``skipped``; ``on`` runs it in full.
 """
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
+from typing import Final
+
 from anjo.sleep.gates.safety import SafetyCases
+
+GATE_ENV: Final = "ANJO_SLEEP_SAFETY_GATE"
+
+
+def gate_on(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the safety gate runs in full: ``on``; ``off`` or unset is off. Any other value stops
+    the night before it starts."""
+    value = (os.environ if environ is None else environ).get(GATE_ENV, "").strip()
+    if value not in ("", "off", "on"):
+        raise ValueError(f"{GATE_ENV} is on or off")
+    return value == "on"
 
 
 def _floor() -> tuple[str, ...]:

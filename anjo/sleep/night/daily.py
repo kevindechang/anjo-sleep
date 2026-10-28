@@ -180,7 +180,8 @@ def run_night_phase(
                          promoted=result.status == "promoted", subset=subset)
             receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
             if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
-                receipt.update(replies=done.replies, judge_calls=done.judge_calls)
+                receipt.update(replies=done.replies, judge_calls=done.judge_calls,
+                               **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
             if subset is not None:
                 receipt["subset"] = subset.name
             if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
