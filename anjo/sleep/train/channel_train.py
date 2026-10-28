@@ -319,6 +319,19 @@ def _row_reading(row: Mapping[str, Any], key: str = "core") -> Mapping[str, Any]
     return None if core is None else core["reading"]
 
 
+def _check_dreamt(row: Mapping[str, Any]) -> None:
+    """A dreamt state (``night.core_snapshot``'s ``dreamt`` mark) is only ever a dream row's own: every
+    other reading is her real state; and a dream row's state is the dreamt one."""
+    dream = row.get("kind") == "dream"
+    for core, own in ((row.get("core"), True), ((row.get("contrast") or {}).get("core"), False)):
+        if core is None:
+            continue
+        if core.get("dreamt") is True and not (dream and own):
+            raise ValueError(f"row {row.get('id')} reads a dreamt state as a real one")
+        if dream and own and core.get("dreamt") is not True:
+            raise ValueError(f"dream row {row.get('id')}'s state isn't marked dreamt")
+
+
 def held_out(row: Mapping[str, Any], share: float) -> bool:
     """Whether ``row`` is held out: by its ``group`` (a generated life), else its id."""
     key = str(row.get("group") or row["id"])
@@ -334,6 +347,7 @@ def readings_of(rows: Sequence[Mapping[str, Any]], arm: str, k: int, d: int) -> 
                       np.zeros(2 * d, np.float32), 0.0)
     found: dict[str, Reading] = {}
     for row in rows:
+        _check_dreamt(row)
         for role, reading in (("own", _row_reading(row)), ("other", _row_reading(row.get("contrast") or {}))):
             if reading is None:
                 continue

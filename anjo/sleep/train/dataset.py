@@ -262,6 +262,8 @@ def _example(transcript: PracticeTranscript, *, new: bool, drop_context: bool) -
         prompt = (("system", transcript.context), *prompt)
     tokens = sum(estimate_tokens(text) + ROLE_OVERHEAD_TOKENS for _, text in prompt)
     tokens += estimate_tokens(transcript.reply) + ROLE_OVERHEAD_TOKENS
+    if transcript.core is not None and json.loads(transcript.core).get("dreamt") is True:
+        raise ValueError(f"transcript {transcript.id} carries a dreamt state; a practice reply is made under her real one")
     return Example(
         id=transcript.id, prompt=prompt, completion=transcript.reply,
         context_dropped=transcript.context is not None and drop_context, tokens=tokens, new=new,

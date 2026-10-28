@@ -110,11 +110,12 @@ def _projector_file(setup: ChannelSetup, reading: MindReading) -> Path:
     return own
 
 
-def channel_for(setup: ChannelSetup, reading: MindReading) -> Channel:
-    """The channel over ``reading``'s state, through the projector the night reads (``projector_path``);
-    the snapshot's state must be the one MIND kept under the reading's id."""
+def channel_for(setup: ChannelSetup, reading: MindReading, *, dreamt: bool = False) -> Channel:
+    """The channel over ``reading``'s state, through the projector the night reads (``projector_path``),
+    its snapshot marked ``dreamt`` for a state MIND imagined; the snapshot's state must be the one
+    MIND kept under the reading's id."""
     projector = Projector.load(_projector_file(setup, reading).read_bytes())
-    snap = snapshot(reading.state, reading.predictions, arm=setup.arm, k=projector.k)
+    snap = snapshot(reading.state, reading.predictions, arm=setup.arm, k=projector.k, dreamt=dreamt)
     if snap.state_sha != reading.state_id:
         raise ValueError("the state the channel would read isn't the state MIND kept under that id")
     return Channel(snap, projector, setup.soft_client)

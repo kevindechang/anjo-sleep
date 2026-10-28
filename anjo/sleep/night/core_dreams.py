@@ -12,7 +12,7 @@ dataset receipt says the dreams are not wired.
 channel on, ``ANJO_SLEEP_CHANNEL``): each seed's imagined state is read back from the core
 (``MindCore.imagined``, by the id its receipt kept) and her reply is made through the channel over
 it, in the night's arm and through the projector her night reads (``channel_night.channel_for``),
-so each dream row carries that state's snapshot. A seed whose state can't be read back stops the
+so each dream row carries that state's snapshot, marked ``dreamt``. A seed whose state can't be read back stops the
 dreams (the dataset step fails), never a dream made without its state. Off, the dreams are as before.
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ def core_dreams(
         reading = core.imagined(user_id, night, dream_seed.state_ref)
         if reading is None or reading.state_id != dream_seed.state_ref:
             raise ValueError("a dream's imagined state can't be read back for the thought channel")
-        return channel_for(channel, reading)
+        return channel_for(channel, reading, dreamt=True)
 
     return GlimmerDreams(client, seeds, seed=seed, channel=None if channel is None else through)
 

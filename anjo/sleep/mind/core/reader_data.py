@@ -328,5 +328,8 @@ def read_readings(path: Path) -> dict[str, tuple[CoreSnapshot, tuple[tuple[str, 
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             r = json.loads(line)
-            found[str(r["key"])] = (CoreSnapshot.from_json(r["snapshot"]), tuple(tuple(c) for c in r["cites"]))
+            snap = CoreSnapshot.from_json(r["snapshot"])
+            if snap.dreamt:
+                raise ValueError(f"reading {r['key']} is a dreamt state; the pretraining reads generated lives' real ones")
+            found[str(r["key"])] = (snap, tuple(tuple(c) for c in r["cites"]))
     return found
