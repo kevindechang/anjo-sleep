@@ -23,12 +23,14 @@ any other is refused with ``ServingError``, before a request is sent.
 to load, whatever sits in its folder (seen live, 2026-10-28). So a client whose server reads adapters
 from a folder (``adapters_dir``: Modal's adapters volume, the APD Colab session's LoRA folder) loads
 each one through ``/v1/load_lora_adapter`` before the first request that names it, once per client
-(its dated copies share the set). One already loaded counts as loaded. A folder the server can't see
-yet is asked for again for up to ``LOAD_WAIT_S``: a warm Modal container sees a new adapter within
-``config.ADAPTER_REFRESH_S``. Only work nobody waits on takes that wait (the night, the morning, the
-demo's pre-generated pairs); a chat turn and the live demo page load once (``load_adapter`` with no
-wait, ``with_load_wait(0)``). A later 404 naming a loaded adapter (its container restarted and forgot
-it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
+(its dated copies share the set). One already loaded counts as loaded. Modal's container never reloads
+its adapters volume (the server wedged while it did, night 1c of 2026-10-28), so an adapter committed
+since the container started isn't on its mount: the client then stages it onto the container's own
+disk (``stage``: ``Serve.stage``, through ``backend.stage_on_modal``) and loads it from there. One
+found nowhere is asked for again for up to ``LOAD_WAIT_S``. Only work nobody waits on takes that wait
+(the night, the morning, the demo's pre-generated pairs); a chat turn and the live demo page load once
+(``load_adapter`` with no wait, ``with_load_wait(0)``). A later 404 naming a loaded adapter (its
+container restarted and forgot it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
 client has no ``adapters_dir`` and never loads. One client serves many threads at once (the night's
 calls run side by side, ``parallel.Calls``): ``httpx.Client`` may be shared between threads, the
 loaded set changes only under one lock its copies share, and each adapter loads under a lock of its
@@ -47,8 +49,15 @@ container, gets the rest of the budget. All the attempts of one request end with
 sends each request once with the full timeout, as before: the live page, where a visitor waits. A
 client and its copies hold at most ``config.CONCURRENT_REQUESTS`` requests in flight, all one Modal
 container takes, so none waits in Modal's queue behind the client's own; ``retries()`` counts the
-requests sent again, for the night log. A turn's poster (``app.runtime``) is its own ``HttpPoster``,
-under its 20 s deadline, and never retries.
+requests sent again, for the night log. **A wedged server fails the client fast.** After a request lost
+in transport, the client asks ``WAKE_PATH``, which never reaches vLLM's engine, within ``LIVENESS_S``.
+With no answer (night 1c: the container took every request and answered none, and each gate thread
+waited out 300 s per request) the request fails as ``ServerUnresponsive``, and so does every request
+the client and its copies send for the next ``DOWN_HOLD_S``, at once and unsent. Only a client that
+sends again asks; a ``once()`` copy is refused while the server is down. A server that is only
+busy past the bound looks the same, and an engine that stalls while the API server answers isn't
+caught. A turn's poster (``app.runtime``) is its own ``HttpPoster``, under its 20 s deadline, and
+never retries.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -96,8 +105,13 @@ WAKE_BACKOFF_MAX_S: Final = 20.0
 WAKE_PATH: Final = "/v1/models"  # needs the bearer token and reaches vLLM, so it resets Modal's idle timer
 LOCALHOST: Final = "localhost"
 LOAD_PATH: Final = "/v1/load_lora_adapter"
-LOAD_RETRY_S: Final = 5.0  # between loads of a folder the server can't see yet
-LOAD_WAIT_S: Final = 2 * config.ADAPTER_REFRESH_S + LOAD_RETRY_S  # two of a warm server's volume refreshes
+LOAD_RETRY_S: Final = 5.0  # between loads of an adapter the server can't find yet
+LOAD_WAIT_S: Final = 45.0  # how long a load waits for an adapter found nowhere: its upload may still be committing
+# After a request lost in transport, the server must answer WAKE_PATH within LIVENESS_S or the client
+# stops sending for DOWN_HOLD_S. /v1/models never reaches vLLM's engine; 15 s covers the slowest
+# /tokenize seen under load (8.6 s, night 1c), which does more.
+LIVENESS_S: Final = 15.0
+DOWN_HOLD_S: Final = 60.0
 _ALREADY_LOADED: Final = b"already been loaded"
 T = TypeVar("T")
 
@@ -113,6 +127,15 @@ class ModelNotFound(ServingError):
 
 class TransportFailed(ServingError):
     """The request or its reply was lost on the way: no status came back."""
+
+
+class ServerUnresponsive(ServingError):
+    """The server answered nothing, not even ``WAKE_PATH``, within ``LIVENESS_S``: a wedged container.
+    Every request fails at once for the next ``DOWN_HOLD_S``."""
+
+    def __init__(self) -> None:
+        super().__init__(f"the server didn't answer {WAKE_PATH} within {LIVENESS_S:.0f} s; "
+                         f"requests fail at once for {DOWN_HOLD_S:.0f} s")
 
 
 class GlimmerNotReady(ServingError):
@@ -255,6 +278,14 @@ class HttpPoster:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
 
+    def answers(self, timeout_s: float) -> bool:
+        """Whether vLLM answers ``WAKE_PATH`` within ``timeout_s``. Only its API server handles it, so a
+        busy engine doesn't delay it. A failure is False, never an exception."""
+        try:
+            return bool(self._http.get(WAKE_PATH, timeout=timeout_s, follow_redirects=True).status_code == 200)
+        except httpx.HTTPError:
+            return False  # no answer within the bound: the caller decides what that means
+
     def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
@@ -275,18 +306,31 @@ class Loader(Protocol):
     def load_adapter(self, name: str, folder: str) -> bool: ...
 
 
+Stage = Callable[[str], "str | None"]
+"""Copies adapter ``name`` onto the server's own disk and names the folder it is in; None when there is
+no such adapter yet (Modal's ``Serve.stage``, through ``backend.stage_on_modal``)."""
+
+
 def load_adapter(
-    poster: Loader, name: str, folder: str, *, wait_s: float = 0.0,
+    poster: Loader, name: str, folder: str, *, stage: Stage | None = None, wait_s: float = 0.0,
     clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Load adapter ``name`` from ``folder/name`` into the server; one already loaded counts. A folder
-    the server can't see yet is asked for again every ``LOAD_RETRY_S`` until ``wait_s`` has passed; the
-    default, no wait, is one attempt. Anything else is ``ServingError`` naming the endpoint only."""
+    """Load adapter ``name`` from ``folder/name`` into the server; one already loaded counts. One the
+    server can't find there is staged (``stage``, when given) and loaded from the folder it names. One
+    found nowhere is asked for again every ``LOAD_RETRY_S`` until ``wait_s`` has passed; the default, no
+    wait, is one attempt. Anything else is ``ServingError`` naming the endpoint only."""
     deadline = clock() + wait_s
-    while not poster.load_adapter(name, f"{folder}/{name}"):
+    while not _load_once(poster, name, folder, stage):
         if clock() >= deadline:
             raise ServingError(f"{LOAD_PATH} found no adapter" + (f" in {wait_s:.0f} s" if wait_s else ""))
         sleep(LOAD_RETRY_S)
+
+
+def _load_once(poster: Loader, name: str, folder: str, stage: Stage | None) -> bool:
+    if poster.load_adapter(name, f"{folder}/{name}"):
+        return True
+    staged = None if stage is None else stage(name)
+    return staged is not None and poster.load_adapter(name, f"{staged}/{name}")
 
 
 def tokens(poster: Poster, body: Mapping[str, Any]) -> list[int]:
@@ -325,6 +369,15 @@ class _Sent:
         self._lock = threading.Lock()
         self._answered: float | None = None
         self._retries = 0
+        self._down_until = float("-inf")  # the server answered nothing, not even WAKE_PATH: refuse until then
+
+    def down(self, now: float) -> bool:
+        with self._lock:
+            return now < self._down_until
+
+    def down_until(self, until: float) -> None:
+        with self._lock:
+            self._down_until = max(self._down_until, until)
 
     def warm(self, now: float) -> bool:
         """Whether the server answered within its scale-down window (``config.SCALEDOWN_S``)."""
@@ -374,6 +427,12 @@ class _Requests:
             raise ServingError("only a server that reads adapters from a folder loads one")
         return self._send(lambda timeout: poster.load_adapter(name, folder, timeout_s=timeout))
 
+    def stage(self, stage: Stage, name: str) -> str | None:
+        """``stage`` under one of the client's slots: it is one more input for the container."""
+        with self.sent.slots:
+            self._refuse_if_down()
+            return stage(name)
+
     def close(self) -> None:
         self.poster.close()
 
@@ -382,8 +441,10 @@ class _Requests:
         for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
             try:
                 with self.sent.slots:
+                    self._refuse_if_down()
                     got = attempt(self._timeout(deadline, first=tried == 0))
             except TransportFailed:
+                self._check_alive()
                 if pause is None or deadline - self.clock() <= pause:
                     raise
                 self.sent.retried()
@@ -392,6 +453,25 @@ class _Requests:
             self.sent.answered(self.clock())
             return got
         raise AssertionError("the last attempt returns or raises")
+
+    def _refuse_if_down(self) -> None:
+        if self.sent.down(self.clock()):
+            raise ServerUnresponsive()
+
+    def _check_alive(self) -> None:
+        """After a request lost in transport: an ``HttpPoster``'s server must answer ``WAKE_PATH`` within
+        ``LIVENESS_S``, asked under a slot so the client's own requests never queue it at Modal. With no
+        answer, every request fails for ``DOWN_HOLD_S``, this one first. Only a client that sends again
+        asks (the night's): ``once()`` fails as before, with no wait added for someone waiting on it."""
+        poster = self.poster
+        if not isinstance(poster, HttpPoster) or self.attempts == 1:
+            return
+        self._refuse_if_down()  # another thread found it so already: don't ask again
+        with self.sent.slots:
+            if poster.answers(LIVENESS_S):
+                return
+        self.sent.down_until(self.clock() + DOWN_HOLD_S)
+        raise ServerUnresponsive()
 
     def _timeout(self, deadline: float, *, first: bool) -> float:
         warm = first and self.attempts > 1 and self.sent.warm(self.clock())
@@ -403,20 +483,20 @@ class VllmClient:
     bearer token, or any other ``Poster`` (``VllmClient.over``). ``on(day)`` dates its prompts
     (the night's date, virtual in an accelerated run); unset, they carry today's UTC date.
     ``adapters_dir`` is the folder the server reads adapters from, which the client loads them from
-    before their first use, waiting up to ``load_wait_s`` for one the server can't see yet; ``None``
-    when the backend loads them itself."""
+    before their first use, staging one the server can't find there (``stage``, Modal's) and waiting up
+    to ``load_wait_s`` for one found nowhere; ``None`` when the backend loads them itself."""
 
     precision: Final = config.SERVING.name
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS, adapters_dir: str | None = None,
-        load_wait_s: float = LOAD_WAIT_S, clock: Callable[[], float] = time.monotonic,
+        stage: Stage | None = None, load_wait_s: float = LOAD_WAIT_S, clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
         self._load_wait_s, self._clock, self._sleep = load_wait_s, clock, sleep
-        self._setup(poster, max_tokens, adapters_dir, timeout_s)
+        self._setup(poster, max_tokens, adapters_dir, timeout_s, stage)
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
@@ -426,12 +506,15 @@ class VllmClient:
         client._setup(poster, max_tokens, None, REQUEST_TIMEOUT_S)
         return client
 
-    def _setup(self, poster: Poster, max_tokens: int, adapters_dir: str | None, cold_s: float) -> None:
+    def _setup(
+        self, poster: Poster, max_tokens: int, adapters_dir: str | None, cold_s: float, stage: Stage | None = None,
+    ) -> None:
         self._strength = config.reasoning_strength()
         self._poster, self._max_tokens = poster, max_tokens
         self._requests = _Requests(poster, _Sent(), ATTEMPTS, cold_s, self._clock, self._sleep)
         self._day: date | None = None
         self._adapters_dir = adapters_dir
+        self._stage = stage
         self._loaded: set[str] = set()
         self._loading: dict[str, threading.Lock] = {}  # one lock per adapter, held while it loads
         self._load_lock = threading.Lock()  # guards both; shared with every copy ``on``, ``with_load_wait`` and ``once`` make
@@ -481,6 +564,11 @@ class VllmClient:
     def adapters_dir(self) -> str | None:
         """The folder the server reads adapters from, or ``None`` when the backend loads them itself."""
         return self._adapters_dir
+
+    @property
+    def stages(self) -> bool:
+        """Whether an adapter the server can't find on its folder is staged onto its own disk (Modal)."""
+        return self._stage is not None
 
     @property
     def base_url(self) -> str | None:
@@ -534,10 +622,14 @@ class VllmClient:
         with loading:
             if self._is_loaded(name):
                 return
-            load_adapter(self._requests, name, self._adapters_dir, wait_s=self._load_wait_s,
-                         clock=self._clock, sleep=self._sleep)
+            load_adapter(self._requests, name, self._adapters_dir, stage=self._staging(),
+                         wait_s=self._load_wait_s, clock=self._clock, sleep=self._sleep)
             with self._load_lock:
                 self._loaded.add(name)
+
+    def _staging(self) -> Stage | None:
+        stage, requests = self._stage, self._requests
+        return None if stage is None else lambda name: requests.stage(stage, name)
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,

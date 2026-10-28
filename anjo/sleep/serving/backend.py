@@ -5,7 +5,8 @@ Both answer the same port, ``Serving``: ``wake`` (poll until vLLM answers, under
 ``ping`` (one cheap request), ``sleep_now`` (stop paying now), ``client`` (the night's ``VllmClient``)
 and ``upload_adapter`` (one checked adapter, never over one that exists). On Modal, ``sleep_now``
 does nothing: Modal scales to zero by itself after ``config.SCALEDOWN_S`` idle. On SageMaker it sets
-the copy count to 0.
+the copy count to 0. Modal's client stages an adapter its container's mount can't show
+(``stage_on_modal``), since the container never reloads the adapters volume.
 
 **Every phase ends asleep.** A simulated day, a night, a morning run and a keep-warm window each
 run inside ``phase``, which calls the phase's ``sleep`` on the way out, after an error too. Phases
@@ -16,17 +17,18 @@ The SageMaker side imports boto3, so it is imported only when chosen.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Final, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol
 
 from anjo.sleep.serving import client
-from anjo.sleep.serving.client import VllmClient, WakeResult
-from anjo.sleep.serving.config import ADAPTERS_DIR, ServeConfigError
+from anjo.sleep.serving.client import ServingError, VllmClient, WakeResult
+from anjo.sleep.serving.config import ADAPTERS_DIR, APP_NAME, STAGED_ADAPTERS_DIR, ServeConfigError
 
 if TYPE_CHECKING:
     from anjo.sleep.serving.sagemaker.serving import SageMakerServing
@@ -36,6 +38,7 @@ BACKENDS: Final = ("sagemaker", "modal")
 DEFAULT_BACKEND: Final = "sagemaker"
 MODAL_URL_ENV: Final = "ANJO_SLEEP_MODAL_URL"
 MODAL_TOKEN_ENV: Final = "ANJO_SLEEP_MODAL_TOKEN"
+STAGE_TIMEOUT_S: Final = 120.0  # one adapter copied from the volume onto the container's disk, queue included
 
 Sleep = Callable[[], None]
 
@@ -74,13 +77,27 @@ class ModalServing:
         """Nothing: Modal scales the container down after ``config.SCALEDOWN_S`` idle."""
 
     def client(self) -> VllmClient:
-        """A client that loads each adapter from the adapters volume before its first use."""
-        return VllmClient(self.url, self.token, adapters_dir=ADAPTERS_DIR)
+        """A client that loads each adapter from the adapters volume before its first use, staging one
+        committed since the container started."""
+        return VllmClient(self.url, self.token, adapters_dir=ADAPTERS_DIR, stage=stage_on_modal)
 
     def upload_adapter(self, folder: Path, name: str) -> None:
         from anjo.sleep.serving.modal_app import put_adapter  # needs the modal package: imported only to upload
 
         put_adapter(folder, name)
+
+
+def stage_on_modal(name: str) -> str | None:
+    """Copy adapter ``name`` onto the serving container's own disk with the deployed app's
+    ``Serve.stage`` (``modal_app``), and name the folder it lands in; None when the adapters volume has
+    no such adapter. Imports the modal package, as training does, so only a client that stages needs
+    it. Any failure, a wait past ``STAGE_TIMEOUT_S`` included, is ``ServingError`` naming its type only."""
+    try:
+        modal: Any = importlib.import_module("modal")
+        staged = modal.Cls.from_name(APP_NAME, "Serve")().stage.spawn(name).get(timeout=STAGE_TIMEOUT_S)
+    except Exception as error:
+        raise ServingError(f"staging an adapter on Modal failed ({type(error).__name__})") from None
+    return STAGED_ADAPTERS_DIR if staged else None
 
 
 def backend_name(environ: Mapping[str, str] | None = None) -> str:

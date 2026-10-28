@@ -40,6 +40,8 @@ class Lossy(LiveVllm):
         self.seen: dict[str, int] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # a liveness probe: kept apart, in ``probes``
+            return super().__call__(request)
         path = request.url.path
         self.timeouts.append((path, request.extensions["timeout"]["read"]))
         self.seen[path] = self.seen.get(path, 0) + 1
@@ -57,7 +59,8 @@ class Hangs(Lossy):
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path in self.lost_paths and self.seen.get(path, 0) < self.lose:
+        lost = path in self.lost_paths and self.seen.get(path, 0) < self.lose
+        if lost or (request.method == "GET" and not self.alive):
             self.waits.now += request.extensions["timeout"]["read"]
         return super().__call__(request)
 
@@ -74,6 +77,7 @@ def test_transport_error_retries_then_succeeds() -> None:
     assert fake.seen[COMPLETIONS] == 2 and fake.seen[vllm.LOAD_PATH] == 2  # the load is sent again too
     assert waits.slept == [vllm.BACKOFF_S[0]] * 2
     assert client.retries() == 2 and client.on(date(2026, 11, 1)).retries() == 2  # its copies share the count
+    assert fake.probes == [vllm.LIVENESS_S] * 2  # the server still answered /v1/models, so each went again
 
 
 def test_transport_error_gives_up_after_three_attempts() -> None:
@@ -151,6 +155,35 @@ def test_a_warm_client_meets_a_restarted_container() -> None:
                              (vllm.LOAD_PATH, vllm.WARM_TIMEOUT_S), ("/tokenize", vllm.WARM_TIMEOUT_S),
                              ("/tokenize", vllm.WARM_TIMEOUT_S), (COMPLETIONS, vllm.WARM_TIMEOUT_S)]
     assert len(fake.loads) == 2 and client.retries() == 1  # loaded again once, sent again once
+
+
+def test_a_wedged_server_fails_the_client_fast_and_all_at_once() -> None:
+    """Night 1c (2026-10-28): the container took requests and answered none, not even /v1/models, and
+    each gate thread waited out 300 s per request. A request lost in transport now asks /v1/models
+    within ``LIVENESS_S``; with no answer it fails as ``ServerUnresponsive``, and every request the client
+    and its copies send for the next ``DOWN_HOLD_S`` fails at once, without being sent."""
+    waits = Waits()
+    fake = Hangs(waits, lose=0, paths=("/tokenize", COMPLETIONS))
+    client = _client(fake, waits)
+    client.complete(None, MESSAGES, temperature=1.0)  # warm
+    fake.lose, fake.alive = 99, False  # wedged: nothing comes back
+    started = waits.now
+    with pytest.raises(vllm.ServerUnresponsive, match="/v1/models") as raised:
+        client.complete(None, MESSAGES, temperature=1.0)
+    assert isinstance(raised.value, ServingError)
+    assert waits.now - started == vllm.WARM_TIMEOUT_S + vllm.LIVENESS_S < vllm.REQUEST_TIMEOUT_S
+    assert fake.probes == [vllm.LIVENESS_S] and waits.slept == [] and client.retries() == 0  # never sent again
+
+    sent = dict(fake.seen)
+    for copy in (client, client.on(date(2026, 11, 1)), client.once(), client.with_load_wait(0)):
+        with pytest.raises(vllm.ServerUnresponsive):
+            copy.complete(ADAPTER, MESSAGES, temperature=1.0)
+    assert fake.seen == sent and fake.probes == [vllm.LIVENESS_S] # nothing sent
+    assert waits.now - started == vllm.WARM_TIMEOUT_S + vllm.LIVENESS_S
+
+    waits.now += vllm.DOWN_HOLD_S  # a minute on, a new container answers
+    fake.lose, fake.alive = 0, True
+    assert client.complete(ADAPTER, MESSAGES, temperature=1.0).text == "hello"
 
 
 def test_in_flight_never_exceeds_server_slots() -> None:

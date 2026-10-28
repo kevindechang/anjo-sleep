@@ -210,14 +210,32 @@ once if a restarted container answers 404 (`serving/client.py`). vLLM's filesyst
 used: in vLLM 0.28.0's source it serves an adapter only when its `base_model_name_or_path` equals the
 path vLLM was started with (`/weights/...`, not the served name), which a trained adapter never names,
 so it answered 404. A running container
-mounts the adapters volume as it was at its start, so `Serve` reloads it every 20 s
-(`config.ADAPTER_REFRESH_S`; a reload that is refused or fails is counted in the container log and the
-next one tries again), and the night's client asks again for a folder vLLM can't see yet for up to
-45 s (`client.LOAD_WAIT_S`). Only the night, the morning and the demo's pre-generated pairs wait so. A
-chat turn (`app/runtime.py`) and the live demo page load once, with no wait, inside the turn's 20 s
-deadline: a missing adapter or a failed load ends the turn, and the frontier talker answers. `Serve` runs
-one container at most (`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one
-wake started two.
+mounts the adapters volume as it was at its start, and nothing reloads it: on night 1c (2026-10-28) the
+container reloaded the volume every 20 s, the gates' first load of the new adapter never answered, and
+the server stopped answering anything, `/v1/models` included. So when vLLM can't find an adapter
+under `/adapters` (committed since the container started), the night's client calls `Serve.stage`
+(`backend.stage_on_modal`, through the modal package, at most `backend.STAGE_TIMEOUT_S`). It copies
+the adapter through the volume's API, not the mount, onto the container's own disk
+(`config.STAGED_ADAPTERS_DIR`), checks it as an upload is checked, and vLLM loads it from there. An
+adapter found nowhere is asked for again for up to 45 s (`client.LOAD_WAIT_S`). Only the night, the
+morning and the demo's pre-generated pairs wait so. A chat turn (`app/runtime.py`) and the live demo
+page load once, with no wait, inside the turn's 20 s deadline: a missing adapter or a failed load ends
+the turn, and the frontier talker answers. A chat turn never stages: by then the night has loaded the
+adapter into the running container, or a container started since mounts it. `Serve` runs one container
+at most (`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one wake started two.
+
+A wedged server fails the night fast. After a request lost in transport, the client asks
+`/v1/models` (which never reaches vLLM's engine) within 15 s (`client.LIVENESS_S`). With no answer,
+that request and every request the client sends for the next 60 s (`client.DOWN_HOLD_S`) fail at once
+as `ServerUnresponsive`, instead of each gate thread waiting out 300 s per request. To tell a wedge
+from a slow server by hand, the probe times each step (it wakes the container, so it costs money; it
+prints its plan without `--go`):
+
+```bash
+python -m anjo.sleep.tools.serve_probe                                    # the plan; sends nothing
+python -m anjo.sleep.tools.serve_probe --go                               # /v1/models, /tokenize, 4 tokens
+python -m anjo.sleep.tools.serve_probe --adapter p-<hash>-n<night> --go   # then load (or stage) one adapter
+```
 
 ### 1.7 Training on Modal (Colab is the fallback)
 
