@@ -428,10 +428,13 @@ def test_the_new_routes_exist_only_on_the_sleep_host(monkeypatch: pytest.MonkeyP
     app.dependency_overrides[demo_api.demo_service] = lambda: service
     with TestClient(app) as mounted:
         assert mounted.get(f"{API}/nights").status_code == 200
+        for asset in ("nights.js", "mind.js", "mind.css"):
+            assert mounted.get(f"/sleep/demo/{asset}").status_code == 200, asset
         monkeypatch.delenv("ANJO_SLEEP_HOST")
         app.dependency_overrides.clear()
         for method, path in NEW_ROUTES:
             assert mounted.request(method, f"{API}{path}").status_code == 404, path
+        assert mounted.get("/sleep/demo/mind.js").status_code == 404
     assert demo_api.PUBLIC_PREFIXES == ("/sleep/demo", "/api/sleep/demo")  # the carve-out is unchanged
 
 
@@ -443,3 +446,5 @@ def test_an_anonymous_visitor_reaches_the_new_routes_inside_the_carve_out(sleep_
     assert client.get(f"{API}/mind", headers=headers).status_code == 200
     assert client.post(f"{API}/toggles/{SCENE.id}", headers=headers).status_code == 200
     assert client.post(f"{API}/nights/n5/ask", json={"text": "The title?"}, headers=headers).json()["kind"] == "answer"
+    for asset in ("/sleep/demo/nights.js", "/sleep/demo/mind.js", "/sleep/demo/mind.css"):
+        assert client.get(asset, follow_redirects=False).status_code == 200, asset

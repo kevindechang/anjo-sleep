@@ -1,6 +1,8 @@
 // The live demo page (Task 13a, minimal step). Vanilla JS, no framework, and every request goes
 // to this host only. Every word comes from the copy the server put in the page (words.COPY), and
-// every piece of model or server text goes in through textContent, never as HTML.
+// every piece of model or server text goes in through textContent, never as HTML. The full step's
+// scripts (nights.js, mind.js) use the helpers on window.anjoDemo and two events: demo:visit, once
+// the 18+ visit starts, and demo:settled, once a starter pair is voted on or can't be.
 (() => {
   "use strict";
 
@@ -10,6 +12,7 @@
   const byId = (id) => document.getElementById(id);
   const status = byId("status");
   let visit = null;
+  let scenes = [];
 
   function say(text) {
     status.textContent = text || "";
@@ -124,6 +127,10 @@
     node.querySelector(".card").classList.add("revealed");
   }
 
+  function settled(node) {
+    if (node.dataset.scene) document.dispatchEvent(new CustomEvent("demo:settled", { detail: { node, scene: node.dataset.scene } }));
+  }
+
   async function vote(node, pairId, choice) {
     const group = node.querySelector(".vote");
     const buttons = group.querySelectorAll("button");
@@ -134,6 +141,7 @@
       showReveal(node, reveal);
       say("");
       node.querySelector(".verdict").focus();
+      settled(node);
     } catch (error) {
       buttons.forEach((button) => { button.disabled = false; });
       say(error.message);
@@ -156,6 +164,7 @@
     if (!pair.votable) {
       group.hidden = true;
       node.querySelector(".unvotable").hidden = false;
+      settled(node);
       return node;
     }
     group.querySelectorAll("button.choice").forEach((button) => {
@@ -169,7 +178,9 @@
     say("");
     try {
       const pair = await call(`/starters/${encodeURIComponent(scene.id)}`, "POST");
-      show(fillPair(exchange("pair-template", copy.she_asks, scene.prompt), pair));
+      const node = exchange("pair-template", copy.she_asks, scene.prompt);
+      node.dataset.scene = scene.id;
+      show(fillPair(node, pair));
     } catch (error) {
       say(error.message);
     } finally {
@@ -258,6 +269,7 @@
       byId("ask").hidden = false;
       say("");
       byId("scenes-heading").focus();
+      document.dispatchEvent(new CustomEvent("demo:visit", { detail: { scenes } }));
     } catch (error) {
       say(error.message);
     }
@@ -267,12 +279,15 @@
     try {
       const data = await call("/page");
       renderBrief(data.brief);
+      scenes = data.scenes;
       renderScenes(data.scenes);
       liveNote(data.live);
     } catch (error) {
       byId("brief-body").replaceChildren(element("p", "", error.message));
     }
   }
+
+  window.anjoDemo = Object.freeze({ call, element, paragraphs, say, copy, byId, reduceMotion });
 
   // One column (below the CSS's 62rem): the brief starts folded so the gate is in view.
   if (!window.matchMedia("(min-width: 62rem)").matches) byId("brief").querySelector("details").open = false;

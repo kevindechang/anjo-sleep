@@ -20,6 +20,9 @@ WEB_DIR: Final = Path(__file__).parents[1] / "web"
 ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "app.js": "text/javascript; charset=utf-8",
     "demo.css": "text/css; charset=utf-8",
+    "nights.js": "text/javascript; charset=utf-8",  # the full step: the night slider and the toggles
+    "mind.js": "text/javascript; charset=utf-8",  # her mind panel and its chart
+    "mind.css": "text/css; charset=utf-8",
 })
 COPY_SLOT: Final = "{{@copy}}"
 _SLOT = re.compile(r"\{\{([a-z0-9_]+)\}\}")
@@ -41,7 +44,7 @@ def page_html() -> str:
 
 
 def asset(name: str) -> tuple[bytes, str] | None:
-    """One of the page's two files and its media type, or None for any other name."""
+    """One of the page's files and its media type, or None for any other name."""
     media = ASSETS.get(name)
     if media is None:
         return None

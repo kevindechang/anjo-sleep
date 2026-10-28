@@ -321,3 +321,20 @@ def test_the_ledger_shows_its_hashes_and_whether_its_chain_holds(tmp_path: Path)
     tampered = [entries[0], ledger.LedgerEntry(**{**entries[1].__dict__, "sha256": "f" * 64})]
     assert ledger_view(tampered, pushed=None, held=HeldOutText([]))["verified"] is False
     assert ledger_view([], pushed=None, held=HeldOutText([]))["state"] == "none"
+
+
+def test_every_word_the_new_scripts_read_is_in_the_one_copy_module() -> None:
+    import re
+
+    from anjo.sleep.demo.page import WEB_DIR
+
+    for name in ("nights.js", "mind.js"):
+        script = (WEB_DIR / name).read_text()
+        read = set(re.findall(r"copy\.([a-zA-Z0-9_]+)", script))
+        assert read and read <= set(words.COPY), (name, sorted(read - set(words.COPY)))
+    for prefix, codes in (("night_status", ("promoted", "rejected", "nothing_new", "failed")),
+                          ("reason", ("unknown_priority_class", "action_not_offered", "candidate_limit",
+                                      "below_threshold", "budget", "lost_to_target", "note_declined")),
+                          ("chart_arm", ("1", "2C", "2F", "3", "3x", "4")), ("toggle_arm", ("1", "3", "swap", "bare")),
+                          ("gate", ("general", "collapse", "safety"))):
+        assert all(f"{prefix}_{code}" in words.COPY for code in codes), prefix
