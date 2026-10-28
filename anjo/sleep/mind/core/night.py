@@ -35,6 +35,9 @@ were (its heads read no memory), so ``Dreamt.view.predictions`` is ``Core.predic
 ``Dreamt.reading`` gives it (the consolidated state, its id, the core's predictions on it, and the
 projector her last kept unit names, when that unit is this core's), None for anyone it doesn't
 serve or a night it skipped. Asked before that night's dream step, it refuses (``ValueError``).
+``imagined(person, night, state)`` is one of the states tonight's dream kept (in its receipt's
+``dreams`` or ``boundaries``), read back from her store, with the core's predictions on it and
+tonight's projector, for the dreams through the thought channel; any other id is refused.
 
 **Keep.** The night's unit: the state, the core's model id, the thought channel's projector version
 and the adapter serving her (``MindStore.keep``). Nothing is written once the night is cancelled.
@@ -47,7 +50,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 
@@ -230,6 +233,17 @@ class CoreNight:
     def reading(self, user_id: str, night: date) -> MindReading | None:
         dreamt = self.dreamt(user_id, night)
         return None if dreamt is None else dreamt.reading()
+
+    def imagined(self, user_id: str, night: date, state_ref: str) -> MindReading | None:
+        dreamt = self.dreamt(user_id, night)
+        if dreamt is None or dreamt.state_id is None:
+            return None
+        kept = {str(d["state"]) for key in ("dreams", "boundaries")
+                for d in cast("Sequence[Mapping[str, object]]", dreamt.receipt.get(key) or ())}
+        if state_ref not in kept:
+            raise ValueError("that state isn't one tonight's dream kept")
+        state = core_state.load(self._store(user_id).state(state_ref), model_id=self.core.model_id)
+        return MindReading(state, state_ref, self.core.predict(state), dreamt.projector)
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         if (why := self._refusal(call.user_id)) is not None:

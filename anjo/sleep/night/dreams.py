@@ -34,6 +34,11 @@ to recall it, so live threads stay in the channel (Kevin, 2026-10-29). A dream's
 Glimmer plus the seed's own, so a seed built from an uncleared model's text never trains
 (``train/terms.py``). Which candidates train is the training job's call: the top by gradient norm
 plus a few at random, kept only if the anchor check holds (``train/sleep_loss.py``).
+
+**Through the thought channel** (``channel``, ``night/core_dreams.py``): each seed's reply is asked
+of a ``ReplyChannel`` over that seed's own imagined state, so her Glimmer answers with the state
+as soft tokens as well as in her system turn, and the dream carries the state's snapshot
+(``Dream.core``), which its row trains under. The message is asked as before, plain.
 """
 from __future__ import annotations
 
@@ -135,6 +140,15 @@ class DreamClient(Protocol):
     ) -> ChatResult: ...
 
 
+class ReplyChannel(DreamClient, Protocol):
+    """Her reply's client with one imagined state in the thought channel (``core_snapshot.Channel``)."""
+
+    @property
+    def row_field(self) -> str:
+        """The state's snapshot, as a row's ``core`` (JSON)."""
+        ...
+
+
 def state_text(seed: DreamSeed) -> str:
     """The seed as the channel's text stand-in: the thread, then the branch, marked as imagined when
     it is the one she didn't take (an imagined state with no branch is marked as imagined too)."""
@@ -203,24 +217,27 @@ class GlimmerDreams:
     def __init__(
         self, client: DreamClient, seeds: Callable[[str, date], Sequence[DreamSeed]], *, seed: int,
         per_state: int = PER_STATE, max_states: int = MAX_STATES,
+        channel: Callable[[str, date, DreamSeed], ReplyChannel] | None = None,
     ) -> None:
         if per_state < 1 or max_states < 1:
             raise ValueError("a dream source asks at least one candidate of at least one state")
         self._client, self._seeds, self._seed = client, seeds, seed
-        self._per_state, self._max_states = per_state, max_states
+        self._per_state, self._max_states, self._channel = per_state, max_states, channel
 
     def dream(self, user_id: str, night: date, adapter: CheckpointRef | None) -> tuple[Dream, ...]:
         made: list[Dream] = []
         anchored = [seed for seed in self._seeds(user_id, night) if seed.event_ids]
         for i_seed, seed in enumerate(anchored[: self._max_states]):
+            through = None if self._channel is None else self._channel(user_id, night, seed)
             for i in range(self._per_state):
-                dream = self._candidate(user_id, night, adapter, seed, f"{i_seed}-{i}")
+                dream = self._candidate(user_id, night, adapter, seed, f"{i_seed}-{i}", through)
                 if dream is not None:
                     made.append(dream)
         return tuple(made)
 
     def _candidate(
         self, user_id: str, night: date, adapter: CheckpointRef | None, state: DreamSeed, i: str,
+        through: ReplyChannel | None,
     ) -> Dream | None:
         thread = state_text(state)
         asked = self._client.complete(
@@ -231,7 +248,7 @@ class GlimmerDreams:
         message = asked.text.strip()
         if asked.finish_reason != NORMAL_STOP or not message:
             return None
-        answered = self._client.complete(
+        answered = (self._client if through is None else through).complete(
             adapter, [{"role": "system", "content": thread}, {"role": "user", "content": message}],
             temperature=DREAM_TEMPERATURE, seed=_seed(self._seed, user_id, night, state.state_ref, i, "reply"),
             max_tokens=REPLY_TOKENS,
@@ -241,4 +258,5 @@ class GlimmerDreams:
             return None
         ancestry = None if state.ancestry is None else state.ancestry | {GLIMMER}
         return Dream(id=f"dream-{i}", state_ref=state.state_ref, thread=thread, message=message, reply=reply,
-                     ancestry=ancestry, kind=state.kind, event_ids=state.event_ids)
+                     ancestry=ancestry, kind=state.kind, event_ids=state.event_ids,
+                     core=None if through is None else through.row_field)

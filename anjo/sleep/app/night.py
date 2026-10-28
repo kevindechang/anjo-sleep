@@ -46,7 +46,9 @@ Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind
 dreams in the night only under ``ANJO_SLEEP_MIND_CORE=1``, with ``--mind``, and only for the demo
 persona's people (``app/mind_core.py``); its dream seeds are where the sleep objective's dreams
 start (``ANJO_SLEEP_DREAMS=1``, ``night/core_dreams.py``), her Glimmer speaking from them on the
-night's client; with the core off the dreams are not wired. Task 16's
+night's client; with the core off the dreams are not wired. With ``ANJO_SLEEP_DREAMS_CHANNEL=1``
+(the channel on) each dream's reply goes through the thought channel over its own imagined state,
+and its row carries that state. Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
@@ -105,7 +107,7 @@ from anjo.sleep.night.deps import (
     GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindState
-from anjo.sleep.night.core_dreams import core_dreams
+from anjo.sleep.night.core_dreams import core_dreams, dreams_channel
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.sleep_pressure import policy_from
@@ -353,6 +355,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, gpu_stop=gpu_stop(serving, os.environ, ledger), retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
-        core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed),
+        core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
+                                      channel=dreams_channel(os.environ, channel)),
     )
 

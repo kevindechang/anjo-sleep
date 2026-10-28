@@ -219,9 +219,10 @@ class MindCore(Protocol):
     consolidates; ``dreamt`` is tonight's dream (its receipt holds the imagined states the sleep
     objective's dreams start from, ``night/core_dreams.py``) and ``reading`` the thought channel's
     ``MindState`` (tonight's dream as the channel reads it), each None for anyone it doesn't serve
-    and refused when asked before the dream; ``keep`` saves
-    the night's unit (her state, the thought channel's projector and her adapter). Ids only cross:
-    no row's words."""
+    and refused when asked before the dream; ``imagined`` is one of the states tonight's dream kept,
+    by its id, as the channel reads it (the dreams through the channel, ``night/core_dreams.py``);
+    ``keep`` saves the night's unit (her state, the thought channel's projector and her adapter).
+    Ids only cross: no row's words."""
 
     def serves(self, user_id: str) -> bool: ...
 
@@ -230,6 +231,8 @@ class MindCore(Protocol):
     def dreamt(self, user_id: str, night: date) -> Dreamt | None: ...
 
     def reading(self, user_id: str, night: date) -> MindReading | None: ...
+
+    def imagined(self, user_id: str, night: date, state_ref: str) -> MindReading | None: ...
 
     def keep(
         self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
@@ -249,6 +252,9 @@ class NoCore:
         return None
 
     def reading(self, user_id: str, night: date) -> MindReading | None:
+        return None
+
+    def imagined(self, user_id: str, night: date, state_ref: str) -> MindReading | None:
         return None
 
     def keep(

@@ -455,3 +455,15 @@ def test_the_sleep_objectives_dreams_come_from_minds_core_only_when_it_runs(
     assert deps.core.serves("synthetic-hero") and isinstance(dreams, GlimmerDreams)
     assert dreams._client is deps.note_writer._client  # type: ignore[attr-defined]  # her Glimmer, the night's client
     assert dreams.dream("someone-else", options.night, None) == ()  # no seed for anyone the core doesn't serve
+    assert dreams._channel is None  # through the channel only when switched on
+
+    from anjo.sleep.night.core_dreams import DREAMS_CHANNEL_ENV
+    monkeypatch.setenv(DREAMS_CHANNEL_ENV, "1")
+    with pytest.raises(ValueError, match="needs the thought channel on"):
+        night.build(NoTrainer(), options)
+    shared = tmp_path / "shared.projector.npz"
+    shared.write_bytes(b"npz")
+    monkeypatch.setenv("ANJO_SLEEP_CHANNEL", "state")
+    monkeypatch.setenv(night.CHANNEL_PROJECTOR_ENV, str(shared))
+    through: Any = night.build(NoTrainer(), options).dreams
+    assert isinstance(through, GlimmerDreams) and through._channel is not None
