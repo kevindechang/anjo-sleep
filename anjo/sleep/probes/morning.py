@@ -147,6 +147,12 @@ DAILY: Final = ProbeSubset(name="daily-v1", arms=("1", "3"), per_kind=MappingPro
     {"new_work": 5, "vocab": 3, "tone_hold": 3, "taste_ab": 3, "pushback": 0}))
 SUBSETS: Final = MappingProxyType({DAILY.name: DAILY})
 MORNING_SUBSET_ENV: Final = "ANJO_SLEEP_MORNING_SUBSET"  # unset: the full morning; a subset's name: that subset
+MORNING_PROBES: Final = "morning_probes"  # an accelerated night's summary: the set its morning asks (``probe_set``)
+
+
+def probe_set(subset: ProbeSubset | None) -> str:
+    """A probe set's name as the results name it: the subset's, or ``full``."""
+    return results.FULL_SET if subset is None else subset.name
 
 
 def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
@@ -401,7 +407,8 @@ def _run_morning(
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
     judge = _Counting(morning.judge, retries)
     spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
-    key = f"morning:{night.isoformat()}:{user_id}"
+    # A backfill holds under a key of its own, so a failed morning's settled spend still counts (``latest_attempts``)
+    key = f"morning:{night.isoformat()}:{user_id}" + (f":backfill-{probe_set(subset)}" if pinned else "")
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:

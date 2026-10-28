@@ -111,17 +111,27 @@ def _counts(raw: Any) -> dict[str, int]:
 Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str, dict[str, int]]
 
 
+def score_records(folder: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Each score file's record by (night, probe set), in that order. A backfill may score a night again
+    on another set; should one (night, set) have two files, the newest (the highest ``night-NN``) counts."""
+    found: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    for path in folder.glob("night-*.json") if folder.is_dir() else ():
+        record, number = _json(path), path.stem.rpartition("-")[2]
+        if "night" not in record or not isinstance(record.get("arms"), dict) or not number.isdigit():
+            raise ResultsError(f"{path.name} lacks a night and its arms, or the number of night-NN")
+        key = (str(record["night"]), str(record.get("subset") or FULL_SET))
+        if key not in found or int(number) > found[key][0]:
+            found[key] = (int(number), record)
+    return {key: record for key, (_, record) in sorted(found.items())}
+
+
 def _scores(folder: Path) -> dict[str, Scored]:
-    """Each scored night's arms, headline pairs and probe set."""
+    """Each scored night's arms, headline pairs and probe set: the full set's when the night has one."""
     found: dict[str, Scored] = {}
-    if not folder.is_dir():
-        return found
-    for path in sorted(folder.glob("night-*.json")):
-        record = _json(path)
-        if "night" not in record or not isinstance(record.get("arms"), dict):
-            raise ResultsError(f"{path.name} lacks a night and its arms")
-        found[str(record["night"])] = (_stats(record["arms"]), _stats(record.get("pairs") or {}),
-                                       str(record.get("subset") or FULL_SET), _counts(record.get("no_verdict")))
+    for (night, probes), record in score_records(folder).items():
+        if night not in found or probes == FULL_SET:
+            found[night] = (_stats(record["arms"]), _stats(record.get("pairs") or {}), probes,
+                            _counts(record.get("no_verdict")))
     return found
 
 

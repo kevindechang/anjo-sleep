@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -15,10 +16,13 @@ import pytest
 
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry, ref_record
+from anjo.sleep.night.holds import usd
+from anjo.sleep.night.past import her_spend
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
-from anjo.sleep.probes.morning import Morning
+from anjo.sleep.probes.morning import MORNING_PROBES, Morning
 from anjo.sleep.probes.score import Verdict
+from anjo.sleep.reports import results
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy, probe, taste
 from anjo.sleep.tools import morning_backfill as backfill_tool
 from anjo.sleep.tools import sleep_objective_live as live
@@ -121,17 +125,46 @@ def test_go_scores_the_nights_own_adapter_while_a_later_one_keeps_serving(tmp_pa
     assert world.run(NIGHTS[0], "--go")[1] == ["refused: the morning of 2026-10-24 already succeeded on the full set"]
 
 
-def test_the_live_comparisons_report_reads_backfilled_mornings_in_night_order(tmp_path: Path) -> None:
+def test_the_report_keeps_each_probe_set_apart_one_score_per_night_and_set(tmp_path: Path) -> None:
+    """An arm on daily-v1 whose first night is backfilled on the full set too: a mean per set, by night
+    date, never pooled; the results table shows that night's full score and says so."""
     world = World(tmp_path)
-    assert world.run(NIGHTS[2], "--go")[0] == 0  # the last night first: its file is night-01.json
-    assert world.run(NIGHTS[0], "--go")[0] == 0
-    said: list[str] = []
-    table = live.report(world.root, {"seed": USER, "today": "syn-today"}, said.append)["seed"]  # seed runs with its control
-    files = {json.loads(p.read_text())["night"]: json.loads(p.read_text())
-             for p in (world.root / USER / "scores").glob("night-*.json")}
-    assert [s["night"] for s in live.scores(world.root, USER)] == ["2026-10-24", "2026-10-26"]
-    assert table["arm3_by_night"] == [files[n]["arms"]["3"]["overall"]["score"] for n in ("2026-10-24", "2026-10-26")]
-    assert table["arm3_mean"] is not None and (table["nights"], table["promoted"]) == (3, 3)
+    for n, night in enumerate(NIGHTS, start=1):
+        world.night(night, {"status": "promoted", "checkpoint": ref_record(_ckpt(n)), "accelerated": True,
+                            "label": "development", "cost_usd": 1.0, MORNING_PROBES: "daily-v1"})
+    for night in (NIGHTS[2], NIGHTS[0], NIGHTS[1]):  # the last night first: its file is night-01.json
+        assert world.run(night, "--go")[0] == 0  # each on the set its summary records
+    assert world.run(NIGHTS[0], "--go", "--subset", "full")[0] == 0
+    files = {(r["night"], r.get("subset", "full")): r for r in
+             (json.loads(p.read_text()) for p in (world.root / USER / "scores").glob("night-*.json"))}
+    assert sorted(files) == sorted([*((n.isoformat(), "daily-v1") for n in NIGHTS), (NIGHTS[0].isoformat(), "full")])
+    table = live.report(world.root, {"seed": USER, "today": "syn-today"}, lambda line: None)["seed"]
+    daily = [files[(n.isoformat(), "daily-v1")]["arms"]["3"]["overall"]["score"] for n in NIGHTS]
+    assert list(table["scores"]) == ["daily-v1", "full"] and table["scores"]["daily-v1"]["arm3_mean"] == round(
+        sum(daily) / 3, 4)  # three nights, not four
+    assert table["scores"]["daily-v1"]["by_night"] == {n.isoformat(): {
+        "3": files[(n.isoformat(), "daily-v1")]["arms"]["3"]["overall"]["score"],
+        "4": None} for n in NIGHTS}  # daily-v1 asks arms 1 and 3
+    full = files[(NIGHTS[0].isoformat(), "full")]["arms"]
+    assert table["scores"]["full"] == {"by_night": {NIGHTS[0].isoformat(): {"3": full["3"]["overall"]["score"],
+                                                                            "4": full["4"]["overall"]["score"]}},
+                                       "arm3_mean": full["3"]["overall"]["score"], "arm4_mean": full["4"]["overall"]["score"]}
+    rows = results.load(USER, world.root)
+    assert [(n.night, n.probes) for n in rows] == [(NIGHTS[0].isoformat(), "full"), (NIGHTS[1].isoformat(), "daily-v1"),
+                                                   (NIGHTS[2].isoformat(), "daily-v1")]  # one row a night: its full set's
+
+
+def test_of_two_files_for_one_night_and_set_the_newest_counts(tmp_path: Path) -> None:
+    folder = tmp_path / "scores"
+    folder.mkdir()
+    for number, score in ((9, 0.2), (100, 0.8), (99, 0.4)):  # night-100 is the newest, though night-99 sorts last
+        record = {"night": "2026-10-24", "subset": "daily-v1", "arms": {"3": {"overall": {"score": score}}}}
+        (folder / f"night-{number:02d}.json").write_text(json.dumps(record), encoding="utf-8")
+    [(key, newest)] = results.score_records(folder).items()
+    assert key == ("2026-10-24", "daily-v1") and newest["arms"]["3"]["overall"]["score"] == 0.8
+    (folder / "night-xx.json").write_text(json.dumps({"night": "2026-10-25", "arms": {}}), encoding="utf-8")
+    with pytest.raises(results.ResultsError, match="night-xx.json"):
+        results.score_records(folder)
 
 
 @pytest.mark.parametrize("rule", ["not_promoted", "morning_ok", "not_synthetic", "lock_held", "scored"])
@@ -236,3 +269,41 @@ def test_a_morning_step_that_names_no_subset_asked_the_nights_own_set(
                             "label": "development"}, morning="ok")
     code, said = world.run(NIGHTS[0], *flag)
     assert (code == 1 and "already succeeded" in said[-1]) if refused else code == 0
+
+
+@pytest.mark.parametrize(("recorded", "asked", "basis"), [
+    ("daily-v1", "the daily-v1 subset: 4 probes, 8 replies", "as the night's summary records"),
+    ("full", "the full set: 4 probes, 24 replies", "as the night's summary records"),
+    (None, "the full set: 4 probes, 24 replies", "records none, so the full set (run before the record)")])
+def test_the_default_set_is_the_one_the_nights_summary_records_else_the_full_set_and_the_plan_says_which(
+    tmp_path: Path, recorded: str | None, asked: str, basis: str,
+) -> None:
+    world = World(tmp_path)
+    world.night(NIGHTS[0], {"status": "promoted", "checkpoint": ref_record(_ckpt(1)), "accelerated": True,
+                            "label": "development", **({MORNING_PROBES: recorded} if recorded else {})})
+    code, said = world.run(NIGHTS[0])
+    assert code == 0 and any(asked in line for line in said) and any(basis in line for line in said)
+
+
+def test_a_set_the_backfill_doesnt_know_is_refused_before_anything(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.night(NIGHTS[0], {"status": "promoted", "checkpoint": ref_record(_ckpt(1)), "accelerated": True,
+                            MORNING_PROBES: "daily-v9"})
+    assert world.run(NIGHTS[0], "--go")[1] == ["refused: the night's summary names a probe set this backfill "
+                                               "doesn't know: 'daily-v9'"]
+    assert world.model.calls == [] and not (world.root / USER / "scores").exists()
+
+
+def test_a_backfill_holds_under_its_own_key_so_the_failed_mornings_spend_still_counts(tmp_path: Path) -> None:
+    world, night = World(tmp_path), NIGHTS[0].isoformat()
+    failed = world.ledger.reserve(f"morning:{night}:{USER}:judge:a1", ("meta_usd",), usd(1.0))
+    assert failed is not None
+    failed.settle(0.04)  # what the night's own morning spent before it failed
+    ports = replace(world.ports, morning=lambda user, persona, on: replace(world.morning(user, persona, on),
+                                                                           ledger=world.ledger))
+    said: list[str] = []
+    assert backfill_tool.main(["--user", USER, "--persona", "film_founder", "--night", night, "--go"], ports=ports,
+                              out=said.append) == 0
+    spent = her_spend(world.ledger.settlements(), USER, NIGHTS[0])
+    assert spent[f"morning:{night}:{USER}:judge"] == pytest.approx(0.04)  # still hers, beside the backfill's
+    assert spent[f"morning:{night}:{USER}:backfill-full:judge"] > 0 and not world.ledger.open_holds()

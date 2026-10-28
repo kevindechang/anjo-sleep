@@ -63,8 +63,8 @@ def _night(root: Path, account: str, day: str, *, minutes: dict[str, float] | No
     scores = root / account / "scores"
     scores.mkdir(exist_ok=True)
     n = len(list(scores.glob("night-*.json"))) + 1
-    (scores / f"night-{n:02d}.json").write_text(json.dumps({"arms": {"3": {"overall": {"score": 0.6}},
-                                                                     "4": {"overall": {"score": 0.7}}}}))
+    arms = {"3": {"overall": {"score": 0.6}}, "4": {"overall": {"score": 0.7}}}
+    (scores / f"night-{n:02d}.json").write_text(json.dumps({"night": day, "arms": arms}))
 
 
 class _Runs:
@@ -254,7 +254,8 @@ def test_the_report_reads_numbers_per_arm_and_flags_an_unmatched_night(tmp_path:
     table = live.report(tmp_path, {"seed": "syn-a", "today": "syn-c"}, lines.append)
     seed = table["seed"]
     assert seed["nights"] == 2 and seed["promoted"] == 2 and seed["train_minutes_mean"] == 5.5
-    assert seed["arm3_by_night"] == [0.6, 0.6] and seed["arm4_mean"] == 0.7 and seed["general_lost_by_night"] == [0.5, 0.5]
+    assert seed["scores"] == {"full": {"by_night": {d: {"3": 0.6, "4": 0.7} for d in ("2026-10-24", "2026-10-25")},
+                                       "arm3_mean": 0.6, "arm4_mean": 0.7}} and seed["general_lost_by_night"] == [0.5, 0.5]
     assert seed["dreams_by_seed"] == [dreams["by_seed"]] and seed["dream_blocks_kept"] == 1 and seed["cost_usd"] == 2.5
     assert table["today"]["match"] == [{"night": "2026-10-24", "budget": 1.0, "used": 1.2, "mismatch": True}]
     assert any("isn't matched" in line for line in lines)

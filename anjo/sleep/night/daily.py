@@ -65,7 +65,7 @@ from anjo.sleep.night.sleep_night import NAP_WHY
 from anjo.sleep.night.state import safe_error
 from anjo.sleep.personas import DEMO_PERSONA
 from anjo.sleep.night.story import MORNING_FAILED
-from anjo.sleep.probes.morning import DAILY, MorningResult, TooManyNoVerdicts, run_morning
+from anjo.sleep.probes.morning import DAILY, MorningResult, ProbeSubset, TooManyNoVerdicts, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
@@ -213,7 +213,7 @@ def _score_morning(
         done = score(user, night, result.checkpoint, morning=ports, label=label,
                      promoted=result.status == "promoted", subset=subset)
     except Exception as error:  # a judge that can't be read, or one that timed out: logged, never lost
-        log_failed_morning(log, night, error, timer() - started)
+        log_failed_morning(log, night, error, timer() - started, subset=subset)
         return
     receipt = morning_receipt(done, timer() - started)
     if subset is not None:
@@ -223,13 +223,16 @@ def _score_morning(
     log.step("morning", "ok", uses="new", system=None, **receipt)
 
 
-def log_failed_morning(log: NightLog, night: date, error: Exception, seconds: float) -> None:
+def log_failed_morning(log: NightLog, night: date, error: Exception, seconds: float, *,
+                       subset: ProbeSubset | None = None) -> None:
     """A morning that failed, in its night's log: why (its error's type, and its message when Sleep
-    raised it), how long it ran, and the unread verdicts when the judge couldn't be read."""
+    raised it), how long it ran, the subset it asked (absent: the full set), and the unread verdicts
+    when the judge couldn't be read."""
     logger.warning("the morning for %s failed: %s", night.isoformat(), type(error).__name__)
     unread: dict[str, Any] = {"no_verdict": error.no_verdict} if isinstance(error, TooManyNoVerdicts) else {}
+    asked: dict[str, Any] = {} if subset is None else {"subset": subset.name}
     log.step("morning", "failed", uses="new", system=None, seconds=round(seconds, 3),
-             why=f"{MORNING_FAILED}{safe_error(error)}", **unread)
+             why=f"{MORNING_FAILED}{safe_error(error)}", **unread, **asked)
 
 
 def morning_receipt(done: object, seconds: float) -> dict[str, Any]:

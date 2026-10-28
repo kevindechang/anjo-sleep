@@ -60,7 +60,15 @@ from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
-from anjo.sleep.probes.morning import Morning, MorningError, ProbeSubset, morning_subset, run_morning
+from anjo.sleep.probes.morning import (
+    MORNING_PROBES,
+    Morning,
+    MorningError,
+    ProbeSubset,
+    morning_subset,
+    probe_set,
+    run_morning,
+)
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -99,6 +107,7 @@ class Rig:
     # ``on_scoring`` is told how long each scoring run took (seconds), as ``on_day`` is for the day.
     score: Callable[[str, date, str, NightResult], object] | None = None
     on_scoring: Callable[[str, float], None] | None = None
+    subset: ProbeSubset | None = None  # the set ``score`` asks, recorded in each night's summary and a failed morning
     timer: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # the wall clock, read as the run starts
 
@@ -142,11 +151,14 @@ def _check_window(user_id: str, day: DayRun, last_end: datetime | None) -> None:
         raise AcceleratedError(f"{user_id}: the day's window starts before the last day's window ended")
 
 
-def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None) -> None:
-    """Add the run's labels to the night's summary, atomically."""
+def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None,
+           probes: str | None = None) -> None:
+    """Add the run's labels to the night's summary, atomically, and the probe set its morning asks."""
     path = result.log_path.parent / SUMMARY
     summary = json.loads(path.read_text(encoding="utf-8"))
     summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index})
+    if probes is not None:
+        summary[MORNING_PROBES] = probes
     if vm is not None:
         summary["vm"] = dict(vm)
     pending = path.with_name(f".{SUMMARY}.stamp")
@@ -170,7 +182,7 @@ def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult)
         if rig.on_scoring is not None:
             rig.on_scoring(uid, seconds)
     if failure is not None:
-        log_failed_morning(log, night, failure, seconds)
+        log_failed_morning(log, night, failure, seconds, subset=rig.subset)
     else:
         log.step("morning", "ok", uses="new", system=None, **morning_receipt(done, seconds))
     log.tell(night, result.status)
@@ -206,7 +218,8 @@ def run_accelerated_batch(
                                        as_of={uid: day_window(night)[1] for uid in runs})
         for uid, result in results.items():
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
-            _stamp(result, sha=sha, label=kind, day_index=i, vm=vm)
+            _stamp(result, sha=sha, label=kind, day_index=i, vm=vm,
+                   probes=None if rig.score is None else probe_set(rig.subset))
             out[uid].append(result)
         if rig.score is not None:
             for uid, result in results.items():
@@ -389,7 +402,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
                 night=night, personas=personas, mind_inquiry=args.mind)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      score=score, **hooks)
+                      score=score, subset=subset, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept)

@@ -7,6 +7,7 @@ other value stops before anything runs. Fakes only."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,13 +18,18 @@ import pytest
 from anjo.sleep.night.daily import morning_receipt
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
-from anjo.sleep.probes.morning import DAILY, MORNING_SUBSET_ENV, Morning, MorningResult, morning_subset
+from anjo.sleep.personas.model import load_person_file
+from anjo.sleep.probes.morning import DAILY, MORNING_PROBES, MORNING_SUBSET_ENV, Morning, MorningResult, morning_subset
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.sim import accelerated
+from anjo.sleep.tests.accelerated_rig import FakeAccelerated
+from anjo.sleep.tests.night_fakes import step
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, FakeRegistry, StoreSpy, ckpt, probe, taste
 from anjo.sleep.tools import sleep_objective_live as live
 
 NIGHT = date(2026, 10, 24)
+START = date(2026, 10, 20)  # before the accelerated rig's wall clock: a life dated in the past
+FOUNDER = load_person_file(Path(__file__).parents[1] / "personas" / "founder.json").visible
 PRICES = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.96)
 REAL = ["--wiring", "x:y", "--simulate", "x:z", "--morning", "x:w", "--days", "2", "--start", "2026-10-20",
         "--user", "u1", "--persona", "film_founder"]
@@ -94,4 +100,26 @@ def test_the_live_comparison_shows_the_set_passes_it_through_and_reports_it(
         accelerated.morning_scorer(build, {"p1": "film_founder"}, subset)(
             "p1", night, "development", cast(Any, SimpleNamespace(status="promoted", checkpoint=registry.adapters["p1"])))
     table = live.report(tmp_path, {"seed": "p1", "today": "syn-c"}, lambda line: None)["seed"]
-    assert table["scored_on"] == ["daily-v1", "full"]
+    assert {name: list(scored["by_night"]) for name, scored in table["scores"].items()} == {
+        "daily-v1": ["2026-10-24"], "full": ["2026-10-25"]}
+
+
+@pytest.mark.parametrize("subset", [DAILY, None])
+def test_each_scored_night_records_its_set_in_its_summary_and_its_morning_step_even_failed(
+    tmp_path: Path, subset: Any,
+) -> None:
+    fake = FakeAccelerated(tmp_path)
+    scored = accelerated.morning_scorer(lambda uid, persona, night: fake.morning(uid), {"u1": "founder"}, subset)
+
+    def score(uid: str, night: date, label: str, result: Any) -> object:
+        if night == START:
+            raise TimeoutError("the judge timed out")
+        return scored(uid, night, label, result)
+
+    results = accelerated.run_accelerated("u1", FOUNDER, 2, START, rig=replace(fake.rig(), score=score, subset=subset))
+    name = "full" if subset is None else subset.name
+    summaries = [json.loads((r.log_path.parent / "summary.json").read_text(encoding="utf-8")) for r in results]
+    assert [s[MORNING_PROBES] for s in summaries] == [name, name]
+    failed, done = (step(r.log_path, "morning") for r in results)
+    assert (failed["status"], done["status"]) == ("failed", "ok")
+    assert failed.get("subset") == done.get("subset") == (None if subset is None else name)

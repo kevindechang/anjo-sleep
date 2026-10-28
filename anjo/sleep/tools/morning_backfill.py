@@ -11,10 +11,16 @@ promotion no longer blocks scoring an earlier night.
 
 **The same morning the night would have run.** The persona's ``Morning`` from the same builder
 (``--morning``, ``app.morning:build`` by default: the same sealed probes, judge and reply seeds, dated on
-the night), the label the night was stamped with, and the night's probe set: an accelerated night
-(``sim.accelerated``, the live comparison's) asks the full set, a daily night the committed subset
-(``DAILY``); ``--subset daily-v1`` asks the subset of an accelerated night instead. Arm 3x, when a donor
-is registered, reads the donor's adapter serving now.
+the night), the label the night was stamped with, and the night's probe set: the one an accelerated
+night's summary records (``MORNING_PROBES``, ``ANJO_SLEEP_MORNING_SUBSET``'s); one that records none (a
+night run before the record) the full set, and the plan says so; a daily night the committed subset
+(``DAILY``) in development, every probe when final. ``--subset full|daily-v1`` asks that set instead. Arm
+3x, when a donor is registered, reads the donor's adapter serving now, not the one it served that night:
+if the donor promoted since, 3x and the ``3_vs_3x`` pair may differ from what the night's morning gave.
+
+**Holds.** The judge and the arms are held as the night's morning holds them, under a key of its own
+(``morning:<night>:<account>:backfill-<set>``): the failed morning's settled spend still counts in the
+person's month (``night/past.latest_attempts`` keeps a key's last attempt), beside the backfill's.
 
 **What it writes.** The score file where the night's morning would have put it
 (``<results>/<account>/scores/night-NN.json``, marked ``pinned``), then a ``morning`` step marked
@@ -58,6 +64,7 @@ from anjo.sleep.probes.morning import (
     DAILY,
     JUDGE_RETRY_SHARE,
     JUDGE_USD_PER_CALL,
+    MORNING_PROBES,
     SCORES,
     SUBSETS,
     Morning,
@@ -70,7 +77,7 @@ from anjo.sleep.probes.morning import (
     run_morning,
     subset_probes,
 )
-from anjo.sleep.reports.results import results_root
+from anjo.sleep.reports.results import FULL_SET, results_root
 from anjo.sleep.serving.config import SCALEDOWN_S
 from anjo.sleep.types import CheckpointRef
 
@@ -105,6 +112,7 @@ class Plan:
     serving: CheckpointRef | None  # the one serving now, left as it is
     label: str
     subset: ProbeSubset | None  # None: the full set
+    basis: str  # how the set is known: the night's record, its kind, or --subset
     morning: Morning
     probes: int
     replies: int
@@ -149,12 +157,19 @@ def _checkpoint(summary: dict[str, Any], user: str, registry: CheckpointRegistry
     return checkpoint
 
 
-def _subset(summary: dict[str, Any], label: str, chosen: ProbeSubset | None) -> ProbeSubset | None:
-    """The probe set the night's morning asked: an accelerated night the full set, a daily development
-    night the daily subset (``night/daily.py``); ``chosen`` overrides it."""
-    if chosen is not None:
-        return chosen
-    return None if summary.get("accelerated") or label != "development" else DAILY
+def _own(summary: dict[str, Any], label: str) -> tuple[ProbeSubset | None, str]:
+    """The probe set the night's morning asked, and how that is known: an accelerated night's summary
+    records it (``MORNING_PROBES``), and one that records none asked the full set, as every accelerated
+    morning did before the record; a daily night asks the daily subset in development (``night/daily.py``)."""
+    recorded = summary.get(MORNING_PROBES)
+    if recorded is not None:
+        if str(recorded) != FULL_SET and str(recorded) not in SUBSETS:
+            raise Refused(f"the night's summary names a probe set this backfill doesn't know: {recorded!r}")
+        return SUBSETS.get(str(recorded)), "as the night's summary records"
+    if summary.get("accelerated"):
+        return None, ("the night's summary records none, so the full set (run before the record): "
+                      "--subset daily-v1 if its morning asked that")
+    return (DAILY, "a daily development night's") if label == "development" else (None, "a daily final night's")
 
 
 def _set(subset: ProbeSubset | None) -> str:
@@ -162,15 +177,20 @@ def _set(subset: ProbeSubset | None) -> str:
 
 
 def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = False,
-         subset: ProbeSubset | None = None) -> Plan:
-    """The backfill of ``user``'s ``night``, or ``Refused``: no model call, no hold, nothing written."""
+         subset: str | None = None) -> Plan:
+    """The backfill of ``user``'s ``night``, or ``Refused``: no model call, no hold, nothing written.
+    ``subset`` names the probe set to ask (``full`` or a subset's name); None: the night's own."""
     if held_elsewhere(ports.ledger):
         raise Refused("the night lock is held: a night or a simulated day is running")
     if not real and not ports.is_synthetic(user):
         raise Refused("the account isn't registered synthetic (--real to score a real person's night)")
     folder, summary = _night(ports.logs(user), night)
     label = str(summary.get("label") or "development")
-    asked, own = _subset(summary, label, subset), _subset(summary, label, None)
+    own, basis = _own(summary, label)
+    if subset is not None and subset != FULL_SET and subset not in SUBSETS:
+        raise Refused(f"the probe set is {FULL_SET} or {', '.join(SUBSETS)}, not {subset!r}")
+    asked = own if subset is None else SUBSETS.get(subset)
+    basis = basis if subset is None else f"named with --subset (the night's own: {_set(own)})"
     name = None if asked is None else asked.name
     if _scored(folder, name, None if own is None else own.name):
         raise Refused(f"the morning of {night.isoformat()} already succeeded on {_set(asked)}")
@@ -187,7 +207,7 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
     replies = len(probes) * len(arms)
     units, daily_replies = Units(), sum(DAILY.per_kind.values()) * len(DAILY.arms)
     serve = morning.prices.serve_gpu_per_hour
-    return Plan(user, night, folder, checkpoint, ports.registry.last_promoted(user), label, asked, morning,
+    return Plan(user, night, folder, checkpoint, ports.registry.last_promoted(user), label, asked, basis, morning,
                 len(probes), replies, judge_calls,
                 (judge_calls + math.ceil(judge_calls * JUDGE_RETRY_SHARE)) * JUDGE_USD_PER_CALL,
                 serve * replies * ARM_CALL_S / 3600.0,
@@ -205,6 +225,7 @@ def describe(chosen: Plan) -> list[str]:
         f"  scores {chosen.checkpoint.id}, the adapter the night promoted, pinned; {serving} keeps serving",
         f"  the night's morning: label {chosen.label}, {asked}: {chosen.probes} probes, {chosen.replies} replies, "
         f"up to {chosen.judge_calls} judge calls",
+        f"  the probe set: {asked}, {chosen.basis}",
         f"  holds: the judge ${chosen.judge_hold_usd:.2f} on meta_usd, the arms ${chosen.arms_hold_usd:.2f} "
         "on modal_usd and baseten_sleep_usd",
         f"  expected: ${judge + gpu:.2f} (the judge ${judge:.2f} at ${JUDGE_USD_PER_CALL:g} a call, the cost "
@@ -263,13 +284,13 @@ def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None,
     parser.add_argument("--night", required=True, type=date.fromisoformat, help="the night, YYYY-MM-DD")
     parser.add_argument("--go", action="store_true", help="run it (without: the plan only)")
     parser.add_argument("--real", action="store_true", help="allow an account that isn't registered synthetic")
-    parser.add_argument("--subset", choices=sorted(SUBSETS), default=None,
-                        help="ask this subset instead of the night's own probe set")
+    parser.add_argument("--subset", choices=sorted([*SUBSETS, FULL_SET]), default=None,
+                        help="ask this probe set instead of the night's own")
     parser.add_argument("--morning", default=MORNING, help="the morning builder, <module>:<function>")
     args = parser.parse_args(argv)
     found = ports or app_ports(args.morning)
     try:
-        chosen = plan(args.user, args.persona, args.night, found, real=args.real, subset=SUBSETS.get(args.subset or ""))
+        chosen = plan(args.user, args.persona, args.night, found, real=args.real, subset=args.subset)
         for line in describe(chosen):
             out(line)
         if not args.go:
