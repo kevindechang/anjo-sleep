@@ -38,6 +38,13 @@ adapter and use that copy as the reference; the copy is removed, so the referenc
 with the adapter switched off; the receipt's ``dpo_reference`` says which reference TRL used.
 Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
+The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_loss.py``, which ships beside
+this file (Modal's image only; the Colab runner refuses the objective), runs the one weighted loss over
+the SFT rows, the pairs and the dataset's ``kind`` rows (seeding, dreams, anchors), each tokenized as
+the server renders it (``served_ids``). Its recipe carries ``terms``: ``fold_rank`` (fold the night into
+the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and ``dreams``. ``match_minutes``, the live
+comparison's control, lets today's ``sft_dpo`` keep training SFT until the job has used that many minutes.
+
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
 ``receipt.json`` go) and, for a warm start, ``ANJO_TRAIN_PREV`` (the previous adapter's folder).
@@ -80,7 +87,11 @@ MODEL = "meta-models/Muse-Glimmer-30B"
 MAX_RANK = 32
 MIN_SEQ_LENGTH = 8192
 RECEIPT = "receipt.json"
-OBJECTIVES = ("sft", "sft_dpo")
+OBJECTIVES = ("sft", "sft_dpo", "sft_dpo_seed")
+SEED_OBJECTIVE = "sft_dpo_seed"
+LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
+KINDS = ("seed", "dream", "anchor")
+MAX_MATCH_MINUTES = 100.0
 MAX_DPO_LR = 1e-5
 MAX_ACCUMULATION = 16
 MAX_EPOCHS = 4
@@ -146,10 +157,11 @@ def load_config(raw: str) -> dict[str, Any]:
         _int(cfg, "max_steps", 1, 100_000)
     if not isinstance(cfg.get("keep_every_row", False), bool):
         raise ValueError("keep_every_row is true or false")
-    if cfg["objective"] == "sft_dpo":
+    if cfg["objective"] in ("sft_dpo", SEED_OBJECTIVE):
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
         _int(cfg, "min_optimizer_steps", 1, 10_000)
+    _check_terms(cfg)
     if not isinstance(cfg["revision"], str) or not cfg["revision"]:
         raise ValueError("the base model's revision is pinned")
     if cfg["reasoning_strength"] not in REASONING_LEVELS:
@@ -161,6 +173,23 @@ def load_config(raw: str) -> dict[str, Any]:
     if not isinstance(cfg["rendering"], str) or not cfg["rendering"].endswith("/" + cfg["reasoning_strength"]):
         raise ValueError("the rendering names the reasoning strength the rows are rendered at")
     return cfg
+
+
+def _check_terms(cfg: dict[str, Any]) -> None:
+    """``terms`` comes with ``sft_dpo_seed`` and only then; ``match_minutes`` only without it."""
+    seeded, terms = cfg["objective"] == SEED_OBJECTIVE, cfg.get("terms")
+    if seeded != (terms is not None):
+        raise ValueError(f"terms come with the {SEED_OBJECTIVE} objective, and only with it")
+    if seeded:
+        fold = terms.get("fold_rank") if isinstance(terms, dict) else 0
+        if (not isinstance(terms, dict) or set(terms) != {"fold_rank", "dreams"} or not isinstance(terms["dreams"], bool)
+                or (fold is not None and (isinstance(fold, bool) or not isinstance(fold, int)
+                                          or not cfg["r"] <= fold <= MAX_RANK))):
+            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}) and dreams (true or false)")
+    if "match_minutes" in cfg and (seeded or isinstance(cfg["match_minutes"], bool)
+                                   or not isinstance(cfg["match_minutes"], int | float)
+                                   or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):
+        raise ValueError(f"match_minutes pads today's objective only, up to {MAX_MATCH_MINUTES:g} minutes")
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -226,8 +255,32 @@ def dpo_plan(n_pairs: int, cfg: dict[str, Any]) -> tuple[int, int]:
 
 
 def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The SFT rows (prompt, completion) and the pair rows (prompt, chosen, rejected)."""
-    return [row for row in rows if "completion" in row], [row for row in rows if "chosen" in row]
+    """The SFT rows (prompt, completion) and the pair rows (prompt, chosen, rejected); the rows
+    with a ``kind`` belong to ``sft_dpo_seed`` alone (``term_rows``)."""
+    plain = [row for row in rows if "kind" not in row]
+    return [row for row in plain if "completion" in row], [row for row in plain if "chosen" in row]
+
+
+def term_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """``sft_dpo_seed``'s rows by kind, each checked as the host cleaned it."""
+    found: dict[str, list[dict[str, Any]]] = {kind: [] for kind in KINDS}
+    for row in rows:
+        if "kind" not in row:
+            continue
+        if row["kind"] not in KINDS:
+            raise ValueError(f"row {row.get('id')}'s kind is one of {', '.join(KINDS)}")
+        if row["kind"] == "anchor":
+            check_clean({"id": row.get("id"), "prompt": row["prompt"], "chosen": [], "rejected": []})
+            choices, answer = row.get("choices"), row.get("answer")
+            if (not isinstance(choices, list) or not all(isinstance(c, str) and not SPECIAL_TOKEN.search(c) for c in choices)
+                    or isinstance(answer, bool) or not isinstance(answer, int) or not 0 <= answer < len(choices)):
+                raise ValueError(f"anchor {row.get('id')} has clean choices and an answer among them")
+        else:
+            check_clean(row)
+            if row["kind"] == "seed":
+                check_clean({**row, "prompt": row.get("teacher")})
+        found[row["kind"]].append(row)
+    return found
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -267,6 +320,8 @@ def row_template(template: dict[str, str], row: dict[str, Any]) -> dict[str, str
 def check_clean(row: dict[str, Any]) -> None:
     """A row as the host cleaned it: no special token's text anywhere, and no reasoning phrase in a
     system turn, which would stop the template writing the night's strength."""
+    if not isinstance(row.get("prompt"), list) or not all(isinstance(row.get(side), list) for side in _sides(row)):
+        raise ValueError(f"row {row.get('id')}'s prompt and reply are lists of messages")
     for message in [*row["prompt"], *(message for side in _sides(row) for message in row[side])]:
         text = message.get("content") if isinstance(message, dict) else None
         if not isinstance(text, str):
@@ -442,6 +497,138 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
     return int(trainer.state.global_step), reference
 
 
+def load_loss(folder: Path | None = None) -> Any:
+    """``sleep_loss.py`` from beside this file. The job runs this script under ``python -I``, which
+    puts no folder on the import path, so the module loads by its file and is registered by name
+    (its dataclasses look themselves up there)."""
+    import importlib.util
+    import sys
+
+    path = (folder or Path(__file__).resolve().parent) / LOSS_FILE
+    spec = importlib.util.spec_from_file_location("sleep_loss", path)
+    if spec is None or spec.loader is None or not path.is_file():
+        raise ValueError(f"{SEED_OBJECTIVE} needs {LOSS_FILE} beside the training script")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sleep_loss"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def served_ids(tokenizer: Any, messages: list[dict[str, Any]], template: dict[str, str]) -> list[int]:
+    """A prompt's ids as the server renders it: the template with the generation prompt, then the header."""
+    return [*tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=False,
+                                           **template),
+            *tokenizer(USER_CHANNEL, add_special_tokens=False)["input_ids"]]
+
+
+def reply_ids(tokenizer: Any, text: str, *, end: bool = True) -> list[int]:
+    """A reply's ids, closed by ``<|eot|>`` (an anchor's choice is scored open, as the gate scores it)."""
+    ids = list(tokenizer(text, add_special_tokens=False)["input_ids"])
+    return [*ids, tokenizer.convert_tokens_to_ids(REPLY_END)] if end else ids
+
+
+def seed_batch(loss: Any, tokenizer: Any, kept: list[tuple[dict[str, Any], dict[str, str]]],
+               pairs: list[tuple[dict[str, Any], dict[str, str]]], terms: dict[str, list[dict[str, Any]]],
+               cfg: dict[str, Any], template: dict[str, str]) -> tuple[Any, dict[str, int]]:
+    """The loss's batch, every row as the server renders it, and the term rows too long to train."""
+    def prompt(row: dict[str, Any], key: str = "prompt") -> tuple[int, ...]:
+        return tuple(served_ids(tokenizer, row[key], row_template(template, row)))
+
+    def reply(row: dict[str, Any], side: str = "completion") -> tuple[int, ...]:
+        return tuple(reply_ids(tokenizer, _reply(row[side])))
+
+    limit = cfg["max_seq_length"]
+    seeds = [loss.SeedSeq(prompt(row), prompt(row, "teacher"), reply(row)) for row in terms["seed"]]
+    dreams = ([(loss.Seq(prompt(row), reply(row)), str(row.get("seed_kind", ""))) for row in terms["dream"]]
+              if cfg["terms"]["dreams"] else [])  # dream rows train only when the recipe asks for them
+    fit = [(seq, kind) for seq, kind in dreams if len(seq.prompt) + len(seq.reply) <= limit]
+    batch = loss.Batch(
+        sft=tuple(loss.Seq(prompt(row), reply(row)) for row, _ in kept),
+        pairs=tuple(loss.PairSeq(prompt(row), reply(row, "chosen"), reply(row, "rejected")) for row, _ in pairs),
+        seeds=tuple(row for row in seeds if len(row.teacher) + len(row.reply) <= limit),
+        dreams=tuple(seq for seq, _ in fit), dream_groups=tuple(kind for _, kind in fit),
+        anchors=tuple(loss.AnchorSeq(prompt(row), tuple(tuple(reply_ids(tokenizer, c, end=False)) for c in row["choices"]),
+                                     row["answer"]) for row in terms["anchor"]),
+    )
+    return batch, {"seed": len(seeds) - len(batch.seeds), "dream": len(dreams) - len(batch.dreams)}
+
+
+def _seed_model(model: Any, settings: dict[str, Any], prev: str | None, fold: int | None,
+                loss: Any) -> tuple[Any, int]:  # pragma: no cover - needs the training stack
+    """The PEFT model ``sft_dpo_seed`` trains, and how many leading ranks stay frozen. Folding, the
+    long-term adapter fills the first ranks of a LoRA of its rank plus the night's, and the rest of B
+    starts at zero (the reset); otherwise a warm start loads the previous adapter as today's does."""
+    from peft import LoraConfig, PeftModel, get_peft_model  # type: ignore[import-not-found, unused-ignore]
+
+    if fold is None and prev:
+        return PeftModel.from_pretrained(model, prev, is_trainable=True), 0
+    if fold is None or not prev:
+        return get_peft_model(model, LoraConfig(**settings["lora"])), 0
+    meta = json.loads((Path(prev) / "adapter_config.json").read_text(encoding="utf-8"))
+    r_prev = meta.get("r")
+    if not isinstance(r_prev, int) or meta.get("lora_alpha") != 2 * r_prev or meta.get("rank_pattern"):
+        raise ValueError("the long-term adapter is a plain LoRA with alpha 2r")
+    width = r_prev + settings["lora"]["r"]
+    peft = get_peft_model(model, LoraConfig(**{**settings["lora"], "r": width, "lora_alpha": 2 * width}))
+    loss.load_leading(peft, loss.read_safetensors(Path(prev) / "adapter_model.safetensors"), r_prev)
+    return peft, r_prev
+
+
+def _train_seed(cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, template: dict[str, str],
+                kept: list[tuple[dict[str, Any], dict[str, str]]], pairs: list[tuple[dict[str, Any], dict[str, str]]],
+                rows: list[dict[str, Any]], model: Any, prev: str | None, out: Path) -> dict[str, Any]:  # pragma: no cover - needs the training stack
+    """``sft_dpo_seed``: the one weighted loss over every term in one loop, then the fold. Returns the
+    receipt's own part: the terms' receipt, the steps and the pairs trained."""
+    loss = load_loss()
+    fold = cfg["terms"]["fold_rank"]
+    by_kind = term_rows(rows)
+    batch, too_long = seed_batch(loss, tokenizer, kept, pairs, by_kind, cfg, template)
+    checked = _check_seed_tokens(tokenizer, batch, kept, pairs, by_kind, template)
+    model, frozen = _seed_model(model, settings, prev, fold, loss)
+    eot = tokenizer.convert_tokens_to_ids(REPLY_END)
+    plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
+                     seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
+                     long_term_rank=frozen, dreams=cfg["terms"]["dreams"])
+    terms = loss.train_terms(model, batch, plan)
+    model.save_pretrained(str(out))
+    terms |= {"dropped_truncated": too_long, "fold_rank": fold,
+              "folded_to": loss.fold_folder(out, fold) if fold is not None else None}
+    return {"terms": terms, "steps": terms["steps"], "pairs": len(batch.pairs), "rows_checked": checked}
+
+
+def _check_seed_tokens(tokenizer: Any, batch: Any, kept: list[tuple[dict[str, Any], dict[str, str]]],
+                       pairs: list[tuple[dict[str, Any], dict[str, str]]], by_kind: dict[str, list[dict[str, Any]]],
+                       template: dict[str, str]) -> int:  # pragma: no cover - needs the training stack
+    """Each trained row's ids against the template's own render of the whole conversation, as the
+    SFT and DPO passes' rows are checked: the teacher's form of a seeding row too."""
+    done = 0
+    for (row, _), seq in zip(kept, batch.sft, strict=True):
+        _check_tokens(tokenizer, row, "completion", seq.prompt, seq.reply, template)
+        done += 1
+    for (row, _), pair in zip(pairs, batch.pairs, strict=True):
+        _check_tokens(tokenizer, row, "chosen", pair.prompt, pair.chosen, template)
+        _check_tokens(tokenizer, row, "rejected", pair.prompt, pair.rejected, template)
+        done += 1
+    for row in [*by_kind["seed"], *by_kind["dream"]]:
+        forms = [row, {**row, "prompt": row["teacher"]}] if row["kind"] == "seed" else [row]
+        for form in forms:
+            _check_tokens(tokenizer, form, "completion", served_ids(tokenizer, form["prompt"], row_template(template, form)),
+                          reply_ids(tokenizer, _reply(form["completion"])), template)
+        done += 1
+    return done
+
+
+def _match_sft(trainer: Any, minutes: float, started: float) -> int:  # pragma: no cover - needs the training stack
+    """The live comparison's control: after today's SFT and DPO, another SFT pass on today's rows (the
+    recipe's own epochs and schedule) while the job has trained under ``minutes``; none starts past
+    the mark. Returns the extra steps."""
+    extra = 0
+    while (time.monotonic() - started) / 60.0 < minutes:
+        trainer.train()
+        extra += int(trainer.state.global_step)
+    return extra
+
+
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
     import numpy  # type: ignore[import-not-found, unused-ignore]
     import torch  # type: ignore[import-not-found, unused-ignore]
@@ -467,11 +654,28 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     tokenizer.eos_token = REPLY_END
     check_template(tokenizer, cfg)
     template = template_kwargs(cfg)
-    rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
+    every = _rows(Path(os.environ["ANJO_TRAIN_DATASET"]))
+    rows, pair_rows = split_rows(every)
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
-    pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
+    seeded = cfg["objective"] == SEED_OBJECTIVE
+    pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings or seeded else []
     model = _load_model(cfg, settings, smoke, base)
+    if seeded:
+        started = time.monotonic()
+        done = _train_seed(cfg, settings, tokenizer, template, kept, pairs, every, model, prev, out)
+        minutes = (time.monotonic() - started) / 60.0
+        record_rendering(out, cfg["rendering"])
+        if base is not None:
+            record_base_model(out)
+        receipt = {
+            **done, "epochs": done["terms"]["epochs"], "train_minutes": minutes, "examples": len(kept),
+            "dropped_truncated": len(rows) - len(kept), "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu",
+            "objective": cfg["objective"], "dpo_steps": 0, "pairs_dropped_truncated": len(pair_rows) - len(pairs),
+            "dpo_reference": "adapter_off", "rendering": cfg["rendering"],
+        }
+        (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+        return 0
     peft_config = None
     if prev:
         model = PeftModel.from_pretrained(model, prev, is_trainable=True)
@@ -491,6 +695,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         accumulation, epochs = dpo_plan(len(pairs), cfg)
         dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
         dpo_steps, reference = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template, prompts)
+    matched = _match_sft(trainer, cfg["match_minutes"], started) if "match_minutes" in cfg else 0
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     record_rendering(out, cfg["rendering"])
@@ -505,6 +710,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
         "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
+        **({"match_minutes": cfg["match_minutes"], "match_steps": matched} if "match_minutes" in cfg else {}),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

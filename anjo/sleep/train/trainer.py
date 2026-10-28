@@ -35,4 +35,7 @@ class LoraTrainer:
             workdir=self._root / "work" / name, adapter_cache=self._root / "adapters",
             publish=self._publish, revision=self._revision,
         )
-        return ckpt, dataclasses.asdict(receipt)
+        done = dataclasses.asdict(receipt)
+        if receipt.terms is None:  # only sft_dpo_seed reports its terms: today's receipt is unchanged
+            del done["terms"]
+        return ckpt, done

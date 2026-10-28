@@ -33,6 +33,7 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.note.hold import Fact, NoteWriter
 from anjo.sleep.ports import (
@@ -335,6 +336,9 @@ class NightDeps:
     sleep: Callable[[], None] | None = None
     # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
     retries: Callable[[], int] = field(default=lambda: 0)
+    # sft_dpo_seed's extra rows (``night/dreams.py``): off unless the night command's switches say so.
+    terms: Terms = field(default_factory=Terms)
+    dreams: DreamSource = field(default_factory=NoDreams)
 
 
 @dataclass(frozen=True)

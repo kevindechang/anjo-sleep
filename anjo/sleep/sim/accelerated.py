@@ -40,12 +40,13 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from anjo.sleep.night.deps import NightDeps, NightOptions
+from anjo.sleep.night.dreams import Terms
 from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
@@ -276,6 +277,11 @@ def _named(path: str) -> Any:
     return getattr(importlib.import_module(module), name)
 
 
+def _with_terms(deps: NightDeps, terms: Terms) -> NightDeps:
+    """The wiring's ports with sft_dpo_seed's terms; with every switch off, untouched (today's night)."""
+    return replace(deps, terms=terms) if terms != Terms() else deps
+
+
 def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.budget import default_ledger
     from anjo.sleep.checkpoints import DATA_DIR_ENV
@@ -283,6 +289,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.night.sweep import NightBusy, swept_night
     from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
+    from anjo.sleep.train import objective
     from anjo.sleep.train.trainer import LoraTrainer
 
     if not (args.wiring and args.simulate and args.morning and args.users and args.personas):
@@ -291,6 +298,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
+    terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows, as the night command sets them
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
@@ -310,8 +318,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
                                   publish=night_command._publisher(chosen.name),
                                   revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
-            rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas,
-                                                                          mind_inquiry=args.mind)),
+            rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
+                night=night, personas=personas, mind_inquiry=args.mind)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       score=score, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end

@@ -30,6 +30,7 @@ import importlib
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from typing import Any
 from anjo.sleep.budget import Ledger, default_ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night.deps import NightOptions, Wiring
+from anjo.sleep.night.dreams import Terms
 from anjo.sleep.night.run import Window, day_window, run_night_batch_with
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.serving.config import REVISION_ENV
@@ -123,6 +125,7 @@ def execute(
     # The runner trains only the people named with a persona (the wiring refuses a persona on an
     # account that isn't registered synthetic), and the others named only with --allow-real.
     cfg = night_cfg()  # before any runner, sweep or call
+    terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows; all off is today's night
     ledger = default_ledger()
     real = [user for user in users if user not in personas] if allow_real else []
     chosen = chosen_runner(data_dir, ledger, personas, real)
@@ -131,6 +134,7 @@ def execute(
     try:
         with swept_night(ledger, chosen.sweep) as swept:
             deps = _wiring(wiring)(trainer, options)
+            deps = replace(deps, terms=terms) if terms != Terms() else deps
             play = _named(simulate) if simulate else None
             played = {user: play(user, persona, day, seed) for user, persona in personas.items()} if play else {}
             clocks = {**{user: day_window(night)[1] for user in played}, **(as_of or {})}

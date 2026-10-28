@@ -48,7 +48,7 @@ def _train(tmp_path: Path, data: Any, cfg: LoraCfg, prev: CheckpointRef | None =
 
 
 def test_nights_train_sft_dpo_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert objective.DEFAULT_OBJECTIVE == "sft_dpo" and objective.OBJECTIVES == ("sft_dpo", "sft")
+    assert objective.DEFAULT_OBJECTIVE == "sft_dpo" and objective.OBJECTIVES == ("sft_dpo", "sft", "sft_dpo_seed")
     assert objective.night_cfg({}).objective == "sft_dpo"
     assert objective.night_cfg({objective.OBJECTIVE_ENV: " "}).objective == "sft_dpo"
     # The night command builds its trainer with it, and the pairs reach the job.

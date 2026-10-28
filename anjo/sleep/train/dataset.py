@@ -34,6 +34,9 @@ only passed because of it.
 Token counts use the conservative estimate (``estimate_tokens``), which over-counts English, so
 the cap and the sequence length are never exceeded by the estimate's error. The training script
 checks the length again with the real tokenizer.
+
+Under ``sft_dpo_seed`` the dataset also carries the seeding, dream and anchor rows ``train/terms.py``
+builds (``to_jsonl(terms=True)``, each row named by its ``kind``); any other objective never writes them.
 """
 from __future__ import annotations
 
@@ -104,6 +107,41 @@ class Pair:
     tokens: int  # the prompt and the longer side
 
 
+@dataclass(frozen=True)
+class SeedRow:
+    """One knowledge-seeding row: the teacher reads ``context`` (the consolidated day) before the
+    message, the student the message alone, and both score ``reply``, her own practice reply."""
+
+    id: str
+    context: str
+    message: str
+    reply: str
+    tokens: int
+
+
+@dataclass(frozen=True)
+class DreamRow:
+    """One dream candidate: ``thread`` (MIND's state as text) is her system turn, the loss is on ``reply``.
+    ``kind`` is its seed's (``boundary`` or ``random``), for the job's keep rate by kind."""
+
+    id: str
+    thread: str
+    message: str
+    reply: str
+    tokens: int
+    kind: str
+
+
+@dataclass(frozen=True)
+class AnchorRow:
+    """One of the general gate's items, for the training job's anchor check (never trained on)."""
+
+    id: str
+    question: str
+    choices: tuple[str, ...]
+    answer: int
+
+
 def _messages(prompt: tuple[Message, ...]) -> list[dict[str, str]]:
     """A prompt as the server is sent it: its text cleaned of Glimmer's special tokens, and its
     system turn of the template's reasoning phrase (``framing.clean_messages``)."""
@@ -124,6 +162,9 @@ class Dataset:
     pairs: tuple[Pair, ...] = ()
     pairs_dropped: Mapping[str, int] = field(default_factory=dict, hash=False)
     context_paraphrase_kept: int = 0  # examples kept although their context matched a probe by paraphrase only
+    seeds: tuple[SeedRow, ...] = ()  # sft_dpo_seed's rows (train/terms.py); written only with terms=True
+    dreams: tuple[DreamRow, ...] = ()
+    anchors: tuple[AnchorRow, ...] = ()
 
     def __post_init__(self) -> None:
         counts: dict[str, int] = {reason: 0 for reason in DROP_REASONS}
@@ -133,12 +174,13 @@ class Dataset:
         pair_counts.update(self.pairs_dropped)
         object.__setattr__(self, "pairs_dropped", MappingProxyType(pair_counts))
 
-    def to_jsonl(self, *, pairs: bool = False) -> str:
+    def to_jsonl(self, *, pairs: bool = False, terms: bool = False) -> str:
         """The rows the training script reads: conversational prompt/completion, so TRL puts the
         loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
-        rejected) for the DPO pass. Every text is cleaned as the server's prompt is. A row with its
-        own ``current_date`` carries it, and is rendered on it."""
-        rows = [
+        rejected) for the DPO pass, and with ``terms`` the seeding, dream and anchor rows. Every
+        text is cleaned as the server's prompt is. A row with its own ``current_date`` carries it,
+        and is rendered on it."""
+        rows: list[dict[str, object]] = [
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
              "prompt": _messages(example.prompt), "completion": _reply(example.completion),
              **({} if example.current_date is None else {"current_date": example.current_date.isoformat()})}
@@ -150,7 +192,20 @@ class Dataset:
                  "rejected": _reply(pair.rejected)}
                 for pair in self.pairs
             ]
+        if terms:
+            rows += self._term_rows()
         return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+
+    def _term_rows(self) -> list[dict[str, object]]:
+        seeds: list[dict[str, object]] = [{"id": row.id, "kind": "seed", "teacher": _messages((("system", row.context), ("user", row.message))),
+                  "prompt": _messages((("user", row.message),)), "completion": _reply(row.reply)} for row in self.seeds]
+        dreams: list[dict[str, object]] = [{"id": row.id, "kind": "dream", "seed_kind": row.kind,
+                   "prompt": _messages((("system", row.thread), ("user", row.message))),
+                   "completion": _reply(row.reply)} for row in self.dreams]
+        anchors: list[dict[str, object]] = [{"id": row.id, "kind": "anchor", "prompt": _messages((("user", row.question),)),
+                    "choices": [framing.clean_text(choice) for choice in row.choices], "answer": row.answer}
+                   for row in self.anchors]
+        return [*seeds, *dreams, *anchors]
 
 
 def quotes_url_or_date(text: str) -> bool:
@@ -205,7 +260,7 @@ def _trained_text(transcript: PracticeTranscript, reply: str | None = None) -> s
     return "\n".join(part for part in parts if part)
 
 
-def _carries_verbatim(text: str, sealed: Sequence[Probe]) -> bool:
+def carries_verbatim(text: str, sealed: Sequence[Probe]) -> bool:
     """Whether ``text`` holds a whole probe, or a run of ``NGRAM`` words of one: the context's only rules."""
     hay = words(text)
     padded = " " + " ".join(hay) + " "
@@ -248,7 +303,7 @@ def _leaks(
     for (t, _), flag in zip(candidates, flags, strict=False):
         ctx = t.context or ""
         if ctx not in verbatim:
-            verbatim[ctx] = bool(ctx) and _carries_verbatim(ctx, sealed)
+            verbatim[ctx] = bool(ctx) and carries_verbatim(ctx, sealed)
             soft[ctx] = bool(ctx) and not verbatim[ctx] and _paraphrases(ctx, sealed)
         leaked.append(bool(flag) or verbatim[ctx])
         paraphrased.append(soft[ctx])

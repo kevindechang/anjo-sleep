@@ -47,6 +47,7 @@ _FILES: Final = (
     (_SLEEP / "serving" / "config.py", "/root/anjo/sleep/serving/config.py"),
     (_TRAIN / "__init__.py", "/root/anjo/sleep/train/__init__.py"),
     (_TRAIN / "colab_train.py", modal_job.REMOTE_SCRIPT),
+    (_TRAIN / "sleep_loss.py", "/root/anjo/sleep/train/sleep_loss.py"),  # sft_dpo_seed's loss, beside the script
     (_TRAIN / "modal_job.py", "/root/anjo/sleep/train/modal_job.py"),
     (_TRAIN / "modal_app.py", "/root/anjo/sleep/train/modal_app.py"),
     (_TRAIN / "latent_job.py", "/root/anjo/sleep/train/latent_job.py"),
