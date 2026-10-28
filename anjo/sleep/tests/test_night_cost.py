@@ -71,6 +71,7 @@ def test_cost_model_sums_a_night_log(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert cost.main(["--from", str(folder), "--prices", "1.25,4.25,2.5,1.8", "--trained-share", "0.5"]) == 0
     out = capsys.readouterr().out
     assert "practice_spark" in out and "projected month" in out and "worst case" in out
+    assert "placeholder" in out  # the judge's price per call is not measured yet, and says so
     assert "$0.6000" in out.split("projected")[0]  # the logged gates line, as measured
 
 

@@ -1,5 +1,6 @@
 """The results chart (Task 12a): one SVG, a panel per label (development, final), a line per arm
-across the nights, and a strip each for general skills and safety. No plotting dependency: the SVG
+and probe set across the nights (a subset's dashed: scores on different probes are never one
+line), and a strip each for general skills and safety. No plotting dependency: the SVG
 is written by hand, so the same input gives the same bytes.
 """
 from __future__ import annotations
@@ -9,7 +10,7 @@ from html import escape
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep.reports.results import ARMS, LABELS, OVERALL, Night, dimensions, load, pair_cell
+from anjo.sleep.reports.results import ARMS, FULL_SET, LABELS, OVERALL, Night, dimensions, load, pair_cell
 
 WIDTH: Final = 720
 PANEL_H: Final = 220
@@ -28,13 +29,19 @@ def _y(score: float) -> float:
 
 
 def _line(nights: Sequence[Night], arm: str, dim: str) -> str:
-    points = [(i, n.arms[arm][dim].score) for i, n in enumerate(nights) if dim in n.arms.get(arm, {})]
-    if not points:
-        return ""
-    coords = " ".join(f"{_x(i, len(nights)):.1f},{_y(v):.1f}" for i, v in points)
-    width = 3 if arm == "3" else 1.5
-    return (f'<polyline fill="none" stroke="{COLORS[arm]}" stroke-width="{width}" points="{coords}">'
-            f"<title>arm {arm} {escape(dim)}</title></polyline>")
+    """One polyline a probe set, in the order the sets first appear."""
+    found = []
+    for probes in dict.fromkeys(n.probes for n in nights):
+        points = [(i, n.arms[arm][dim].score) for i, n in enumerate(nights)
+                  if n.probes == probes and dim in n.arms.get(arm, {})]
+        if not points:
+            continue
+        coords = " ".join(f"{_x(i, len(nights)):.1f},{_y(v):.1f}" for i, v in points)
+        width = 3 if arm == "3" else 1.5
+        dashed = "" if probes == FULL_SET else ' stroke-dasharray="5 3"'
+        found.append(f'<polyline fill="none" stroke="{COLORS[arm]}" stroke-width="{width}"{dashed} points="{coords}">'
+                     f"<title>arm {arm} {escape(dim)} ({escape(probes)})</title></polyline>")
+    return "".join(found)
 
 
 def _strip(nights: Sequence[Night], gate: str, top: float) -> list[str]:

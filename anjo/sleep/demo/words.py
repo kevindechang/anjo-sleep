@@ -327,6 +327,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "chart_panel_title": "Score by night: {dimension}",
     "chart_series_desc": "{arm}: {first} on the first scored night, {last} on the last. Scored nights: {nights}.",
     "chart_numbers": "Show the numbers",
+    "chart_probes_subset": "daily probes",
     "chart_table_caption": "Every arm's score by night, development",
     "chart_night": "Night",
     "chart_final_heading": "Final test",

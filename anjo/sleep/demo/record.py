@@ -2,7 +2,8 @@
 and the pre-registration ledger's hashes, ready to send.
 
 - ``chart_view``: every arm's score per dimension and night (``reports.results``), development and
-  final apart and labeled, never pooled. The development nights are the film student's own; the
+  final apart and labeled, never pooled; each night names its probe set (``probes``), and the page
+  draws one line a set. The development nights are the film student's own; the
   final ones are the held-out lives', scored after the freeze, so until then the final side is
   ``None`` and the page says "not yet".
 - ``task16_view``: MIND's report (``reports.mind.render``), its held-out section line by line, the
@@ -29,7 +30,7 @@ POOLED: Final = "Pooled"
 def _life(nights: Sequence[Night], dims: Sequence[str], name: str | None) -> dict[str, Any]:
     dated = sorted(nights, key=lambda n: n.night)
     return {"name": name, "nights": [
-        {"night": number, "date": n.night, "status": n.status,
+        {"night": number, "date": n.night, "status": n.status, "probes": n.probes,
          "scores": {arm: {d: n.arms[arm][d].score for d in dims if d in n.arms[arm]} for arm in ARMS if arm in n.arms}}
         for number, n in enumerate(dated, start=1)]}
 

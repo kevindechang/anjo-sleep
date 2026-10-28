@@ -51,6 +51,8 @@ DEFAULT_PRICES: Final = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_
 SUMMARY_LINES: Final = ("extract", "brief", "practice_spark", "practice_gpu", "training", "gates", "mind")
 TRAINED_LINES: Final = ("extract", "brief", "practice_spark", "practice_gpu", "training", "gates")
 QUIET_LINES: Final = ("extract", "brief")
+JUDGE_NOTE: Final = (f"the morning judge's ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL) is a placeholder"
+                     " estimate, not yet measured")
 
 
 class CostError(ValueError):
@@ -261,6 +263,8 @@ def _night_report(folder: Path, summary: Mapping[str, Any], lines: Sequence[Line
     ceiling = ceiling_usd(lines)
     out.append(f"  ceiling parts {_usd(ceiling)}; a month of nights like this: {_usd(MONTH_NIGHTS * ceiling)}"
                f" (ceiling ${CEILING_USD:g})")
+    if any(line.step == "morning_judge" for line in lines):
+        out.append(f"  {JUDGE_NOTE}")
     return out
 
 
@@ -284,6 +288,7 @@ def _projection_report(found: Sequence[Projection], share: float) -> list[str]:
                f"trained; ceiling ${CEILING_USD:g}. The morning run and MIND are outside the ceiling.")
     out.append("  measured: extract, brief, training (this night); practice and gates anchored on 2026-10-28;"
                " the rest estimated (night.cost.UNITS)")
+    out.append(f"  morning (out): {JUDGE_NOTE}")
     return out
 
 

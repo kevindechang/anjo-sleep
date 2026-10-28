@@ -124,13 +124,17 @@ def _night_lines(view: NightView) -> list[Change]:
     return lines
 
 
-def _score(raw: Any) -> float:
-    return float(raw["score"] if isinstance(raw, dict) else raw)
+def _score(raw: Any) -> tuple[float, int | None]:
+    """A stat's score, and how many probes it counts when the file says."""
+    if not isinstance(raw, dict):
+        return float(raw), None
+    n = raw.get("n")
+    return float(raw["score"]), n if isinstance(n, int) and not isinstance(n, bool) else None
 
 
-def _scores(person_dir: Path) -> list[tuple[date, str | None, Mapping[str, float]]]:
-    """Each scored night's probe subset (None: the full set) and personal-arm score per dimension,
-    in night order."""
+def _scores(person_dir: Path) -> list[tuple[date, str | None, Mapping[str, tuple[float, int | None]]]]:
+    """Each scored night's probe subset (None: the full set) and personal-arm score and count per
+    dimension, in night order."""
     folder = person_dir / "scores"
     found = []
     for path in sorted(folder.glob("night-*.json")) if folder.is_dir() else []:
@@ -151,12 +155,14 @@ def _score_lines(person_dir: Path, since: date) -> list[Change]:
         if night < since or was != now:  # a score moves only against a night scored on the same probes
             continue
         for name in sorted(set(before) & set(after)):
-            move = after[name] - before[name]
-            if abs(move) < MIN_MOVE:
+            (was_score, _), (score, n) = before[name], after[name]
+            move = score - was_score
+            if abs(move) < MIN_MOVE or (now is not None and n is None):  # a subset's move always says its n
                 continue
             label = "overall" if name == OVERALL else name
             way = "up" if move > 0 else "down"
-            lines.append(Change(night, "score", f"{night.isoformat()}: on your own test questions, her {label} score against the starting model went {way} from {before[name]:.2f} to {after[name]:.2f}."))
+            asked = "your own test questions" if n is None else f"{n} of your own test questions"
+            lines.append(Change(night, "score", f"{night.isoformat()}: on {asked}, her {label} score against the starting model went {way} from {was_score:.2f} to {score:.2f}."))
     return lines
 
 

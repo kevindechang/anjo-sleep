@@ -9,7 +9,10 @@ It reads a person's results tree, ``<root>/<person>/``:
   full record the claim rules need: ``n``, ``wins``, ``ties``, ``losses``, ``score`` (tie-inclusive),
   ``decisive_share`` and the block-bootstrap ``ci`` ``[low, high]``. The table prints the CI beside it.
   The same file's ``pairs`` (``3_vs_3x``, ``4_vs_2C``, ...) are the headline comparisons, in the same
-  shape; the table lists each under its night with its score, CI and decisive share.
+  shape; the table lists each under its night with its score, CI and decisive share. A file run on a
+  subset of the probes names it (``subset``, ``probes.morning.DAILY``); each night carries its probe
+  set (``probes``: the subset's name, or ``full``), and the table and the chart keep the sets apart,
+  never one line across two sets.
 
 Development and final results are printed in separate sections and never mixed. A night whose
 summary carries no label is refused: an unlabeled result could be read as the other kind. The root
@@ -30,6 +33,7 @@ DIMENSIONS: Final = ("knowledge", "interaction")  # shown first, in this order; 
 DATA_DIR_ENV: Final = "ANJO_DATA_DIR"
 MISSING: Final = "-"
 OVERALL: Final = "overall"  # the all-dimensions stat in a score file; the table shows the dimensions
+FULL_SET: Final = "full"  # a night scored on every sealed probe
 
 
 class ResultsError(ValueError):
@@ -70,6 +74,7 @@ class Night:
     gates: Mapping[str, Mapping[str, Any]]
     arms: Mapping[str, Mapping[str, Stat]]
     pairs: Mapping[str, Mapping[str, Stat]]
+    probes: str = FULL_SET  # the probe set its scores come from: ``full`` or a subset's name
 
 
 def results_root(root: Path | None = None) -> Path:
@@ -92,16 +97,20 @@ def _stats(raw: Any) -> dict[str, dict[str, Stat]]:
     return {str(name): {str(d): _stat(v) for d, v in dims.items()} for name, dims in raw.items()}
 
 
-def _scores(folder: Path) -> dict[str, tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]]]]:
-    """Each scored night's arms and headline pairs."""
-    found: dict[str, tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]]]] = {}
+Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str]
+
+
+def _scores(folder: Path) -> dict[str, Scored]:
+    """Each scored night's arms, headline pairs and probe set."""
+    found: dict[str, Scored] = {}
     if not folder.is_dir():
         return found
     for path in sorted(folder.glob("night-*.json")):
         record = _json(path)
         if "night" not in record or not isinstance(record.get("arms"), dict):
             raise ResultsError(f"{path.name} lacks a night and its arms")
-        found[str(record["night"])] = (_stats(record["arms"]), _stats(record.get("pairs") or {}))
+        found[str(record["night"])] = (_stats(record["arms"]), _stats(record.get("pairs") or {}),
+                                       str(record.get("subset") or FULL_SET))
     return found
 
 
@@ -116,10 +125,11 @@ def load(person: str, root: Path | None = None) -> list[Night]:
         if label not in LABELS:
             raise ResultsError(f"{person} {summary.parent.name}: the night has no development or final label")
         night = str(record.get("night", summary.parent.name))
+        arms, pairs, probes = scores.get(night, ({}, {}, FULL_SET))
         nights.append(Night(
             person=person, night=night, label=str(label), status=str(record.get("status", "?")),
             cost_usd=float(record.get("cost_usd", 0.0)), gates=record.get("gates") or {},
-            arms=scores.get(night, ({}, {}))[0], pairs=scores.get(night, ({}, {}))[1],
+            arms=arms, pairs=pairs, probes=probes,
         ))
     return sorted(nights, key=lambda n: n.night)
 
@@ -161,10 +171,10 @@ def _section(label: str, people: Sequence[str], loaded: Mapping[str, list[Night]
         if not nights:
             continue
         dims = dimensions(nights)
-        head = ["night", "status", *(f"arm {a}" for a in ARMS), "general", "safety", "cost"]
+        head = ["night", "status", "probes", *(f"arm {a}" for a in ARMS), "general", "safety", "cost"]
         lines += ["", f"{person} (arm cells: {'/'.join(dims) or 'no scores yet'})", " | ".join(head)]
         for n in nights:
-            row = [n.night, n.status, *(cell(n, a, dims) for a in ARMS), gate_cell(n, "general"),
+            row = [n.night, n.status, n.probes, *(cell(n, a, dims) for a in ARMS), gate_cell(n, "general"),
                    gate_cell(n, "safety"), f"${n.cost_usd:.2f}"]
             lines.append(" | ".join(row))
         for n in nights:

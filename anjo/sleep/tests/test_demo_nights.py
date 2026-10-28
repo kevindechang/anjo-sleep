@@ -6,6 +6,7 @@ views. The routes and the app's reads are tested in ``tests/app/test_demo_mind.p
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -299,6 +300,9 @@ def test_chart_labels_development_and_final_apart() -> None:
     final = chart_view([], [[_night(1, "final", 0.61)], [_night(1, "development", 0.4)]], name="Mara")
     assert final["development"] is None and len(final["final"]["lives"]) == 1  # a life with no final night isn't one
     assert chart_view([], [], name="Mara")["state"] == "none"
+    assert [n["probes"] for n in life["nights"]] == ["full", "full"]  # the page draws one line a probe set
+    daily = chart_view([replace(_night(3, "development", 0.7), probes="daily-v1")], [], name="Mara")
+    assert daily["development"]["lives"][0]["nights"][0]["probes"] == "daily-v1"
 
 
 def test_task16_result_is_shown_line_by_line_or_not_yet() -> None:
