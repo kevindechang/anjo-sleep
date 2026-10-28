@@ -18,11 +18,10 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.mind.apd import types as apd
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
 from anjo.sleep.mind.inquiry import types as it
-from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, score
+from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, score, settings
 from anjo.sleep.mind.replay.types import (
     REPLAY_K,
     CallEnd,
-    TOKEN_PENALTY,
     Branch,
     Label,
     ReplayRefused,
@@ -35,6 +34,7 @@ from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import Evidence
 
 BRIEF = load_brief()
+LAMBDA = settings.token_penalty()
 
 
 def _dev(seed: int = 0, life: apd.Life | None = None) -> tuple[apd.Life, apd.ArmRun]:
@@ -98,9 +98,9 @@ def test_replay_uses_only_synthetic_lives() -> None:
         _branches(start, real)
     labels = resolve.LabelBook().with_label(Label(start.id, "q1.h2a", SPARK_OPEN))
     with pytest.raises(ReplayRefused):  # a start state from a life the dataset wasn't given
-        dataset.build([fakes.fake_life(1)], [start], {start.id: _branches(start, life)}, labels, brief=BRIEF)
+        dataset.build([fakes.fake_life(1)], [start], {start.id: _branches(start, life)}, labels, brief=BRIEF, penalty=LAMBDA)
     with pytest.raises(ReplayRefused):
-        dataset.build([life, real], [start], {start.id: _branches(start, life)}, labels, brief=BRIEF)
+        dataset.build([life, real], [start], {start.id: _branches(start, life)}, labels, brief=BRIEF, penalty=LAMBDA)
     with pytest.raises(ReplayRefused):
         resolve.label_all([start], {life.id: typed}, resolve.SparkLabeler(chat=fakes.FakeLabelChat()))
 
@@ -187,7 +187,7 @@ def test_a_world_answer_or_verdict_the_m_run_never_attributed_never_trains() -> 
         assert all(start.ancestry is not None for start in starts if start not in holding)
         book = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeLabelChat()))
         branches = {start.id: _branches(start, life) for start in starts}
-        built = dataset.build([life], starts, branches, book, brief=BRIEF)
+        built = dataset.build([life], starts, branches, book, brief=BRIEF, penalty=LAMBDA)
         assert not (_ids(built.thinker1) | _ids(built.shuffled)) & {start.id for start in holding}
 
 
@@ -218,16 +218,16 @@ def test_every_branch_scored_on_the_frozen_hypothesis_set() -> None:
     assert vector == pytest.approx({f"{q}.h2a": 0.3, f"{q}.h2b": 0.4, f"{q}.else": 0.3})  # added → catch-all
     branch = _branches(start, life)[0]
     label = Label(start.id, f"{q}.h2a", SPARK_OPEN)
-    scored = score.score_branch(branch, start, label)
+    scored = score.score_branch(branch, start, label, penalty=LAMBDA)
     p = branch.credences
     expected = -sum((p[h] - (1.0 if h == label.holds else 0.0)) ** 2 for h in start.frozen_ids)
     assert scored.brier == pytest.approx(expected)
-    assert scored.score == pytest.approx(expected - TOKEN_PENALTY * branch.tokens / 1000)
+    assert scored.score == pytest.approx(expected - LAMBDA * branch.tokens / 1000)
     off_set = dataclasses.replace(branch, credences={f"{q}.h2a": 0.5, f"{q}.h7a": 0.5})
     with pytest.raises(ValueError, match="frozen"):
-        score.score_branch(off_set, start, label)
+        score.score_branch(off_set, start, label, penalty=LAMBDA)
     with pytest.raises(ValueError, match="frozen"):
-        score.score_branch(branch, start, Label(start.id, f"{q}.h7a", SPARK_OPEN))
+        score.score_branch(branch, start, Label(start.id, f"{q}.h7a", SPARK_OPEN), penalty=LAMBDA)
 
 
 # ── Labels ────────────────────────────────────────────────────────────────────
@@ -245,7 +245,7 @@ def test_truth_written_once_per_start_state_and_shared() -> None:
     determined = [start for start in starts if book.labels[start.id].holds is not None]
     for start in determined:
         label = book.labels[start.id]
-        scored = score.score_start(_branches(start, life), start, label)
+        scored = score.score_start(_branches(start, life), start, label, penalty=LAMBDA)
         assert len(scored) == REPLAY_K  # every branch against the one label
         for each in scored:
             p = each.branch.credences
@@ -304,7 +304,7 @@ def test_undetermined_start_state_dropped_for_all_branches() -> None:
     life, starts, branches, book = _labelled()
     undetermined = [start.id for start in starts if book.labels[start.id].holds is None]
     assert undetermined
-    built = dataset.build([life], starts, branches, book, brief=BRIEF)
+    built = dataset.build([life], starts, branches, book, brief=BRIEF, penalty=LAMBDA)
     for data in (built.thinker1, built.shuffled):
         assert not _ids(data) & set(undetermined)
     assert built.dropped["undetermined"] == len(undetermined)
@@ -316,7 +316,7 @@ def test_replay_dataset_refuses_uncleared_provenance() -> None:
     life, starts, branches, book = _labelled()
     kept = [start for start in starts if book.labels[start.id].holds is not None]
     hosted = sorted(HOSTED)[0]
-    clean = dataset.build([life], kept, branches, book, brief=BRIEF)
+    clean = dataset.build([life], kept, branches, book, brief=BRIEF, penalty=LAMBDA)
     assert clean.dropped["provenance"] == 0 and len(clean.thinker1.examples) > 0
     first = kept[0]
 
@@ -331,12 +331,12 @@ def test_replay_dataset_refuses_uncleared_provenance() -> None:
                          for b in branches[first.id])},
         {first.id: tuple(dataclasses.replace(b, ancestry=None) for b in branches[first.id])},
     ):
-        built = dataset.build([life], kept, {**branches, **taint}, book, brief=BRIEF)
+        built = dataset.build([life], kept, {**branches, **taint}, book, brief=BRIEF, penalty=LAMBDA)
         assert built.dropped["provenance"] == 1
         for data in (built.thinker1, built.shuffled):
             assert first.id not in _ids(data)
     tainted = [dataclasses.replace(first, ancestry=frozenset({SPARK_OPEN, hosted})), *kept[1:]]
-    assert dataset.build([life], tainted, branches, book, brief=BRIEF).dropped["provenance"] == 1
+    assert dataset.build([life], tainted, branches, book, brief=BRIEF, penalty=LAMBDA).dropped["provenance"] == 1
     world = dataclasses.replace(fakes.fake_replay_models(), world=fakes.FakeWorld(model=hosted))
     assert any(hosted in (b.ancestry or ()) for b in _branches(first, life, world))  # a world answer's model
 
@@ -352,7 +352,7 @@ def test_a_label_trains_only_when_spark_opens_reply_names_it() -> None:
         label = resolve.SparkLabeler(chat=answer).label(first, life)
         assert label.holds is not None and label.model == named and not label.usable
         relabelled = resolve.LabelBook({**book.labels, first.id: label})
-        built = dataset.build([life], kept, branches, relabelled, brief=BRIEF)
+        built = dataset.build([life], kept, branches, relabelled, brief=BRIEF, penalty=LAMBDA)
         assert built.dropped["provenance"] == 1
         assert first.id not in _ids(built.thinker1) | _ids(built.shuffled)
         assert first.id not in sample.sample_all([(life, kept)], fakes.fake_replay_models(), relabelled, brief=BRIEF)
@@ -366,7 +366,7 @@ def test_a_label_trains_only_when_spark_opens_reply_names_it() -> None:
 
 def test_dataset_rows_are_glimmers_own_turns_behind_the_brief() -> None:
     life, starts, branches, book = _labelled()
-    built = dataset.build([life], starts, branches, book, brief=BRIEF)
+    built = dataset.build([life], starts, branches, book, brief=BRIEF, penalty=LAMBDA)
     turns = {(b.start_id, b.index, t.seq): t for bs in branches.values() for b in bs for t in b.turns}
     for example in (*built.thinker1.examples, *built.shuffled.examples):
         start_id, rest = example.id.split(":b", 1)
@@ -389,7 +389,7 @@ def test_both_datasets_take_one_whole_trajectory_from_the_same_start_states() ->
         branches_all.update(branches)
         for label in book.labels.values():
             labels = labels.with_label(label)
-    built = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF)
+    built = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF, penalty=LAMBDA)
     determined = [s for s in starts_all if labels.labels[s.id].holds is not None]
     assert built.starts == len(determined) and _ids(built.thinker1) == _ids(built.shuffled) == {s.id for s in determined}
     assert len(built.thinker1.examples) != len(built.shuffled.examples)  # never trimmed to match
@@ -400,10 +400,10 @@ def test_both_datasets_take_one_whole_trajectory_from_the_same_start_states() ->
             (index,) = {int(e.id.rsplit(":b", 1)[1].split(":t", 1)[0]) for e in rows}  # one branch each
             winner = branches_all[start.id][index]
             assert [e.id for e in rows] == [f"{start.id}:b{index}:t{t.seq}" for t in winner.targets]  # whole
-    again = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF)
+    again = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF, penalty=LAMBDA)
     assert again == built  # seeded: the same inputs make the same datasets
     longest = max(e.tokens for e in built.thinker1.examples)
-    tight = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF, max_seq_tokens=longest - 1)
+    tight = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF, penalty=LAMBDA, max_seq_tokens=longest - 1)
     assert tight.dropped["too_long"] >= 1 and _ids(tight.thinker1) == _ids(tight.shuffled)
     assert tight.starts + tight.dropped["too_long"] == built.starts  # a long row drops its start state from both
 
@@ -502,5 +502,5 @@ def test_only_applied_turns_that_ended_at_a_stop_token_train() -> None:
         assert not any(branch.ends[t.seq].finish == "length" for t in branch.targets)
         assert branch.failed and not branch.complete  # a failed call makes a branch incomplete
     built = dataset.build([life], starts[:1], {starts[0].id: cut}, resolve.LabelBook().with_label(
-        Label(starts[0].id, "q1.h2a", SPARK_OPEN)), brief=BRIEF)
+        Label(starts[0].id, "q1.h2a", SPARK_OPEN)), brief=BRIEF, penalty=LAMBDA)
     assert built.dropped["incomplete"] == 1 and not built.thinker1.examples

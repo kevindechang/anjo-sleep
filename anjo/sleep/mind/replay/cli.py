@@ -18,7 +18,7 @@ from typing import Final
 
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
 from anjo.sleep.mind.apd.types import Life
-from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, score
+from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, score, settings
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.mind.replay.types import Branch, LabelBook, StartState
 from anjo.sleep.reports import replay as report
@@ -46,7 +46,7 @@ def _sampled(
             book = book.with_label(label)
         branches.update(sample.sample_all([(life, found)], fakes.fake_replay_models(), labels, seed=seed, brief=brief))
         starts.extend(found)
-    return starts, book, branches, dataset.build(developed, starts, branches, book, brief=brief, seed=seed)
+    return starts, book, branches, dataset.build(developed, starts, branches, book, brief=brief, penalty=settings.token_penalty(), seed=seed)
 
 
 def _prices(text: str | None) -> Prices | None:
@@ -59,8 +59,8 @@ def _prices(text: str | None) -> Prices | None:
 
 
 def _summary(starts: Sequence[StartState], book: LabelBook, branches: Mapping[str, tuple[Branch, ...]], data: ReplayData) -> str:
-    determined = [start for start in starts if book.holds(start.id) is not None]
-    scores = [s.score for start in determined for s in score.score_start(branches[start.id], start, book.labels[start.id])]
+    determined, penalty = [start for start in starts if book.holds(start.id) is not None], settings.token_penalty()
+    scores = [s.score for start in determined for s in score.score_start(branches[start.id], start, book.labels[start.id], penalty=penalty)]
     dropped = ", ".join(f"{reason} {count}" for reason, count in data.dropped.items())
     return "\n".join((
         f"Start states: {len(starts)} ({len(determined)} labelled, {len(starts) - len(determined)} undetermined); "

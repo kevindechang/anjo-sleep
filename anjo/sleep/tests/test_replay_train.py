@@ -20,7 +20,7 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger, Pool
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
-from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, served, spend
+from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, served, settings, spend
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.mind.replay.types import Branch, CallEnd, ReplayRefused, StartState
 from anjo.sleep.night.deps import Prices
@@ -34,6 +34,7 @@ from anjo.sleep.train.lora import LoraCfg, TrainError, plan_steps, training_conf
 from anjo.sleep.train.runners.colab import ColabCli, RealPersonRefused
 
 BRIEF = load_brief()
+LAMBDA = settings.token_penalty()
 _PIECE = re.compile(r"<\|[a-z_]+\|>|[^\s<]+|<")
 
 
@@ -124,7 +125,7 @@ def _replay(models: sample.ReplayModels | None = None, seeds: Sequence[int] = (0
         branches.update(sample.sample_all([(life, found)], models or fakes.fake_replay_models(), labels, brief=BRIEF))
         lives.append(life)
         starts.extend(found)
-    return dataset.build(lives, starts, branches, book, brief=BRIEF)
+    return dataset.build(lives, starts, branches, book, brief=BRIEF, penalty=LAMBDA)
 
 
 def test_thinker_rows_match_the_served_rendering_token_for_token() -> None:

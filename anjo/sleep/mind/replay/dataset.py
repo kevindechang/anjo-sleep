@@ -38,7 +38,6 @@ from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.inquiry.types import Turn
 from anjo.sleep.mind.replay.score import score_start
 from anjo.sleep.mind.replay.types import (
-    TOKEN_PENALTY,
     Branch,
     LabelBook,
     ReplayRefused,
@@ -158,7 +157,7 @@ def _winners(
 
 def build(
     lives: Iterable[Life], starts: Sequence[StartState], branches: Mapping[str, Sequence[Branch]],
-    labels: LabelBook, *, brief: str, penalty: float = TOKEN_PENALTY, seed: int = 0,
+    labels: LabelBook, *, brief: str, penalty: float, seed: int = 0,
     max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
 ) -> ReplayData:
     """thinker-1's and thinker-shuffled's datasets from the labelled start states' branches."""

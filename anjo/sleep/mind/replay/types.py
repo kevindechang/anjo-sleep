@@ -8,10 +8,8 @@ every tool masked to that night, and ends with a credence vector over the frozen
 **labels** each start state once, from the evidence after it; the branches are scored against
 that one label.
 
-The settings below are registered (Task 17's protocol): ``REPLAY_K`` and ``BRANCH_TEMPERATURE``
-are the spec's; ``TOKEN_PENALTY`` (λ) is set on development. Its default makes a night spent to
-the 20,000-token cap cost 0.2, a tenth of the Brier score's range of 2, so tokens only decide
-between branches whose beliefs end about equally right.
+The settings below are the spec's: ``REPLAY_K`` and ``BRANCH_TEMPERATURE``. The token penalty
+(λ) is registered with the night's settings in ``prereg/thresholds.json`` (``replay.settings``).
 """
 from __future__ import annotations
 
@@ -29,7 +27,6 @@ from anjo.sleep.types import Target
 
 REPLAY_K: Final = 4  # branches per start state
 BRANCH_TEMPERATURE: Final = 0.8
-TOKEN_PENALTY: Final = 0.01  # λ: score points per 1,000 tokens, registered on development
 UNDETERMINED: Final = "undetermined"
 STOPPED: Final = "stop"  # vLLM's finish_reason for a reply that ended at a stop token
 APD_LIFE_ID: Final = re.compile(r"^development-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+$")

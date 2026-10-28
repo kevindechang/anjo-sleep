@@ -2,14 +2,14 @@
 
 A branch scores ``-Σᵢ (pᵢ - yᵢ)² - λ x tokens / 1000``: the multi-class Brier score of its credence
 vector over the start state's frozen set against the label (``yᵢ`` is 1 for the hypothesis that
-held, else 0), less ``TOKEN_PENALTY`` (λ) per thousand tokens. Every branch of a start state is
+held, else 0), less ``penalty`` (λ, ``replay.settings``) per thousand tokens. Every branch of a start state is
 scored on the same frozen set and the same label, so none wins by answering an easier question.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from anjo.sleep.mind.replay.types import TOKEN_PENALTY, Branch, Label, Scored, StartState
+from anjo.sleep.mind.replay.types import Branch, Label, Scored, StartState
 
 
 def brier(credences: Mapping[str, float], frozen_ids: Sequence[str], holds: str) -> float:
@@ -19,7 +19,7 @@ def brier(credences: Mapping[str, float], frozen_ids: Sequence[str], holds: str)
     return -sum((credences[h] - (1.0 if h == holds else 0.0)) ** 2 for h in frozen_ids)
 
 
-def score_branch(branch: Branch, start: StartState, label: Label, *, penalty: float = TOKEN_PENALTY) -> Scored:
+def score_branch(branch: Branch, start: StartState, label: Label, *, penalty: float) -> Scored:
     if branch.start_id != start.id or label.start_id != start.id:
         raise ValueError(f"branch {branch.start_id} and label {label.start_id} aren't start state {start.id}'s")
     if label.holds is None:
@@ -29,7 +29,7 @@ def score_branch(branch: Branch, start: StartState, label: Label, *, penalty: fl
 
 
 def score_start(
-    branches: Sequence[Branch], start: StartState, label: Label, *, penalty: float = TOKEN_PENALTY,
+    branches: Sequence[Branch], start: StartState, label: Label, *, penalty: float,
 ) -> tuple[Scored, ...]:
     """Every branch of ``start``, against its one label."""
     return tuple(score_branch(branch, start, label, penalty=penalty) for branch in branches)
