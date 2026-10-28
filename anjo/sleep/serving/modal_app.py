@@ -32,6 +32,7 @@ so the container reads the same values. The image carries only this file and ``c
 from __future__ import annotations
 
 import importlib
+import logging
 import subprocess
 import threading
 import time
@@ -39,7 +40,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from anjo.sleep.serving import config
 
@@ -49,6 +50,7 @@ SETTINGS = config.ServeConfig.from_env()
 REVISION: Final = SETTINGS.pinned_revision()  # at load: no deploy without a pinned revision
 _HERE = Path(__file__).resolve().parent
 _HEALTH_POLL_S = 5.0
+logger = logging.getLogger(__name__)
 
 
 def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
@@ -117,20 +119,36 @@ def _wait_until_healthy(process: subprocess.Popen[bytes], timeout_s: float) -> N
     raise TimeoutError(f"vLLM was not healthy within {timeout_s:.0f} s")
 
 
+class Refreshes(NamedTuple):
+    """How a container's volume refresher went: reloads done, refused as busy, and failed."""
+
+    done: int
+    skipped: int
+    failed: int
+
+
 def refresh_adapters(
-    reload: Callable[[], None], stop: threading.Event, *, every_s: float, transient: tuple[type[Exception], ...],
-) -> int:
-    """Reload the adapters volume every ``every_s`` until ``stop`` is set; the number of reloads
-    that went through. A reload the volume refuses for now (``transient``: a file held open) is
-    skipped and the next one tries again. Anything else ends the loop and propagates."""
-    done = 0
+    reload: Callable[[], None], stop: threading.Event, *, every_s: float, busy: tuple[type[Exception], ...],
+) -> Refreshes:
+    """Reload the adapters volume every ``every_s`` until ``stop`` is set. A reload the volume refuses
+    for now (``busy``: a file held open) is a skip, and any other error a failure; each is logged with
+    the counts so far and the error's type, never its message (it may name a path), and the next
+    period tries again, so a container keeps seeing new adapters for as long as it runs."""
+    done = skipped = failed = 0
     while not stop.wait(every_s):
         try:
             reload()
-        except transient:
-            continue  # the volume is busy now: the next period tries again
+        except busy:
+            skipped += 1
+            logger.warning("adapters volume busy, reload skipped (%d skipped, %d failed so far)", skipped, failed)
+            continue
+        except Exception as error:
+            failed += 1
+            logger.warning("adapters volume reload failed with %s (%d skipped, %d failed so far)",
+                           type(error).__name__, skipped, failed)
+            continue
         done += 1
-    return done
+    return Refreshes(done, skipped, failed)
 
 
 @app.cls(
@@ -157,7 +175,7 @@ class Serve:
         self.refresh_stop = threading.Event()
         self.refresher = threading.Thread(
             target=refresh_adapters, args=(adapters.reload, self.refresh_stop), daemon=True,
-            kwargs={"every_s": config.ADAPTER_REFRESH_S, "transient": (RuntimeError, modal.exception.Error)},
+            kwargs={"every_s": config.ADAPTER_REFRESH_S, "busy": (RuntimeError,)},  # Modal's "open files" refusal
         )
         self.refresher.start()
 

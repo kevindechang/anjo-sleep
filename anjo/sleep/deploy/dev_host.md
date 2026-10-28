@@ -211,8 +211,11 @@ used: in vLLM 0.28.0's source it serves an adapter only when its `base_model_nam
 path vLLM was started with (`/weights/...`, not the served name), which a trained adapter never names,
 so it answered 404. A running container
 mounts the adapters volume as it was at its start, so `Serve` reloads it every 20 s
-(`config.ADAPTER_REFRESH_S`; a reload refused while a file is open waits for the next one), and the
-client asks again for a folder vLLM can't see yet for up to 45 s (`client.LOAD_WAIT_S`). `Serve` runs
+(`config.ADAPTER_REFRESH_S`; a reload that is refused or fails is counted in the container log and the
+next one tries again), and the night's client asks again for a folder vLLM can't see yet for up to
+45 s (`client.LOAD_WAIT_S`). Only the night, the morning and the demo's pre-generated pairs wait so. A
+chat turn (`app/runtime.py`) and the live demo page load once, with no wait, inside the turn's 20 s
+deadline: a missing adapter or a failed load ends the turn, and the frontier talker answers. `Serve` runs
 one container at most (`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one
 wake started two.
 
