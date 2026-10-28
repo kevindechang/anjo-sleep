@@ -14,8 +14,10 @@ slot answers for a thread). The losses:
 - binding: events of one thread write into the same slot, events of different threads apart;
 - imagination: the next event's encoding, for dreams.
 
-Validation keeps the best epoch, and the speak threshold is then locked on validation
-(``evaluate.lock_threshold``). Seeds, one CPU thread and deterministic algorithms make a run
+Validation keeps the best epoch; training stops once ``patience`` epochs pass without a better
+validation loss, or at the ``epochs`` cap. The speak threshold is then locked on validation
+(``evaluate.lock_threshold``), and the dream's own ignition threshold on the same lives
+(``evaluate.lock_ignite``). Seeds, one CPU thread and deterministic algorithms make a run
 repeatable bit for bit.
 
 **Per-person adaptation** (``adapt``) is conservative: the person's events are replayed through
@@ -241,14 +243,16 @@ def _binding(write: Tensor, data: Batch) -> Tensor:
 
 @contextlib.contextmanager
 def deterministic(seed: int) -> Iterator[np.random.Generator]:
+    """Seeded, one thread, deterministic algorithms; the caller's settings come back on exit."""
     threads = torch.get_num_threads()
+    was, warn_only = torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled()
     torch.manual_seed(seed)
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
     try:
         yield np.random.default_rng(seed)
     finally:
-        torch.use_deterministic_algorithms(False)
+        torch.use_deterministic_algorithms(was, warn_only=warn_only)
         torch.set_num_threads(threads)
 
 
@@ -267,11 +271,13 @@ LifeSource = Sequence[LabelledStream] | Callable[[int], Sequence[LabelledStream]
 
 def train_shared(
     fit: LifeSource, val: Sequence[LabelledStream], config: CoreConfig, *, seed: int,
-    epochs: int, batch_size: int = 16, lr: float = 1e-3, weight_decay: float = 0.01, clip: float = 1.0,
+    epochs: int, patience: int | None = None, batch_size: int = 16, lr: float = 1e-3, weight_decay: float = 0.01,
+    clip: float = 1.0,
 ) -> Trained:
-    """The shared core, trained on ``fit``, its best epoch and speak threshold chosen on ``val``.
+    """The shared core, trained on ``fit``, its best epoch and thresholds chosen on ``val``.
     ``fit`` is a fixed set of lives, or a source of each epoch's lives (``fit(epoch)``): fresh
-    generated lives each epoch, so nothing can be learned by heart."""
+    generated lives each epoch, so nothing can be learned by heart. ``epochs`` caps the run;
+    ``patience`` ends it early, once that many epochs pass without a better validation loss."""
     if not val or (not callable(fit) and not fit):
         raise ValueError("shared training needs training and validation lives")
     with deterministic(seed) as rng:
@@ -281,6 +287,8 @@ def train_shared(
         fit_batches: dict[tuple[str, ...], Batch] = {}
         best, best_loss, best_epoch, log = None, math.inf, 0, []
         for epoch in range(epochs):
+            if patience is not None and epoch - best_epoch > patience:
+                break
             net.train()
             seen = []
             lives = fit(epoch) if callable(fit) else fit
@@ -302,8 +310,8 @@ def train_shared(
         assert best is not None
         net.load_state_dict(best)
         core = Core(net)
-        locked = evaluate.lock_threshold(core, val)
-    return Trained(core.with_thresholds(Thresholds(speak=locked)), tuple(log), best_epoch)
+        thresholds = Thresholds(speak=evaluate.lock_threshold(core, val), ignite=evaluate.lock_ignite(core, val, seed=seed))
+    return Trained(core.with_thresholds(thresholds), tuple(log), best_epoch)
 
 
 # ── Per-person adaptation ─────────────────────────────────────────────────────

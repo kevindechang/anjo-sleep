@@ -7,10 +7,14 @@ cites one of the thread's ``origin_ids`` on a day from the day the problem is kn
 day before the person raises it (APD's match rule); each thread is caught once, and a later
 intervention on a thread already caught is a **repeat**. Any other intervention is **false**.
 
-- ``headline``: recall of failing threads, and false interventions per 100 person-days.
+- ``headline``: recall of failing threads (overall and per family), and false interventions per
+  100 person-days.
 - ``lock_threshold``: the speak threshold with the best recall at no more than
   ``MAX_FALSE_PER_100`` false interventions per 100 person-days, on validation lives; the highest
-  such threshold on ties. Test lives are then scored at it, untouched.
+  such threshold on ties. Test lives are then scored at it, untouched. ``lock_ignite`` locks the
+  dream's own threshold the same way on the same lives: each night's ignitions
+  (``dream_traces``, ``DREAM_STEPS`` steps, seeded) are scored as interventions. The two budgets
+  are separate, so speak calls and ignitions together stay within twice ``MAX_FALSE_PER_100``.
 - ``calibration``: Brier score and reliability bins of each open slot's risk against what happened
   to the thread it cites (it surfaced within the horizon), and of the self-error head against the
   risk's realized squared error.
@@ -19,9 +23,11 @@ intervention on a thread already caught is a **repeat**. Any other intervention 
 - ``transplant``: the counterfactual test. Two histories of one person differ only in how earlier
   bookings ended; the present is the same. With nothing but the state moved, the booking's slot
   must flip (speak about it after the history of cancellations, not after the deliveries), and the
-  slots of unrelated events (citing neither the booking nor the party's earlier threads) should
-  keep their risk within ``tolerance`` on average; the largest shift is reported too, since the
-  shared fast memory lets a little of the history reach every later write.
+  slot of an unrelated thread still open at the cut (a plan and a conflicting constraint, not yet
+  raised: a thread able to fail), a slot citing neither the booking nor any event that differs
+  between the histories, should keep its risk within ``tolerance`` on average; its mean risk and
+  the largest shift are reported too, since the shared fast memory lets a little of the history
+  reach every later write.
 - ``separation``: the threshold-free AUC of each labelled thread's peak risk, problems against
   decoys.
 """
@@ -33,6 +39,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
+import numpy as np
+
 from anjo.sleep.mind.core.api import Core
 from anjo.sleep.mind.core.state import CoreState
 from anjo.sleep.mind.core.toy import TransplantPair
@@ -40,6 +48,8 @@ from anjo.sleep.mind.core.types import EventLatent, LabelledStream, Predictions,
 
 MAX_FALSE_PER_100: Final = 1.0
 BINS: Final = 10
+DREAM_STEPS: Final = 8  # a night's dream, as the CLI's ``--dream`` runs it
+LOCK_CANDIDATES: Final = 256  # thresholds tried when locking; quantiles of the calls beyond that
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,7 @@ class Headline:
     false: int
     repeats: int
     person_days: int
+    by_family: tuple[tuple[str, int, int], ...] = ()  # (family, failing threads, caught)
 
 
 @dataclass(frozen=True)
@@ -101,8 +112,9 @@ class Transplant:
     relevant_gap: float  # mean risk of the booking's slot, cancellations minus deliveries
     mean_unrelated_shift: float
     max_unrelated_shift: float
-    unrelated_found: int  # pairs whose unrelated events hold a slot of their own in both histories
+    unrelated_found: int  # pairs whose unrelated thread holds a slot of its own in both histories
     tolerance: float
+    mean_unrelated_risk: float = 0.0  # that slot's risk after the cancellations: how able to fail it looks
 
 
 # ── Traces ────────────────────────────────────────────────────────────────────
@@ -155,18 +167,30 @@ def traces(core: Core, streams: Sequence[LabelledStream], *, reset_each_night: b
 # ── The headline ──────────────────────────────────────────────────────────────
 
 
-def score(runs: Sequence[LifeTrace], streams: Sequence[LabelledStream], threshold: float) -> Headline:
-    problems = caught = false = repeats = days = 0
+_Matched = tuple[tuple[LabelledStream, tuple[tuple[DayCall, tuple[ThreadLabel, ...]], ...]], ...]
+
+
+def _matched(runs: Sequence[LifeTrace], streams: Sequence[LabelledStream]) -> _Matched:
+    """Each call with the failing threads it would catch (APD's match rule), whatever the threshold."""
+    out = []
     for run, stream in zip(runs, streams, strict=True):
         failing = [label for label in stream.labels if label.failed]
-        problems += len(failing)
+        calls = tuple((call, tuple(label for label in failing if set(call.cites) & set(label.origin_ids)
+                                   and label.knowable_at.date() <= call.day < label.outcome_at.date()))
+                      for call in run.calls if call.cites)
+        out.append((stream, calls))
+    return tuple(out)
+
+
+def _tally(matched: _Matched, threshold: float) -> Headline:
+    caught = false = repeats = days = 0
+    families: dict[str, list[int]] = {}
+    for stream, calls in matched:
         days += len(stream.days)
         found: set[str] = set()
-        for call in run.calls:
-            if call.p_speak < threshold or not call.cites:
+        for call, match in calls:
+            if call.p_speak < threshold:
                 continue
-            match = [label for label in failing if set(call.cites) & set(label.origin_ids)
-                     and label.knowable_at.date() <= call.day < label.outcome_at.date()]
             fresh = [label for label in match if label.id not in found]
             if fresh:
                 found.add(fresh[0].id)
@@ -175,23 +199,60 @@ def score(runs: Sequence[LifeTrace], streams: Sequence[LabelledStream], threshol
                 repeats += 1
             else:
                 false += 1
+        for label in stream.labels:
+            if label.failed:
+                tally = families.setdefault(label.family, [0, 0])
+                tally[0] += 1
+                tally[1] += label.id in found
+    problems = sum(n for n, _ in families.values())
     return Headline(
         threshold=threshold, recall=caught / problems if problems else 0.0,
         false_per_100=100.0 * false / days if days else 0.0, problems=problems, caught=caught, false=false,
-        repeats=repeats, person_days=days,
+        repeats=repeats, person_days=days, by_family=tuple((f, n, c) for f, (n, c) in sorted(families.items())),
     )
+
+
+def score(runs: Sequence[LifeTrace], streams: Sequence[LabelledStream], threshold: float) -> Headline:
+    return _tally(_matched(runs, streams), threshold)
+
+
+def _lock(runs: Sequence[LifeTrace], val: Sequence[LabelledStream]) -> float:
+    matched = _matched(runs, val)
+    values: list[float] = sorted({call.p_speak for _, calls in matched for call, _ in calls})
+    if len(values) > LOCK_CANDIDATES:
+        cut: list[float] = np.quantile(values, np.linspace(0.0, 1.0, LOCK_CANDIDATES)).tolist()
+        values = sorted(set(cut))
+    best = (-1.0, 0.0)
+    for threshold in [*values, 1.0 + 1e-6]:
+        result = _tally(matched, threshold)
+        if result.false_per_100 <= MAX_FALSE_PER_100 and (result.recall, threshold) > best:
+            best = (result.recall, threshold)
+    return best[1]
 
 
 def lock_threshold(core: Core, val: Sequence[LabelledStream]) -> float:
     """The speak threshold locked on validation lives (see the module docstring)."""
-    runs = traces(core, val)
-    candidates = sorted({call.p_speak for run in runs for call in run.calls} | {1.0 + 1e-6})
-    best = (-1.0, 0.0)
-    for threshold in candidates:
-        result = score(runs, val, threshold)
-        if result.false_per_100 <= MAX_FALSE_PER_100 and (result.recall, threshold) > best:
-            best = (result.recall, threshold)
-    return best[1]
+    return _lock(traces(core, val), val)
+
+
+def dream_traces(
+    core: Core, streams: Sequence[LabelledStream], *, seed: int, steps: int = DREAM_STEPS,
+) -> tuple[LifeTrace, ...]:
+    """Each night's ignitions as calls (their score, their cites), every one of them (no threshold)."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for stream in streams:
+        state, calls = core.init_state(stream.life_id), list[DayCall]()
+        for day in stream.days:
+            state = _run(core, state, [e for e in stream.events if e.t.date() == day])
+            calls.extend(DayCall(day, i.score, i.cited_event_ids) for i in core.dream(state, steps, rng, ignite_at=0.0))
+        out.append(LifeTrace(stream.life_id, tuple(calls), ()))
+    return tuple(out)
+
+
+def lock_ignite(core: Core, val: Sequence[LabelledStream], *, seed: int) -> float:
+    """The dream's ignition threshold, locked on validation lives like the speak threshold."""
+    return _lock(dream_traces(core, val, seed=seed), val)
 
 
 def headline(
@@ -263,7 +324,7 @@ def transplant(
     core: Core, pairs: Sequence[TransplantPair], *, tolerance: float, threshold: float | None = None,
 ) -> Transplant:
     line = core.threshold if threshold is None else threshold
-    flipped, gaps, shifts = 0, [], []
+    flipped, gaps, shifts, risks = 0, [], [], []
     for pair in pairs:
         cancelled = _run(core, _run(core, core.init_state(pair.person), pair.problem), pair.now)
         delivered = _run(core, _run(core, core.init_state(pair.person), pair.benign), pair.now)
@@ -276,13 +337,14 @@ def transplant(
         flipped += int(raises(cancelled) and not raises(delivered))
         high, low = _risk_citing(core, cancelled, (pair.relevant,)), _risk_citing(core, delivered, (pair.relevant,))
         gaps.append((high or 0.0) - (low or 0.0))
-        moved = (pair.relevant, *pair.history)
+        moved = (pair.relevant, *pair.moved)
         a = _risk_citing(core, cancelled, pair.unrelated, excluding=moved)
         b = _risk_citing(core, delivered, pair.unrelated, excluding=moved)
         if a is not None and b is not None:
             shifts.append(abs(a - b))
+            risks.append(a)
     return Transplant(
         pairs=len(pairs), flipped=flipped, relevant_gap=math.fsum(gaps) / max(len(gaps), 1),
         mean_unrelated_shift=math.fsum(shifts) / max(len(shifts), 1), max_unrelated_shift=max(shifts, default=0.0),
-        unrelated_found=len(shifts), tolerance=tolerance,
+        unrelated_found=len(shifts), tolerance=tolerance, mean_unrelated_risk=math.fsum(risks) / max(len(risks), 1),
     )

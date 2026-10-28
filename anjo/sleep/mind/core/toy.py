@@ -20,7 +20,9 @@ each on its own draw:
 
 ``pairs`` builds counterfactual autobiographies from the same generator: one life written twice,
 identical in every draw except how the booked party's two earlier bookings ended (cancelled, or
-delivered), cut at the new booking. The background threads before it are the unrelated part.
+delivered), cut at the new booking. Each also holds an unrelated thread still open at the cut: a
+plan and a conflicting constraint, not yet raised (a thread able to fail, whose risk the history
+must not move).
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ NOISE: Final = 0.15
 BOOKING: Final = 0.7  # lives with a new booking (a gap, or its decoy)
 CONTRADICTION: Final = 0.5  # lives with a plan and a constraint (a contradiction, or its decoy)
 SECOND_PARTY: Final = 0.7  # lives with a party who delivered twice
+OPEN_START: Final = 1  # a transplant's open thread: its plan on day 1, its conflicting constraint on day 4
 _ROLE_SEED: Final = 20_261_028
 
 
@@ -144,16 +147,20 @@ def _booking(draft: _Draft, party: np.ndarray, record: list[str], fails: bool, *
     return booked
 
 
-def _contradiction(draft: _Draft, conflicts: bool) -> None:
+def _contradiction(draft: _Draft, conflicts: bool, *, start: int | None = None, raised: bool = True) -> None:
+    """A plan, then three days later a constraint on the same thread; ``raised`` (two days after)
+    ends it, else it stays open (the transplant's unrelated thread, whose times aren't labelled)."""
     thread, attribute = draft.part(), draft.part()
-    start = int(draft.rng.integers(0, 3))
+    start = int(draft.rng.integers(0, 3)) if start is None else start
     plan = draft.say(start, "plan", thread, attribute, key="plan")
     other = -attribute if conflicts else draft.part()
     constraint = draft.say(start + 3, "constraint", thread, other, key="constraint")
-    raised = draft.say(start + 5, "raise" if conflicts else "chat", thread, key="raised")
+    if not raised:
+        return
+    raised_id = draft.say(start + 5, "raise" if conflicts else "chat", thread, key="raised")
     draft.labels.append(_Label(
         id=f"{draft.life_id}-contradiction", family="contradiction" if conflicts else "decoy",
-        event_ids=(plan, constraint), origin_ids=(plan, constraint), knowable_id=constraint, outcome_id=raised,
+        event_ids=(plan, constraint), origin_ids=(plan, constraint), knowable_id=constraint, outcome_id=raised_id,
         failed=conflicts,
     ))
 
@@ -184,6 +191,7 @@ def _draft(seed: int, index: int, dim: int, booked: str | None = None) -> _Draft
     has_booking, fails = rng.uniform() < BOOKING, rng.uniform() < 0.5
     has_contradiction, conflicts = rng.uniform() < CONTRADICTION, rng.uniform() < 0.5
     if booked is not None:
+        _contradiction(draft, conflicts=True, start=OPEN_START, raised=False)  # open at the cut (day 5 or 6)
         _booking(draft, first, record, True, cut=True)
         return draft
     if has_booking:
@@ -209,8 +217,9 @@ def lives(n: int, *, seed: int, dim: int = DIM) -> tuple[LabelledStream, ...]:
 class TransplantPair:
     """One life written twice, cut at a new booking (``now``, the ``relevant`` event, the same in
     both): in ``problem`` the booked party's two earlier bookings were cancelled, in ``benign``
-    delivered; every other event is identical. ``history`` are those earlier threads' events;
-    ``unrelated`` are the background events before the booking."""
+    delivered; every other event is identical. ``history`` are those earlier threads' events and
+    ``moved`` the ones among them that differ (how each ended); ``unrelated`` are the events of a
+    thread still open at the cut (a plan and a conflicting constraint, not yet raised)."""
 
     person: str
     problem: tuple[EventLatent, ...]
@@ -218,6 +227,7 @@ class TransplantPair:
     now: tuple[EventLatent, ...]
     relevant: str
     history: tuple[str, ...]
+    moved: tuple[str, ...]
     unrelated: tuple[str, ...]
 
 
@@ -232,6 +242,8 @@ def pairs(n: int, *, seed: int, dim: int = DIM) -> tuple[TransplantPair, ...]:
         out.append(TransplantPair(
             person=f"toy{seed}-{index}", problem=problem[:cut], benign=benign[:cut], now=problem[cut:cut + 1],
             relevant=relevant, history=tuple(e.event_id for e in problem[:cut] if "-old" in e.event_id),
-            unrelated=tuple(e.event_id for e in problem[:cut] if "-bg" in e.event_id),
+            moved=tuple(a.event_id for a, b in zip(problem, benign, strict=True) if not np.array_equal(a.vec, b.vec)),
+            unrelated=tuple(e.event_id for e in problem[:cut] if e.event_id.endswith(("-plan", "-constraint"))
+                            and "-bg" not in e.event_id),
         ))
     return tuple(out)
