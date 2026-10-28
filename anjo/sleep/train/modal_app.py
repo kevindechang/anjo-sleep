@@ -1,6 +1,7 @@
 # mypy: disallow-untyped-decorators=False
 # (modal has no type stubs here, so its decorators are untyped)
-"""Anjo Sleep's training app on Modal (Task 5): one function, ``train``, on one A100-80GB.
+"""Anjo Sleep's training app on Modal (Task 5): ``train``, on one A100-80GB, and MIND's encoder
+``encode_latents`` beside it.
 
 It is the Modal twin of the Colab VM: the image installs exactly the pins the training script names
 (``colab_train.TORCH`` and ``TRAIN_PACKAGES``, the list the Colab runner installs too), and the call
@@ -19,6 +20,10 @@ deploy without one fails before anything is built:
     ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/train/modal_app.py
 
 The weights volume must already hold that revision (the serving app's ``download_weights``).
+
+``encode_latents`` reads a job's events through Glimmer's hidden states on the same image and GPU,
+with the weights read-only and the latents volume read-write (``latent_job``); the host's side is
+``latent_runner``, which holds before it calls.
 """
 from __future__ import annotations
 
@@ -27,7 +32,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.serving import config
-from anjo.sleep.train import colab_train, modal_job
+from anjo.sleep.train import colab_train, latent_job, modal_job
 
 modal: Any = importlib.import_module("modal")  # only the deploying machine has the package
 
@@ -43,6 +48,7 @@ _FILES: Final = (
     (_TRAIN / "colab_train.py", modal_job.REMOTE_SCRIPT),
     (_TRAIN / "modal_job.py", "/root/anjo/sleep/train/modal_job.py"),
     (_TRAIN / "modal_app.py", "/root/anjo/sleep/train/modal_app.py"),
+    (_TRAIN / "latent_job.py", "/root/anjo/sleep/train/latent_job.py"),
 )
 
 image = (
@@ -55,6 +61,7 @@ for _local, _remote in _FILES:
 app = modal.App(modal_job.APP_NAME, image=image)
 weights = modal.Volume.from_name(config.WEIGHTS_VOLUME)  # filled by the serving app; never made here
 adapters = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
+latents = modal.Volume.from_name(latent_job.VOLUME, create_if_missing=True)  # MIND's event latents
 
 
 @app.function(
@@ -69,4 +76,20 @@ def train(dataset: str, config_json: str, prev: dict[str, bytes], name: str, exe
         weights_root=Path(config.WEIGHTS_DIR), adapters_root=Path(config.ADAPTERS_DIR),
     )
     adapters.commit()
+    return done
+
+
+@app.function(
+    gpu=latent_job.GPU, timeout=latent_job.FUNCTION_TIMEOUT_S, startup_timeout=modal_job.STARTUP_TIMEOUT_S,
+    scaledown_window=latent_job.SCALEDOWN_S,
+    volumes={config.WEIGHTS_DIR: weights.read_only(), latent_job.VOLUME_DIR: latents}, secrets=[],
+)
+def encode_latents(job: str, spec_json: str, exec_s: float) -> dict[str, Any]:
+    """Read one job's uploaded events through Glimmer's hidden states (``latent_job.encode_on_volume``)."""
+    latents.reload()  # see the events the host uploaded after this container started
+    done = latent_job.encode_on_volume(
+        job_dir=Path(latent_job.VOLUME_DIR) / latent_job.check_job(job), spec_json=spec_json, pinned=REVISION,
+        weights_root=Path(config.WEIGHTS_DIR), exec_s=exec_s,
+    )
+    latents.commit()
     return done
