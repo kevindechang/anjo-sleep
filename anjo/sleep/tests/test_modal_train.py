@@ -56,8 +56,11 @@ def _load_app(monkeypatch: pytest.MonkeyPatch, revision: str | None = PIN) -> tu
     image, declared = _Chain(), {}
 
     def function(**options: Any) -> Any:
-        declared.update(options)
-        return lambda fn: fn
+        def wrap(fn: Any) -> Any:
+            if fn.__name__ == modal_job.FUNCTION:  # the encoder's options are test_mind_latents' to check
+                declared.update(options)
+            return fn
+        return wrap
 
     fake = types.SimpleNamespace(
         Image=types.SimpleNamespace(debian_slim=lambda **kw: image),

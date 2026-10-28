@@ -375,3 +375,25 @@ def test_delete_cancels_a_running_modal_job(auth_client: Any, tmp_path: Path, mo
     assert dict(report.remote_removed)["modal volume"] == 2
     assert fake.volume.folders == {"p-bbbbbbbbbbbb-n1"}
     assert inventory().pending() == []  # every remote delete finished: nothing left to retry
+
+
+def test_delete_succeeds_for_any_valid_account_id(auth_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """MIND's latents step of a delete takes every id the delete itself takes, and removes only that
+    person's latents: their cache and their folder in every run."""
+    from anjo.core.ids import validate_user_id
+    from anjo.sleep.app.ownership import _USER, delete_all
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.mind.core import latents
+
+    root = data_root() / SLEEP_DIR / latents.LATENTS_DIR
+    assert latents.check_life("_" * 128) and latents.check_life("-" + "a" * 127)  # every id ownership takes, too
+    for uid in ("_lead", "-dash", "x_y-9", "a" * 64):  # account ids (anjo.core.ids) at their edges
+        assert validate_user_id(uid) and _USER.fullmatch(uid) and latents.check_life(uid) == uid
+        kept = [root / latents.CACHE_DIR / BOB / "spec" / "shard.npy", root / latents.RUNS_DIR / "run-1" / BOB / "x"]
+        theirs = [root / latents.CACHE_DIR / uid / "spec" / "shard.npy", root / latents.RUNS_DIR / "run-1" / uid / "x"]
+        for path in kept + theirs:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x")
+        delete_all(uid)
+        assert not any(path.exists() for path in theirs) and all(path.exists() for path in kept)
+    delete_all("person-with-no-latents")  # nothing kept: nothing to remove, and no failure

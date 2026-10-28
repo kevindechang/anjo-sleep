@@ -263,6 +263,21 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
     }
 
 
+def test_prompt_embeds_are_served_only_when_their_flag_is_set(
+    modal_app: tuple[types.ModuleType, _Recorder],
+) -> None:
+    module, recorder = modal_app
+    off = ServeConfig.from_env({config.REVISION_ENV: REVISION})
+    assert off.prompt_embeds is False and module.SETTINGS.prompt_embeds is False
+    assert config.vllm_command(off) == config.vllm_command(_settings())  # off: today's command, flag for flag
+    assert "--enable-prompt-embeds" not in config.vllm_command(off)
+    assert config.PROMPT_EMBEDS_ENV not in recorder.by("env")[0]["values"]
+    on = ServeConfig.from_env({config.REVISION_ENV: REVISION, config.PROMPT_EMBEDS_ENV: "1"})
+    assert config.vllm_command(on) == [*config.vllm_command(off), "--enable-prompt-embeds"]
+    assert "--language-model-only" in config.vllm_command(on)  # still text only, LoRA still on
+    assert module._settings_env(on)[config.PROMPT_EMBEDS_ENV] == "1"  # the container reads the same setting
+
+
 def test_serve_never_reloads_its_adapters_volume(modal_app: tuple[types.ModuleType, _Recorder]) -> None:
     """On night 1c (2026-10-28) the server stopped answering before the night had sent any adapter
     load, and the stall was in the container's Modal process, where the adapters volume reload thread

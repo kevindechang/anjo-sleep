@@ -12,7 +12,9 @@ holder sweeps (``swept_mind``), before any new hold:
 2. it settles each night a killed run's journal holds open, at what it priced plus one call's
    worst case (the command passes this step in);
 3. it settles every other open hold of MIND's kinds (``MIND_KINDS``) at its full bound: work may
-   have run, so the worst case is the honest charge.
+   have run, so the worst case is the honest charge. The latents encoder's holds are MIND's too; a
+   killed encode's Modal call and volume folder are cleared by the next encode's own sweep
+   (``train.latent_runner.sweep``), which runs under this same lock.
 
 MIND's kinds and the night's (``night.sweep.NIGHT_KINDS``) share no prefix, and the two locks are
 separate files, so a Sleep night and a MIND command run side by side and neither sweep settles the
@@ -30,10 +32,11 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import Ledger
+from anjo.sleep.train.latent_runner import HOLD_KIND as LATENTS_KIND
 from anjo.sleep.train.runners.colab import HOLD_KINDS, MIND_SESSION_PREFIX
 
 MIND_KINDS: Final = ("apd:", "replay:", *(f"{kind}:" for kind in HOLD_KINDS[MIND_SESSION_PREFIX]),
-                     f"colab_serve:{MIND_SESSION_PREFIX}")
+                     f"colab_serve:{MIND_SESSION_PREFIX}", f"{LATENTS_KIND}:")
 LOCK_NAME: Final = "mind.lock"
 _HELD: ContextVar[frozenset[Path]] = ContextVar("mind_lock_held", default=frozenset())
 

@@ -19,6 +19,8 @@ CORE = (
     "anjo.sleep.serving",
     "anjo.sleep.serving.config",
     "anjo.sleep.serving.client",
+    "anjo.sleep.serving.soft_tokens",
+    "anjo.sleep.tools.soft_tokens_live",
     "anjo.sleep.checkpoints",
     "anjo.sleep.gates.general",
     "anjo.sleep.gates.collapse",
@@ -36,6 +38,9 @@ CORE = (
     "anjo.sleep.train.runners.choice",
     "anjo.sleep.train.modal_job",
     "anjo.sleep.train.colab_train",
+    "anjo.sleep.train.latent_job",
+    "anjo.sleep.train.latent_runner",
+    "anjo.sleep.mind.core.latents",
 )
 
 
