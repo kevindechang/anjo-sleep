@@ -9,8 +9,10 @@ import json
 import httpx
 import pytest
 
+from anjo.sleep.app import sim_transport
 from anjo.sleep.app.sim_transport import MAX_BUSY_WAIT_S, MAX_RETRY_AFTER_S, DevApiTransport
 from anjo.sleep.sim.day import TurnFailed
+from anjo.sleep.tools import sleep_objective_live
 
 
 def test_the_dev_api_transport_reads_the_stream_and_fails_a_turn_it_cannot_answer() -> None:
@@ -93,3 +95,48 @@ def test_keyed_refusal_409_fails_with_its_code() -> None:
         transport.send("sim-d1", "Hello there", cleared=True)
     assert "already answered" not in str(raised.value) and raised.value.reason == "request_key_spent"
     assert len(seen) == 1
+
+
+def _whoami(answer: httpx.Response, seen: list[tuple[str, str]]) -> httpx.MockTransport:
+    """A dev API that answers its who-am-I read with ``answer``; every call is recorded."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return answer if request.url.path == sim_transport.WHOAMI else httpx.Response(500)
+
+    return httpx.MockTransport(handler)
+
+
+def test_simulate_refuses_a_token_for_another_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, str]] = []
+    other = httpx.Response(200, json={"payments_enabled": False, "user_id": "syn-other", "products": {}})
+    real = sim_transport.DevApiTransport
+    monkeypatch.setattr(sim_transport, "DevApiTransport", lambda url, token: real(url, token, transport=_whoami(other, seen)))
+    monkeypatch.setattr(sim_transport, "require_sleep_host", lambda: None)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_ENV, "tok-other")
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the day started")
+
+    for name in ("Ledger", "run_day", "night_lock"):  # no hold, no wake, no line
+        monkeypatch.setattr(sim_transport, name, never)
+    with pytest.raises(sim_transport.TokenRefused, match="another account") as raised:
+        sim_transport.simulate("syn-a", "founder", 0, 7)
+    assert "tok-other" not in str(raised.value) and "syn-other" not in str(raised.value)
+    assert seen == [("GET", sim_transport.WHOAMI)]
+
+
+def test_the_account_check_passes_only_its_own_token() -> None:
+    seen: list[tuple[str, str]] = []
+    DevApiTransport("http://x", "t", transport=_whoami(httpx.Response(200, json={"user_id": "syn-a"}), seen)
+                    ).check_account("syn-a")
+    for answer in (httpx.Response(401, json={"detail": "Not authenticated"}), httpx.Response(200, text="not json"),
+                   httpx.Response(200, json={"user_id": "syn-b"})):
+        with pytest.raises(sim_transport.TokenRefused):
+            DevApiTransport("http://x", "t", transport=_whoami(answer, seen)).check_account("syn-a")
+    assert all(method == "GET" for method, _ in seen)
+
+
+def test_the_live_comparison_sets_the_token_simulate_reads() -> None:
+    assert sleep_objective_live.SIM_TOKEN_ENV == sim_transport.SIM_TOKEN_ENV
