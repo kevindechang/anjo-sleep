@@ -143,5 +143,7 @@ def pace_note(args: argparse.Namespace) -> str:
     reads = ("" if reader(args).model is None
              else f"Gemini reads: at most {args.vertex_concurrency} at once across the run{paced}; ")
     return (f"{reads}a 429 waits a backoff, or its hint plus up to {retry.HINT_JITTER:.0%}, at most "
-            f"{retry.MAX_WAIT_S:g} s before that jitter, and tries again; an attempt a call still ended cools down "
+            f"{retry.MAX_WAIT_S:g} s before that jitter, and tries again, a call at most {retry.RATE_LIMIT_ATTEMPTS} "
+            f"tries in all (its timeouts and 5xx included) and an attempt at most "
+            f"{retry.RATE_LIMIT_BUDGET_S / 60:g} min of 429 waits; an attempt a call still ended cools down "
             f"{retry.ATTEMPT_COOL_DOWN_S:g} s before the next")

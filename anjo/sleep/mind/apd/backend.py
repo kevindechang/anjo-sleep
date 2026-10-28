@@ -96,6 +96,7 @@ GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_to
 GEMINI_READ_TIMEOUT_S: Final = 120.0  # a Gemini gate read's whole wait: a verdict, not a Spark Open decode
 CALL_GRACE_S: Final = 5.0  # past its own timeout, a generation call is given up on (``bounded``)
 CALL_POLL_S: Final = 0.1  # how often a caller waiting on a call in flight looks for a kill
+LEAK_MARGIN_S: Final = 30.0  # past its transport timeout, a call given up on gives its limiter place back anyway
 ROOM_POLL_S: Final = 0.1  # how often an attempt waiting for room looks for a kill
 
 
@@ -295,23 +296,98 @@ def pause(seconds: float, sleep: Callable[[float], None], halt: threading.Event 
     halted(halt)
 
 
+class GivenUp:
+    """A call given up on (past its deadline, or at a kill) whose thread may still be in flight.
+    If its limiter place has to be freed for it rather than by its end, it ``leak``s: each hook
+    runs (``CountedChat`` marks the call ``leaked`` in its log)."""
+
+    def __init__(self) -> None:
+        self._lock, self._leaked = threading.Lock(), False
+        self._hooks: list[Callable[[], None]] = []
+
+    def on_leak(self, hook: Callable[[], None]) -> None:
+        with self._lock:
+            if not self._leaked:
+                self._hooks.append(hook)
+                return
+        hook()
+
+    def leak(self) -> None:
+        with self._lock:
+            self._leaked, hooks, self._hooks = True, self._hooks, []
+        for hook in hooks:
+            hook()
+
+
 class Abandoned(Halted):
     """A call given up on in flight once the command is ending: it may still be billed, so it is
     priced at its worst case (``CountedChat``)."""
 
+    def __init__(self, message: str, given_up: GivenUp | None = None) -> None:
+        super().__init__(message)
+        self.given_up = given_up
 
-def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None = None) -> BriefChat:
+
+class CallTimedOut(ModelApiError):
+    """A call past its deadline, given up on (``bounded``): a timeout, which ``retry.transient``
+    tries again."""
+
+    def __init__(self, message: str, given_up: GivenUp) -> None:
+        super().__init__(message)
+        self.given_up = given_up
+
+
+class _Place:
+    """One call's place at ``limiter`` (none without one), given back once only: by the call's own
+    thread when the call ends, or, once the caller gave up on it, by a timer ``LEAK_MARGIN_S`` past
+    its transport timeout, so a thread whose transport never times out can't keep it forever."""
+
+    def __init__(self, limiter: Limiter | None, halt: threading.Event | None) -> None:
+        if limiter is not None:
+            limiter.acquire(halt)
+        self._limiter, self._lock = limiter, threading.Lock()
+
+    def release(self) -> bool:
+        """Give the place back, if it is still held; whether this call did."""
+        with self._lock:
+            limiter, self._limiter = self._limiter, None
+        if limiter is not None:
+            limiter.release()
+        return limiter is not None
+
+    def give_up(self, wait_s: float) -> GivenUp:
+        """The caller gave up on the call: the place is freed ``wait_s`` and ``LEAK_MARGIN_S`` from
+        now if the call hasn't ended by then (it ``leak``s)."""
+        given_up = GivenUp()
+
+        def free() -> None:
+            if self.release():
+                given_up.leak()
+
+        if self._limiter is not None:  # still held: no timer for a call with no place
+            timer = threading.Timer(wait_s + LEAK_MARGIN_S, free)
+            timer.daemon = True
+            timer.start()
+        return given_up
+
+
+def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None = None,
+            limiter: Limiter | None = None) -> BriefChat:
     """``chat`` with a deadline that fires and a kill that reaches a call in flight. Each call runs
     on a daemon thread of its own, its timeout capped at ``cap_s``; the caller waits for its reply
     no longer than that timeout and ``CALL_GRACE_S`` (then a timeout, as ``model_api``'s, which
     ``retry.transient`` tries again) and only until ``halt`` is set (``Abandoned``). A thread given
-    up on ends with its own transport's timeout and never holds the process open."""
+    up on ends with its own transport's timeout and never holds the process open. With
+    ``limiter``, the caller takes a place before the call (its wait there no part of the deadline)
+    and the call's own thread gives it back once the call really ends, so a call given up on but
+    still in flight keeps counting against the limit, for at most its transport timeout and
+    ``LEAK_MARGIN_S`` more (``_Place``)."""
 
     def call(model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, timeout_s: float, *,
              temperature: float | None = None) -> ChatResult:
         wait = timeout_s if cap_s is None else min(timeout_s, cap_s)
         found: list[ChatResult | BaseException] = []
-        done = threading.Event()
+        done, place = threading.Event(), _Place(limiter, halt)
 
         def run() -> None:
             try:
@@ -319,15 +395,22 @@ def bounded(chat: BriefChat, halt: threading.Event | None, cap_s: float | None =
             except BaseException as error:  # noqa: BLE001 - handed to the caller, raised there
                 found.append(error)
             finally:
-                done.set()
+                try:
+                    place.release()
+                finally:
+                    done.set()
 
-        threading.Thread(target=run, name="apd-call", daemon=True).start()
+        try:
+            threading.Thread(target=run, name="apd-call", daemon=True).start()
+        except BaseException:
+            place.release()
+            raise
         deadline = time.monotonic() + wait + CALL_GRACE_S
         while not done.wait(max(0.0, min(CALL_POLL_S, deadline - time.monotonic()))):
             if halt is not None and halt.is_set():
-                raise Abandoned("the command is ending: a call in flight was given up on")
+                raise Abandoned("the command is ending: a call in flight was given up on", place.give_up(wait))
             if time.monotonic() >= deadline:
-                raise ModelApiError(f"a generation call timed out after {wait:g}s (its deadline)")
+                raise CallTimedOut(f"a generation call timed out after {wait:g}s (its deadline)", place.give_up(wait))
         if isinstance(found[0], BaseException):
             raise found[0]
         return found[0]
@@ -375,27 +458,39 @@ class Flight:
 
 
 @dataclass
+class WaitBudget:
+    """What one attempt may still wait on 429s, in seconds, shared by its calls (``Retries``)."""
+
+    left_s: float = retry.RATE_LIMIT_BUDGET_S
+
+
+@dataclass
 class Retries:
     """The extra tries one attempt holds for transient failures (a 5xx, a timeout or a reset),
     shared by its writer's and reader's calls and held at their worst case; each waits first
-    (``wait``). A 429 is billed nothing and held nothing, so its tries never spend ``left``: only
-    its own call's ``retry.RATE_LIMIT_ATTEMPTS`` bound them. With ``rate_limits_only`` (the
-    auditor's, whose hold has no extra tries) only a 429 is tried again."""
+    (``wait``). A 429 is billed nothing and held nothing, so its tries never spend ``left``: the
+    call's ``retry.RATE_LIMIT_ATTEMPTS`` tries in all and the attempt's ``budget`` of 429 waits
+    bound them. With ``rate_limits_only`` (the auditor's, whose hold has no extra tries) only a 429
+    is tried again."""
 
     left: int = GEN_SPARK_RETRIES
     sleep: Callable[[float], None] = time.sleep
     rand: Callable[[], float] = random.random
     halt: threading.Event | None = None
     rate_limits_only: bool = False
+    budget: WaitBudget = field(default_factory=WaitBudget)
 
     def wait(self, error: ModelApiError, attempt: int) -> float | None:
         """The wait before trying again a call whose try ``attempt`` failed with ``error``;
-        ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, up to
-        ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call; another transient failure
-        ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
+        ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, taken from
+        the attempt's budget, up to ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all; another
+        transient failure ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
         if retry.rate_limited(error):
-            return None if attempt >= retry.RATE_LIMIT_ATTEMPTS else retry.rate_limit_wait(attempt, retry.hint(error),
-                                                                                          self.rand)
+            wait = retry.rate_limit_wait(attempt, retry.hint(error), self.rand)
+            if attempt >= retry.RATE_LIMIT_ATTEMPTS or wait > self.budget.left_s:
+                return None
+            self.budget.left_s -= wait
+            return wait
         if self.rate_limits_only or self.left < 1 or attempt >= retry.ATTEMPTS or not retry.transient(error):
             return None
         self.left -= 1
@@ -431,14 +526,16 @@ class CountedChat:
             halted(self.halt)
             try:
                 result = self.inner(model, messages, tools, timeout_s, temperature=temperature)
-            except Abandoned:
+            except Abandoned as error:
                 self._priced(messages, 0, 0, 0.0 if self.rate is None else self.rate.worst, failed=True)
+                self._watch(error.given_up)
                 raise
             except ModelApiError as error:
                 limited = retry.rate_limited(error)  # a 429 is billed nothing; another failure at worst
                 wait = None if self.retries is None else self.retries.wait(error, attempt)
                 self._priced(messages, 0, 0, 0.0 if limited or self.rate is None else self.rate.worst, failed=True,
                              rate_limited=limited, wait_s=wait)
+                self._watch(error.given_up if isinstance(error, CallTimedOut) else None)
                 if self.retries is None or wait is None:
                     raise
                 self.retries.pause(wait)
@@ -448,6 +545,11 @@ class CountedChat:
                          0.0 if self.rate is None else self.rate.usd(result.input_tokens, result.output_tokens),
                          reply=result)
             return result
+
+    def _watch(self, given_up: GivenUp | None) -> None:
+        """The try just logged, given up on: marked ``leaked`` in the log if its place is freed for it."""
+        if given_up is not None and self.log is not None:
+            given_up.on_leak(functools.partial(self.log.mark_leaked, len(self.log.calls) - 1))
 
     def _priced(self, messages: list[dict[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
                 failed: bool = False, reply: ChatResult | None = None, rate_limited: bool = False,
@@ -546,15 +648,15 @@ def held_attempt(backend: Backend, key: str, calls: GenCalls = WORST_LIFE,
     waits ``GEMINI_READ_TIMEOUT_S`` at most; a hold without room waits (``_room``)."""
     halted(backend.halt)
     halt, cap = backend.halt, None if backend.read_by.model is None else GEMINI_READ_TIMEOUT_S
-    retries = Retries(calls.retries, sleep=backend.sleep, halt=halt)
+    budget = WaitBudget(retry.RATE_LIMIT_BUDGET_S)  # the attempt's 429 waits, its auditor's included
+    retries = Retries(calls.retries, sleep=backend.sleep, halt=halt, budget=budget)
     spark = CountedChat(bounded(backend.life_chat, halt), calls.writes, write_rate(backend), retries, halt=halt,
                         log=log)
-    reads = bounded(backend.reader, halt, cap)
-    reads = reads if backend.read_limit is None else backend.read_limit.limit(reads, halt)
+    reads = bounded(backend.reader, halt, cap, backend.read_limit)
     reader = CountedChat(reads, calls.reads, read_rate(backend), retries, halt=halt, log=log)
     auditor = CountedChat(bounded(backend.auditor, halt), calls.muse,
                           None if backend.rates is None else backend.rates[MUSE],
-                          Retries(calls.retries, sleep=backend.sleep, halt=backend.halt, rate_limits_only=True),
+                          Retries(calls.retries, sleep=backend.sleep, halt=halt, rate_limits_only=True, budget=budget),
                           halt=backend.halt, log=log)
     if backend.ledger is None:
         yield spark, reader, auditor

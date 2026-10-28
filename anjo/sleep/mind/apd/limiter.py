@@ -2,7 +2,8 @@
 
 Lives generated side by side each read their gates on Gemini, so a run of many lives can send
 Vertex more reads at once than its quota takes, and every one of them answers 429. A ``Limiter``
-is made once per run and shared by every attempt's reader (``Backend.read_limit``): at most
+is made once per run and shared by every attempt's reader (``Backend.read_limit``, taken by
+``backend.bounded``, so a read given up on but still in flight keeps its place): at most
 ``concurrency`` reads in flight at once (``--vertex-concurrency``), and, with ``per_minute``
 (``--vertex-rpm``), their starts spaced evenly, ``60 / per_minute`` seconds apart.
 
@@ -47,18 +48,30 @@ class Limiter:
         self._next: float | None = None  # the earliest the next call may start
         self._clock, self._sleep = clock, sleep
 
-    @contextmanager
-    def slot(self, halt: threading.Event | None = None) -> Iterator[None]:
-        """Hold one of the limiter's places for a call, once its paced start has come; ``Halted``
-        instead once ``halt`` is set, whether it waited for its place or its start."""
+    def acquire(self, halt: threading.Event | None = None) -> None:
+        """Take one of the limiter's places, once its paced start has come; ``Halted`` instead
+        once ``halt`` is set, whether it waited for its place or its start. ``release`` gives it
+        back, from any thread (``backend.bounded``: the call's own, once it really ends)."""
         while not self._slots.acquire(timeout=None if halt is None else HALT_POLL_S):
             halted(halt)
         try:
             halted(halt)
             self._wait_for_start(halt)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def release(self) -> None:
+        self._slots.release()
+
+    @contextmanager
+    def slot(self, halt: threading.Event | None = None) -> Iterator[None]:
+        """Hold one of the limiter's places for a call (``acquire``) while the ``with`` lasts."""
+        self.acquire(halt)
+        try:
             yield
         finally:
-            self._slots.release()
+            self.release()
 
     def _wait_for_start(self, halt: threading.Event | None) -> None:
         if self.per_minute is None:

@@ -19,10 +19,12 @@ import pytest
 
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generate, readers, retry
+from anjo.sleep.mind.apd import calls, core_splits, failures, fakes, gen_batch, generate, readers, retry
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.mind.apd.generate import GenerationError
 from anjo.sleep.mind.apd.judging import Rate
+from anjo.sleep.mind.apd.limiter import Limiter
+from anjo.sleep.mind.apd.live import RunsFailed
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.spark_provider import FIREWORKS
 from anjo.sleep.model_api import ChatResult, ModelApiError, RateLimited
@@ -163,6 +165,91 @@ def test_a_kill_reaches_a_read_in_flight_and_settles_its_hold(tmp_path: Path, ne
     assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
 
 
+def test_an_attempt_cut_short_by_a_kill_is_recorded_as_killed(tmp_path: Path, never: NeverAnswers) -> None:
+    # Arrange: a life's read in flight that would never answer, the attempt's failures recorded
+    halt, data = threading.Event(), DataDir(tmp_path / "pilot")
+    log = calls.CallLog(on_failure=gen_batch.recorder(data, "generate-attempt", "the life"))
+    backend = dataclasses.replace(_gemini_backend(tmp_path, [], reader=never), halt=halt)
+    worker, raised = _in_thread(lambda: gen_batch.generate_life(SPEC, backend, log))
+    assert never.entered.wait(10.0)
+
+    # Act
+    halt.set()
+    worker.join(5.0)
+
+    # Assert: the attempt the kill cut short has its record, marked killed, at the read in flight
+    assert len(raised) == 1 and isinstance(raised[0], backends.Abandoned)
+    (record,) = data.failed()
+    assert (record["what"], record["attempt"], record["step"], record["error"], record["killed"]) == (
+        "generate-attempt", 0, "leak reader", "Abandoned", True)
+    assert "killed" in failures.line("the life", failures.AttemptFailure.from_json(record))
+
+
+def test_a_read_given_up_on_keeps_its_limiter_place_until_it_really_ends(never: NeverAnswers,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: one place; a read past its deadline, still in flight
+    monkeypatch.setattr(backends, "CALL_GRACE_S", 0.05)
+    read = backends.bounded(never, None, 0.1, Limiter(1))
+    leak = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+    with pytest.raises(ModelApiError, match="timed out"):
+        read("gemini", leak, None, 5.0)
+
+    # Act: a second read, while the first is still in flight
+    second, raised = _in_thread(lambda: read("gemini", leak, None, 5.0))
+    time.sleep(0.2)
+    waited = len(never.timeouts)
+    never.answer.set()
+    never.release.set()  # the first read really ends, and its place frees
+    second.join(5.0)
+
+    # Assert: the second read reached the model only once the first had ended
+    assert waited == 1
+    assert len(never.timeouts) == 2 and raised == [] and not second.is_alive()
+
+
+def test_reads_stuck_past_their_timeout_give_their_places_back_within_the_bound(
+        never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: two places, both taken by reads whose transport never times out
+    monkeypatch.setattr(backends, "CALL_GRACE_S", 0.05)
+    monkeypatch.setattr(backends, "LEAK_MARGIN_S", 0.1)
+    log = calls.CallLog()
+    read = backends.CountedChat(backends.bounded(never, None, 0.1, Limiter(2)), 10, None, log=log)
+    leak = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+    for _ in range(2):
+        with pytest.raises(ModelApiError, match="timed out"):
+            read("gemini", leak, None, 5.0)
+
+    # Act: a third read
+    never.answer.set()
+    started = time.monotonic()
+    read("gemini", leak, None, 5.0)
+
+    # Assert: it got a place within the transport timeout and the margin, not never, and each
+    # stuck read whose place a timer freed is marked leaked
+    assert time.monotonic() - started < 2.0
+    marked = time.monotonic() + 2.0
+    while not all(call.leaked for call in log.calls[:2]) and time.monotonic() < marked:
+        time.sleep(0.02)
+    assert [call.leaked for call in log.calls] == [True, True, False]
+
+
+def test_a_read_that_ends_gives_its_place_back_once(never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A read given up on that then ends frees its place itself, and its timer frees nothing more
+    monkeypatch.setattr(backends, "CALL_GRACE_S", 0.05)
+    monkeypatch.setattr(backends, "LEAK_MARGIN_S", 0.1)
+    limit, log = Limiter(1), calls.CallLog()
+    read = backends.CountedChat(backends.bounded(never, None, 0.1, limit), 10, None, log=log)
+    leak = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+    with pytest.raises(ModelApiError, match="timed out"):
+        read("gemini", leak, None, 5.0)
+    never.answer.set()
+    never.release.set()
+    time.sleep(0.4)  # past the timer
+    with limit.slot():
+        assert not limit._slots.acquire(blocking=False)  # one place, never two
+    assert not log.calls[0].leaked
+
+
 def test_ctrl_c_with_a_call_that_never_answers_ends_without_a_stuck_join(
         tmp_path: Path, never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange: one life whose leak read never answers; Ctrl-C comes while the command waits on it
@@ -218,6 +305,46 @@ def test_429s_on_more_reads_than_the_extra_tries_wait_within_one_attempt(tmp_pat
     made = gen_batch.generate_life(SPEC, _gemini_backend(tmp_path, slept, reader=reader))
     assert made.attempts == 1 and retry.ATTEMPT_COOL_DOWN_S not in slept
     assert len(slept) == len(reader.seen) > backends.GEN_SPARK_RETRIES
+
+
+def test_an_attempts_429_waits_stop_at_its_budget() -> None:
+    # Each wait is taken from the attempt's budget; one that would pass it isn't waited
+    budget = backends.WaitBudget(10.0)
+    tries = backends.Retries(budget=budget, rand=lambda: 0.0)
+    assert tries.wait(RateLimited(VERTEX_429, retry_after_s=8.0), 1) == 8.0 and budget.left_s == 2.0
+    assert tries.wait(RateLimited(VERTEX_429, retry_after_s=8.0), 1) is None
+    assert retry.RATE_LIMIT_BUDGET_S == 1200.0
+
+
+def test_an_attempt_out_of_429_budget_fails_recorded_and_the_next_cools_down(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: every read answered 429 once, with a 30 s hint and no jitter, under a 100 s budget
+    # an attempt
+    monkeypatch.setattr(retry, "RATE_LIMIT_BUDGET_S", 100.0)
+    monkeypatch.setattr(retry, "HINT_JITTER", 0.0)
+    slept: list[float] = []
+    data = DataDir(tmp_path / "pilot")
+
+    class Hinted(LimitedOnce):
+        def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                     temperature: float | None = None) -> ChatResult:
+            try:
+                return super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+            except RateLimited:
+                raise RateLimited(VERTEX_429, retry_after_s=30.0) from None
+
+    # Act
+    with pytest.raises(RunsFailed):
+        gen_batch.generate_lives(data, [SPEC], _gemini_backend(tmp_path, slept, reader=Hinted()), lambda _: None)
+
+    # Assert: each attempt waited out 429s up to its budget, then failed and was recorded, and
+    # each next attempt cooled down first
+    waits = [wait for wait in slept if wait != retry.ATTEMPT_COOL_DOWN_S]
+    assert slept.count(retry.ATTEMPT_COOL_DOWN_S) == generate.MAX_ATTEMPTS - 1
+    assert waits == [30.0] * 3 * generate.MAX_ATTEMPTS
+    records = [raw for raw in data.failed() if raw["what"] == "generate-attempt"]
+    assert [(raw["attempt"], raw["error"], raw["rate_limits"]) for raw in records] == [
+        (n, "RateLimited", 4) for n in range(generate.MAX_ATTEMPTS)]
 
 
 def test_a_429_never_spends_the_billed_extra_tries() -> None:
