@@ -25,7 +25,9 @@ from a folder (``adapters_dir``: Modal's adapters volume, the APD Colab session'
 each one through ``/v1/load_lora_adapter`` before the first request that names it, once per client
 (its dated copies share the set). One already loaded counts as loaded. A folder the server can't see
 yet is asked for again for up to ``LOAD_WAIT_S``: a warm Modal container sees a new adapter within
-``config.ADAPTER_REFRESH_S``. A later 404 naming a loaded adapter (its container restarted and forgot
+``config.ADAPTER_REFRESH_S``. Only work nobody waits on takes that wait (the night, the morning, the
+demo's pre-generated pairs); a chat turn and the live demo page load once (``load_adapter`` with no
+wait, ``with_load_wait(0)``). A later 404 naming a loaded adapter (its container restarted and forgot
 it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
 client has no ``adapters_dir`` and never loads.
 
@@ -233,6 +235,20 @@ class HttpPoster:
         return True
 
 
+def load_adapter(
+    poster: HttpPoster, name: str, folder: str, *, wait_s: float = 0.0,
+    clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Load adapter ``name`` from ``folder/name`` into the server; one already loaded counts. A folder
+    the server can't see yet is asked for again every ``LOAD_RETRY_S`` until ``wait_s`` has passed; the
+    default, no wait, is one attempt. Anything else is ``ServingError`` naming the endpoint only."""
+    deadline = clock() + wait_s
+    while not poster.load_adapter(name, f"{folder}/{name}"):
+        if clock() >= deadline:
+            raise ServingError(f"{LOAD_PATH} found no adapter" + (f" in {wait_s:.0f} s" if wait_s else ""))
+        sleep(LOAD_RETRY_S)
+
+
 def tokens(poster: Poster, body: Mapping[str, Any]) -> list[int]:
     """``/tokenize``'s token ids for ``body``, or ``ServingError``."""
     data = poster.post("/tokenize", body)
@@ -264,25 +280,27 @@ class VllmClient:
     bearer token, or any other ``Poster`` (``VllmClient.over``). ``on(day)`` dates its prompts
     (the night's date, virtual in an accelerated run); unset, they carry today's UTC date.
     ``adapters_dir`` is the folder the server reads adapters from, which the client loads them from
-    before their first use; ``None`` when the backend loads them itself."""
+    before their first use, waiting up to ``load_wait_s`` for one the server can't see yet; ``None``
+    when the backend loads them itself."""
 
     precision: Final = config.SERVING.name
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS, adapters_dir: str | None = None,
-        clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+        load_wait_s: float = LOAD_WAIT_S, clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
         self._setup(poster, max_tokens, None if adapters_dir is None else poster, adapters_dir)
-        self._clock, self._sleep = clock, sleep
+        self._load_wait_s, self._clock, self._sleep = load_wait_s, clock, sleep
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
         """A client over ``poster``, whose server loads adapters itself (SageMaker's shim)."""
         client = cls.__new__(cls)
         client._setup(poster, max_tokens, None, None)
-        client._clock, client._sleep = time.monotonic, time.sleep
+        client._load_wait_s, client._clock, client._sleep = LOAD_WAIT_S, time.monotonic, time.sleep
         return client
 
     def _setup(self, poster: Poster, max_tokens: int, loader: HttpPoster | None, adapters_dir: str | None) -> None:
@@ -298,6 +316,19 @@ class VllmClient:
         dated.__dict__.update(self.__dict__)
         dated._day = day
         return dated
+
+    def with_load_wait(self, seconds: float) -> VllmClient:
+        """This client, waiting up to ``seconds`` for an adapter folder the server can't see yet (0:
+        one attempt, for an answer someone is waiting on); the poster and the loaded set are shared."""
+        waiting = type(self).__new__(type(self))
+        waiting.__dict__.update(self.__dict__)
+        waiting._load_wait_s = seconds
+        return waiting
+
+    @property
+    def load_wait_s(self) -> float:
+        """How long a load waits for an adapter folder the server can't see yet."""
+        return self._load_wait_s
 
     @property
     def rendering(self) -> str:
@@ -345,15 +376,11 @@ class VllmClient:
             return call(model)
 
     def _ensure_loaded(self, name: str) -> None:
-        """Load ``name`` unless this client has; a folder the server can't see yet is asked for again
-        until ``LOAD_WAIT_S``."""
-        if name in self._loaded or self._loader is None:
+        """Load ``name`` unless this client has (``load_adapter``, waiting ``load_wait_s``)."""
+        if name in self._loaded or self._loader is None or self._adapters_dir is None:
             return
-        deadline = self._clock() + LOAD_WAIT_S
-        while not self._loader.load_adapter(name, f"{self._adapters_dir}/{name}"):
-            if self._clock() >= deadline:
-                raise ServingError(f"{LOAD_PATH} found no adapter in {LOAD_WAIT_S:.0f} s")
-            self._sleep(LOAD_RETRY_S)
+        load_adapter(self._loader, name, self._adapters_dir, wait_s=self._load_wait_s,
+                     clock=self._clock, sleep=self._sleep)
         self._loaded.add(name)
 
     def complete(
