@@ -34,7 +34,8 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.evidence.extract import ExtractionError, Turn, extract
 from anjo.sleep.evidence.targets import mentioned_target
 from anjo.sleep.mind.apd import gates, retry
-from anjo.sleep.mind.apd.families import Template, fields, templates_for
+from anjo.sleep.mind.apd.core_families import fields, templates_for
+from anjo.sleep.mind.apd.families import Template
 from anjo.sleep.mind.apd.types import (
     DEVELOPMENT_LIVES,
     EMPTY_HELD_OUT_LIVES,
@@ -46,10 +47,10 @@ from anjo.sleep.mind.apd.types import (
     Family,
     GateVerdict,
     Life,
+    LifeSplit,
     PlantedItem,
     ProblemFile,
     Session,
-    Split,
 )
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.types import Evidence, Target
@@ -96,7 +97,7 @@ class Generated:
 class LifeSpec:
     """One life to generate: the arguments of ``life`` apart from the model."""
 
-    split: Split
+    split: LifeSplit
     field: str
     families: tuple[Family, ...]
     prevalence: int
@@ -151,7 +152,7 @@ def _schedule(template: Template, dice: _Dice) -> _Plan:
     return _Plan(template, tuple(days[:-2]), days[-2], days[-1])
 
 
-def plan(split: Split, field: str, families: Sequence[Family], prevalence: int, seed: int) -> tuple[_Plan, ...]:
+def plan(split: LifeSplit, field: str, families: Sequence[Family], prevalence: int, seed: int) -> tuple[_Plan, ...]:
     """The life's planted items: templates drawn round-robin through ``families``, then scheduled."""
     if not 0 <= prevalence <= MAX_PREVALENCE:
         raise ValueError(f"prevalence must be 0 to {MAX_PREVALENCE}")
@@ -260,7 +261,7 @@ def _extractor(chat: ChatFn, model: str) -> Callable[[list[dict[str, Any]]], Cha
 
 
 def life(
-    field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: Split, chat: ChatFn,
+    field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: LifeSplit, chat: ChatFn,
     model: str = SPARK_OPEN,
 ) -> tuple[Life, ProblemFile]:
     """One life of ``LIFE_DAYS`` days with ``prevalence`` planted items, and its sealed file.
@@ -360,7 +361,7 @@ def _expresses(fact: str, evidence_text: str) -> bool:
 
 
 def generate(
-    field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: Split, chat: ChatFn,
+    field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: LifeSplit, chat: ChatFn,
     reader: ChatFn, auditor: ChatFn, max_attempts: int = MAX_ATTEMPTS,
 ) -> Generated:
     """A life that passes every gate: ``life`` again, under ``attempt_seed``, while an attempt
@@ -398,13 +399,18 @@ def draw_held_out(draw_seed: str, *, count: int = HELD_OUT_LIVES) -> tuple[LifeS
     plant 1 to ``MAX_PREVALENCE`` items. Written now, run at the freeze."""
     if count not in (HELD_OUT_LIVES, HELD_OUT_LIVES_CUT):
         raise ValueError(f"the held-out lives number {HELD_OUT_LIVES} or {HELD_OUT_LIVES_CUT}")
-    names = fields("held_out")
-    label = f"held_out:{draw_seed}"
-    empty = set(_ranked(label, list(range(count)), str)[:EMPTY_HELD_OUT_LIVES])
+    return draw_specs("held_out", f"held_out:{draw_seed}", count, EMPTY_HELD_OUT_LIVES)
+
+
+def draw_specs(split: LifeSplit, label: str, count: int, empty_count: int) -> tuple[LifeSpec, ...]:
+    """``count`` lives of ``split``, a pure function of ``label``: fields rotate through the split's
+    fields, ``empty_count`` lives plant nothing, and the rest plant 1 to ``MAX_PREVALENCE`` items."""
+    names = fields(split)
+    empty = set(_ranked(label, list(range(count)), str)[:empty_count])
     dice = _Dice(label)
     seeds = [int.from_bytes(hashlib.sha256(f"{label}:seed:{n}".encode()).digest()[:6], "big") for n in range(count)]
     return tuple(
-        LifeSpec("held_out", names[n % len(names)], ALL_FAMILIES,
+        LifeSpec(split, names[n % len(names)], ALL_FAMILIES,
                  0 if n in empty else 1 + dice.below(MAX_PREVALENCE), seeds[n])
         for n in range(count)
     )

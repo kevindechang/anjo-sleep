@@ -30,7 +30,8 @@ from typing import Any, Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
-from anjo.sleep.mind.apd.families import TEMPLATES, Template
+from anjo.sleep.mind.apd.core_families import template as find_template
+from anjo.sleep.mind.apd.families import Template
 from anjo.sleep.mind.apd.retry import REPLY_MAX_TOKENS, reply_timeout_s
 from anjo.sleep.mind.apd.types import GateVerdict, Life, PlantedItem, ProblemFile, Session
 from anjo.sleep.mind.inquiry._check import check_text
@@ -170,7 +171,7 @@ def _audit(life: Life, problems: ProblemFile, auditor: ChatFn) -> GateVerdict:
 
 
 def _template(item: PlantedItem) -> Template | None:
-    return next((t for ts in TEMPLATES.values() for t in ts if t.id == item.template), None)
+    return find_template(item.template)
 
 
 def _sealed(life: Life, item: PlantedItem) -> dict[str, Any]:

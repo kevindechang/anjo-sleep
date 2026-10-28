@@ -3,7 +3,8 @@
 ::
 
     <data>/lives/<life>.json          a life, as the arms and the gates read it
-    <data>/sealed/<life>.json         its problem file, sealed: only the judge and the report read it
+    <data>/sealed/<life>.json         its problem file, sealed: only the judge and the report read it,
+                                      and the core's labels for ``LABELLED_SPLITS`` (``labels``)
     <data>/runs/<life>.<arm>.json     each finished run (``ArmRun``), written once
     <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
     <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
@@ -44,7 +45,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.evidence.jsonl import PLAIN, append_records, read_records
-from anjo.sleep.mind.apd.types import ArmName, ArmRun, Life, ProblemFile, Split
+from anjo.sleep.mind.apd.types import LABELLED_SPLITS, ArmName, ArmRun, Life, LifeSplit, ProblemFile
 
 _MODULES: Final = (
     "anjo.sleep.types", "anjo.sleep.mind.apd.types", "anjo.sleep.mind.inquiry.types",
@@ -306,7 +307,7 @@ class DataDir:
             raise StoreError(f"{life_id}'s file holds another life")
         return found
 
-    def lives(self, split: Split) -> tuple[Life, ...]:
+    def lives(self, split: LifeSplit) -> tuple[Life, ...]:
         """Every life of ``split`` on disk, by id."""
         folder = self.root / "lives"
         found = [self.life(path.stem) for path in sorted(folder.glob("*.json"))] if folder.exists() else []
@@ -317,6 +318,13 @@ class DataDir:
         (Spark Open, the model that wrote it). A held-out life's is never read here."""
         if self.life(life_id).split != "development":
             raise StoreError("only a development life's problem file is read outside judging")
+        return self.sealed(life_id)
+
+    def labelled_problems(self, life_id: str) -> ProblemFile:
+        """A labelled life's problem file, for the core's training labels (``labels``); a
+        ``core-val``, ``core-test`` or held-out life's is never read here."""
+        if self.life(life_id).split not in LABELLED_SPLITS:
+            raise StoreError("only a labelled split's problem file is read for training labels")
         return self.sealed(life_id)
 
     def sealed(self, life_id: str) -> ProblemFile:

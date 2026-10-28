@@ -89,6 +89,8 @@ from anjo.sleep.types import Evidence, Target
 
 Family = Literal["contradiction", "gap", "opportunity", "reversal", "decoy"]
 Split = Literal["development", "held_out"]
+CoreSplit = Literal["core-train", "core-val", "core-test"]  # MIND core's lives (``core_splits``), outside APD's protocol
+LifeSplit = Literal[Split, CoreSplit]
 ArmName = Literal["A", "B", "M", "M-persist", "M-kernel", "M-control", "M+replay", "M+shuffled"]
 JudgeView = Literal["audited", "gemini"]  # audited: Muse Spark, with Claude's blind audit where the judges differ
 ApdGate = Literal["leak", "discoverability", "script_audit"]
@@ -99,6 +101,9 @@ ARMS: Final = frozenset(get_args(ArmName))
 DEVELOPMENT_ARMS: Final = frozenset({"B", "M"})
 HELD_OUT_ONLY_ARMS: Final = frozenset({"M-kernel", "M-control", "M+replay", "M+shuffled"})
 WORKSPACE_ARMS: Final = ARMS - {"A", "B"}  # the arms that keep a workspace log
+CORE_SPLITS: Final[tuple[CoreSplit, ...]] = get_args(CoreSplit)
+LIFE_SPLITS: Final = frozenset(get_args(LifeSplit))
+LABELLED_SPLITS: Final = frozenset({"development", "core-train"})  # the splits whose items the core may train on
 
 FINDING_CAP: Final = 8  # distinct finding ids per arm and life; updating one in place is free
 LIFE_DAYS: Final = 10
@@ -210,7 +215,7 @@ class Life:
     id: str
     field: str
     seed: int
-    split: Split
+    split: LifeSplit
     days: tuple[date, ...]
     sessions: tuple[Session, ...]
     evidence: tuple[Evidence, ...]
@@ -219,7 +224,7 @@ class Life:
     def __post_init__(self) -> None:
         check_text("id", self.id)
         check_text("field", self.field)
-        check_one_of("split", self.split, frozenset(get_args(Split)))
+        check_one_of("split", self.split, LIFE_SPLITS)
         freeze_tuple(self, "days", date)
         freeze_tuple(self, "sessions", Session)
         freeze_tuple(self, "evidence", Evidence)

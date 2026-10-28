@@ -29,6 +29,12 @@ CLI, ``ssh`` and ``ssh-keygen`` are here (``colab_vllm.preflight``), then Glimme
 vLLM's version, the precision and the reasoning strength against the pilot's first session
 (``DataDir.pin_serving``), and 17b's adapters before the VM boots.
 
+MIND core's lives (``core_splits``): ``generate --split core-train`` (or ``core-val``, ``core-test``)
+writes a split; ``run --split core-test --subset b12`` runs B alone (``--arms B,M`` adds M) on the
+pinned subset, and ``judge`` takes the same flags. ``labels --split S --out DIR`` exports a split's
+event streams, with training labels for a labelled split only (``labels``); it reads the data dir
+and calls nothing, so it needs no ``--live``.
+
 Spark Open runs on the one provider ``ANJO_SLEEP_MIND_SPARK`` names (``mind.spark_provider``:
 Fireworks by default, or Baseten), read once per command, its calls held on that provider's pool.
 A command that calls Spark Open first checks the provider against the data dir's
@@ -55,7 +61,7 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
+from anjo.sleep.mind.apd import colab_vllm, core_splits, fakes, generate, intervene, labels, pilot, plan, timing
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
 from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
@@ -65,7 +71,15 @@ from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.live import RunFailed
 from anjo.sleep.mind.apd.pilot import Out
 from anjo.sleep.mind.apd.store import DataDir, StoreError
-from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, MAX_PREVALENCE, ArmName, Life, Split
+from anjo.sleep.mind.apd.types import (
+    CORE_SPLITS,
+    HELD_OUT_LIVES,
+    KILL_RESUME_LIVES,
+    MAX_PREVALENCE,
+    ArmName,
+    Life,
+    LifeSplit,
+)
 from anjo.sleep.mind.spark_provider import SparkProvider, from_env
 from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
@@ -102,6 +116,9 @@ SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that cal
 # one at a time; mind.lock already keeps every other MIND command off the session.
 SERIAL_COMMANDS: Final = ("intervene", "kill-resume")
 GEN_COMMANDS: Final = ("generate",)  # their --parallel is the lives generated at once
+CORE_COMMANDS: Final = ("generate", "run", "judge", "labels")  # the commands that take --split
+SUBSET_COMMANDS: Final = ("run", "judge", "labels")
+CORE_ARMS: Final[tuple[ArmName, ...]] = ("B",)  # a core split's runs, unless --arms says otherwise
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
 
 
@@ -138,6 +155,16 @@ def _parser() -> argparse.ArgumentParser:
     judged = commands.add_parser("judge", help="judge every run of a split, blind")
     judged.add_argument("--held-out", action="store_true")
     commands.add_parser("report", help="the APD report, with 17b's section")
+    exported = commands.add_parser("labels", help="a split's event streams, and a labelled split's labels")
+    exported.add_argument("--out", type=Path, required=True, help="the export's folder")
+    ran.add_argument("--arms", help=f"a core split's arms, comma-separated, of {', '.join(pilot.DEV_ARMS)} "
+                     f"(default {','.join(CORE_ARMS)})")
+    for name in CORE_COMMANDS:
+        commands.choices[name].add_argument("--split", choices=("development", *CORE_SPLITS),
+                                            help="the split (APD's held-out lives take --held-out)")
+    for name in SUBSET_COMMANDS:
+        commands.choices[name].add_argument("--subset", choices=sorted(core_splits.SUBSETS),
+                                            help="a pinned subset of a core split's lives")
     killed = commands.add_parser("kill-resume", help="kill-resume on held-out lives")
     killed.add_argument("--kill-at", type=int, required=True)
     for name in CEILING_COMMANDS:
@@ -187,12 +214,45 @@ def _check_parallel(parser: argparse.ArgumentParser, args: argparse.Namespace) -
                      "and its runs are compared token for token")
 
 
-def _split(args: argparse.Namespace) -> Split:
-    return "held_out" if getattr(args, "held_out", False) else "development"
+def _split(args: argparse.Namespace) -> LifeSplit:
+    if getattr(args, "held_out", False):
+        return "held_out"
+    found: LifeSplit = getattr(args, "split", None) or "development"
+    return found
 
 
-def _lives(data: DataDir, split: Split, only: int | None) -> tuple[Life, ...]:
+def _check_split(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    split, subset = getattr(args, "split", None), getattr(args, "subset", None)
+    if split is not None and getattr(args, "held_out", False):
+        parser.error("--held-out and --split name two splits; give one")
+    if subset is not None and core_splits.SUBSETS[subset] != split:
+        parser.error(f"--subset {subset} is of --split {core_splits.SUBSETS[subset]}")
+    if args.command == "labels" and split is None:
+        parser.error("labels needs --split")
+    if getattr(args, "arms", None) is not None and split not in CORE_SPLITS:
+        parser.error("--arms is for a core split's runs; APD's splits run their protocol's arms")
+    if args.command == "labels" and args.data is None:
+        parser.error("labels needs --data, the data dir to export from")
+
+
+def _arms(args: argparse.Namespace) -> tuple[ArmName, ...]:
+    """A core split's arms: ``--arms``, or ``CORE_ARMS``; never an arm outside development's."""
+    text = getattr(args, "arms", None)
+    if text is None:
+        return CORE_ARMS
+    arms = tuple(arm for arm in pilot.DEV_ARMS if arm in text.split(","))
+    if not arms or set(text.split(",")) - set(arms):
+        raise SystemExit(f"--arms takes {', '.join(pilot.DEV_ARMS)}, comma-separated")
+    return arms
+
+
+def _specs(split: LifeSplit) -> tuple[generate.LifeSpec, ...]:
+    return core_splits.core_specs(split) if split in CORE_SPLITS else generate.development_specs()
+
+
+def _lives(data: DataDir, split: LifeSplit, only: int | None, subset: str | None = None) -> tuple[Life, ...]:
     found = data.lives(split)
+    found = found if subset is None else core_splits.in_subset(found, subset)
     return found if only is None else found[:only]
 
 
@@ -203,13 +263,14 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
           provider: SparkProvider) -> plan.Plan:
     session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
-    on_disk = len(_lives(data, split, args.only))
+    on_disk = len(_lives(data, split, args.only, getattr(args, "subset", None)))
     if args.command == "generate":  # the held-out lives' items are drawn at the freeze: held at the most
         found = ([MAX_PREVALENCE] * args.lives if split == "held_out"
-                 else [spec.prevalence for spec in generate.development_specs()])
+                 else [spec.prevalence for spec in _specs(split)])
         return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider)
     if args.command == "run":
-        arms = pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()) if split == "held_out" else pilot.DEV_ARMS
+        arms = (_arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development"
+                else pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()))
         return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured, provider=provider)
     if args.command == "timing":
         return plan.timing_plan(prices, session_s, parallel, provider=provider)
@@ -351,15 +412,16 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         data.pin_spark(backend.provider.name, backend.provider.model)
     if args.command in SERVING_COMMANDS:
         data.pin_serving(_pins(settings_))
+    subset = getattr(args, "subset", None)
     if args.command == "generate":
-        specs = generate.development_specs()
+        specs = _specs(split)
         if split == "held_out":
             specs = pilot.held_out_specs(_entries(args, data, backend.fake), args.draw_seed or "", args.lives)
             data.save_drawn(pilot.seed_digest(args.draw_seed or ""), args.lives)
         pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out,
                              parallel=_parallel(args))
     elif args.command == "run":
-        arms = pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
+        arms = _arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
         replay = _adapters(args) if args.adapters is not None and split == "held_out" else None  # before the VM
         with pilot.serving(backend, settings_, session_s, out) as session:
             adapters = None
@@ -367,7 +429,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
                 publisher, adapters = replay
                 publisher.upload(session)
                 arms = (*arms, *pilot.REPLAY_ARMS)
-            pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters,
+            pilot.run_lives(data, _lives(data, split, args.only, subset), arms, session, backend, out, adapters=adapters,
                             parallel=_parallel(args), run_s=run_s)
     elif args.command == "timing":
         started = time.monotonic()
@@ -383,7 +445,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
             results, skipped = intervene.intervene(data, session, backend, out, snapshots=snaps, run_s=run_s)
         out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
-        pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
+        pilot.judge_lives(data, _lives(data, split, args.only, subset), backend, out)
     elif args.command == "report":
         judged = pilot.judge_lives(data, _lives(data, "held_out", args.only), _no_new_calls(backend), out)
         out(pilot.report(judged, intervene.on_disk(data)))
@@ -480,6 +542,14 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
     return 0
 
 
+def _labels(args: argparse.Namespace, out: Out) -> int:
+    done = labels.export(DataDir(args.data), _split(args), args.out, subset=args.subset)
+    sealed = "labels sealed: streams only" if done.sealed else "with labels"
+    out(f"exported {len(done.lives)} li{'fe' if len(done.lives) == 1 else 'ves'} of {_split(args)}"
+        f"{'' if args.subset is None else ' (' + args.subset + ')'}, {done.events} events, {sealed}, to {args.out}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
     with _signals_exit():
         return _main(argv, out)
@@ -489,6 +559,9 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     _check_parallel(parser, args)
+    _check_split(parser, args)
+    if args.command == "labels":  # reads the data dir and writes the export; no call, no spend
+        return _labels(args, out)
     provider = _provider(parser)
     if args.fake:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
