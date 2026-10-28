@@ -41,8 +41,9 @@ request Modal's proxy never delivered). The night's client sends a request that 
 is an idempotent post (``/tokenize``, ``/v1/completions`` with its seed, an adapter load), so a repeat
 gives the same answer. A status is an answer and never goes again. Until the server has answered
 within its scale-down window an attempt may wait out a cold start (``REQUEST_TIMEOUT_S``); after that
-it gives up at ``WARM_TIMEOUT_S``. All the attempts of one request end within ``REQUEST_TIMEOUT_S`` of
-the first (warm: 3 x 90 + 2 + 4 = 276 s), so no bound built on one request's time changes. ``once()``
+a first attempt gives up at ``WARM_TIMEOUT_S``, and any later one, which may meet a restarted
+container, gets the rest of the budget. All the attempts of one request end within
+``REQUEST_TIMEOUT_S`` of the first, so no bound built on one request's time changes. ``once()``
 sends each request once with the full timeout, as before: the live page, where a visitor waits. A
 client and its copies hold at most ``config.CONCURRENT_REQUESTS`` requests in flight, all one Modal
 container takes, so none waits in Modal's queue behind the client's own; ``retries()`` counts the
@@ -79,9 +80,10 @@ TOP_K: Final = 64
 MAX_TOKENS: Final = 1024
 REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own limit; one request's whole bound
 # The night's client sends a request lost in transport (no status came back) again: every night post
-# is idempotent, and its seed fixed, so a repeat gives the same answer. One attempt at a warm server
+# is idempotent, and its seed fixed, so a repeat gives the same answer. A first attempt at a warm server
 # gives up at WARM_TIMEOUT_S, 2.25 times the slowest warm completion seen (40 s at 1,024 tokens, 16 at
-# once), so three attempts and their pauses (3 x 90 + 2 + 4 = 276 s) end inside REQUEST_TIMEOUT_S.
+# once). The container may have restarted meanwhile, so every later attempt gets the rest of
+# REQUEST_TIMEOUT_S (300 - 90 - 2 = 208 s after a warm timeout): all of them end inside it.
 WARM_TIMEOUT_S: Final = 90.0
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
 ATTEMPTS: Final = len(BACKOFF_S) + 1
@@ -347,8 +349,9 @@ class _Sent:
 class _Requests:
     """``Poster`` and ``Loader`` for one client. Each request takes one of the client's slots; one lost
     in transport (``TransportFailed``) goes again, ``attempts`` in all, after the pauses in
-    ``BACKOFF_S``. An attempt gives up at a warm server's timeout, or at ``cold_s`` until the server
-    has answered within its scale-down window, and never later than ``cold_s`` after the first began.
+    ``BACKOFF_S``. A first attempt gives up at a warm server's timeout, or at ``cold_s`` until the server
+    has answered within its scale-down window; a later one, which may meet a restarted container, gets
+    whatever is left of ``cold_s`` after the first began, and none runs past it.
     A status is an answer, and never goes again. A poster other than ``HttpPoster`` keeps its own
     timeout (SageMaker's), and reports no transport failure apart from the rest, so it is never retried."""
 
@@ -376,10 +379,10 @@ class _Requests:
 
     def _send(self, attempt: Callable[[float], T]) -> T:
         deadline = self.clock() + self.cold_s
-        for pause in (*BACKOFF_S[: self.attempts - 1], None):
+        for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
             try:
                 with self.sent.slots:
-                    got = attempt(self._timeout(deadline))
+                    got = attempt(self._timeout(deadline, first=tried == 0))
             except TransportFailed:
                 if pause is None or deadline - self.clock() <= pause:
                     raise
@@ -390,8 +393,8 @@ class _Requests:
             return got
         raise AssertionError("the last attempt returns or raises")
 
-    def _timeout(self, deadline: float) -> float:
-        warm = self.attempts > 1 and self.sent.warm(self.clock())
+    def _timeout(self, deadline: float, *, first: bool) -> float:
+        warm = first and self.attempts > 1 and self.sent.warm(self.clock())
         return min(WARM_TIMEOUT_S if warm else self.cold_s, deadline - self.clock())
 
 

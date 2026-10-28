@@ -48,6 +48,20 @@ class Lossy(LiveVllm):
         return super().__call__(request)
 
 
+class Hangs(Lossy):
+    """``Lossy`` whose lost requests hang until their attempt's timeout, on ``waits``' clock."""
+
+    def __init__(self, waits: Waits, lose: int, paths: tuple[str, ...] = (COMPLETIONS,)) -> None:
+        super().__init__(lose=lose, paths=paths)
+        self.waits = waits
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path in self.lost_paths and self.seen.get(path, 0) < self.lose:
+            self.waits.now += request.extensions["timeout"]["read"]
+        return super().__call__(request)
+
+
 def _client(fake: Any, waits: Waits) -> VllmClient:
     return VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(fake),
                       adapters_dir=config.ADAPTERS_DIR, clock=waits.clock, sleep=waits.sleep)
@@ -98,33 +112,45 @@ def test_warm_attempt_timeout_is_shorter_than_cold() -> None:
     client.complete(None, MESSAGES, temperature=1.0)
     assert fake.timeouts[3][1] == vllm.REQUEST_TIMEOUT_S
 
-    # every attempt of one request, and the pauses between, end inside what one request could always take
-    assert vllm.ATTEMPTS * vllm.WARM_TIMEOUT_S + sum(vllm.BACKOFF_S) <= vllm.REQUEST_TIMEOUT_S
-
-    class Hangs(Lossy):  # a lost request hangs until its attempt's timeout
-        def __init__(self, waits: Waits, paths: tuple[str, ...]) -> None:
-            super().__init__(lose=99, paths=paths)
-            self.waits = waits
-
-        def __call__(self, request: httpx.Request) -> httpx.Response:
-            if request.url.path in self.lost_paths:
-                self.waits.now += request.extensions["timeout"]["read"]
-            return super().__call__(request)
+    waits = Waits()
+    warm = Hangs(waits, lose=99)  # the chat's ids came back; every completion is then lost
+    with pytest.raises(ServingError, match="failed in transport"):
+        _client(warm, waits).complete(None, MESSAGES, temperature=1.0)
+    budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
+    assert [t for path, t in warm.timeouts if path == COMPLETIONS] == [vllm.WARM_TIMEOUT_S, budget]
+    assert waits.now == vllm.REQUEST_TIMEOUT_S  # every attempt of one request ends inside what one could always take
 
     waits = Waits()
-    warm = Hangs(waits, (COMPLETIONS,))  # the chat's ids came back; every completion is then lost
+    cold = Hangs(waits, lose=99, paths=("/tokenize",))  # the first request after a wake is lost: it had the whole 300 s
     with pytest.raises(ServingError, match="failed in transport"):
-        VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(warm), clock=waits.clock,
-                   sleep=waits.sleep).complete(None, MESSAGES, temperature=1.0)
-    assert [t for path, t in warm.timeouts if path == COMPLETIONS] == [vllm.WARM_TIMEOUT_S] * 3
-    assert waits.now == 3 * vllm.WARM_TIMEOUT_S + sum(vllm.BACKOFF_S) <= vllm.REQUEST_TIMEOUT_S
-
-    waits = Waits()
-    cold = Hangs(waits, ("/tokenize",))  # the first request after a wake is lost: it had the whole 300 s
-    with pytest.raises(ServingError, match="failed in transport"):
-        VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(cold), clock=waits.clock,
-                   sleep=waits.sleep).complete(None, MESSAGES, temperature=1.0)
+        _client(cold, waits).complete(None, MESSAGES, temperature=1.0)
     assert [t for _, t in cold.timeouts] == [vllm.REQUEST_TIMEOUT_S] and waits.now == vllm.REQUEST_TIMEOUT_S
+
+
+def test_warm_timeout_then_cold_gets_the_remaining_budget() -> None:
+    waits = Waits()
+    fake = Hangs(waits, lose=1)  # one completion hangs at the warm timeout; the container may have restarted
+    client = _client(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
+    assert [t for path, t in fake.timeouts if path == COMPLETIONS] == [vllm.WARM_TIMEOUT_S, budget]
+    assert budget > 2 * vllm.WARM_TIMEOUT_S and client.retries() == 1  # a cold start's patience, nearly all of it
+
+
+def test_a_warm_client_meets_a_restarted_container() -> None:
+    waits = Waits()
+    fake = Hangs(waits, lose=0, paths=("/tokenize",))
+    client = _client(fake, waits)
+    client.complete(ADAPTER, MESSAGES, temperature=1.0, seed=1)  # loaded, and warm
+    fake.timeouts.clear()
+    fake.lose = fake.seen["/tokenize"] + 1  # the next request hangs while the container restarts
+    fake.loaded.clear()  # and the new container has forgotten every load
+    assert client.complete(ADAPTER, MESSAGES, temperature=1.0, seed=2).text == "hello"
+    budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
+    assert fake.timeouts == [("/tokenize", vllm.WARM_TIMEOUT_S), ("/tokenize", budget),  # then a 404: forgotten
+                             (vllm.LOAD_PATH, vllm.WARM_TIMEOUT_S), ("/tokenize", vllm.WARM_TIMEOUT_S),
+                             ("/tokenize", vllm.WARM_TIMEOUT_S), (COMPLETIONS, vllm.WARM_TIMEOUT_S)]
+    assert len(fake.loads) == 2 and client.retries() == 1  # loaded again once, sent again once
 
 
 def test_in_flight_never_exceeds_server_slots() -> None:
