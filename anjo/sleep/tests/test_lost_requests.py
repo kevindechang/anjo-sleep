@@ -241,7 +241,8 @@ def test_warm_timeout_then_cold_gets_the_remaining_budget() -> None:
     assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
     budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
     assert [t for path, t in fake.timeouts if path == COMPLETIONS] == [vllm.WARM_TIMEOUT_S, budget]
-    assert budget > 2 * vllm.WARM_TIMEOUT_S and client.retries() == 1  # a cold start's patience, nearly all of it
+    assert budget + vllm.WARM_TIMEOUT_S + vllm.BACKOFF_S[0] == vllm.REQUEST_TIMEOUT_S  # all that is left of the 300 s
+    assert client.retries() == 1
 
 
 def test_a_warm_client_meets_a_restarted_container() -> None:
