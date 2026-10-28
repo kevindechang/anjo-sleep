@@ -269,7 +269,7 @@ these names; their values never enter the repo:
 | `ANJO_SLEEP_MODAL_URL`, `ANJO_SLEEP_MODAL_TOKEN` | only with `ANJO_SLEEP_BACKEND=modal`: the `Serve.web` URL, and the same value as the Modal secret's `VLLM_API_KEY` |
 | `ANJO_SLEEP_GLIMMER_REVISION`, `ANJO_SLEEP_TOOL_CALL_PARSER` | the same values as the deploy (the revision is the pin above), so the pin matches what is served |
 | `ANJO_SLEEP_INSTANCE_TYPE` | `ml.g6e.xlarge` (default) or `ml.g6e.2xlarge`; read by `deploy` only, which the `--instance-type` option overrides |
-| `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the last follows the chosen type: `2.61` on g6e.xlarge, `2.81` on g6e.2xlarge |
+| `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the first two are Muse Spark 1.3's standard list prices, `1.25,4.25` (Meta's pricing page, checked 2026-10-28; Wonder's `4.00/20.00` is fixed in `homework/agent.py`); the last follows the chosen type: `2.61` on g6e.xlarge, `2.81` on g6e.2xlarge |
 | `GCP_PROJECT`, `GCP_LOCATION` | the frontier talker's Vertex project |
 | `RESEND_API_KEY` | needed to create password accounts: production mode refuses password registration without email |
 
