@@ -13,6 +13,9 @@
     <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
     <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
     <data>/failed.jsonl               each run or snapshot-edit that failed alone, never saved
+    <data>/quarantine/lives|sealed/<life>.r<round>.json  a core split's failed attempt (``--keep-failed``),
+                                      stored as a life is; ``why/`` beside them holds its verdicts and
+                                      the auditor's issues, which may name the sealed items. No step reads it
     <data>/kill/<life>.result.json    each finished kill-resume (``resume.KillResume``)
     <data>/interventions/<n>.<edit>.json  each finished snapshot-edit of the intervention test
     <data>/timing.json                the last timing's measurements
@@ -309,6 +312,16 @@ class DataDir:
             raise StoreError("a problem file is its own life's")
         write_text(self._sealed(life.id), dumps(problems))
         write_text(self._life(life.id), dumps(life))
+
+    def save_quarantined(self, name: str, life: Life, problems: ProblemFile, why: Mapping[str, object]) -> None:
+        """A failed attempt's life (``--keep-failed``) under ``quarantine``, as a life is saved (its
+        problem file sealed apart, first), and why it failed; never a life of the data dir."""
+        if problems.life_id != life.id:
+            raise StoreError("a problem file is its own life's")
+        kept = DataDir(self.root / "quarantine")
+        write_text(kept._sealed(name), dumps(problems))
+        write_text(kept._life(name), dumps(life))
+        write_text(kept.root / "why" / f"{check_id(name)}.json", json.dumps(why, ensure_ascii=False, sort_keys=True))
 
     def has_life(self, life_id: str) -> bool:
         return self._life(life_id).exists() and self._sealed(life_id).exists()

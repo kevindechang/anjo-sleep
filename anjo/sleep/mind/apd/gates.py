@@ -22,9 +22,10 @@ A life passes only when every verdict passed. A reply that isn't the JSON asked 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -45,6 +46,7 @@ TEMPERATURE: Final = 0.0
 AUDIT_PATH: Final = Path(__file__).parent / "prompts" / "audit_v1.md"
 IDENTIFY_PATH: Final = Path(__file__).parent / "prompts" / "identify_v1.md"
 CLAUDE_AUDIT_LIVES: Final = 4  # Claude reads this many lives of a cohort, or all of a smaller one
+_FLAGGED: Final = re.compile(r"(sessions|evidence) flagged from (\d{4}-\d{2}-\d{2})")  # ``_leak``'s reason
 
 
 class GateError(ValueError):
@@ -65,10 +67,9 @@ def check(
         raise ValueError("the problem file belongs to another life")
     verdicts: list[GateVerdict] = []
     for item in problems.items:
-        days = _days(pre_surface(life, item))
-        views = {"sessions": days, "evidence": _arm_days(life, item, days)}
+        views = _views(life, item)
         verdicts.append(_leak(item, views, reader, model))
-        verdicts.append(_discoverability(life, item, days, reader, auditor, model))
+        verdicts.append(_discoverability(life, item, views["sessions"], reader, auditor, model))
     verdicts.append(_audit(life, problems, auditor))
     return tuple(verdicts)
 
@@ -111,18 +112,51 @@ def _arm_days(life: Life, item: PlantedItem, days: list[dict[str, str]]) -> list
     return [{"date": day, "text": "\n".join(lines[day])} for day in sorted(lines)]
 
 
+def _views(life: Life, item: PlantedItem) -> dict[str, list[dict[str, str]]]:
+    """What the leak gate reads of ``item``, by view: the sessions, then what the arms see."""
+    days = _days(pre_surface(life, item))
+    return {"sessions": days, "evidence": _arm_days(life, item, days)}
+
+
 def _leak(item: PlantedItem, views: Mapping[str, list[dict[str, str]]], reader: ChatFn,
           model: str = READER_MODEL) -> GateVerdict:
     for view, days in views.items():
         for window in _windows(days):
-            reply = _ask(reader, model, LEAK_PATH.read_text(encoding="utf-8"), {
-                "topic": item.topic, "family": item.family, "view": view, "days": window})
-            flag = reply.get("flag")
-            if not isinstance(flag, bool):
-                raise GateError("the leak reply has no flag")
-            if flag:
+            if _leak_flag(item, view, window, reader, model):
                 return GateVerdict("leak", item.id, False, f"{view} flagged from {window[0]['date']}")
     return GateVerdict("leak", item.id, True)
+
+
+def _leak_flag(item: PlantedItem, view: str, window: list[dict[str, str]], reader: ChatFn, model: str) -> bool:
+    reply = _ask(reader, model, LEAK_PATH.read_text(encoding="utf-8"), {
+        "topic": item.topic, "family": item.family, "view": view, "days": window})
+    flag = reply.get("flag")
+    if not isinstance(flag, bool):
+        raise GateError("the leak reply has no flag")
+    return flag
+
+
+def flagged(verdict: GateVerdict) -> tuple[str, date] | None:
+    """A failed leak verdict's view and the first day of the window it flagged (that day alone, or
+    it and the next); ``None`` for any other verdict."""
+    found = None if verdict.gate != "leak" or verdict.passed else _FLAGGED.fullmatch(verdict.reason or "")
+    return None if found is None else (found.group(1), date.fromisoformat(found.group(2)))
+
+
+def flagged_window(life: Life, item: PlantedItem, verdict: GateVerdict, reader: ChatFn,
+                   model: str = READER_MODEL) -> tuple[date, ...] | None:
+    """The days of the window a failed leak verdict flagged: its first day alone, or that day and
+    the next when the day alone was not flagged. ``_leak`` reads every single day of a view before
+    any pair, so the day alone was asked already: a reader that keeps its replies (``repair.Memo``)
+    answers without a call."""
+    where = flagged(verdict)
+    if where is None or verdict.item_id != item.id:
+        return None
+    view, start = where
+    single = [day for day in _views(life, item)[view] if day["date"] == start.isoformat()]
+    if not single or _leak_flag(item, view, single, reader, model):
+        return (start,)
+    return (start, start + timedelta(days=1))
 
 
 def _discoverability(
@@ -158,6 +192,12 @@ def _evidence_days(life: Life, ids: Sequence[str]) -> set[str] | None:
 
 
 def _audit(life: Life, problems: ProblemFile, auditor: ChatFn) -> GateVerdict:
+    issues = audit_issues(life, problems, auditor)
+    return GateVerdict("script_audit", None, not issues, f"{len(issues)} issue(s) found" if issues else None)
+
+
+def audit_issues(life: Life, problems: ProblemFile, auditor: ChatFn) -> tuple[str, ...]:
+    """The script audit's issues, none when the script is sound (the auditor's own sentences)."""
     reply = _ask(auditor, AUDITOR_MODEL, AUDIT_PATH.read_text(encoding="utf-8"), {
         "problem_file": [_sealed(life, item) for item in problems.items],
         "days": _days(life.sessions),
@@ -167,7 +207,7 @@ def _audit(life: Life, problems: ProblemFile, auditor: ChatFn) -> GateVerdict:
         raise GateError("the audit reply has no verdict")
     if not all(isinstance(issue, str) and issue.strip() for issue in issues) or ok == bool(issues):
         raise GateError("the audit reply contradicts itself")
-    return GateVerdict("script_audit", None, ok, None if ok else f"{len(issues)} issue(s) found")
+    return tuple(issues)
 
 
 def _template(item: PlantedItem) -> Template | None:
