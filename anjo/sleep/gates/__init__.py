@@ -10,12 +10,17 @@ come back in item order, so a gate's verdict never depends on timing. The gates 
 app passes it (``workers``); the general gate only scores log-probabilities (one token each, the
 prompt's cost alone) and keeps the server's concurrency (``config.CONCURRENT_REQUESTS``).
 Reasons name item ids or case indices, never their words.
+
+Every gate prompt carries one fixed date (``EVAL_DAY``), as every gate call carries a fixed seed: the
+base model's answers then don't change from night to night, so ``base_cache`` can keep them. Both
+sides of a comparison always carry the same date.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Final, TypeVar
 
@@ -24,6 +29,7 @@ from anjo.sleep.serving import config
 
 THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
 EVAL_SEED: Final = 20261028
+EVAL_DAY: Final = date(2026, 10, 28)  # the date every gate prompt carries (``VllmClient.on``)
 TEMPERATURE: Final = 1.0  # registered for every arm and gate, with top_p 0.95 and top_k 64
 
 In = TypeVar("In")

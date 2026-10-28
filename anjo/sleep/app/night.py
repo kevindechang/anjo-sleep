@@ -18,7 +18,10 @@ it off the serving path). Everything else is here:
 - the held note through outreach (``delivery``), its final text through the reply check;
 - every paid step's hold on the sleep host's budget ledger;
 - practice's calls and the generation gates' (collapse, safety) side by side, ``ANJO_SLEEP_CONCURRENCY``
-  at once (8 by default, ``parallel``); the general gate's log-probabilities at the server's 16.
+  at once (8 by default, ``parallel``); the general gate's log-probabilities at the server's 16;
+- the gates' prompts dated one fixed day (``gates.EVAL_DAY``) and, on a server pinned to a Glimmer
+  revision, the base model's gate answers kept across nights (``gates.base_cache``) in
+  ``sleep/gate_base.jsonl``, encrypted at rest and keyed on the server (``gate_cache``).
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -49,6 +52,7 @@ from anjo.sleep.app.policy import build_policy
 from anjo.sleep.app.recall import MiniLmRecall
 from anjo.sleep.app.safety_gate import load_cases
 from anjo.sleep.app.storage import (
+    CODEC,
     SLEEP_DIR,
     brief_store,
     checkpoint_registry,
@@ -62,7 +66,10 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import TrainingBriefs
 from anjo.sleep.context.training import TrainingContext
 from anjo.sleep.evidence.extract import spark_open
-from anjo.sleep.gates import THRESHOLDS
+from anjo.sleep.evidence.jsonl import canonical
+from anjo.sleep.gates import EVAL_DAY, THRESHOLDS
+from anjo.sleep.gates.base_cache import FILE_NAME as GATE_BASE_FILE
+from anjo.sleep.gates.base_cache import BaseCache, JsonlBaseStore
 from anjo.sleep.gates.collapse import CollapseGate
 from anjo.sleep.gates.general import GeneralGate
 from anjo.sleep.gates.safety import SafetyGate
@@ -80,8 +87,8 @@ from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.full import CappedChat, FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
-from anjo.sleep.serving import backend
-from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.serving import backend, config
+from anjo.sleep.serving.client import MAX_TOKENS, TOP_K, TOP_P, VllmClient
 from anjo.sleep.types import Probe
 
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour", USD list prices
@@ -137,16 +144,34 @@ class AppGates:
     """The three gates on one server. General and safety keep the base side for the whole run;
     collapse is per person, over their fields."""
 
-    def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]], *, workers: int) -> None:
+    def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]], *, workers: int,
+                 cache: BaseCache | None = None) -> None:
         self._client = client
         self._fields = fields
         self._workers = workers  # the generation gates' calls at once (ANJO_SLEEP_CONCURRENCY)
-        self._general = GeneralGate(client)  # log-probabilities only: the server's concurrency
-        self._safety = SafetyGate(client, load_cases, workers=workers)
+        self._cache = cache
+        self._general = GeneralGate(client, cache=cache)  # log-probabilities only: the server's concurrency
+        self._safety = SafetyGate(client, load_cases, workers=workers, cache=cache)
 
     def for_person(self, user_id: str) -> Mapping[str, GateCheck]:
-        collapse = CollapseGate(self._client, self._fields(user_id), workers=self._workers)
+        collapse = CollapseGate(self._client, self._fields(user_id), workers=self._workers, cache=self._cache)
         return {"general": self._general.check, "collapse": collapse.check, "safety": self._safety.check}
+
+
+def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache | None:
+    """The base model's gate answers kept across nights, keyed on everything the server answers by:
+    the weights' revision, precision, vLLM release, backend, rendering, sampling, reply cap and the
+    gates' date. None when the revision isn't pinned: weights that could change under the same name
+    are asked every night."""
+    serve = config.ServeConfig.from_env()
+    if serve.revision is None:
+        return None
+    fingerprint = canonical({
+        "model": config.MODEL, "revision": serve.revision, "precision": vars(serve.precision),
+        "vllm": serve.vllm_version, "backend": serving.name, "rendering": client.rendering,
+        "max_tokens": MAX_TOKENS, "top_p": TOP_P, "top_k": TOP_K, "day": EVAL_DAY.isoformat(),
+    })
+    return BaseCache(JsonlBaseStore(data_root() / SLEEP_DIR / GATE_BASE_FILE, codec=CODEC), serving=fingerprint)
 
 
 def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...]]:
@@ -173,6 +198,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
+    gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
     def practice(chat: CappedChat, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
@@ -190,7 +216,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         spark_chat=baseten_api.chat,
         probes=SealedProbes(Path(_env(SEALED_ENV)), options.personas, seed=night_settings.seed, chat=meta_api.chat),
         chooser=StateChooser(), policy=build_policy(), practice=practice,
-        decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(client, field_domains(options.personas), workers=calls),
+        decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(
+            gate_client, field_domains(options.personas), workers=calls, cache=gate_cache(serving, gate_client)),
         registry=registry, notifier=OutreachNotifier(),
         note_writer=GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed),
         note_check=passes_reply_check, ledger=ledger,

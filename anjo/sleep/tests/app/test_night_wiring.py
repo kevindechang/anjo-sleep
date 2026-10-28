@@ -97,9 +97,9 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     gates: Any = deps.gates
     note: Any = deps.note_writer
     practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
-    clients = {gates._client, note._client, practice._client}
-    assert len(clients) == 1  # practice, the gates and the note share one server
-    assert next(iter(clients)).precision == served == config.SERVING.name
+    clients = (gates._client, note._client, practice._client)
+    assert len({c._poster for c in clients}) == 1  # practice, the gates and the note share one server
+    assert {c.precision for c in clients} == {served} == {config.SERVING.name}
     assert set(gates.for_person("synthetic-founder")) == {"general", "collapse", "safety"}
     from anjo.sleep.app.delivery import passes_reply_check
     from anjo.sleep.budget import LEDGER_NAME
@@ -107,6 +107,33 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     gpu: Any = deps.gpu
     assert deps.note_check is passes_reply_check  # the final note text, sources included
     assert deps.ledger is not None and deps.ledger.path.name == LEDGER_NAME and gpu._ledger is deps.ledger
+
+
+def test_the_gates_keep_the_base_side_only_on_a_pinned_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                             offline_embedder: Any) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.gates import EVAL_DAY
+    from anjo.sleep.gates.base_cache import FILE_NAME
+    from anjo.sleep.night.deps import NightOptions
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 30), personas={"synthetic-founder": "founder"})
+    monkeypatch.delenv(config.REVISION_ENV, raising=False)
+    unpinned: Any = night.build(NoTrainer(), options)
+    assert unpinned.gates._cache is None  # weights that could change under the same name: ask every night
+    assert unpinned.gates._client._day == EVAL_DAY and unpinned.note_writer._client._day == date(2026, 10, 30)
+
+    monkeypatch.setenv(config.REVISION_ENV, "a" * 40)
+    pinned: Any = night.build(NoTrainer(), options)
+    cache = pinned.gates._cache
+    assert cache.store.path == tmp_path / "sleep" / FILE_NAME
+    collapse = pinned.gates.for_person("synthetic-founder")["collapse"].__self__
+    assert pinned.gates._general._cache is cache and pinned.gates._safety._cache is cache and collapse._cache is cache
+    monkeypatch.setenv(config.REVISION_ENV, "b" * 40)
+    rebuilt: Any = night.build(NoTrainer(), options)
+    assert rebuilt.gates._cache.serving != cache.serving  # new weights: a new key
 
 
 def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice(
