@@ -25,6 +25,12 @@ In order, the builder:
 7. drops the whole of C from a seeded share of the examples (context dropout), chosen only among
    examples whose targets quote no URL or date.
 
+The context (the person's own brief, never a training target: the loss is on the reply) is held to
+exact and 13-gram only, stricter-for-training than input but looser than the paraphrase rule, which
+dropped every example when the shared brief paraphrased two probes (2026-10-28). The message, the
+reply and each DPO side keep all three rules. ``context_paraphrase_kept`` counts the examples that
+only passed because of it.
+
 Token counts use the conservative estimate (``estimate_tokens``), which over-counts English, so
 the cap and the sequence length are never exceeded by the estimate's error. The training script
 checks the length again with the real tokenizer.
@@ -43,6 +49,7 @@ from typing import Final, Literal
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.ports import Decontaminator, EvidenceStore
 from anjo.sleep.practice.transcripts import PracticeTranscript, TranscriptStore
+from anjo.sleep.probes.decontam import NGRAM, overlaps, probe_texts, words
 from anjo.sleep.provenance import may_train
 from anjo.sleep.serving import framing
 from anjo.sleep.types import Evidence, Probe
@@ -116,6 +123,7 @@ class Dataset:
     dropped: Mapping[str, int] = field(hash=False)
     pairs: tuple[Pair, ...] = ()
     pairs_dropped: Mapping[str, int] = field(default_factory=dict, hash=False)
+    context_paraphrase_kept: int = 0  # examples kept although their context matched a probe by paraphrase only
 
     def __post_init__(self) -> None:
         counts: dict[str, int] = {reason: 0 for reason in DROP_REASONS}
@@ -191,26 +199,60 @@ def _pair(transcript: PracticeTranscript, example: Example) -> Pair:
     )
 
 
-def _full_text(transcript: PracticeTranscript, reply: str | None = None) -> str:
-    parts = (transcript.context, transcript.message, transcript.reply if reply is None else reply)
+def _trained_text(transcript: PracticeTranscript, reply: str | None = None) -> str:
+    """What trains: the message and a reply. All three decontamination rules apply to it."""
+    parts = (transcript.message, transcript.reply if reply is None else reply)
     return "\n".join(part for part in parts if part)
+
+
+def _carries_verbatim(text: str, sealed: Sequence[Probe]) -> bool:
+    """Whether ``text`` holds a whole probe, or a run of ``NGRAM`` words of one: the context's only rules."""
+    hay = words(text)
+    padded = " " + " ".join(hay) + " "
+    runs = {" ".join(hay[i:i + NGRAM]) for i in range(len(hay) - NGRAM + 1)}
+    for probe in sealed:
+        for needle in probe_texts(probe):
+            tokens = words(needle)
+            if not tokens:
+                continue
+            if " " + " ".join(tokens) + " " in padded:
+                return True
+            if len(tokens) >= NGRAM and any(" ".join(tokens[i:i + NGRAM]) in runs
+                                            for i in range(len(tokens) - NGRAM + 1)):
+                return True
+    return False
+
+
+def _paraphrases(text: str, sealed: Sequence[Probe]) -> bool:
+    return any(overlaps(text, needle) for probe in sealed for needle in probe_texts(probe) if needle.strip())
 
 
 def _leaks(
     candidates: Sequence[tuple[PracticeTranscript, bool]], sealed: list[Probe], decontam: Decontaminator,
-) -> tuple[list[bool], list[bool]]:
-    """Per candidate: whether its example carries a sealed probe, and whether its pair's rejected
-    side does. Every text that could train goes through one check."""
-    texts = [_full_text(t) for t, _ in candidates]
+) -> tuple[list[bool], list[bool], list[bool]]:
+    """Per candidate: whether its example carries a sealed probe (in what trains, or verbatim in its
+    context), whether its pair's rejected side does, and whether its context matches a probe by
+    paraphrase alone (kept, and counted). Every text that trains goes through the decontaminator."""
+    texts = [_trained_text(t) for t, _ in candidates]
     sides = [i for i, (t, new) in enumerate(candidates) if new and t.rejected is not None]
-    texts += [_full_text(candidates[i][0], candidates[i][0].rejected) for i in sides]
+    texts += [_trained_text(candidates[i][0], candidates[i][0].rejected) for i in sides]
     flags = decontam.check(texts, sealed) if texts else ()
     if len(flags) != len(texts):
         raise ValueError("the decontaminator must return one flag per text")
     rejected = [False] * len(candidates)
     for i, flag in zip(sides, flags[len(candidates):], strict=True):
         rejected[i] = bool(flag)
-    return [bool(flag) for flag in flags[: len(candidates)]], rejected
+    verbatim: dict[str, bool] = {}  # the brief is the same for most transcripts: check each once
+    soft: dict[str, bool] = {}
+    leaked, paraphrased = [], []
+    for (t, _), flag in zip(candidates, flags, strict=False):
+        ctx = t.context or ""
+        if ctx not in verbatim:
+            verbatim[ctx] = bool(ctx) and _carries_verbatim(ctx, sealed)
+            soft[ctx] = bool(ctx) and not verbatim[ctx] and _paraphrases(ctx, sealed)
+        leaked.append(bool(flag) or verbatim[ctx])
+        paraphrased.append(soft[ctx])
+    return leaked, rejected, paraphrased
 
 
 def build_night_dataset(
@@ -246,11 +288,12 @@ def build_night_dataset(
             dropped["hosted"] += 1  # hosted or unknown ancestry, in the item or its transcript
         else:
             candidates.append((transcript, new))
-    leaked, rejected_leaked = _leaks(candidates, sealed, decontam)
+    leaked, rejected_leaked, soft_context = _leaks(candidates, sealed, decontam)
     kept: list[Example] = []
     pairs: list[Pair] = []
     pairs_dropped: dict[str, int] = {reason: 0 for reason in PAIR_DROP_REASONS}
     used = 0
+    context_paraphrase_kept = 0
     for index, (transcript, new) in enumerate(candidates):
         paired = new and transcript.rejected is not None  # only the night's new practice gives pairs
         drop = (
@@ -269,6 +312,7 @@ def build_night_dataset(
                 pairs_dropped["probe" if reason == "probe" else "example"] += 1
             continue
         kept.append(example)
+        context_paraphrase_kept += soft_context[index]
         used += example.tokens
         if not paired:
             continue
@@ -281,5 +325,6 @@ def build_night_dataset(
             pairs_dropped[why] += 1
         else:
             pairs.append(pair)
-    data = Dataset(examples=tuple(kept), tokens=used, dropped=dropped, pairs=tuple(pairs), pairs_dropped=pairs_dropped)
+    data = Dataset(examples=tuple(kept), tokens=used, dropped=dropped, pairs=tuple(pairs), pairs_dropped=pairs_dropped,
+                   context_paraphrase_kept=context_paraphrase_kept)
     return data, dropped["probe"]

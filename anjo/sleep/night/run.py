@@ -564,7 +564,8 @@ class NightRunner:
         return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
-                "dropped": dict(data.dropped), "probe_dropped": probe_dropped, "sealed": len(p.sealed)}
+                "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
+                "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
 
     def _train(self, p: _Night) -> Mapping[str, Any]:
         registry = self.deps.registry
