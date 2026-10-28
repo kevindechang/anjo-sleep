@@ -168,8 +168,10 @@ def test_failed_life_is_skipped_and_the_run_continues(tmp_path: Path, monkeypatc
     done = [line for line in lines if line.startswith(("generated ", "SKIPPED "))]
     assert [line.split()[0] for line in done] == ["generated", "SKIPPED", "generated"]  # in life order
     assert str(specs[1].seed) in done[1] and "timed out" in done[1]
-    failed = DataDir(data).failed()
-    assert len(failed) == 1 and failed[0]["what"] == "generate" and str(specs[1].seed) in str(failed[0]["life"])
+    failed = [raw for raw in DataDir(data).failed() if raw["what"] == "generate"]
+    assert len(failed) == 1 and str(specs[1].seed) in str(failed[0]["life"])
+    attempts = [raw for raw in DataDir(data).failed() if raw["what"] == "generate-attempt"]
+    assert [(raw["attempt"], raw["step"], raw["error"]) for raw in attempts] == [(0, "writer", "ModelApiError")]
     assert "Stopped: 1 failed and weren't saved" in text
     assert RunLedger(data / "fake-budget.jsonl").open_holds() == ()
 

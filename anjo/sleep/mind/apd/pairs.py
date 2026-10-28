@@ -38,13 +38,22 @@ from typing import Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
-from anjo.sleep.mind.apd import gates, readers
+from anjo.sleep.mind.apd import failures, gates, readers
 from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, held_attempt, item_reads
 from anjo.sleep.mind.apd.batch import Out, check_failed
-from anjo.sleep.mind.apd.calls import CallLog
+from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
 from anjo.sleep.mind.apd.families import Template
-from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, made_record, refuse_mixed, side_by_side
+from anjo.sleep.mind.apd.gen_batch import (
+    GEN_PARALLEL,
+    SKIPPED,
+    failed_at,
+    failing,
+    made_record,
+    refuse_mixed,
+    report_failures,
+    side_by_side,
+)
 from anjo.sleep.mind.apd.generate import (
     AWAY_DAYS,
     MAX_ATTEMPTS,
@@ -181,7 +190,7 @@ def _pair(spec: PairSpec, plans: Sequence[ItemPlan], failed: Draft, kept: Draft)
             final_ids=tuple(e.id for e in failed_life.evidence if e.day == failed_life.days[-1] and not e.held_out),
         )
     except ValueError as error:  # an outcome written the same in both histories, or none left on the last day
-        raise GenerationFailed(f"the two histories aren't a pair: {error}") from None
+        raise GenerationFailed(f"the two histories aren't a pair: {error}", step="pair") from None
 
 
 # ── Gated, held and many ─────────────────────────────────────────────────────
@@ -203,15 +212,18 @@ def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) 
             backend.ceiling.check()
         if log is not None:
             log.attempt = attempt
-        with held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS, log) as (writer, reader, auditor):
+        with failing(log, attempt), held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS,
+                                                 log) as (writer, reader, auditor):
             try:
                 made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes)
-            except GenerationFailed:
+            except GenerationFailed as failed:
+                failed_at(log, failures.of_rule(attempt, failed))
                 continue
             verdicts = (*gates.check(made.failed, made.failed_problems, reader=reader, auditor=auditor, model=model),
                         *gates.check(made.kept, made.kept_problems, reader=reader, auditor=auditor, model=model))
         if gates.passed(verdicts):
             return GeneratedPair(made, attempt + 1, verdicts)
+        failed_at(log, *failures.of_verdicts(attempt, made.failed, verdicts))
     raise GenerationError(f"no pair passed the gates in {MAX_ATTEMPTS} attempts")
 
 
@@ -221,16 +233,29 @@ class _Skip:
     error: str
 
 
-def _one(data: DataDir, spec: PairSpec, backend: Backend) -> GeneratedPair | _Skip:
+@dataclass(frozen=True)
+class _Outcome:
+    spec: PairSpec
+    found: GeneratedPair | _Skip
+    failed: tuple[failures.AttemptFailure, ...]
+
+
+def _name(spec: PairSpec) -> str:
+    return f"pair {spec.seed} ({spec.template})"
+
+
+def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
     log = CallLog()
     try:
         made = generate_pair(spec, backend, log)
     except SKIPPED as error:
-        return _Skip(spec, str(error) or type(error).__name__)
+        first = pair_id(pair_template(spec.template).field, spec.seed)
+        data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
+        return _Outcome(spec, _Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
     data.save_made(made.pair.id, made_record(backend))
     data.save_calls(made.pair.id, [call.to_json() for call in log.calls])
     data.save_pair(made.pair)
-    return made
+    return _Outcome(spec, made, tuple(log.failures))
 
 
 def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, out: Out, *,
@@ -248,9 +273,11 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
     made: list[str] = []
     skipped: list[str] = []
     with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
-        for found in results:
+        for outcome in results:
+            found = outcome.found
+            report_failures(data, out, "generate-pairs-attempt", _name(outcome.spec), outcome.failed)
             if isinstance(found, _Skip):
-                name = f"pair {found.spec.seed} ({found.spec.template})"
+                name = _name(found.spec)
                 data.record_failed({"what": "generate-pairs", "pair": name, "error": found.error})
                 out(f"SKIPPED {name}: {found.error}. Not saved; a rerun generates it again")
                 skipped.append(name)

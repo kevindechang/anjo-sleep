@@ -453,6 +453,42 @@ class FakeLifeChat:
         return _reply(json.dumps({"items": items}), model)
 
 
+REPLY_SHAPES: Final = ("plain", "think", "fenced", "reasoning_field", "length", "rejected")
+
+
+def generator_transport(shape: str) -> httpx.MockTransport:
+    """Fireworks answering a reasoning generator's writer and extractor (``FakeLifeChat``'s replies)
+    in one ``shape`` of ``REPLY_SHAPES``: plain JSON; reasoning in the content between think tags;
+    the JSON fenced inside prose; reasoning kept apart in ``reasoning_content``; every reply cut at
+    its cap (``finish_reason`` length, the JSON unfinished); or ``reasoning_effort`` refused with
+    HTTP 400. The reasoning is counted in the usage as a provider counts it."""
+    if shape not in REPLY_SHAPES:
+        raise ValueError(f"no reply shape {shape!r}")
+    chat = FakeLifeChat()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if shape == "rejected":
+            return httpx.Response(400, json={"error": {"message": "reasoning_effort is not supported"}})
+        answer = chat(body["model"], body["messages"], None, 30.0).text
+        message: dict[str, Any] = {"role": "assistant", "content": answer}
+        finish, reasoning = "stop", 0
+        if shape == "think":
+            message["content"], reasoning = f"<think>\nThe person {{works}} on it.\n</think>\n\n{answer}", 40
+        elif shape == "fenced":
+            message["content"] = f"Here is the JSON:\n```json\n{answer}\n```\nDone."
+        elif shape == "reasoning_field":
+            message["reasoning_content"], reasoning = "Let me plan the day first.", 40
+        elif shape == "length":
+            message["content"], finish = answer[: len(answer) // 2], "length"
+        usage = {"prompt_tokens": len(json.dumps(body["messages"])) // 4, "completion_tokens": len(answer) // 4 + reasoning,
+                 "completion_tokens_details": {"reasoning_tokens": reasoning}}
+        return httpx.Response(200, json={"model": body["model"], "usage": usage,
+                                         "choices": [{"message": message, "finish_reason": finish}]})
+
+    return httpx.MockTransport(handle)
+
+
 @dataclass
 class FakeGateReader:
     """The leak reader never flags; the discoverability reader always finds. Each reply names the

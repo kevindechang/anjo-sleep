@@ -9,6 +9,10 @@
 - **Side by side** (``generate_lives``): ``parallel`` lives at once, each on a thread of its own
   and under its own seed, so a life is the same whatever runs beside it. Each is saved as it
   ends; its line is printed in the specs' order, once it and every life before it are done.
+- **Why each attempt failed** (``failures``): the step, day and item, the error's class or the
+  gate's verdict, and for an unreadable reply its field, length and finish reason, never its
+  text: recorded in ``failed.jsonl`` (``generate-attempt``), kept in the call log (a skipped life's
+  too, ``calls.failed_log_id``) and printed, one line each, whether the life then passed or not.
 - **A life that still fails is skipped:** every attempt failed a rule or a gate
   (``GenerationError``), a model call failed after its tries (``ModelApiError``), or a reader's
   reply was unreadable (``gates.GateError``). It is recorded (``DataDir.record_failed``), the run
@@ -38,9 +42,9 @@ from functools import partial
 from types import TracebackType
 from typing import Final, TypeVar
 
-from anjo.sleep.mind.apd import gates, generate, readers
+from anjo.sleep.mind.apd import failures, gates, generate, readers
 from anjo.sleep.mind.apd.backend import Backend, Flight, held_attempt, life_calls
-from anjo.sleep.mind.apd.calls import CallLog
+from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
@@ -148,18 +152,37 @@ def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None) 
             backend.ceiling.check()  # before the attempt's hold
         if log is not None:
             log.attempt = attempt
-        with held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
-                          life_calls(spec.prevalence), log) as (writer, reader, auditor):
+        with failing(log, attempt), held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
+                                                 life_calls(spec.prevalence), log) as (writer, reader, auditor):
             try:
                 built, problems = generate.life(spec.field, spec.families, spec.prevalence,
                                                 generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
                                                 model=writes)
-            except GenerationFailed:
+            except GenerationFailed as failed:
+                failed_at(log, failures.of_rule(attempt, failed))
                 continue
             verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
         if gates.passed(verdicts):
             return Generated(built, problems, attempt + 1, verdicts)
+        failed_at(log, *failures.of_verdicts(attempt, built, verdicts))
     raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts")
+
+
+def failed_at(log: CallLog | None, *found: failures.AttemptFailure) -> None:
+    """Keep why an attempt failed in ``log``, when there is one."""
+    if log is not None:
+        log.failures.extend(found)
+
+
+@contextmanager
+def failing(log: CallLog | None, attempt: int) -> Iterator[None]:
+    """An attempt ended by a call that still failed or a reply that couldn't be read: kept in
+    ``log`` at its last call, and raised on (the life is skipped)."""
+    try:
+        yield
+    except (ModelApiError, gates.GateError) as error:
+        failed_at(log, failures.of_error(attempt, error, None if log is None else log.last()))
+        raise
 
 
 def spec_ids(spec: LifeSpec) -> frozenset[str]:
@@ -217,16 +240,34 @@ class Skip:
     error: str
 
 
-def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Generated | Skip:
+@dataclass(frozen=True)
+class Outcome:
+    """A life generated or skipped, and why each of its failed attempts failed."""
+
+    spec: LifeSpec
+    found: Generated | Skip
+    failed: tuple[failures.AttemptFailure, ...]
+
+
+def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
     log = CallLog()
     try:
         made = generate_life(spec, backend, log)
     except SKIPPED as error:
-        return Skip(spec, str(error) or type(error).__name__)
+        first = generate.life_id_for(spec.split, spec.field, spec.seed)
+        data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
+        return Outcome(spec, Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
     data.save_made(made.life.id, made_record(backend))
     data.save_calls(made.life.id, [call.to_json() for call in log.calls])
     data.save_life(made.life, made.problems)
-    return made
+    return Outcome(spec, made, tuple(log.failures))
+
+
+def report_failures(data: DataDir, out: Out, what: str, name: str, found: Sequence[failures.AttemptFailure]) -> None:
+    """Each failed attempt: recorded in ``failed.jsonl`` and printed, one line each."""
+    for failure in found:
+        data.record_failed({"what": what, "name": name, **failure.to_json()})
+        out(failures.line(name, failure))
 
 
 def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, out: Out, *,
@@ -244,7 +285,9 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     made: list[str] = []
     skipped: list[str] = []
     with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
-        for found in results:
+        for outcome in results:
+            found = outcome.found
+            report_failures(data, out, "generate-attempt", spec_name(outcome.spec), outcome.failed)
             if isinstance(found, Skip):
                 name = spec_name(found.spec)
                 data.record_failed({"what": "generate", "life": name, "error": found.error})

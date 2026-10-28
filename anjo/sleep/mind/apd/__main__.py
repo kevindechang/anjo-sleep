@@ -36,7 +36,8 @@ event streams, with training labels for a labelled split only (``labels``); it r
 and calls nothing, so it needs no ``--live``. A core split and the pairs are written by DeepSeek
 V4.1 Flash and read by Gemini unless ``--generator`` and ``--reader`` say otherwise (``gen_args``);
 APD's own splits stay Spark Open's. ``calls`` prints where the generated lives' calls went, per
-gate, days read and item, with their tokens (``calls``); it too reads the data dir only.
+gate, days read and item, with their tokens (``calls``), and every failed attempt, where and why
+(``failures``); it too reads the data dir only.
 
 Spark Open runs on the one provider ``ANJO_SLEEP_MIND_SPARK`` names (``mind.spark_provider``:
 Fireworks by default, or Baseten), read once per command, its calls held on that provider's pool.
@@ -68,6 +69,7 @@ from anjo.sleep.mind.apd import (
     calls,
     colab_vllm,
     core_splits,
+    failures,
     fakes,
     gen_args,
     generate,
@@ -600,9 +602,12 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     _check_split(parser, args)
     if args.command == "labels":  # reads the data dir and writes the export; no call, no spend
         return _labels(args, out)
-    if args.command == "calls":  # reads the data dir's call logs; no call, no spend
-        for line in calls.breakdown({made: [calls.Call.from_json(raw) for raw in found]
-                                     for made, found in DataDir(args.data).call_logs().items()}):
+    if args.command == "calls":  # reads the data dir's call logs and failed attempts; no call, no spend
+        data = DataDir(args.data)
+        failed = failures.recorded(data.failed())
+        for line in [*calls.breakdown({made: [calls.Call.from_json(raw) for raw in found]
+                                       for made, found in data.call_logs().items()}),
+                     f"Failed attempts: {len(failed)}", *failed]:
             out(line)
         return 0
     provider = _provider(parser)

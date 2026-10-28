@@ -3,10 +3,12 @@
 Each try of each generation call (``backend.CountedChat``) is logged with its kind (the prompt it
 was sent: ``write``, ``extract``, ``leak``, ``discover``, ``identify``, ``audit``), the attempt,
 the item it read for (numbered in the order the attempt first read it: never its topic, which is
-the sealed file's), how many days it read, its tokens in and out as the provider counted them, and
-what it was priced at. ``DataDir.save_calls`` keeps a saved life's log, every attempt included;
-``breakdown`` prints it per gate, per days read and per item, which is what the plan's read shapes
-are checked against.
+the sealed file's), how many days it read, its tokens in and out as the provider counted them,
+what it was priced at, and its reply's length and finish reason (never its text).
+``DataDir.save_calls`` keeps a life's log, every attempt included, and a skipped life's too (under
+``failed_log_id``); ``breakdown`` prints it per gate, per days read and per item, which is what the
+plan's read shapes are checked against. The log also keeps why each failed attempt failed
+(``failures.AttemptFailure``).
 
 Pure.
 """
@@ -38,15 +40,19 @@ class Call:
     tokens_out: int
     usd: float
     failed: bool = False
+    reply_chars: int | None = None  # the reply's length, never its text
+    finish: str | None = None  # its finish reason, as the provider gave it
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> Call:
+        chars, finish = raw.get("reply_chars"), raw.get("finish")
         return cls(str(raw["kind"]), int(raw["attempt"]), None if raw["item"] is None else int(raw["item"]),
                    None if raw["days"] is None else int(raw["days"]), int(raw["tokens_in"]), int(raw["tokens_out"]),
-                   float(raw["usd"]), bool(raw.get("failed", False)))
+                   float(raw["usd"]), bool(raw.get("failed", False)), None if chars is None else int(chars),
+                   None if finish is None else str(finish))
 
 
 def kind_of(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -69,13 +75,19 @@ class CallLog:
 
     attempt: int = 0
     calls: list[Call] = field(default_factory=list)
+    failures: list[Any] = field(default_factory=list)  # ``failures.AttemptFailure``, one per failed attempt
     _items: dict[tuple[int, str], int] = field(default_factory=dict)
 
     def add(self, messages: Sequence[Mapping[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
-            failed: bool = False) -> None:
+            failed: bool = False, reply_chars: int | None = None, finish: str | None = None) -> None:
         kind, payload = kind_of(messages), _payload(messages)
         self.calls.append(Call(kind, self.attempt, self._item(kind, payload), _days(kind, payload), tokens_in,
-                               tokens_out, usd, failed))
+                               tokens_out, usd, failed, reply_chars, finish))
+
+    def last(self) -> Call | None:
+        """The attempt's last call, if it made one."""
+        mine = [call for call in self.calls if call.attempt == self.attempt]
+        return mine[-1] if mine else None
 
     def _item(self, kind: str, payload: Mapping[str, Any]) -> int | None:
         sealed = payload.get("item")
@@ -132,3 +144,8 @@ def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:
     for life_id, calls in sorted(logs.items()):
         lines.append(_line(life_id, calls))
     return lines
+
+
+def failed_log_id(life_id: str) -> str:
+    """The id a skipped life's log is kept under (its first attempt's life id)."""
+    return f"{life_id}.failed"

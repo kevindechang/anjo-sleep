@@ -20,11 +20,16 @@ halted and ceilinged by the same code (``backend``, ``gen_batch``).
   extracted it on every evidence item (the generator, both); ``generator_of`` names it.
 - **Never mixed.** A split, and the pairs, hold one generator's lives only: a life another wrote is
   a mismatch, never a life to reuse (``mixed``).
+- **Its answer only** (``answer``). A reasoning model may put its reasoning in the reply between
+  think tags, or wrap its JSON in a fence with prose around it; the writer and the extractor read
+  the answer, never the reasoning (which a reply's own reasoning field already keeps apart). A
+  reply cut at its cap stays cut, and fails as unreadable.
 
 Pure.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -98,6 +103,20 @@ def generator_of(life: Life) -> GeneratorName:
     if found is None:
         raise ValueError(f"{life.id} was written by {', '.join(sorted(models))}, no generator's")
     return found.name
+
+
+_THINK: Final = re.compile(r"<think>.*?</think>", re.DOTALL)
+_FENCED: Final = re.compile(r"```[A-Za-z]*[ \t]*\n(.*?)```", re.DOTALL)
+
+
+def answer(text: str) -> str:
+    """A generator's reply as its answer: reasoning between think tags taken out, and a fenced
+    JSON answer taken out of the prose around it. A reply that is its answer already is unchanged."""
+    body = _THINK.sub("", text).strip()
+    if body.startswith("{"):
+        return body
+    fenced = _FENCED.search(body)
+    return fenced.group(1).strip() if fenced else body
 
 
 def mixed(lives: Iterable[Life], model: str) -> tuple[str, ...]:
