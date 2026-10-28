@@ -4,7 +4,9 @@ The same open-weight model as Baseten's (``baseten_api``), under the same Muse M
 its exact id is cleared for training beside Baseten's (``provenance``). MIND's experiment calls it
 when ``ANJO_SLEEP_MIND_SPARK`` says so (``mind.spark_provider``); Sleep's night stays on Baseten.
 It's served through Fireworks' OpenAI-compatible API. The key comes from
-``ANJO_FIREWORKS_API_KEY``, read at call time.
+``ANJO_FIREWORKS_API_KEY``, read at call time. ``generate`` calls the cheaper models that may write
+MIND's core splits and pairs instead (``mind.apd.generators``); they are not Spark Open, and
+``provenance`` doesn't clear them for training.
 """
 from __future__ import annotations
 
@@ -17,8 +19,12 @@ from anjo.sleep.model_api import ChatResult, post_chat
 KEY_ENV = "ANJO_FIREWORKS_API_KEY"
 URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 SPARK_OPEN: Final = "accounts/fireworks/models/muse-spark-open"
+# Cheaper writers of MIND's core splits and pairs (``mind.apd.generators``); never Spark Open's stand-in.
+GPT_OSS_120B: Final = "accounts/fireworks/models/gpt-oss-120b"
+GLM_5P3_FLASH: Final = "accounts/fireworks/models/glm-5p3-flash"
 
 SparkOpenModel = Literal["accounts/fireworks/models/muse-spark-open"]
+GeneratorModel = Literal["accounts/fireworks/models/gpt-oss-120b", "accounts/fireworks/models/glm-5p3-flash"]
 
 
 def chat(
@@ -44,4 +50,33 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+    )
+
+
+def generate(
+    model: GeneratorModel,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    timeout_s: float,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> ChatResult:
+    """One chat completion on a core split's generator, its reply capped at ``max_tokens``; a
+    reasoning model is asked for ``reasoning_effort``, and its reasoning tokens count as output."""
+    return post_chat(
+        provider="Fireworks",
+        url=URL,
+        key_env=KEY_ENV,
+        model=model,
+        messages=messages,
+        tools=tools,
+        timeout_s=timeout_s,
+        temperature=temperature,
+        transport=transport,
+        max_tokens=max_tokens,
+        extra=None if reasoning_effort is None else {"reasoning_effort": reasoning_effort},
+        count_reasoning=True,
     )

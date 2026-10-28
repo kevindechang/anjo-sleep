@@ -21,9 +21,10 @@ pair is written again under the next attempt's seed. ``CounterfactualPair`` reco
 differ (the slot's decision: speak in the failed history, wait in the kept one) and what should
 not (the unrelated item, the last day).
 
-**Many pairs** (``generate_pairs``): as ``gen_batch.generate_lives``, side by side, each attempt
-held before it starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling
-checked before each attempt. Pairs are test material: the core never trains on them.
+**Many pairs** (``generate_pairs``): as ``gen_batch.generate_lives``, side by side, written by the
+backend's generator (``generators``) and never mixed with another's, each attempt held before it
+starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling checked before
+each attempt. Pairs are test material: the core never trains on them.
 """
 from __future__ import annotations
 
@@ -41,7 +42,7 @@ from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, h
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
 from anjo.sleep.mind.apd.families import Template
-from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, side_by_side
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, refuse_mixed, side_by_side
 from anjo.sleep.mind.apd.generate import (
     AWAY_DAYS,
     MAX_ATTEMPTS,
@@ -58,6 +59,7 @@ from anjo.sleep.mind.apd.generate import (
     problem_file,
     ranked,
 )
+from anjo.sleep.mind.apd.generators import check
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import HALF_GAP_DAYS, LIFE_DAYS, CounterfactualPair, GateVerdict, Life
 
@@ -191,14 +193,15 @@ class GeneratedPair:
 
 
 def generate_pair(spec: PairSpec, backend: Backend) -> GeneratedPair:
-    """``write_pair``'s attempts, each held before it starts, both histories gated."""
-    model = backend.provider.model
+    """``write_pair``'s attempts, each held before it starts, written by the backend's generator,
+    both histories gated on Spark Open."""
+    model, writes = backend.provider.model, backend.generator.writes_with(backend.provider)
     for attempt in range(MAX_ATTEMPTS):
         if backend.ceiling is not None:
             backend.ceiling.check()
         with held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS) as (writer, reader, auditor):
             try:
-                made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=model)
+                made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes)
             except GenerationFailed:
                 continue
             verdicts = (*gates.check(made.failed, made.failed_problems, reader=reader, auditor=auditor, model=model),
@@ -227,6 +230,8 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
                    parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
     """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
     a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end."""
+    check("core-test", backend.generator, backend.provider)
+    refuse_mixed((life for pair in data.pairs() for life in (pair.failed, pair.kept)), backend, "the pairs")
     todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
     if backend.ceiling is not None:
         backend.ceiling.begin("pair(s) generated", len(todo))

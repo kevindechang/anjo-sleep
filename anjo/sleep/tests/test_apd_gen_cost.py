@@ -82,7 +82,7 @@ def test_the_generate_plan_prints_each_lifes_range_and_flags_a_split_over_the_po
     low, high = min(plan.expected_usd(c) for c in each), max(plan.expected_usd(c) for c in each)
     assert f"Expected: about ${expected:,.2f} for 120 lives, one attempt each: ${low:,.2f} to ${high:,.2f} a life" in text
     assert spark > CAPS[FIREWORKS.pool]
-    assert (f"Over the cap: about ${spark:,.2f} of it is Spark Open on {FIREWORKS.pool}, more than its whole "
+    assert (f"Over the cap: about ${spark:,.2f} of it is on {FIREWORKS.pool}, more than its whole "
             f"${CAPS[FIREWORKS.pool]:,.2f} cap") in text
     assert list(tmp_path.iterdir()) == []
 

@@ -1,6 +1,7 @@
 """APD's lives generated side by side, each failure alone (Task 17; MIND's data).
 
-- **One life** (``generate_life``): ``generate.generate``'s attempts, each attempt's worst case,
+- **One life** (``generate_life``): ``generate.generate``'s attempts, written by the backend's
+  generator (``generators``; a split never mixes two), each attempt's worst case,
   sized to the life's planted items, held before it starts (``backend.held_attempt``), after the
   run's ceiling is checked. A
   transient Spark Open failure is tried again inside the attempt's own hold (``backend``).
@@ -28,7 +29,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -40,7 +41,9 @@ from anjo.sleep.mind.apd import gates, generate
 from anjo.sleep.mind.apd.backend import Backend, Flight, held_attempt, life_calls
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
-from anjo.sleep.mind.apd.store import DataDir
+from anjo.sleep.mind.apd.generators import check, mixed
+from anjo.sleep.mind.apd.store import DataDir, StoreError
+from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.model_api import ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
@@ -134,9 +137,9 @@ def side_by_side(backend: Backend, work: Sequence[Callable[[Backend], T]], paral
 
 
 def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
-    """``generate.generate``'s attempts, each attempt's worst case held before it starts, Spark Open
-    on the backend's provider."""
-    model = backend.provider.model
+    """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
+    the backend's generator (``generators``), read by the gates on Spark Open."""
+    model, writes = backend.provider.model, backend.generator.writes_with(backend.provider)
     for attempt in range(generate.MAX_ATTEMPTS):
         if backend.ceiling is not None:
             backend.ceiling.check()  # before the attempt's hold
@@ -145,7 +148,7 @@ def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
             try:
                 built, problems = generate.life(spec.field, spec.families, spec.prevalence,
                                                 generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
-                                                model=model)
+                                                model=writes)
             except GenerationFailed:
                 continue
             verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
@@ -167,6 +170,15 @@ def spec_name(spec: LifeSpec) -> str:
 
 
 # ── Many lives ────────────────────────────────────────────────────────────────
+
+
+def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str) -> None:
+    """``StoreError`` when another generator wrote any of ``lives``: a mismatch, never a reuse."""
+    other = mixed(lives, backend.generator.writes_with(backend.provider))
+    if other:
+        raise StoreError(f"{where} holds {len(other)} written by another generator than {backend.generator.name} "
+                         f"({', '.join(other[:3])}{', ...' if len(other) > 3 else ''}); one never mixes generators: "
+                         "go on with theirs, or start a new data dir")
 
 
 @dataclass(frozen=True)
@@ -191,6 +203,9 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     """Every life of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved,
     its problems sealed; lines in the specs' order, and with a ceiling what the run has settled per
     life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end."""
+    for split in dict.fromkeys(spec.split for spec in specs):
+        check(split, backend.generator, backend.provider)
+        refuse_mixed(data.lives(split), backend, split)
     todo = [spec for spec in specs if not any(data.has_life(life_id) for life_id in spec_ids(spec))]
     if backend.ceiling is not None:
         backend.ceiling.begin("life(s) generated", len(todo))

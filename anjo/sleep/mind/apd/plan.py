@@ -22,6 +22,7 @@ from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
 from anjo.sleep.mind.apd.generate import LifeSpec
+from anjo.sleep.mind.apd.generators import SPARK, Generator
 from anjo.sleep.mind.apd.pairs import OUTCOME_DAYS, PAIR_CALLS, PAIR_EXPECTED
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
@@ -35,6 +36,7 @@ from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX
 NIGHT_WHAT: Final = "screen and resolver, held at a night's first call and settled at what it priced"
 MEASURED_LIFE_USD: Final = 0.28  # a development life with no items, one attempt, on Fireworks, measured 2026-10-28
 CALL_USD: Final = MEASURED_LIFE_USD / GEN_WRITE_CALLS  # one call, from that life's writer and extractor calls
+CALL_MIX_IN: Final = 4  # a generation call's input tokens per output token, assumed: prices one generator against another
 PRICED: Final = (f"at ${CALL_USD:.3f} a call: a life with no items cost ${MEASURED_LIFE_USD:.2f} for its "
                  f"{GEN_WRITE_CALLS} writer and extractor calls on Fireworks (measured 2026-10-28); the gates' "
                  "reads and Muse Spark's calls priced the same, not measured")
@@ -99,64 +101,101 @@ def expected_calls(surfaces: Sequence[int]) -> GenCalls:
     return GenCalls(GEN_WRITE_CALLS, sum(item_reads(day) for day in surfaces), len(surfaces) + 1, retries=0)
 
 
-def expected_usd(calls: GenCalls) -> float:
-    return (calls.spark + calls.muse) * CALL_USD
+def write_scale(rate: Rate, prices: Prices) -> float:
+    """What a generator's call costs against Spark Open's at ``prices``, at ``CALL_MIX_IN``."""
+    spark = CALL_MIX_IN * prices.spark_in_per_m + prices.spark_out_per_m
+    return 1.0 if spark == 0 else (CALL_MIX_IN * rate.per_m_in + rate.per_m_out) / spark
+
+
+def expected_usd(calls: GenCalls, scale: float = 1.0) -> float:
+    """One attempt's calls at ``CALL_USD``, its writes at ``scale`` times that (``write_scale``)."""
+    return (calls.writes * scale + calls.reads + calls.retries + calls.muse) * CALL_USD
+
+
+def _spark_usd(calls: GenCalls, scale: float) -> float:
+    return (calls.writes * scale + calls.reads + calls.retries) * CALL_USD
+
+
+def _writer(generator: Generator, rate: Rate | None) -> tuple[str, ...]:
+    """The note naming a core split's generator, when it isn't Spark Open."""
+    if generator.model is None or rate is None:
+        return ()
+    effort = "" if generator.reasoning_effort is None else (
+        f", reasoning effort {generator.reasoning_effort}, its reasoning held and settled as output but not in the "
+        "expected")
+    return (f"the writer and extractor are {generator.name} on Fireworks ({generator.model}{effort}) at "
+            f"${rate.per_m_in:g}/${rate.per_m_out:g} per 1M tokens, a call expected at its prices against Spark "
+            f"Open's ({CALL_MIX_IN} input tokens to each output token); the gates still read on Spark Open",)
 
 
 def _over_cap(spark_usd: float, pool: Pool) -> tuple[str, ...]:
     cap = CAPS[pool]
     if spark_usd <= cap:
         return ()
-    return (f"Over the cap: about ${spark_usd:,.2f} of it is Spark Open on {pool}, more than its whole ${cap:,.2f} cap; "
+    return (f"Over the cap: about ${spark_usd:,.2f} of it is on {pool}, more than its whole ${cap:,.2f} cap; "
             "the run stops once the pool is full (BudgetStop), and a rerun goes on from what was saved.",)
 
 
-def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provider: SparkProvider) -> Plan:
+def _writes(generator: Generator, rate: Rate | None, prices: Prices) -> tuple[Rate | None, float, str]:
+    """The writes' rate for the holds (``None``: Spark Open's), their scale for the expected, and
+    who makes them."""
+    if generator.model is None or rate is None:
+        return None, 1.0, "Spark Open"
+    return rate, write_scale(rate, prices), generator.name
+
+
+def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provider: SparkProvider,
+               generator: Generator = SPARK, generator_rate: Rate | None = None) -> Plan:
     """Generating ``count`` counterfactual pairs, each attempt held for both histories."""
     pool = provider.pool
-    worst = gen_holds(prices, rates, pool, PAIR_CALLS)
+    rate, scale, writer = _writes(generator, generator_rate, prices)
+    worst = gen_holds(prices, rates, pool, PAIR_CALLS, rate)
     attempts = count * generate.MAX_ATTEMPTS
     holds = (
-        Hold(pool, worst[pool], attempts, f"Spark Open per pair attempt: {LIFE_DAYS} days written and extracted once, "
-             f"each history's {len(OUTCOME_DAYS)} outcomes extracted, both histories' gate readers, and "
-             f"{GEN_SPARK_RETRIES} extra tries"),
+        Hold(pool, worst[pool], attempts, f"{pool} per pair attempt: {LIFE_DAYS} days written and extracted once and "
+             f"each history's {len(OUTCOME_DAYS)} outcomes extracted ({writer}), both histories' gate readers (Spark "
+             f"Open), and {GEN_SPARK_RETRIES} extra tries"),
         Hold("meta_usd", worst["meta_usd"], attempts, "Muse Spark per pair attempt: both histories' auditor"),
     )
     total = sum(hold.each * hold.count for hold in holds)
     pairs = f"{count} pair{'' if count == 1 else 's'}"
+    one = expected_usd(PAIR_EXPECTED, scale)
     return Plan(f"generate {pairs} of histories in core-test's fields", None, holds, (
-        _spark(provider),
+        _spark(provider), *_writer(generator, generator_rate),
         f"at most {generate.MAX_ATTEMPTS} attempts a pair; both histories pass the gates or the pair is written again",
         "a pair that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
     ), totals=(
         f"Worst case: ${total:,.2f} for {pairs}: every pair taking all {generate.MAX_ATTEMPTS} attempts, every call "
         "at its cap and every extra try used.",
-        f"Expected: about ${count * expected_usd(PAIR_EXPECTED):,.2f} for {pairs}, one attempt each: "
-        f"${expected_usd(PAIR_EXPECTED):,.2f} a pair, {PAIR_EXPECTED.spark + PAIR_EXPECTED.muse} calls, {PRICED}.",
-        *_over_cap(count * PAIR_EXPECTED.spark * CALL_USD, pool),
+        f"Expected: about ${count * one:,.2f} for {pairs}, one attempt each: ${one:,.2f} a pair, "
+        f"{PAIR_EXPECTED.spark + PAIR_EXPECTED.muse} calls, {PRICED}.",
+        *_over_cap(count * _spark_usd(PAIR_EXPECTED, scale), pool),
     ))
 
 
 def generate_plan(lives: Sequence[Sequence[int]], prices: Prices, rates: Mapping[str, Rate], split: str, *,
-                  provider: SparkProvider) -> Plan:
+                  provider: SparkProvider, generator: Generator = SPARK, generator_rate: Rate | None = None) -> Plan:
     """Generating one life per entry of ``lives``, each its items' surface days: each attempt held
-    for its own items, and expected at its own calls (``expected_calls``)."""
+    for its own items, and expected at its own calls (``expected_calls``), its writes by the
+    generator's prices."""
     count, pool = len(lives), provider.pool
-    worst = [gen_holds(prices, rates, pool, life_calls(len(items))) for items in lives]
+    rate, scale, writer = _writes(generator, generator_rate, prices)
+    worst = [gen_holds(prices, rates, pool, life_calls(len(items)), rate) for items in lives]
     each = [expected_calls(items) for items in lives]
-    expected = [expected_usd(calls) for calls in each]
+    expected = [expected_usd(calls, scale) for calls in each]
     attempts = count * generate.MAX_ATTEMPTS
     sized = "sized to its life's planted items; the mean shown"
     holds = (
         Hold(pool, _mean([w[pool] for w in worst]), attempts,
-             f"Spark Open per attempt: writer, extractor, gate readers, and {GEN_SPARK_RETRIES} extra tries, {sized}"),
+             f"{pool} per attempt: writer and extractor ({writer}), gate readers (Spark Open), and "
+             f"{GEN_SPARK_RETRIES} extra tries, {sized}"),
         Hold("meta_usd", _mean([w["meta_usd"] for w in worst]), attempts,
              f"Muse Spark per attempt: the gates' auditor, {sized}"),
     )
     total = sum(hold.each * hold.count for hold in holds)
     items = sorted(len(found) for found in lives) or [0]
     return Plan(f"generate {_lives(count)} of {split}", None, holds, (
-        _spark(provider),
+        _spark(provider), *_writer(generator, generator_rate),
         f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts, its Spark Open calls "
         f"sharing {GEN_SPARK_RETRIES} extra tries for a transient failure",
         "a life that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
@@ -165,7 +204,7 @@ def generate_plan(lives: Sequence[Sequence[int]], prices: Prices, rates: Mapping
         "call at its cap and every extra try used.",
         f"Expected: about ${sum(expected):,.2f} for {_lives(count)}, one attempt each: ${min(expected, default=0.0):,.2f} "
         f"to ${max(expected, default=0.0):,.2f} a life by its planted items ({items[0]} to {items[-1]}), {PRICED}.",
-        *_over_cap(sum(calls.spark for calls in each) * CALL_USD, pool),
+        *_over_cap(sum(_spark_usd(calls, scale) for calls in each), pool),
     ))
 
 

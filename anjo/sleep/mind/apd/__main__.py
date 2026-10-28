@@ -64,6 +64,7 @@ from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import colab_vllm, core_splits, fakes, generate, intervene, labels, pairs, pilot, plan, timing
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
 from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
+from anjo.sleep.mind.apd.generators import GENERATORS, SPARK, Generator, check
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
 from anjo.sleep.mind.apd.ceiling import DEFAULT_MAX_USD, UNITS, Ceiling, CeilingReached, RunLedger, max_usd
 from anjo.sleep.mind.apd.journal import SpendJournal
@@ -121,6 +122,7 @@ CORE_COMMANDS: Final = ("generate", "run", "judge", "labels")  # the commands th
 SUBSET_COMMANDS: Final = ("run", "judge", "labels")
 CORE_ARMS: Final[tuple[ArmName, ...]] = ("B",)  # a core split's runs, unless --arms says otherwise
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
+FAKE_GENERATOR_RATE: Final = Rate(0.15, 0.6)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -148,6 +150,11 @@ def _parser() -> argparse.ArgumentParser:
     for name in GEN_COMMANDS:  # --parallel after the command too; SUPPRESS keeps one given before it
         commands.choices[name].add_argument("--parallel", type=int, default=argparse.SUPPRESS,
                                             help=f"lives generated at once (default {GEN_PARALLEL})")
+        commands.choices[name].add_argument("--generator", choices=tuple(GENERATORS), default=SPARK.name,
+                                            help="who writes and extracts a core split's lives or the pairs "
+                                                 "(default spark: Spark Open; APD's own splits take spark only)")
+        commands.choices[name].add_argument("--generator-prices", help="with another --generator: its in,out "
+                                            "list prices (USD per million tokens); --prices still prices Spark Open")
     ran = commands.add_parser("run", help="every arm on every life of a split")
     ran.add_argument("--held-out", action="store_true")
     ran.add_argument("--adapters", type=Path, help="17b's adapter cache: runs M+replay and M+shuffled")
@@ -190,6 +197,42 @@ def _four(text: str | None, name: str) -> tuple[float, ...] | None:
 def _rates(text: str | None) -> dict[str, Rate] | None:
     parts = _four(text, "--judge-prices")
     return None if parts is None else {MUSE: Rate(parts[0], parts[1]), GEMINI: Rate(parts[2], parts[3])}
+
+
+def _generator(args: argparse.Namespace) -> Generator:
+    return GENERATORS[getattr(args, "generator", SPARK.name)]
+
+
+def _generator_rate(args: argparse.Namespace) -> Rate | None:
+    """``--generator-prices``: two list prices, each at least 0."""
+    text = getattr(args, "generator_prices", None)
+    if text is None:
+        return None
+    parts = tuple(float(part) for part in text.split(","))
+    if len(parts) != 2 or any(part < 0 for part in parts):
+        raise SystemExit("--generator-prices holds two prices, in and out, each at least 0")
+    return Rate(parts[0], parts[1])
+
+
+def _check_generator(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: SparkProvider) -> None:
+    """A generator only on the core splits and the pairs, beside Spark Open on Fireworks; live, with its prices."""
+    found = _generator(args)
+    split = "core-test" if args.command == "generate-pairs" else _split(args)
+    try:
+        check(split, found, provider)
+    except ValueError as error:
+        parser.error(str(error))
+    if found.model is not None and not args.fake and getattr(args, "generator_prices", None) is None:
+        parser.error(f"--generator {found.name} needs --generator-prices in,out to price its holds")
+
+
+def _generating(args: argparse.Namespace, backend: backends.Backend) -> backends.Backend:
+    """The backend writing with the command's generator, at its prices (the fakes': list-like)."""
+    found = _generator(args)
+    if found.model is None:
+        return backend
+    rate = FAKE_GENERATOR_RATE if backend.fake else _generator_rate(args)
+    return dataclasses.replace(backend, generator=found, generator_rate=rate)
 
 
 def _provider(parser: argparse.ArgumentParser) -> SparkProvider:
@@ -273,9 +316,11 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     if args.command == "generate":  # the held-out lives' items are drawn at the freeze: at the most, surfacing last
         found = ([(LIFE_DAYS - 1,) * MAX_PREVALENCE] * args.lives if split == "held_out"
                  else [plan.surface_days(spec) for spec in _specs(split)])
-        return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider)
+        return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider,
+                                  generator=_generator(args), generator_rate=_generator_rate(args))
     if args.command == "generate-pairs":
-        return plan.pairs_plan(args.n, prices, rates, provider=provider)
+        return plan.pairs_plan(args.n, prices, rates, provider=provider, generator=_generator(args),
+                               generator_rate=_generator_rate(args))
     if args.command == "run":
         arms = (_arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development"
                 else pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()))
@@ -352,7 +397,7 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
     """One command under MIND's lock, after its sweep; failed runs, a session that can't carry the
     next run, a hold with no room coming, or the run's ceiling stop it cleanly."""
     ceiling = _ceiling(args, backend)
-    backend = dataclasses.replace(backend, ceiling=ceiling)
+    backend = dataclasses.replace(_generating(args, backend), ceiling=ceiling)
     try:
         if args.command in SERVING_COMMANDS:
             backend.preflight()  # the CLI, ssh and ssh-keygen, before the sweep, a hold or a VM
@@ -577,6 +622,7 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     if args.command == "labels":  # reads the data dir and writes the export; no call, no spend
         return _labels(args, out)
     provider = _provider(parser)
+    _check_generator(parser, args, provider)
     if args.fake:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
         out(f"APD on fakes in {data.root}. The numbers mean nothing.")

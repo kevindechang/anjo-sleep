@@ -25,7 +25,9 @@ tried again from the extra tries (``retry``), each try a call of its own, and a 
 priced at one call's worst case, so the hold stays a true bound. Every generation reply goes out
 capped at ``retry.REPLY_MAX_TOKENS`` (``gen_chat``), the cap one call is held for. Side by side, an
 attempt whose hold finds no room waits for the command's other attempts in flight to end
-(``Flight``), and once the command is ending (``halt``) no attempt or call starts (``Halted``).
+(``Flight``), and once the command is ending (``halt``) no attempt or call starts (``Halted``). A
+core split's generator (``generators``) writes and extracts on Fireworks at its own list prices:
+an attempt holds its writes at those and its gate reads at Spark Open's, on the same pool.
 """
 from __future__ import annotations
 
@@ -40,12 +42,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from anjo.sleep import meta_api
+from anjo.sleep import fireworks_api, meta_api
 from anjo.sleep.budget import Ledger, Pool
 from anjo.sleep.context.brief import ChatFn as BriefChat
 from anjo.sleep.mind.apd import colab_vllm, fakes, retry
 from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.colab_vllm import ColabSession, TunnelOpener
+from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
 from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
 from anjo.sleep.model_api import ChatResult, ModelApiError
@@ -112,6 +115,8 @@ class Backend:
     preflight: Callable[[], None] = lambda: None  # live: the CLI, ``ssh`` and ``ssh-keygen`` are here
     halt: threading.Event | None = field(default=None, compare=False)
     flight: Flight | None = field(default=None, compare=False)
+    generator: Generator = SPARK  # who writes and extracts a core split's lives and the pairs (``generators``)
+    generator_rate: Rate | None = None  # its list prices, when it isn't Spark Open
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -139,14 +144,18 @@ def fake_backend(provider: SparkProvider = BASETEN) -> Backend:
 
 
 def gen_chat(provider: SparkProvider) -> BriefChat:
-    """Generation's calls: Muse Spark on Meta's API for the auditor, Spark Open on ``provider`` else,
-    every reply capped at ``retry.REPLY_MAX_TOKENS``, the most one call is held for."""
+    """Generation's calls: Muse Spark on Meta's API for the auditor, a core split's generator on
+    Fireworks for its own id (``generators``), Spark Open on ``provider`` else, every reply capped at
+    ``retry.REPLY_MAX_TOKENS``, the most one call is held for."""
 
     def chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
              temperature: float | None = None) -> ChatResult:
         cap = retry.REPLY_MAX_TOKENS
         if model == "muse-spark":
             return meta_api.chat("muse-spark", messages, tools, timeout_s, temperature=temperature, max_tokens=cap)
+        if model in BY_MODEL:
+            return fireworks_api.generate(model, messages, tools, timeout_s, temperature=temperature, max_tokens=cap,
+                                          reasoning_effort=BY_MODEL[model].reasoning_effort)
         return provider.write(model, messages, tools, timeout_s, temperature=temperature, max_tokens=cap)
 
     return chat
@@ -324,11 +333,24 @@ WORST_LIFE: Final = life_calls(MAX_PREVALENCE)
 
 
 def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None, spark_pool: Pool = BASETEN.pool,
-              calls: GenCalls = WORST_LIFE) -> dict[Pool, float]:
-    """One generation attempt's worst case on each pool: Spark Open's on ``spark_pool``."""
+              calls: GenCalls = WORST_LIFE, write_rate: Rate | None = None) -> dict[Pool, float]:
+    """One generation attempt's worst case on each pool: on ``spark_pool``, its writes at
+    ``write_rate`` (a generator's, or Spark Open's when ``None``), its reads at Spark Open's, and
+    each extra try at the dearer of the two."""
     spark, muse = spark_rate(prices), None if rates is None else rates[MUSE]
-    return {spark_pool: spark.worst * calls.spark if spark else 0.0,
-            "meta_usd": muse.worst * calls.muse if muse else 0.0}
+    writes = write_rate or spark
+    on_pool = 0.0 if spark is None or writes is None else (
+        calls.writes * writes.worst + calls.reads * spark.worst + calls.retries * max(writes.worst, spark.worst))
+    return {spark_pool: on_pool, "meta_usd": muse.worst * calls.muse if muse else 0.0}
+
+
+def write_rate(backend: Backend) -> Rate | None:
+    """What the writer and extractor cost: the generator's prices, or Spark Open's."""
+    if backend.generator.model is None:
+        return spark_rate(backend.prices)
+    if backend.prices is not None and backend.generator_rate is None:
+        raise ValueError(f"--generator {backend.generator.name} needs its prices to be held")
+    return backend.generator_rate
 
 
 @contextmanager
@@ -339,15 +361,16 @@ def held_attempt(backend: Backend, key: str,
     Nothing starts once ``backend.halt`` is set; a hold without room waits (``_room``)."""
     halted(backend.halt)
     retries = Retries(calls.retries, sleep=backend.sleep)
-    spark = CountedChat(backend.life_chat, calls.writes, spark_rate(backend.prices), retries, halt=backend.halt)
-    reader = CountedChat(backend.reader, calls.reads, spark.rate, retries, halt=backend.halt)
+    writes = write_rate(backend)
+    spark = CountedChat(backend.life_chat, calls.writes, writes, retries, halt=backend.halt)
+    reader = CountedChat(backend.reader, calls.reads, spark_rate(backend.prices), retries, halt=backend.halt)
     auditor = CountedChat(backend.auditor, calls.muse, None if backend.rates is None else backend.rates[MUSE],
                           halt=backend.halt)
     if backend.ledger is None:
         yield spark, reader, auditor
         return
     pool, ledger = backend.provider.pool, backend.ledger
-    worst = gen_holds(backend.prices, backend.rates, pool, calls)
+    worst = gen_holds(backend.prices, backend.rates, pool, calls, writes)
 
     def holds(stack: ExitStack) -> None:
         stack.enter_context(held(ledger, f"apd:gen:{key}:spark", (pool,), usd(worst[pool]),
