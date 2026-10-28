@@ -40,7 +40,9 @@ STAGE_STEPS: Final[Mapping[str, tuple[str, ...]]] = {  # the night log's steps e
 }
 CORE_DREAM: Final = "dream"  # MIND's core's dream step (mind-frontier), logged after ``notice`` when the core serves her
 STORY_STEP: Final = "story"  # a story that couldn't be told or written, logged as this failed step (``nightlog``)
-AFTER_THE_NIGHT: Final = ("morning", STORY_STEP)  # logged once the night ended: their failure never stopped it
+# Steps logged once the night ended (the morning's runners, ``daily`` and ``accelerated``, and the story):
+# their failure never stopped the night, so it never reads as where it stopped.
+AFTER_THE_NIGHT: Final = ("morning", "dailies", STORY_STEP)
 MORNING_FAILED: Final = "morning failed: "  # a failed morning step's ``why`` starts with this (``daily.py``)
 STAMP_CHARS: Final = 12  # a projector's stamp: the first characters of its id (``projector_math.params_sha``)
 

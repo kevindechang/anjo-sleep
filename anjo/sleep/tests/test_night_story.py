@@ -6,6 +6,7 @@ zero for something that didn't run. Fakes only."""
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep.night import story as st
-from anjo.sleep.night.nightlog import STORY, safe_error
+from anjo.sleep.night.nightlog import STORY, NightLog, safe_error
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.night.sleep_night import DEFER_WHY, NAP_WHY
 from anjo.sleep.night.sleep_pressure import SleepPolicy
@@ -321,6 +322,39 @@ def test_a_story_that_cant_be_written_never_changes_the_night(
     retold = st.tell(NIGHT, "promoted", steps(result.log_path))  # a failed story step never reads as where the night stopped
     assert isinstance(retold.check, st.Check) and retold.wake == st.Wake(st.NotRun(st.SCORED_IN_MORNING),
                                                                          st.NotRun(st.SELF_MODEL_NOT_YET))
+
+
+def test_steps_logged_after_the_night_never_read_as_where_it_stopped() -> None:
+    after = [*PROMOTED, {"step": "morning", "status": "ok", "replies": 28},
+             {"step": "dailies", "status": "failed", "error": "RuntimeError"}, {"step": st.STORY_STEP, "status": "failed"}]
+    told = st.tell(NIGHT, "promoted", _log(*after))
+    assert told.check == TOLD["promoted"].check and told.wake == st.Wake(st.Morning(28, 0), st.NotRun(st.SELF_MODEL_NOT_YET))
+    root = Path(st.__file__).parents[1]  # every step the morning's runners log after the night: daily and accelerated
+    logged = {name for source in (root / "night" / "daily.py", root / "sim" / "accelerated.py")
+              for name in re.findall(r'\.step\("(\w+)"', source.read_text(encoding="utf-8"))}
+    assert logged == {"morning", "dailies"} and logged | {st.STORY_STEP} == set(st.AFTER_THE_NIGHT)
+
+
+def test_one_persons_story_crash_never_stops_anothers_night(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path)
+    for uid in ("p1", "p2"):
+        world.plan(uid, NIGHT, count=3)
+    replace_file = NightLog._replace
+
+    def full_for_p1(log: NightLog, name: str, text: str) -> None:
+        if name == STORY and world.logs("p1") in log.folder.parents:
+            raise OSError("no space left on device")
+        replace_file(log, name, text)
+
+    monkeypatch.setattr(NightLog, "_replace", full_for_p1)
+    results = run_night_batch_with(world.deps(), {"p1": NIGHT, "p2": NIGHT})
+    assert {uid: r.status for uid, r in results.items()} == {"p1": "promoted", "p2": "promoted"}
+    assert summary(results["p1"].log_path)["status"] == "promoted"  # the summary was written before the story
+    assert step(results["p1"].log_path, st.STORY_STEP) == {**step(results["p1"].log_path, st.STORY_STEP),
+                                                           "status": "failed", "error": "OSError"}
+    assert not (results["p1"].log_path.parent / STORY).exists()
+    assert _story(results["p2"].log_path) == st.tell(NIGHT, "promoted", steps(results["p2"].log_path))
+    assert st.STORY_STEP not in [r["step"] for r in steps(results["p2"].log_path)]
 
 
 def test_a_night_that_failed_writes_where_it_stopped(tmp_path: Path) -> None:

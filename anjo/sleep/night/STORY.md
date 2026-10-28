@@ -9,7 +9,8 @@ the accelerated runner's morning). The demo page's night view reads it (`demo/ni
 
 Telling it never fails a night: a story that can't be told or written is a failed `story` step in
 the log (`STORY_STEP`, its error's type and, when Sleep raised it, its message), and the night's
-status and summary stand. That step, like the morning's, never reads as where the night stopped.
+status and summary stand. That step, like the morning's and the Dailies line's (`AFTER_THE_NIGHT`),
+never reads as where the night stopped.
 
 A record a step can't fill yet is `NotRun(reason)`, never missing, `None` or a zero. Each one still
 waiting for its branch names that branch in a `*_NOT_YET` reason in `story.py`.
