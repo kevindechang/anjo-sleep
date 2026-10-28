@@ -196,7 +196,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
-        wake=serving.wake, sleep=serving.sleep_now,
+        wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(),
     )
 

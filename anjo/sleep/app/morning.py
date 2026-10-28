@@ -68,4 +68,5 @@ def build(user_id: str, persona: str, night: date) -> Morning:
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
     return Morning(arms=arms, sealed=probes, judge=MuseJudge(meta_api.chat, lambda _person: judge_brief(persona)),
                    prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
-                   wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ))
+                   wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ),
+                   retries=client.retries)

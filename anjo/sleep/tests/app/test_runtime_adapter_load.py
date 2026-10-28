@@ -153,3 +153,30 @@ def test_only_pre_generated_demo_pairs_wait_for_an_adapter_folder() -> None:
     assert live_page(date(2026, 10, 28)).model.load_wait_s == 0.0  # type: ignore[attr-defined]
     pairs = demo_live.glimmer_deps("u-1", Serving(), load_wait_s=LOAD_WAIT_S)  # type: ignore[arg-type]
     assert pairs(date(2026, 10, 28)).model.load_wait_s == LOAD_WAIT_S  # type: ignore[attr-defined]
+
+
+def test_chat_deadline_has_no_retry(live: LiveVllm) -> None:
+    from anjo.sleep.serving import client as vllm
+
+    live.timeout = True  # a request lost on the way: the turn ends at its deadline, sent once
+    started = time.monotonic()
+    assert _turn(Modal(chunks("never sent"))) == [Finish("error", "transient")]
+    assert live.paths == [LOAD_PATH] and live.deadlines == [runtime.REPLY_DEADLINE_S]
+    assert time.monotonic() - started < vllm.BACKOFF_S[0]  # never a pause before a second attempt
+
+    lost: list[str] = []
+
+    def lose(request: httpx.Request) -> httpx.Response:
+        lost.append(request.url.path)
+        raise httpx.ReadTimeout("lost on the way", request=request)
+
+    class Serving:
+        def client(self) -> VllmClient:
+            return VllmClient(URL, TOKEN, transport=httpx.MockTransport(lose), adapters_dir=config.ADAPTERS_DIR)
+
+    page = demo_live.glimmer_deps("u-1", Serving(), load_wait_s=0.0)(date(2026, 10, 28)).model  # type: ignore[arg-type]
+    with pytest.raises(vllm.ServingError, match="failed in transport"):
+        page.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+    assert lost == ["/tokenize"] and page.retries() == 0 and page.attempts == 1  # type: ignore[attr-defined]
+    pairs = demo_live.glimmer_deps("u-1", Serving(), load_wait_s=LOAD_WAIT_S)(date(2026, 10, 28)).model  # type: ignore[arg-type]
+    assert pairs.attempts == vllm.ATTEMPTS  # type: ignore[attr-defined]  # nobody waits on a pre-generated pair

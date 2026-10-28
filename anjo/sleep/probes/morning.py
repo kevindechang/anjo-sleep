@@ -33,7 +33,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from functools import partial
 from pathlib import Path
@@ -90,6 +90,7 @@ class Morning:
     wake: Callable[[], WakeResult] | None = None  # wakes Glimmer before any arm calls it
     sleep: Callable[[], None] | None = None  # puts it back to sleep when the run ends, however it ends
     concurrency: int = 1  # model calls at once (``parallel.Calls``); 1 is the serial run
+    retries: Callable[[], int] = field(default=lambda: 0)  # the arms' running count of requests sent again (the night log's)
 
 
 @dataclass(frozen=True)
