@@ -10,10 +10,12 @@ the weights volume read-only and lands each adapter on the adapters volume. Thre
 - ``Serve``: vLLM's OpenAI-compatible server on one GPU at the precision ``config.SERVING``
   names, with LoRA on, so the base model and every personal adapter share it. It holds only the
   serving secret (VLLM_API_KEY). It runs one container at most (``config.MAX_CONTAINERS``), scales
-  to zero after ten idle minutes, and every function has a timeout.
+  to zero after ten idle minutes, and every function has a timeout. vLLM loads an adapter only
+  when the client asks it to (``/v1/load_lora_adapter``, ``serving.client``).
 - ``put_adapter`` and the ``upload_adapter`` entrypoint: put one checked adapter folder on the
-  adapters volume under its name, never over an adapter already there. A running container sees a
-  new adapter after its next start.
+  adapters volume under its name, never over an adapter already there. A running container mounts
+  the volume as it was when the container started, so ``Serve`` reloads it every
+  ``config.ADAPTER_REFRESH_S`` (``refresh_adapters``) to see adapters uploaded since.
 
 Deploying and calling cost money, so only the coordinator runs them, on Kevin's go (the pinned
 commit is in deploy/dev_host.md). Loading this file without a pinned revision raises, so a deploy
@@ -31,9 +33,11 @@ from __future__ import annotations
 
 import importlib
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
@@ -113,6 +117,22 @@ def _wait_until_healthy(process: subprocess.Popen[bytes], timeout_s: float) -> N
     raise TimeoutError(f"vLLM was not healthy within {timeout_s:.0f} s")
 
 
+def refresh_adapters(
+    reload: Callable[[], None], stop: threading.Event, *, every_s: float, transient: tuple[type[Exception], ...],
+) -> int:
+    """Reload the adapters volume every ``every_s`` until ``stop`` is set; the number of reloads
+    that went through. A reload the volume refuses for now (``transient``: a file held open) is
+    skipped and the next one tries again. Anything else ends the loop and propagates."""
+    done = 0
+    while not stop.wait(every_s):
+        try:
+            reload()
+        except transient:
+            continue  # the volume is busy now: the next period tries again
+        done += 1
+    return done
+
+
 @app.cls(
     gpu=SETTINGS.precision.gpu,
     volumes={config.WEIGHTS_DIR: weights, config.ADAPTERS_DIR: adapters},
@@ -129,12 +149,25 @@ class Serve:
         self.process = subprocess.Popen(config.vllm_command(SETTINGS))
         _wait_until_healthy(self.process, config.STARTUP_TIMEOUT_S)
 
+    @modal.enter(snap=False)
+    def watch_adapters(self) -> None:
+        """Keep this container's adapters mount current, in a thread of the container's own process
+        (vLLM is a child process, and the volume reloads only from here). Never snapshotted: a
+        restored container starts its own."""
+        self.refresh_stop = threading.Event()
+        self.refresher = threading.Thread(
+            target=refresh_adapters, args=(adapters.reload, self.refresh_stop), daemon=True,
+            kwargs={"every_s": config.ADAPTER_REFRESH_S, "transient": (RuntimeError, modal.exception.Error)},
+        )
+        self.refresher.start()
+
     @modal.web_server(port=config.PORT, startup_timeout=config.STARTUP_TIMEOUT_S)
     def web(self) -> None:
         """The OpenAI-compatible server the dev host calls. vLLM checks VLLM_API_KEY."""
 
     @modal.exit()
     def stop(self) -> None:
+        self.refresh_stop.set()
         self.process.terminate()
 
 

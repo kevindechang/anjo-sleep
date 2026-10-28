@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+import threading
 import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -252,6 +253,40 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
         "/root/anjo/sleep/__init__.py", "/root/anjo/sleep/serving/__init__.py",
         "/root/anjo/sleep/serving/config.py",
     }
+
+
+def test_a_warm_server_refreshes_its_adapters_volume(
+    modal_app: tuple[types.ModuleType, _Recorder], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A running container sees only the volume as committed when it started, so ``Serve`` reloads the
+    adapters volume every ``ADAPTER_REFRESH_S`` while it runs (after a snapshot's restore too). A reload
+    the volume refuses (a file open) is skipped and the next one tries again; ``stop`` ends it."""
+    module, recorder = modal_app
+    assert {"snap": False, "target": "watch_adapters"} in recorder.by("enter")
+    refreshed = threading.Semaphore(0)
+    tries: list[int] = []
+
+    def reload() -> None:
+        tries.append(1)
+        if len(tries) == 1:
+            raise RuntimeError("there are open files preventing the operation")
+        refreshed.release()
+
+    monkeypatch.setattr(module.adapters, "reload", reload, raising=False)
+    monkeypatch.setattr(config, "ADAPTER_REFRESH_S", 0.01)
+    serve = module.Serve()
+    serve.process = types.SimpleNamespace(terminate=lambda: None)
+    serve.watch_adapters()
+    assert refreshed.acquire(timeout=10) and refreshed.acquire(timeout=10)  # refused once, then on and on
+    serve.stop()
+    serve.refresher.join(timeout=10)
+    assert not serve.refresher.is_alive() and serve.refresher.daemon
+
+    def broken() -> None:
+        raise ValueError("not a busy volume")
+
+    with pytest.raises(ValueError):  # anything else is no refusal to wait out: it ends the refresher, loudly
+        module.refresh_adapters(broken, threading.Event(), every_s=0.0, transient=(RuntimeError,))
 
 
 def test_the_gpu_snapshot_is_tried_only_when_its_flag_is_set(
