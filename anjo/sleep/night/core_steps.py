@@ -10,7 +10,10 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
   evidence, picks the threads she is least sure of or most at risk on, consolidates, and keeps the
   state the night's rows are made under. Its one log record holds the dream: the surprise
   weights, the ignitions, the questions opened and the ignitions dropped (why), the curriculum's
-  picks and the imagined states.
+  picks and the imagined states. A nap dreams too: every part of it is CPU work, so it wakes no
+  Glimmer and holds nothing on ``modal_usd``; its questions wait, with the deferred inquiry, for
+  her next deep sleep. A person the core refuses (fake latents for anyone not synthetic) gets a
+  no-op dream record saying why, and the rest of her night as it would be without the core.
 - **Inquire** reads the dream: the call carries the core's view, so the core picks the question.
 - **Rehearse**: practice is seeded on the picked evidence, at the same scenes and token cap; with
   nothing picked, on the newest evidence as before.
@@ -19,9 +22,13 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
   channel's row field (``core``, its ``state`` is ``p.dreamt.state_id``). The training step's
   record says whether the training job applied the weights (``surprise_weights``): its loss reads
   no row weight yet, so a weighted night says so instead of claiming it.
+- **Read**: the thought channel's ``mind_state`` is the core port's ``reading``: this dream's
+  state, its id and the core's predictions, and the projector her last unit kept. Practice and
+  training ask for it in the GPU session, after every CPU step, so always after the dream.
 - **Keep**: when the night ends, however it ends (unless the person was deleted), its unit is
-  saved: the core state, the thought channel's projector version and the adapter that serves her,
-  together (``mind.core.store``).
+  saved: the core state, the projector and the adapter that serve her, together
+  (``mind.core.store``): tonight's projector (the training receipt's) only when tonight promoted
+  the adapter trained with it, else the one her last unit kept.
 """
 from __future__ import annotations
 
@@ -91,6 +98,14 @@ class CoreSteps:
         said = receipt.get("surprise_weights")
         return {"surprise_weights": said if isinstance(said, str) else "not applied (the training job did not report)"}
 
+    def _projector(self, p: PersonNight) -> str | None:
+        """The projector that serves her with the adapter that serves her: tonight's, trained with the
+        LoRA, when tonight promoted (none when the channel was off); else the one her last unit kept."""
+        if p.status != "promoted":
+            return p.dreamt.projector
+        trained = p.receipts.get("train", {}).get("receipt", {}).get("projector")
+        return trained if isinstance(trained, str) else None
+
     def _kept(self, p: PersonNight) -> dict[str, Any]:
         """The night's unit, for the summary; a disk or store failure to keep it is recorded, not raised."""
         if p.dreamt.state_id is None or self.deps.cancel(p.uid):  # a deleted person's mind is never written again
@@ -98,7 +113,7 @@ class CoreSteps:
         serving = self.deps.registry.last_promoted(p.uid)
         try:
             unit = self.deps.core.keep(self._call(p, "finish"), p.dreamt, lora=None if serving is None else serving.id,
-                                       projector=None)  # the thought channel passes its projector version here
+                                       projector=self._projector(p))
         except (OSError, ValueError) as error:  # the night already ended: its summary says the unit wasn't kept
             return {"mind_unit": None, "mind_unit_error": type(error).__name__}
         return {"mind_unit": dict(unit)}

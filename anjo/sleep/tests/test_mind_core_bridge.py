@@ -50,6 +50,21 @@ def test_ignition_opens_a_question_through_the_kernel() -> None:
     assert again.dropped == ((dreamt_only, "nothing_real"),)
 
 
+def test_a_collision_opens_no_question_unless_contradictions_are_switched_on() -> None:
+    w, log = _held()
+    collided = Ignition(slot=1, other=2, kind="collision", score=0.97, cited_event_ids=(CAMERA.id, CANCELLED.id))
+    off = bridge.ignite(w.ws, (collided,), log, targets=TARGETS, as_of=night(5))
+    assert off.ws == w.ws and off.events == () and log.events() == tuple(w.events)
+    assert off.dropped == ((collided, "contradictions_off"),)
+    assert not bridge.contradictions_on({}) and not bridge.contradictions_on({bridge.CONTRADICTIONS_ENV: "0"})
+
+    assert bridge.contradictions_on({bridge.CONTRADICTIONS_ENV: "1"})
+    on = bridge.ignite(w.ws, (collided,), log, targets=TARGETS, as_of=night(5), collisions=True)
+    question = on.ws.questions[-1]
+    assert question.kind == "contradiction" and question.origin_evidence == (CAMERA.id, CANCELLED.id)
+    assert question.subject == "Whether the plans for Thursday's shoot agree with each other"
+
+
 def _script() -> list[Any]:
     return [
         {"op": "HYPOTHESIZE", "question_id": "q1", "hypotheses": [

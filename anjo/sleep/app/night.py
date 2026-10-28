@@ -34,7 +34,8 @@ The thought channel (``night.channel_night``) is on when ``ANJO_SLEEP_CHANNEL`` 
 (``channel_setup``): practice then replies through the person's MIND state as soft tokens, read from
 the shared pretraining's projector (``ANJO_SLEEP_CHANNEL_PROJECTOR``) or the person's own, and the
 GPU session's hold adds the embedding rows' CPU container. It needs MIND's state of each person
-(``NightDeps.mind_state``), which MIND's store provides; set without it, the night stops at build.
+(``NightDeps.mind_state``), which MIND's core gives after each night's dream (``core_state``); set
+without the core, the night stops at build.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). MIND's core
@@ -61,7 +62,7 @@ from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource, own_turn_count
-from anjo.sleep.app.mind_core import build_core, core_people
+from anjo.sleep.app.mind_core import build_core, core_people, core_state
 from anjo.sleep.app.mind_night import build_mind
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
 from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
@@ -290,7 +291,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
 
     core = build_core(os.environ, data_root() / SLEEP_DIR, core_people(options), workspace=workspace_log,
                       synthetic=is_synthetic)
-    mind_state: MindState | None = None  # MIND's store fills this (each person's night after the dream step)
+    mind_state: MindState | None = core_state(core)  # each person's night after the dream step
     channel = channel_setup(os.environ, client, practice, mind_state)
     gpu_rate = night_prices.serve_gpu_per_hour + (soft_tokens.EMBED_USD_PER_HOUR if channel is not None else 0.0)
 

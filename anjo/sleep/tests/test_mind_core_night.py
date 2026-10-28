@@ -23,7 +23,7 @@ from anjo.sleep.mind.core import api, store  # noqa: E402
 from anjo.sleep.mind.core import state as core_state  # noqa: E402
 from anjo.sleep.mind.core.latents import FakeEncoder  # noqa: E402
 from anjo.sleep.mind.core.night import CoreNight  # noqa: E402
-from anjo.sleep.mind.core.types import CoreConfig  # noqa: E402
+from anjo.sleep.mind.core.types import CoreConfig, Ignition  # noqa: E402
 from anjo.sleep.mind.inquiry import kernel  # noqa: E402
 from anjo.sleep.mind.inquiry import types as it  # noqa: E402
 from anjo.sleep.mind.inquiry.log import MemoryWorkspaceLog  # noqa: E402
@@ -192,10 +192,32 @@ def test_each_ignition_opens_a_question_through_the_kernel_on_her_real_evidence(
     assert receipt["ignite"] == "opened" and receipt["questions_opened"] == [q.id for q in ws.questions]
     assert receipt["questions_opened"] and all(set(q.origin_evidence) <= {i.id for i in day} for q in ws.questions)
     assert len(receipt["ignitions_dropped"]) == len(receipt["ignitions"]) - len(receipt["questions_opened"])
-    assert {d["why"] for d in receipt["ignitions_dropped"]} <= {"already_open", "nothing_real", "no_targets"}
+    assert {d["why"] for d in receipt["ignitions_dropped"]} <= {"already_open", "nothing_real", "no_targets",
+                                                                "contradictions_off"}
     assert all(not isinstance(e.step.entry, it.RunStart) for e in log.events()[before:])  # under tonight's notice pass
     again = night.dream(_call(world, NIGHT), day)  # a rerun: what is open stays open, once
     assert again.receipt["questions_opened"] == [] and len(kernel.fold(log.events()).questions) == len(ws.questions)
+
+
+def test_by_default_a_dreamt_collision_opens_no_question_in_her_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World(tmp_path)
+    day, as_of = _targeted(world), _call(world, NIGHT).as_of
+    collided = Ignition(slot=0, other=1, kind="collision", score=0.99, cited_event_ids=(day[0].id, day[1].id))
+    opened: dict[bool, list[str]] = {}
+    for switched in (False, True):
+        log = _seen(day, tonight="notice", as_of=as_of)
+        night = _core_night(tmp_path / str(switched), workspace=lambda uid, log=log: log,
+                            **({"contradictions": True} if switched else {}))
+        monkeypatch.setattr(night.core, "dream_states", lambda *a, **k: api.Dream((collided,), ()))
+        receipt: dict[str, Any] = dict(night.dream(_call(world, NIGHT), day).receipt)
+        opened[switched] = receipt["questions_opened"]
+        if not switched:
+            assert receipt["ignitions_dropped"] == [{"slot": 0, "other": 1, "kind": "collision",
+                                                     "why": "contradictions_off"}]
+            assert not kernel.fold(log.events()).questions
+    assert opened[False] == [] and len(opened[True]) == 1  # switched on, the same collision opens one
 
 
 def test_without_a_run_tonight_a_notice_start_comes_first_and_after_the_inquiry_began_nothing_opens(
@@ -216,10 +238,15 @@ def test_without_a_run_tonight_a_notice_start_comes_first_and_after_the_inquiry_
     assert dreamt.receipt["ignite"] == "skipped: tonight's inquiry began" and begun.events() == held
 
 
-def test_fake_latents_are_refused_for_a_real_person_and_a_state_built_on_them_says_so(tmp_path: Path) -> None:
+def test_fake_latents_are_refused_for_a_real_person_and_a_state_built_on_them_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     world = World(tmp_path)
-    with pytest.raises(ValueError, match="fake latents"):
-        _core_night(tmp_path, synthetic=lambda uid: False).dream(_call(world, NIGHT), _day(NIGHT))
+    refused = _core_night(tmp_path, synthetic=lambda uid: False)
+    skipped = refused.dream(_call(world, NIGHT), _day(NIGHT))  # her night goes on without the core
+    assert skipped.receipt["noop"] is True and "fake latents" in str(skipped.receipt["why"])
+    assert "fake latents" in caplog.text and skipped.state_id is None and skipped.rehearse == ()
+    assert refused.reading(UID, NIGHT) is None  # no state: the thought channel is off for her tonight
     assert not (tmp_path / store.STORE_DIR / UID).exists()
     allowed = _core_night(tmp_path, synthetic=lambda uid: False, fake_for_anyone=True)
     dreamt = allowed.dream(_call(world, NIGHT), _day(NIGHT))

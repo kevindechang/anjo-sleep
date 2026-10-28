@@ -11,12 +11,13 @@ observed (``CoreState.through``) and not after the night's clock. So a rerun nev
 twice, and a night killed before its unit was kept is caught up the next night
 (``events_before_tonight`` counts those). The evidence is read through the encoder
 (``latents.Encoder``: the fake encoder until the live one serves); a state that read any fake
-latent says so (``CoreState.fake_latents``), and fake latents are refused for anyone but a
-synthetic person unless ``ANJO_SLEEP_MIND_FAKE_LATENTS=1`` (development only). Observing gives
+latent says so (``CoreState.fake_latents``). Fake latents are refused for anyone but a synthetic
+person unless ``ANJO_SLEEP_MIND_FAKE_LATENTS=1`` (development only): her night then skips the core,
+the dream step's record (a no-op) and the log saying why, and runs on as it would without it. Observing gives
 each item its surprise weight (``Core.surprise_weights``, bounded and averaging 1: the Sleep link).
 Then one dream (``Core.dream_states``, the night's seeded rng). Each ignition opens a question in
 her workspace through the kernel (``bridge.ignite``, citing her real evidence only, no screen
-call), logged under tonight's notice pass (a notice ``RunStart`` for tonight is logged first when
+call; a collision only with ``ANJO_SLEEP_MIND_CONTRADICTIONS=1``, off by default), logged under tonight's notice pass (a notice ``RunStart`` for tonight is logged first when
 there was none); once tonight's inquiry has begun (a rerun of a killed night) nothing is opened,
 so its resume reads the log it left. Its ignitions and the core's predictions rank her threads,
 and the curriculum picks the evidence practice rehearses (``curriculum.pick``; off with
@@ -30,12 +31,18 @@ is what practice reads through the thought channel and what the night's rows are
 id is the rows' ``core`` snapshot's ``state``. Consolidation leaves the core's predictions as they
 were (its heads read no memory), so ``Dreamt.view.predictions`` is ``Core.predict`` of that state.
 
+**Read.** ``reading(person, night)`` is the thought channel's ``MindState``: tonight's dream as
+``Dreamt.reading`` gives it (the consolidated state, its id, the core's predictions on it, and the
+projector her last kept unit names, when that unit is this core's), None for anyone it doesn't
+serve or a night it skipped. Asked before that night's dream step, it refuses (``ValueError``).
+
 **Keep.** The night's unit: the state, the core's model id, the thought channel's projector version
 and the adapter serving her (``MindStore.keep``). Nothing is written once the night is cancelled.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
@@ -53,6 +60,7 @@ from anjo.sleep.mind.core.types import Decision, Ignition, days_of
 from anjo.sleep.mind.inquiry import kernel
 from anjo.sleep.mind.inquiry.ports import WorkspaceLog
 from anjo.sleep.mind.inquiry.types import FULL_RULES, Budget, Rejected, RunStart, Step, WorkspaceEvent
+from anjo.sleep.night.channel_night import MindReading
 from anjo.sleep.night.deps import Dreamt, MindCall
 from anjo.sleep.stops import Cancelled
 from anjo.sleep.types import Evidence
@@ -61,6 +69,8 @@ CURRICULUM_ENV: Final = "ANJO_SLEEP_DREAM_CURRICULUM"  # "0": practice seeds on 
 FAKE_LATENTS_ENV: Final = "ANJO_SLEEP_MIND_FAKE_LATENTS"  # "1": fake latents for anyone (development only)
 REHEARSE_BUDGET: Final = 12  # evidence items the curriculum may pick for practice
 ROLLOUTS: Final = 8  # the dream's imagined continuations
+
+logger = logging.getLogger(__name__)
 
 
 def curriculum_on(env: Mapping[str, str]) -> bool:
@@ -77,7 +87,8 @@ def from_env(
     core = Core.load(model)
     return CoreNight(core, sleep_root / store.STORE_DIR, latents.FakeEncoder(core.config.dim_in),
                      curriculum=curriculum_on(env), people=people, workspace=workspace, synthetic=synthetic,
-                     fake_for_anyone=env.get(FAKE_LATENTS_ENV, "").strip() == "1")
+                     fake_for_anyone=env.get(FAKE_LATENTS_ENV, "").strip() == "1",
+                     contradictions=bridge.contradictions_on(env))
 
 
 @dataclass(frozen=True)
@@ -125,9 +136,10 @@ def _runs_tonight(events: Sequence[WorkspaceEvent], night: date) -> tuple[RunSta
     return tuple(e.step.entry for e in events if isinstance(e.step.entry, RunStart) and e.step.entry.night == night)
 
 
-def ignite(log: WorkspaceLog, ignitions: Sequence[Ignition], call: MindCall) -> dict[str, Any]:
-    """Open a question for each ignition in her workspace (``bridge.ignite``), under tonight's
-    notice pass; the receipt holds the questions' ids and each ignition dropped, with why."""
+def ignite(log: WorkspaceLog, ignitions: Sequence[Ignition], call: MindCall, *, collisions: bool = False) -> dict[str, Any]:
+    """Open a question for each ignition in her workspace (``bridge.ignite``; a collision only with
+    ``collisions``), under tonight's notice pass; the receipt holds the questions' ids and each
+    ignition dropped, with why."""
     events = log.events()
     tonight = _runs_tonight(events, call.night)
     if any(start.call == "inquiry" for start in tonight):
@@ -142,7 +154,8 @@ def ignite(log: WorkspaceLog, ignitions: Sequence[Ignition], call: MindCall) -> 
         log.append(begun.event)
         ws = begun.ws
     before = {q.id for q in ws.questions}
-    done = bridge.ignite(ws, ignitions, log, targets=call.targets.open_targets(call.as_of), as_of=call.as_of)
+    done = bridge.ignite(ws, ignitions, log, targets=call.targets.open_targets(call.as_of), as_of=call.as_of,
+                         collisions=collisions)
     return {"questions_opened": [q.id for q in done.ws.questions if q.id not in before],
             "ignitions_dropped": [{"slot": i.slot, "other": i.other, "kind": i.kind, "why": why}
                                   for i, why in done.dropped],
@@ -157,14 +170,15 @@ class CoreNight:
         self, core: Core, root: Path, encoder: latents.Encoder, *, curriculum: bool = True, seed: int = 0,
         budget: int = REHEARSE_BUDGET, people: frozenset[str] = frozenset(),
         workspace: Callable[[str], WorkspaceLog] | None = None, synthetic: Callable[[str], bool] = lambda _: False,
-        fake_for_anyone: bool = False,
+        fake_for_anyone: bool = False, contradictions: bool = False,
     ) -> None:
         if encoder.spec.d != core.config.dim_in:
             raise ValueError(f"the encoder writes {encoder.spec.d} dims; the core reads {core.config.dim_in}")
         self.core, self.root, self.encoder = core, root, encoder
         self.curriculum, self.seed, self.budget = curriculum, seed, budget
         self.people, self.workspace, self.synthetic = people, workspace, synthetic
-        self.fake_for_anyone = fake_for_anyone
+        self.fake_for_anyone, self.contradictions = fake_for_anyone, contradictions
+        self._tonight: dict[tuple[str, date], Dreamt] = {}  # each night's dream, for ``reading``
 
     @property
     def fake(self) -> bool:
@@ -200,12 +214,29 @@ class CoreNight:
         return {item.id: item.target_id for item in call.store.stored(call.night)
                 if item.id in cited and item.target_id is not None}
 
-    def _refuse_fake(self, user_id: str) -> None:
+    def _refusal(self, user_id: str) -> str | None:
         if self.fake and not (self.fake_for_anyone or self.synthetic(user_id)):
-            raise ValueError(f"fake latents serve only a synthetic person's night ({FAKE_LATENTS_ENV}=1 allows them)")
+            return f"skipped: fake latents serve only a synthetic person's night ({FAKE_LATENTS_ENV}=1 allows them)"
+        return None
+
+    def reading(self, user_id: str, night: date) -> MindReading | None:
+        if not self.serves(user_id):
+            return None
+        dreamt = self._tonight.get((user_id, night))
+        if dreamt is None:
+            raise ValueError("MIND's state was asked for before the night's dream step")
+        return dreamt.reading()
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
-        self._refuse_fake(call.user_id)
+        if (why := self._refusal(call.user_id)) is not None:
+            logger.warning("MIND's core %s", why)
+            done = Dreamt(receipt={"noop": True, "why": why})
+        else:
+            done = self._dream(call, evidence)
+        self._tonight[(call.user_id, call.night)] = done
+        return done
+
+    def _dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         held = self._store(call.user_id)
         start = self._start(held, call.user_id, call.night)
         events = self._events(call, start.state, evidence)
@@ -219,7 +250,8 @@ class CoreNight:
         pressure = self.core.sleep_pressure(lived)
         _guard(call)  # nothing is written for a person deleted mid-night
         opened = ({"ignite": "no workspace"} if self.workspace is None
-                  else ignite(_Guarded(self.workspace(call.user_id), call.cancelled), dream.ignitions, call))
+                  else ignite(_Guarded(self.workspace(call.user_id), call.cancelled), dream.ignitions, call,
+                              collisions=self.contradictions))
         slept = self.core.consolidate(lived)
         state_id = held.put_state(core_state.save(slept))
         cited = {c for slot in seen.slots for c in slot.cites}
@@ -235,9 +267,10 @@ class CoreNight:
                            for b in dream.boundaries],
             "pressure": round(pressure, 6),
         }
+        own = start.unit is not None and start.unit.model == self.core.model_id  # a projector reads this core's states
         return Dreamt(state_id=state_id, state=slept, rehearse=() if picks is None else picks.evidence_ids,
                       weights=weights, view=bridge.CoreView(decision, seen, self._targets_of(call, cited)),
-                      receipt=receipt)
+                      projector=start.unit.projector if own and start.unit is not None else None, receipt=receipt)
 
     def _imagined(self, held: store.MindStore, dream: Dream, picks: curriculum.Picks | None) -> list[dict[str, Any]]:
         """Each imagined state about the picked threads (every one, with no curriculum), kept by id."""

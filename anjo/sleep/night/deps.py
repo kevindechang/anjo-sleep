@@ -35,7 +35,7 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
-from anjo.sleep.night.channel_night import ChannelSetup, MindState
+from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
 from anjo.sleep.note.hold import Fact, NoteWriter
@@ -185,31 +185,43 @@ class NoInquiry:
 
 @dataclass(frozen=True)
 class Dreamt:
-    """What the night's dream (step 2c) left for the steps after it: her core state after every
+    """What the night's dream (step 2d) left for the steps after it: her core state after every
     event so far, consolidated (``state``: what practice reads and the night's rows are made under;
     ``state_id``, its id in her store and the thought channel's ``state_sha``), the evidence
     practice is seeded on (empty: today's newest), the surprise weights of the evidence it observed
-    tonight by evidence id, the
-    core's view for the inquiry (``view.predictions`` is ``Core.predict(state)``), and the dream's
-    receipt (ids and numbers, for the night log)."""
+    tonight by evidence id, the core's view for the inquiry (``view.predictions`` is
+    ``Core.predict(state)``), the projector her last kept unit names (``MindStore.before(night)``;
+    None: the shared one), and the dream's receipt (ids and numbers, for the night log)."""
 
     state_id: str | None = None
     state: CoreState | None = None
     rehearse: tuple[str, ...] = ()
     weights: Mapping[str, float] = field(default_factory=dict)
     view: CoreView | None = None
+    projector: str | None = None
     receipt: Mapping[str, object] = field(default_factory=dict)
+
+    def reading(self) -> MindReading | None:
+        """What the thought channel reads of this dream (``channel_night.MindReading``), or None
+        when nothing was dreamt."""
+        if self.state is None or self.state_id is None or self.view is None:
+            return None
+        return MindReading(self.state, self.state_id, self.view.predictions, self.projector)
 
 
 class MindCore(Protocol):
     """MIND's core in the night (the one system), for the people it ``serves`` only: ``dream``
     observes her evidence it hasn't yet, dreams, opens questions, picks what practice rehearses and
-    consolidates; ``keep`` saves the night's unit (her state, the thought channel's projector
-    version and her adapter). Ids only cross: no row's words."""
+    consolidates; ``reading`` is the thought channel's ``MindState`` (tonight's dream as the channel
+    reads it, None for anyone it doesn't serve; asked before the dream, it refuses); ``keep`` saves
+    the night's unit (her state, the thought channel's projector and her adapter). Ids only cross:
+    no row's words."""
 
     def serves(self, user_id: str) -> bool: ...
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt: ...
+
+    def reading(self, user_id: str, night: date) -> MindReading | None: ...
 
     def keep(
         self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
@@ -224,6 +236,9 @@ class NoCore:
 
     def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         return Dreamt()
+
+    def reading(self, user_id: str, night: date) -> MindReading | None:
+        return None
 
     def keep(
         self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,

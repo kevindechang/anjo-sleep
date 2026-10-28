@@ -18,6 +18,7 @@ import pytest
 from anjo.sleep.mind.core import bridge
 from anjo.sleep.mind.core.types import Decision, Predictions
 from anjo.sleep.mind.inquiry import types as it
+from anjo.sleep.night.channel_night import MindReading
 from anjo.sleep.night.deps import Dreamt, MindCall, NightSettings
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.tests.inquiry_fakes import Kill
@@ -52,6 +53,9 @@ class FakeCore:
         picked = ("not-trainable",) if self.picks < 0 else tuple(item.id for item in day[:self.picks])
         return Dreamt(state_id=STATE, rehearse=picked, weights={item.id: n + 2.0 for n, item in enumerate(day)},
                       view=self.view, receipt={"state": STATE, "picked": list(picked)})
+
+    def reading(self, user_id: str, night: date) -> MindReading | None:
+        return None
 
     def keep(self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None) -> dict[str, object]:
         if self.keep_fails:

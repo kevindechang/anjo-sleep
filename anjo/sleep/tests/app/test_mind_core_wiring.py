@@ -65,7 +65,8 @@ def test_on_the_night_dreams_with_the_trained_core_over_her_store(tmp_path: Path
     assert core.root == tmp_path / store.STORE_DIR and core.curriculum  # type: ignore[attr-defined]
     assert core.encoder.spec.encoder == "fake" and core.encoder.spec.d == 16  # type: ignore[attr-defined]
     assert core.workspace("u-hero") is LOGS["u-hero"]  # type: ignore[attr-defined]
-    assert not core.fake_for_anyone  # type: ignore[attr-defined]
+    assert not core.fake_for_anyone and not core.contradictions  # type: ignore[attr-defined]
+    assert _build({**on, bridge.CONTRADICTIONS_ENV: "1"}, tmp_path).contradictions  # type: ignore[attr-defined]
     assert _build({**on, FAKE_LATENTS_ENV: "1"}, tmp_path).fake_for_anyone  # type: ignore[attr-defined]
     assert not _build({**on, CURRICULUM_ENV: "0"}, tmp_path).curriculum  # type: ignore[attr-defined]
 
