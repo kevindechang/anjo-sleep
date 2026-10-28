@@ -2,8 +2,9 @@
 runs: its Colab session and hard timeout, and each hold it takes on each pool, priced at the list
 prices given, Spark Open's on its provider's pool (``mind.spark_provider``). Beside each worst
 case it shows the expected spend when a timing has been measured (``timing.json``), and beside the
-holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. Printing a plan spends
-nothing and reaches nothing."""
+holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. ``generate`` also prints
+its worst case in all and its expected cost, from what one life cost when measured
+(``EXPECTED_LIFE_USD``). Printing a plan spends nothing and reaches nothing."""
 from __future__ import annotations
 
 import math
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from anjo.sleep.mind.apd import colab_vllm, generate
-from anjo.sleep.mind.apd.backend import gen_holds
+from anjo.sleep.mind.apd.backend import GEN_SPARK_RETRIES, gen_holds, life_calls
 from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
@@ -27,6 +28,7 @@ from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX
 
 NIGHT_WHAT: Final = "screen and resolver, held at a night's first call and settled at what it priced"
+EXPECTED_LIFE_USD: Final = 0.28  # one development life on Fireworks, one attempt, measured live on 2026-10-28
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class Plan:
     ceiling_usd: float | None = None  # --max-usd, for the commands that take it
     ceiling_unit: str = ""  # what the ceiling is checked before
     parallel: int = 1  # the units that may be in flight at once
+    totals: tuple[str, ...] = ()  # the worst case in all and the expected cost, when the plan prints them
 
 
 def _night(provider: SparkProvider, prices: Prices, nights: int, what: str, timing: Timing | None) -> Hold:
@@ -67,14 +70,39 @@ def _session_cu(timing: Timing | None, nights: int) -> float | None:
     return None if timing is None else cu(timing.setup_s) + nights * timing.cu_per_night
 
 
-def generate_plan(lives: int, prices: Prices, rates: Mapping[str, Rate], split: str, *,
+def _mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _lives(count: int) -> str:
+    return f"{count} li{'fe' if count == 1 else 'ves'}"
+
+
+def generate_plan(prevalences: Sequence[int], prices: Prices, rates: Mapping[str, Rate], split: str, *,
                   provider: SparkProvider) -> Plan:
-    worst = gen_holds(prices, rates, provider.pool)
+    """Generating one life per entry of ``prevalences``, each attempt held for its own planted items."""
+    lives, pool = len(prevalences), provider.pool
+    worst = [gen_holds(prices, rates, pool, life_calls(prevalence)) for prevalence in prevalences]
     attempts = lives * generate.MAX_ATTEMPTS
-    return Plan(f"generate {lives} {split} li{'fe' if lives == 1 else 'ves'}", None, (
-        Hold(provider.pool, worst[provider.pool], attempts, "Spark Open per attempt: writer, extractor, gate readers"),
-        Hold("meta_usd", worst["meta_usd"], attempts, "Muse Spark per attempt: the gates' auditor"),
-    ), (_spark(provider), f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts"))
+    sized = "sized to its life's planted items; the mean shown"
+    holds = (
+        Hold(pool, _mean([w[pool] for w in worst]), attempts,
+             f"Spark Open per attempt: writer, extractor, gate readers, and {GEN_SPARK_RETRIES} extra tries, {sized}"),
+        Hold("meta_usd", _mean([w["meta_usd"] for w in worst]), attempts,
+             f"Muse Spark per attempt: the gates' auditor, {sized}"),
+    )
+    total = sum(hold.each * hold.count for hold in holds)
+    return Plan(f"generate {_lives(lives)} of {split}", None, holds, (
+        _spark(provider),
+        f"at most {generate.MAX_ATTEMPTS} attempts a life; each attempt held before it starts, its Spark Open calls "
+        f"sharing {GEN_SPARK_RETRIES} extra tries for a transient failure",
+        "a life that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
+    ), totals=(
+        f"Worst case: ${total:,.2f} for {_lives(lives)}: every life taking all {generate.MAX_ATTEMPTS} attempts, every "
+        "call at its cap and every extra try used.",
+        f"Expected: about ${lives * EXPECTED_LIFE_USD:,.2f} for {_lives(lives)}, at ${EXPECTED_LIFE_USD:.2f} a life "
+        "(one development life, one attempt, on Fireworks, measured 2026-10-28).",
+    ))
 
 
 def run_plan(lives: int, arms: Sequence[str], prices: Prices, session_s: float, parallel: int,
@@ -165,7 +193,8 @@ def describe(plan: Plan) -> str:
         expected = "" if hold_.expected is None else (
             f"; expected about ${hold_.expected:.4f} each (timing), ${hold_.expected * hold_.count:.2f} in all")
         lines.append(f"Hold on {hold_.pool}: {amount} each{times}{expected}: {hold_.what}.")
-    lines.extend(_ceiling(plan))
+    lines.extend(_ceiling(plan))  # beside the holds
+    lines.extend(plan.totals)
     lines.extend(f"Note: {note}." for note in plan.notes)
     lines.append("Nothing has run. Add --yes to start it.")
     return "\n".join(lines)

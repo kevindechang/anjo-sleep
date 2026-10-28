@@ -1,8 +1,9 @@
 """The APD pilot's steps (Task 17, with 17b on the same server), on one data directory.
 
 - **generate:** the 8 development lives now (``generate.development_specs``), through the gates;
-  the held-out lives only at the freeze (``held_out_specs``). Each attempt's worst case is held
-  first (``backend.held_attempt``). Each life's problem file is sealed (``store``).
+  the held-out lives only at the freeze (``held_out_specs``), several at once (``gen_batch``). Each
+  attempt's worst case is held first (``backend.held_attempt``); a life that still fails is skipped
+  and the run goes on. Each life's problem file is sealed (``store``).
 - **run:** every arm on every life of a split, in one Colab session (``serving``, after the
   command's own sweep of ``anjo-mind-`` leftovers under MIND's lock, ``mind.sweep``), ``parallel``
   life-arms at a time (``batch``). A run already on disk is skipped, so a rerun resumes; 17b's
@@ -25,7 +26,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
-import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -36,12 +36,13 @@ from typing import Final
 import httpx
 
 from anjo.sleep.budget import Ledger
-from anjo.sleep.mind.apd import colab_vllm, fakes, gates, generate, judging, resume
+from anjo.sleep.mind.apd import colab_vllm, fakes, generate, judging, resume
 from anjo.sleep.mind.apd.arms import mind_core
-from anjo.sleep.mind.apd.backend import Backend, held_attempt
+from anjo.sleep.mind.apd.backend import Backend
 from anjo.sleep.mind.apd.batch import Out, fresh_journal, in_parallel, run_lives, serial, settle_orphans
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
-from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
+from anjo.sleep.mind.apd.gen_batch import generate_life, generate_lives, spec_ids
+from anjo.sleep.mind.apd.generate import LifeSpec
 from anjo.sleep.mind.apd.interventions import InterventionResult, Skipped
 from anjo.sleep.mind.apd.journal import SpendJournal
 from anjo.sleep.mind.apd.live import SparkCalls, arm_models
@@ -58,7 +59,7 @@ from anjo.sleep.reports import replay as replay_report
 from anjo.sleep.serving import config
 from anjo.sleep.serving.config import ServeConfig
 
-__all__ = ["Out", "run_lives"]  # the runs live in ``batch``; the command reaches them here
+__all__ = ["Out", "generate_life", "generate_lives", "run_lives", "spec_ids"]  # in ``batch`` and ``gen_batch``
 
 DEV_ARMS: Final[tuple[ArmName, ...]] = ("B", "M")
 HELD_OUT_ARMS: Final[tuple[ArmName, ...]] = ("A", "B", "M", "M-persist", "M-kernel", "M-control")
@@ -76,50 +77,6 @@ class FreezeError(RuntimeError):
 
 
 # ── Generation ────────────────────────────────────────────────────────────────
-
-
-def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
-    """``generate.generate``'s attempts, each attempt's worst case held before it starts, Spark Open
-    on the backend's provider."""
-    model = backend.provider.model
-    for attempt in range(generate.MAX_ATTEMPTS):
-        if backend.ceiling is not None:
-            backend.ceiling.check()  # before the attempt's hold
-        with held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}") as (writer, reader, auditor):
-            try:
-                built, problems = generate.life(spec.field, spec.families, spec.prevalence,
-                                                generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
-                                                model=model)
-            except GenerationFailed:
-                continue
-            verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
-        if gates.passed(verdicts):
-            return Generated(built, problems, attempt + 1, verdicts)
-    raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts")
-
-
-def spec_ids(spec: LifeSpec) -> frozenset[str]:
-    """The ids ``spec``'s life may take, one per attempt (``generate.life`` names a life by its
-    split, field and attempt seed)."""
-    field_ = re.sub(r"[^a-z0-9]+", "-", spec.field.lower()).strip("-")
-    return frozenset(f"{spec.split}-{field_}-{generate.attempt_seed(spec.seed, n)}" for n in range(generate.MAX_ATTEMPTS))
-
-
-def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, out: Out) -> tuple[str, ...]:
-    """Every life of ``specs`` not yet on disk, generated, gated and saved, its problems sealed;
-    with a ceiling, what the run has settled per life printed after each."""
-    made: list[str] = []
-    todo = [spec for spec in specs if not any(data.has_life(life_id) for life_id in spec_ids(spec))]
-    if backend.ceiling is not None:
-        backend.ceiling.begin("life(s) generated", len(todo))
-    for spec in todo:
-        made_life = generate_life(spec, backend)
-        data.save_life(made_life.life, made_life.problems)
-        made.append(made_life.life.id)
-        out(f"generated {made_life.life.id} ({made_life.attempts} attempt(s), {len(made_life.problems.items)} planted)")
-        if backend.ceiling is not None:
-            out(backend.ceiling.life_generated())
-    return tuple(made)
 
 
 def seed_digest(draw_seed: str) -> str:

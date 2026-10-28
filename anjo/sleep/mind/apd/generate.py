@@ -33,7 +33,7 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.evidence.extract import ExtractionError, Turn, extract
 from anjo.sleep.evidence.targets import mentioned_target
-from anjo.sleep.mind.apd import gates
+from anjo.sleep.mind.apd import gates, retry
 from anjo.sleep.mind.apd.families import Template, fields, templates_for
 from anjo.sleep.mind.apd.types import (
     DEVELOPMENT_LIVES,
@@ -59,7 +59,7 @@ EXTRACT_PROMPT: Final = Path(__file__).parent / "prompts" / "extract_open_v1.md"
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
-TIMEOUT_S: Final = 180.0
+TIMEOUT_S: Final = retry.reply_timeout_s(retry.REPLY_MAX_TOKENS)  # the wait a capped reply needs (``retry``)
 MAX_ATTEMPTS: Final = 3
 ORIGIN_GAP_DAYS: Final = 2  # two origin facts of a non-contradiction are at least this far apart
 AWAY_DAYS: Final = 2  # the disambiguating fact lies at least this far after the last origin fact

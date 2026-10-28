@@ -4,8 +4,9 @@
 development runs, the intervention test, a fake freeze, the held-out lives and runs with 17b's arms,
 kill-resume, judge and report), on offline fakes: no key, no network, no spend. Their numbers mean
 nothing. ``--parallel N`` (default 8) runs that many life-arms at once against the one server, for
-``run`` and ``timing``. The intervention test and kill-resume run one at a time and refuse any
-other value (``SERIAL_COMMANDS``).
+``run`` and ``timing``; for ``generate`` it is the lives generated at once (default 4), given
+before the command or after it. The intervention test and kill-resume run one at a time and refuse
+any other value (``SERIAL_COMMANDS``).
 
 A real run makes paid calls, so it is refused without ``--live``; ``--live`` prints the command's
 plan (its Colab session and hard timeout, every hold on every pool, and its ceiling) and stops, and
@@ -16,7 +17,8 @@ it spent (``ceiling``). Glimmer's pinned revision comes from the serving setting
 (``ServeConfig.from_env``), the ledger from the data dir (``budget.default_ledger``).
 
 A run whose model call still fails after its retries fails alone, recorded; the others go on, and
-the command then stops with exit code 3. So does a session that can't carry the next run, or a
+the command then stops with exit code 3. A life whose generation still fails is skipped the same
+way (``gen_batch``). So does a session that can't carry the next run, or a
 hold with no room coming (``BudgetStop``): what finished is kept, and a rerun goes on from there. Every command runs under
 MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
 runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
@@ -55,6 +57,7 @@ from typing import Final
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
 from anjo.sleep.mind.apd.ceiling import DEFAULT_MAX_USD, UNITS, Ceiling, CeilingReached, RunLedger, max_usd
 from anjo.sleep.mind.apd.journal import SpendJournal
@@ -62,7 +65,7 @@ from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.live import RunFailed
 from anjo.sleep.mind.apd.pilot import Out
 from anjo.sleep.mind.apd.store import DataDir, StoreError
-from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, ArmName, Life, Split
+from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, MAX_PREVALENCE, ArmName, Life, Split
 from anjo.sleep.mind.spark_provider import SparkProvider, from_env
 from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
@@ -98,6 +101,7 @@ SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that cal
 # The intervention test's twins and kill-resume's runs are compared token for token, so they run
 # one at a time; mind.lock already keeps every other MIND command off the session.
 SERIAL_COMMANDS: Final = ("intervene", "kill-resume")
+GEN_COMMANDS: Final = ("generate",)  # their --parallel is the lives generated at once
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
 
 
@@ -112,7 +116,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hours", type=float, default=DEFAULT_HOURS, help="the Colab session's hard timeout")
     parser.add_argument("--only", type=int, help="run a step on its first N lives only")
     parser.add_argument("--parallel", type=int, help=f"life-arms at once against the one server, for run and timing "
-                        f"(default {PARALLEL}); intervene and kill-resume run one at a time")
+                        f"(default {PARALLEL}); lives at once for generate (default {GEN_PARALLEL}); intervene and "
+                        "kill-resume run one at a time")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("pilot", help="the whole chain (--fake only)")
     made = commands.add_parser("generate", help="the development lives; --held-out only at the freeze")
@@ -120,6 +125,9 @@ def _parser() -> argparse.ArgumentParser:
     made.add_argument("--draw-seed", help="the pre-committed draw seed, revealed at the freeze")
     made.add_argument("--lives", type=int, default=HELD_OUT_LIVES)
     made.add_argument("--prereg", type=Path, help="with --fake only: a stand-in prereg ledger (default: the data dir's)")
+    for name in GEN_COMMANDS:  # --parallel after the command too; SUPPRESS keeps one given before it
+        commands.choices[name].add_argument("--parallel", type=int, default=argparse.SUPPRESS,
+                                            help=f"lives generated at once (default {GEN_PARALLEL})")
     ran = commands.add_parser("run", help="every arm on every life of a split")
     ran.add_argument("--held-out", action="store_true")
     ran.add_argument("--adapters", type=Path, help="17b's adapter cache: runs M+replay and M+shuffled")
@@ -162,13 +170,18 @@ def _provider(parser: argparse.ArgumentParser) -> SparkProvider:
 
 
 def _parallel(args: argparse.Namespace) -> int:
-    """Life-arms at once: one for ``SERIAL_COMMANDS``, else ``--parallel`` or ``PARALLEL``."""
+    """Units at once: one for ``SERIAL_COMMANDS``, else ``--parallel``, or ``GEN_PARALLEL`` lives
+    for ``GEN_COMMANDS`` and ``PARALLEL`` life-arms for the rest."""
     if args.command in SERIAL_COMMANDS:
         return 1
-    return PARALLEL if args.parallel is None else int(args.parallel)
+    if args.parallel is not None:
+        return int(args.parallel)
+    return GEN_PARALLEL if args.command in GEN_COMMANDS else PARALLEL
 
 
 def _check_parallel(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.parallel is not None and args.parallel < 1:
+        parser.error("--parallel is at least 1")
     if args.command in SERIAL_COMMANDS and args.parallel not in (None, 1):
         parser.error(f"{args.command} runs one at a time (--parallel 1): vLLM at temperature 0 isn't batch-invariant, "
                      "and its runs are compared token for token")
@@ -191,10 +204,10 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
     on_disk = len(_lives(data, split, args.only))
-    if args.command == "generate":
-        count = args.lives if split == "held_out" else len(generate.development_specs())
-        return plan.generate_plan(count if args.only is None else min(count, args.only), prices, rates, split,
-                                  provider=provider)
+    if args.command == "generate":  # the held-out lives' items are drawn at the freeze: held at the most
+        found = ([MAX_PREVALENCE] * args.lives if split == "held_out"
+                 else [spec.prevalence for spec in generate.development_specs()])
+        return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider)
     if args.command == "run":
         arms = pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()) if split == "held_out" else pilot.DEV_ARMS
         return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured, provider=provider)
@@ -212,7 +225,7 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
 def _plan_with_ceiling(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
     if args.command not in CEILING_COMMANDS:
         return found
-    parallel = _parallel(args) if args.command in ("run", "timing") else 1
+    parallel = _parallel(args) if args.command in ("run", "timing", *GEN_COMMANDS) else 1
     return dataclasses.replace(found, ceiling_usd=args.max_usd, ceiling_unit=UNITS[args.command], parallel=parallel)
 
 
@@ -343,7 +356,8 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         if split == "held_out":
             specs = pilot.held_out_specs(_entries(args, data, backend.fake), args.draw_seed or "", args.lives)
             data.save_drawn(pilot.seed_digest(args.draw_seed or ""), args.lives)
-        pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out)
+        pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out,
+                             parallel=_parallel(args))
     elif args.command == "run":
         arms = pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
         replay = _adapters(args) if args.adapters is not None and split == "held_out" else None  # before the VM
