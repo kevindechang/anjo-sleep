@@ -207,6 +207,49 @@ def test_a_read_given_up_on_keeps_its_limiter_place_until_it_really_ends(never: 
     assert len(never.timeouts) == 2 and raised == [] and not second.is_alive()
 
 
+def test_reads_stuck_past_their_timeout_give_their_places_back_within_the_bound(
+        never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: two places, both taken by reads whose transport never times out
+    monkeypatch.setattr(backends, "CALL_GRACE_S", 0.05)
+    monkeypatch.setattr(backends, "LEAK_MARGIN_S", 0.1)
+    log = calls.CallLog()
+    read = backends.CountedChat(backends.bounded(never, None, 0.1, Limiter(2)), 10, None, log=log)
+    leak = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+    for _ in range(2):
+        with pytest.raises(ModelApiError, match="timed out"):
+            read("gemini", leak, None, 5.0)
+
+    # Act: a third read
+    never.answer.set()
+    started = time.monotonic()
+    read("gemini", leak, None, 5.0)
+
+    # Assert: it got a place within the transport timeout and the margin, not never, and each
+    # stuck read whose place a timer freed is marked leaked
+    assert time.monotonic() - started < 2.0
+    marked = time.monotonic() + 2.0
+    while not all(call.leaked for call in log.calls[:2]) and time.monotonic() < marked:
+        time.sleep(0.02)
+    assert [call.leaked for call in log.calls] == [True, True, False]
+
+
+def test_a_read_that_ends_gives_its_place_back_once(never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A read given up on that then ends frees its place itself, and its timer frees nothing more
+    monkeypatch.setattr(backends, "CALL_GRACE_S", 0.05)
+    monkeypatch.setattr(backends, "LEAK_MARGIN_S", 0.1)
+    limit, log = Limiter(1), calls.CallLog()
+    read = backends.CountedChat(backends.bounded(never, None, 0.1, limit), 10, None, log=log)
+    leak = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+    with pytest.raises(ModelApiError, match="timed out"):
+        read("gemini", leak, None, 5.0)
+    never.answer.set()
+    never.release.set()
+    time.sleep(0.4)  # past the timer
+    with limit.slot():
+        assert not limit._slots.acquire(blocking=False)  # one place, never two
+    assert not log.calls[0].leaked
+
+
 def test_ctrl_c_with_a_call_that_never_answers_ends_without_a_stuck_join(
         tmp_path: Path, never: NeverAnswers, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange: one life whose leak read never answers; Ctrl-C comes while the command waits on it

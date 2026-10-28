@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -44,6 +44,7 @@ class Call:
     finish: str | None = None  # its finish reason, as the provider gave it
     rate_limited: bool = False  # a failed try answered 429
     wait_s: float | None = None  # the wait before the call was tried again, after this try failed
+    leaked: bool = False  # given up on, and still in flight when its limiter place was freed for it
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -55,7 +56,7 @@ class Call:
                    None if raw["days"] is None else int(raw["days"]), int(raw["tokens_in"]), int(raw["tokens_out"]),
                    float(raw["usd"]), bool(raw.get("failed", False)), None if chars is None else int(chars),
                    None if finish is None else str(finish), bool(raw.get("rate_limited", False)),
-                   None if wait is None else float(wait))
+                   None if wait is None else float(wait), bool(raw.get("leaked", False)))
 
 
 def kind_of(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -88,6 +89,11 @@ class CallLog:
         kind, payload = kind_of(messages), _payload(messages)
         self.calls.append(Call(kind, self.attempt, self._item(kind, payload), _days(kind, payload), tokens_in,
                                tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s))
+
+    def mark_leaked(self, index: int) -> None:
+        """Call ``index`` was still in flight when its limiter place was freed for it. A life saved
+        before that happens keeps its log unmarked."""
+        self.calls[index] = replace(self.calls[index], leaked=True)
 
     def rate_limits(self) -> tuple[int, tuple[float, ...]]:
         """The attempt's tries answered 429, and the waits they were tried again after (0.1 s)."""
