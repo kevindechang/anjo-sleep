@@ -11,8 +11,9 @@
   ends; its line is printed in the specs' order, once it and every life before it are done.
 - **Why each attempt failed** (``failures``): the step, day and item, the error's class or the
   gate's verdict, and for an unreadable reply its field, length and finish reason, never its
-  text: recorded in ``failed.jsonl`` (``generate-attempt``), kept in the call log (a skipped life's
-  too, ``calls.failed_log_id``) and printed, one line each, whether the life then passed or not.
+  text: recorded in ``failed.jsonl`` (``generate-attempt``) the moment the attempt fails, so a
+  killed run keeps it (``recorder``), kept in the call log (a skipped life's too,
+  ``calls.failed_log_id``) and printed, one line each, once the life ends, passed or not.
 - **A call that still fails on a transient failure** (a 429, a 5xx, a timeout or a reset, after
   its tries: ``retry``) ends its attempt, not its life (``CallFailed``); the next attempt starts
   after a cool-down (``backend.cool_down``), and the attempt's 429s are kept with its failure.
@@ -189,11 +190,16 @@ def last_call(failed: CallFailed | None) -> str:
 
 
 def failed_at(log: CallLog | None, *found: failures.AttemptFailure) -> None:
-    """Keep why an attempt failed in ``log``, when there is one, with the attempt's 429s."""
+    """Keep why an attempt failed in ``log``, when there is one, with the attempt's 429s, and hand
+    each to its ``on_failure`` at once."""
     if log is None:
         return
     count, waits = log.rate_limits()
-    log.failures.extend(dataclasses.replace(failure, rate_limits=count, waits_s=waits) for failure in found)
+    kept = [dataclasses.replace(failure, rate_limits=count, waits_s=waits) for failure in found]
+    log.failures.extend(kept)
+    if log.on_failure is not None:
+        for failure in kept:
+            log.on_failure(failure)
 
 
 @contextmanager
@@ -275,7 +281,7 @@ class Outcome:
 
 
 def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
-    log, made = CallLog(), None
+    log, made = CallLog(on_failure=recorder(data, "generate-attempt", spec_name(spec))), None
     try:
         made = generate_life(spec, backend, log)
     except SKIPPED as error:
@@ -290,10 +296,15 @@ def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
     return Outcome(spec, made, tuple(log.failures))
 
 
-def report_failures(data: DataDir, out: Out, what: str, name: str, found: Sequence[failures.AttemptFailure]) -> None:
-    """Each failed attempt: recorded in ``failed.jsonl`` and printed, one line each."""
+def recorder(data: DataDir, what: str, name: str) -> Callable[[failures.AttemptFailure], None]:
+    """Each failed attempt recorded in ``failed.jsonl`` as it fails, so a run that is killed or
+    stopped keeps why its attempts failed."""
+    return lambda failure: data.record_failed({"what": what, "name": name, **failure.to_json()})
+
+
+def report_failures(out: Out, name: str, found: Sequence[failures.AttemptFailure]) -> None:
+    """Each failed attempt (recorded as it failed: ``recorder``) printed, one line each."""
     for failure in found:
-        data.record_failed({"what": what, "name": name, **failure.to_json()})
         out(failures.line(name, failure))
 
 
@@ -314,7 +325,7 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
         for outcome in results:
             found = outcome.found
-            report_failures(data, out, "generate-attempt", spec_name(outcome.spec), outcome.failed)
+            report_failures(out, spec_name(outcome.spec), outcome.failed)
             if isinstance(found, Skip):
                 name = spec_name(found.spec)
                 data.record_failed({"what": "generate", "life": name, "error": found.error})
