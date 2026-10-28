@@ -29,6 +29,7 @@ from anjo.sleep.night.sleep_pressure import (
     CORE_ENV,
     FRESH_NIGHT_USD,
     GPU_ENV,
+    MEASURED_MARGIN,
     MEASURED_REUSED_USD,
     NAP_USD,
     PRACTICE_REUSED_SAVES_USD,
@@ -36,6 +37,7 @@ from anjo.sleep.night.sleep_pressure import (
     SleepPolicyError,
     SleepState,
     decide,
+    deep_estimate,
     deep_night_usd,
     high_risk,
     policy_from,
@@ -101,6 +103,7 @@ def test_quiet_day_naps_and_costs_no_gpu(tmp_path: Path) -> None:
     assert (sleep["kind"], sleep["reason"]) == ("nap", "below_threshold")
     assert sleep["pressure"] < sleep["threshold"] == POLICY.base_threshold
     assert (sleep["turns"], sleep["new_turns"], sleep["new_evidence"]) == (4, 4, 1)
+    assert (sleep["core"], sleep["channel"], sleep["practice_fresh"]) == (False, False, True)  # what prices later deep nights
     assert world.gpu.opened == [] and world.trainer.calls == [] and world.glimmer.calls == 0
     skipped = {r["step"]: r["why"] for r in steps(result.log_path) if r["status"] == "skipped"}
     assert set(skipped) == {"probes", *GPU_STEPS} and all(why.startswith("napped") for why in skipped.values())
@@ -143,13 +146,14 @@ def test_month_cap_turns_deep_into_logged_nap(tmp_path: Path) -> None:
         world.targets(UID).upsert(_lost(UID, n))
     ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": 1000.0})
     yesterday = (NIGHT - timedelta(days=1)).isoformat()
-    _settle(ledger, f"night:practice:{UID}:{yesterday}:a1", 13.5)
+    _settle(ledger, f"night:practice:{UID}:{yesterday}:a1", 10.5)  # room for her naps and Wonder, not a deep night
     _settle(ledger, f"night:practice:someone:{yesterday}:a1", 400.0)  # another person's: not hers
     result = _night(world, turns=_turns(60), ledger=ledger)
     sleep = step(result.log_path, "sleep")
     assert (sleep["kind"], sleep["reason"]) == ("nap", "month_cap")
     assert sleep["pressure"] == 1.0 >= sleep["threshold"] > POLICY.base_threshold  # it would have gone deep
-    assert sleep["month_spent_usd"] == pytest.approx(13.5) and sleep["month_usd"] == POLICY.month_usd
+    assert sleep["month_spent_usd"] == pytest.approx(10.5) and sleep["month_usd"] == POLICY.month_usd
+    assert sleep["capped"] is False and step(result.log_path, "extract")["status"] == "ok"  # a nap with room
     assert result.status == "napped" and world.gpu.opened == [] and world.trainer.calls == []
     assert summary(result.log_path)["sleep"]["reason"] == "month_cap"  # logged, never silent
 
@@ -202,29 +206,59 @@ def test_force_deep_overrides(tmp_path: Path) -> None:
 
 
 def test_a_capped_nap_makes_no_paid_hold(tmp_path: Path) -> None:
-    """A nap with no room under the month's cap skips its paid steps (the study and the brief), says so,
-    and holds nothing after its decision; the same nap with room folds the day and may study."""
-    def nap(folder: Path, spent: float) -> tuple[NightResult, Ledger]:
+    """A night with no room under the month's cap even for a nap is a capped nap: it skips its paid steps
+    (extract, the study and the brief), says so and holds nothing; the next night with room extracts the
+    day it left first. The same nap with room extracts, folds the day and may study."""
+    last, first = date(2026, 10, 31), date(2026, 11, 1)  # October's last night, then November's first
+
+    def nap(folder: Path, spent: float) -> tuple[World, NightResult, Ledger]:
         world = World(folder)
-        world.plan(UID, NIGHT, count=1)
+        world.plan(UID, last, count=1)
         world.targets(UID).upsert(thread(UID))
         ledger = Ledger(folder / "budget.jsonl", caps={**CAPS, "modal_usd": 1000.0})
-        _settle(ledger, f"night:practice:{UID}:{(NIGHT - timedelta(days=1)).isoformat()}:a1", spent)
-        return _night(world, turns=_turns(4), ledger=ledger, homework=Homework(world)), ledger
+        _settle(ledger, f"night:practice:{UID}:{(last - timedelta(days=1)).isoformat()}:a1", spent)
+        return world, _night(world, night=last, turns=_turns(4), ledger=ledger, homework=Homework(world)), ledger
 
-    roomy, roomy_ledger = nap(tmp_path / "room", 1.0)
+    _, roomy, roomy_ledger = nap(tmp_path / "room", 1.0)
     assert step(roomy.log_path, "sleep")["capped"] is False and step(roomy.log_path, "brief")["folded"] >= 1
     assert any(job.startswith(f"night:brief:{UID}") for job in _holds_on(roomy_ledger, "baseten_sleep_usd"))
-    capped, ledger = nap(tmp_path / "capped", POLICY.month_usd - 0.5)  # 3 nights left and Wonder's $3: no room
+    world, capped, ledger = nap(tmp_path / "capped", POLICY.month_usd - 0.5)  # Wonder's $3 held back: no room
     sleep = step(capped.log_path, "sleep")
     assert (sleep["kind"], sleep["capped"], capped.status) == ("nap", True, "napped")
-    assert (step(capped.log_path, "brief")["status"], step(capped.log_path, "brief")["why"]) == ("skipped", CAPPED_WHY)
+    for skipped in ("extract", "brief"):
+        assert (step(capped.log_path, skipped)["status"], step(capped.log_path, skipped)["why"]) == ("skipped", CAPPED_WHY)
     choose = step(capped.log_path, "choose")
     assert choose["action"] not in STUDY_ACTIONS and not set(choose["offered"]) & STUDY_ACTIONS
     assert choose["ports"]["homework"] == CAPPED_WHY and summary(capped.log_path)["wonder_usd"] == 0.0
-    # Its only holds came before the decision (extract's): nothing paid after it.
     held = [e["job"] for e in read_records(ledger.path, PLAIN) if e["op"] == "reserve" and e["job"].startswith("night:")]
-    assert held and all(job.startswith((f"night:extract:{UID}", f"night:practice:{UID}")) for job in held)
+    assert held == [f"night:practice:{UID}:{(last - timedelta(days=1)).isoformat()}:a1"]  # only the seeded spend
+    assert not [event for event in world.events if event[0] == "extract"]
+
+    world.plan(UID, first, count=1)  # a new month: room again, and October 31's day is extracted first
+    caught = _night(world, night=first, turns=_turns(4), ledger=ledger)
+    assert [event[2] for event in world.events if event[0] == "extract"] == [last, first]
+    assert step(caught.log_path, "extract")["caught_up"] == [last.isoformat()]
+    assert {item.day for item in world.evidence(UID).stored(first)} >= {last, first}
+
+
+def test_a_deep_night_is_priced_on_her_measured_ones() -> None:
+    """Tonight's deep night: the highest of her last three measured at tonight's settings, plus the
+    margin; the model's only before she has one."""
+    state = _state(new_turns=60, new_evidence=12, open_high_risk=3, nights_left=10, wonder_left_usd=3.0)
+    assert deep_estimate(state, POLICY) == deep_night_usd()  # nothing measured yet
+    measured = replace(state, measured_deep_usd=(1.19, 1.05, 1.10, 9.0))  # newest first; the fourth is too old
+    assert deep_estimate(measured, POLICY) == pytest.approx(1.19 * (1 + MEASURED_MARGIN))
+    assert decide(measured, POLICY, pressure=1.0).deep_usd == pytest.approx(1.19 * (1 + MEASURED_MARGIN))
+    on, before, older = NIGHT, NIGHT - timedelta(days=2), NIGHT - timedelta(days=5)
+    key = {"core": False, "channel": False, "practice_fresh": True}
+    history = [{**_summary(before), "sleep": {"kind": "deep", **key}},
+               {**_summary(older), "sleep": {"kind": "deep", **key, "core": True}},  # another setting
+               _summary(NIGHT - timedelta(days=1), kind="nap")]
+    settled = {f"night:gates:{UID}:{before.isoformat()}:a1": 0.30, f"morning:{before.isoformat()}:{UID}:judge:a1": 0.50,
+               f"night_gpu:{before.isoformat()}:{batch_digest([UID])}:a1": 0.40,
+               f"night:homework:{UID}:{before.isoformat()}:a1": 0.23,  # Wonder: held back apart
+               f"night:gates:{UID}:{older.isoformat()}:a1": 2.0}
+    assert past.measured_deep(history, settled, UID, on, key) == pytest.approx((1.20,))
 
 
 def test_the_cap_holds_back_the_months_later_nights_and_wonder() -> None:

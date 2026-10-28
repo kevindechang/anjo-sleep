@@ -28,7 +28,7 @@ from typing import Any, Final
 from anjo.sleep.budget import default_ledger
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.nightlog import summaries
-from anjo.sleep.night.sleep_pressure import MEASURED_REUSED_USD, SleepPolicy, read_policy
+from anjo.sleep.night.sleep_pressure import MEASURED_NIGHTS, MEASURED_REUSED_USD, SleepPolicy, read_policy
 
 Summary = Mapping[str, Any]
 # <kind>:<date>:<person>:...; a live night's latent encode settles under ``modal_latents:<date>:<person>`` (the
@@ -163,20 +163,50 @@ def her_share(job: str, person: str, batches: Mapping[str, int]) -> tuple[date, 
     return None
 
 
+def _dated_spend(
+    settlements: Mapping[str, float], person: str, batches: Mapping[str, int], units: Mapping[str, float],
+) -> dict[str, tuple[date, float]]:
+    """Each settled job of ``person``'s: its date and her dollars, Colab units at ``COLAB_USD_PER_CU``."""
+    priced = {**latest_attempts(settlements),
+              **{job: cu * COLAB_USD_PER_CU for job, cu in latest_attempts(units).items()}}
+    found = {}
+    for job, amount in priced.items():
+        if (owned := her_share(job, person, batches)) is not None:
+            found[job] = (owned[0], amount * owned[1])
+    return found
+
+
 def her_spend(
     settlements: Mapping[str, float], person: str, night: date, *,
     batches: Mapping[str, int] = _NONE, units: Mapping[str, float] = _NONE,
 ) -> dict[str, float]:
     """``person``'s dollars in ``night``'s calendar month through ``night``, by job: the ledger's
     dollar settlements and its Colab compute units (``units``) at ``COLAB_USD_PER_CU``."""
-    priced = {**latest_attempts(settlements),
-              **{job: cu * COLAB_USD_PER_CU for job, cu in latest_attempts(units).items()}}
-    spend = {}
-    for job, amount in priced.items():
-        owned = her_share(job, person, batches)
-        if owned is not None and (owned[0].year, owned[0].month) == (night.year, night.month) and owned[0] <= night:
-            spend[job] = amount * owned[1]
-    return spend
+    return {job: usd for job, (on, usd) in _dated_spend(settlements, person, batches, units).items()
+            if (on.year, on.month) == (night.year, night.month) and on <= night}
+
+
+def measured_deep(
+    history: Sequence[Summary], settlements: Mapping[str, float], person: str, night: date,
+    settings: Mapping[str, bool], *, batches: Mapping[str, int] = _NONE, units: Mapping[str, float] = _NONE,
+) -> tuple[float, ...]:
+    """What her last ``MEASURED_NIGHTS`` deep nights before ``night`` at ``settings`` (their ``sleep``
+    records' ``core``, ``channel`` and ``practice_fresh``) settled at, newest first: every job dated on
+    the night, its morning included, Wonder's studies left out (held back apart)."""
+    by_night: dict[date, float] = {}
+    for job, (dated, usd) in _dated_spend(settlements, person, batches, units).items():
+        if not job.startswith("night:homework:"):
+            by_night[dated] = by_night.get(dated, 0.0) + usd
+    found: list[float] = []
+    for summary in sorted(history, key=lambda s: str(s.get("night")), reverse=True):
+        on, sleep = _night(summary), summary.get("sleep")
+        if on is None or on >= night or not isinstance(sleep, Mapping) or sleep.get("kind") != "deep":
+            continue
+        if all(sleep.get(key) == value for key, value in settings.items()) and by_night.get(on, 0.0) > 0:
+            found.append(by_night[on])
+        if len(found) == MEASURED_NIGHTS:
+            break
+    return tuple(found)
 
 
 def month_spent(

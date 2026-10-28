@@ -68,7 +68,16 @@ from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.night.past import paid_within, spent_within
-from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, deferred_note, mind_on, put_off, sleep_step, unnoticed
+from anjo.sleep.night.sleep_night import (
+    CAPPED_WHY,
+    DEFER_WHY,
+    deferred_days,
+    deferred_note,
+    mind_on,
+    put_off,
+    sleep_step,
+    unnoticed,
+)
 from anjo.sleep.night.state import GPU_STEPS as GPU_STEPS
 from anjo.sleep.night.state import PersonNight, checkpoint_id, note_error, safe_error, study_outcome
 from anjo.sleep.night.state import Window as Window
@@ -304,7 +313,10 @@ class NightRunner:
     def _extract(self, p: PersonNight) -> Mapping[str, Any]:
         p.spend.part = "extract"
         source = self.deps.extractor(p.spend.wrap_extract(self.deps.extract_chat))
-        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS):
+        behind = deferred_days(summaries(self.deps.logs(p.uid)), p.night)  # days capped naps left: first
+        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS * (1 + len(behind))):
+            for day, window, as_of in behind:
+                source.extract_day(p.uid, day, window, as_of)
             items = source.extract_day(p.uid, p.night, p.window, p.as_of)
         since = self._since(p)
         fresh = [
@@ -316,7 +328,8 @@ class NightRunner:
         for item in items:
             kinds[item.kind] = kinds.get(item.kind, 0) + 1
         return {"items": len(items), "kinds": kinds, "new_since_last_training": len(fresh),
-                "min_new_examples": self.deps.settings.min_new_examples, "training_night": p.due}
+                "min_new_examples": self.deps.settings.min_new_examples, "training_night": p.due,
+                **({"caught_up": [day.isoformat() for day, _, _ in behind]} if behind else {})}
 
     def _since(self, p: PersonNight) -> date | None:
         """The last trained night: the night of the checkpoint that serves, which the next night

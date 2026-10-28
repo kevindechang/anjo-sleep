@@ -14,10 +14,14 @@ those rules. The month's budget comes last and always wins: the threshold rises 
 ``base_threshold`` to 1 as the person's settled spend this month nears ``month_usd``, and a deep
 sleep that would pass the cap becomes a nap whose reason says so (``month_cap``), never a silent one.
 The cap bounds the whole month: tonight fits only with every later night of the calendar month held
-back as a nap (``nap_usd``) and Wonder's room left this month held back too, and a deep night is sized
-by its own settings (``deep_night_usd``: the serving GPU, MIND's core, the gates' base cache, practice
-fresh or a rerun's). A nap that doesn't fit is ``capped``: it skips its paid steps (the study and the
-brief; the latent encode once a live night runs one), which her next night with room catches up.
+back as a nap (``nap_usd``) and Wonder's room left this month held back too. A deep night is priced on
+what hers really cost (``deep_estimate``): the highest settled cost of her last ``MEASURED_NIGHTS`` deep
+nights at tonight's settings (MIND's core, the thought channel, practice fresh or a rerun's), plus
+``MEASURED_MARGIN``. Only before she has one is it the model's (``deep_night_usd``: the serving GPU, the
+core, the gates' base cache, practice), which assumes the base cache missed; once nights are measured
+that assumption matters only after a revision change, whose one recomputed base side the margin covers.
+A nap that doesn't fit is ``capped``: it skips its paid steps (extract, the study and the brief; the
+latent encode once a live night runs one), which her next night with room catches up.
 ``ANJO_SLEEP_PRESSURE=0`` turns all of it off (``policy_from`` gives no policy): every night is deep,
 as before naps.
 
@@ -64,6 +68,8 @@ CACHE_HIT_SAVES_USD: Final[Mapping[str, float]] = MappingProxyType({"L40S": 0.10
 CORE_ADDS_USD: Final = 0.32  # MIND's core: the joint training and the day's latent encode
 PRACTICE_REUSED_SAVES_USD: Final = 0.85  # a rerun's practice, already paid for
 MEASURED_REUSED_USD: Final = 1.19  # measured: Teo's night 1 (2026-10-29), practice reused; shown beside the estimate
+MEASURED_NIGHTS: Final = 3  # her last deep nights at tonight's settings that price tonight's
+MEASURED_MARGIN: Final = 0.15  # on the highest of them: a base side recomputed after a revision change is under it
 # A nap's own paid steps at list prices: extract and the brief ($0.023 for one day's items on 2026-10-29;
 # a busy day's brief folds more), rounded up. Wonder's study is held back apart (``SleepState.wonder_left_usd``);
 # the nap's latent encode is planned, not live.
@@ -101,6 +107,7 @@ class SleepState:
     wonder_left_usd: float = 0.0  # what Wonder's studies may still spend (its rolling cap's room), held back
     practice_fresh: bool = True  # False: a rerun of the night, its practice already paid for
     base_cached: bool = False  # the gates' base side known to be cached (a live night can't know before the wake)
+    measured_deep_usd: tuple[float, ...] = ()  # her last deep nights' settled dollars at tonight's settings, newest first
 
 
 @dataclass(frozen=True)
@@ -164,6 +171,15 @@ def deep_night_usd(*, gpu: str = DEFAULT_GPU, core: bool = False, cache_hit: boo
                  - (0.0 if practice_fresh else PRACTICE_REUSED_SAVES_USD), 6)
 
 
+def deep_estimate(state: SleepState, policy: SleepPolicy) -> float:
+    """Tonight's deep night: the highest of her last ``MEASURED_NIGHTS`` measured ones at tonight's
+    settings plus ``MEASURED_MARGIN``, or the model's (``deep_night_usd``) before she has one."""
+    if measured := state.measured_deep_usd[:MEASURED_NIGHTS]:
+        return round(max(measured) * (1.0 + MEASURED_MARGIN), 6)
+    return deep_night_usd(gpu=policy.gpu, core=policy.core, cache_hit=state.base_cached,
+                          practice_fresh=state.practice_fresh)
+
+
 def fits(state: SleepState, policy: SleepPolicy, tonight_usd: float) -> bool:
     """Tonight's cost fits under the month's cap with every later night of the month held back as a nap
     and Wonder's room left held back too, so the month as a whole stays under it."""
@@ -216,8 +232,7 @@ def decide(state: SleepState, policy: SleepPolicy, *, pressure: float, force_dee
         raise SleepPolicyError("sleep pressure is a number from 0 to 1")
     threshold = policy.threshold(state.month_spent_usd)
     kind, reason = _wanted(state, policy, pressure, threshold, force_deep)
-    deep_usd = deep_night_usd(gpu=policy.gpu, core=policy.core, cache_hit=state.base_cached,
-                              practice_fresh=state.practice_fresh)
+    deep_usd = deep_estimate(state, policy)
     if kind == "deep" and not fits(state, policy, deep_usd):
         kind, reason = "nap", "month_cap"  # the budget wins, even over --force-deep
     capped = kind == "nap" and not fits(state, policy, policy.nap_usd)

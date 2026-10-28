@@ -155,16 +155,23 @@ def test_cost_model_projects_a_month_from_a_pressure_trace(tmp_path: Path, capsy
     assert set(one.quiet) == {"extract", "brief"}  # what a nap's ledger counts: no GPU step, MIND waits for deep sleep
     assert current.nap_encode == 0.0 < one.nap_encode  # the encode only with the core on: planned, not live
     policy = SleepPolicy()
-    active, quiet = (cost.month_from_trace(u.days, policy, current) for u in (cost.ACTIVE, cost.QUIET))
+    # Deep nights shaped like 2026-10-29's, measured at $1.19 all in: practice reused, so priced on what
+    # they cost, not the model's fresh night, once the first is measured.
+    teo = cost.project(cost.CURRENT, cost.UNITS, PRICES, cost.Measured(extract=0.0, brief=0.022, training=0.107))
+    teo = replace(teo, trained={line: 0.0 if line.startswith("practice") else usd for line, usd in teo.trained.items()})
+    assert 1.0 < teo.deep < 1.5
+    active, quiet = (cost.month_from_trace(u.days, policy, teo) for u in (cost.ACTIVE, cost.QUIET))
     assert len(active.nights) == len(quiet.nights) == 30
     assert [n.reason for n in quiet.nights if n.kind == "deep"] == ["max_days"] * quiet.deep  # too little for pressure
-    # her pressure, not the seventh day, wakes the active one; the cap, with Wonder's room held back, gives
-    # neither more than it holds
-    assert any(n.reason == "pressure" for n in active.nights) and active.deep >= quiet.deep
-    assert quiet.usd <= active.usd
-    deep, nap = math.fsum(current.trained.values()) + current.morning, math.fsum(current.quiet.values())
-    assert quiet.usd == pytest.approx(quiet.deep * deep + quiet.naps * nap + cost.WONDER_MONTH_USD)  # Wonder spent
-    assert active.usd <= policy.month_usd and quiet.usd <= policy.month_usd  # the cap holds the whole month
+    # her pressure, not the seventh day, wakes the active one, and she sleeps deep more often
+    assert any(n.reason == "pressure" for n in active.nights) and active.deep > quiet.deep
+    assert quiet.usd < active.usd <= policy.month_usd
+    assert quiet.usd == pytest.approx(quiet.deep * teo.deep + quiet.naps * math.fsum(teo.quiet.values())
+                                      + cost.WONDER_MONTH_USD)  # Wonder spent
+    # The cap holds the whole month at the model's fresh nights too, with MIND's core off and on.
+    for projected in (current, one):
+        for usage in (cost.ACTIVE, cost.QUIET):
+            assert cost.month_from_trace(usage.days, policy, projected).usd <= policy.month_usd
 
     # The nap's encode: one A100 start a person, shared by five, restored from a snapshot, or deferred.
     a100, units = PRICES.train_gpu_per_hour / 3600, cost.UNITS
