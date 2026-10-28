@@ -180,7 +180,7 @@ def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
     seed, writes = generate.attempt_seed(spec.seed, attempt), backend.generator.writes_with(backend.provider)
     tried = _checked(spec, backend, log, attempt, 0, life_calls(spec.prevalence), memo,
                      lambda chat: generate.drafted(spec.field, spec.families, spec.prevalence, seed, split=spec.split,
-                                                   chat=chat, model=writes))
+                                                   chat=chat, model=writes, keep_off=backend.keep_off))
     round_ = 0
     while tried is not None and not tried.passed:
         if keep is not None:
@@ -314,10 +314,12 @@ def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str, data: Data
 
 def made_record(backend: Backend) -> dict[str, object]:
     """Who wrote and read a life or pair, and why its lives may train the MIND core (``None``: no
-    clearance recorded for its writer)."""
+    clearance recorded for its writer); ``keep_off`` when its writer was given its topics
+    (``--keep-off``), absent otherwise, as on every life made before it."""
     return {"writer": backend.generator.name, "writer_model": backend.generator.writes_with(backend.provider),
             "trains": backend.generator.trains, "reader": backend.read_by.name,
-            "reader_model": backend.read_by.reads_with(backend.provider)}
+            "reader_model": backend.read_by.reads_with(backend.provider),
+            **({"keep_off": True} if backend.keep_off else {})}
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,9 @@ The fakes stand in for Vertex and aren't paced.
 ``generate``'s ``--repair`` gives a core split's attempt that fails only a leak, a missed origin day
 or the script audit up to ``repair.ROUNDS`` repair rounds (``repair``); APD's own splits are
 regenerated whole, as registered. ``--keep-failed`` keeps each failed check's life under the data
-dir's ``quarantine``, on ``core-train`` only: every other split's items are sealed.
+dir's ``quarantine``, on ``core-train`` only: every other split's items are sealed. ``--keep-off``
+gives a core split's writer its life's planted topics, to keep to their beats (``generate.KEEP_OFF``);
+APD's own splits are written as registered.
 """
 from __future__ import annotations
 
@@ -60,6 +62,9 @@ def add_repair(command: argparse.ArgumentParser) -> None:
     command.add_argument("--repair", action="store_true",
                          help=f"a core split's attempt failing only a leak, a missed origin day or the script audit "
                               f"has the days named written again, up to {repair.ROUNDS} rounds, each held as an attempt")
+    command.add_argument("--keep-off", action="store_true",
+                         help="a core split's writer is given its life's planted topics and told to keep them to "
+                              "their beats (recorded in the life's made record)")
     command.add_argument("--keep-failed", action="store_true",
                          help=f"keep {KEEP_FAILED_SPLIT}'s failed attempts' lives under the data dir's quarantine "
                               f"({KEEP_FAILED_SPLIT} only)")
@@ -126,6 +131,8 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
         parser.error(str(error))
     if getattr(args, "repair", False) and split in generators.APD_SPLITS:
         parser.error(f"--repair is for the core splits; APD's {split} lives are regenerated whole, as registered")
+    if getattr(args, "keep_off", False) and split in generators.APD_SPLITS:
+        parser.error(f"--keep-off is for the core splits; APD's {split} lives are written as registered")
     if getattr(args, "keep_failed", False) and split != KEEP_FAILED_SPLIT:
         parser.error(f"--keep-failed is for {KEEP_FAILED_SPLIT} only: {split}'s items are sealed, and a kept life and "
                      "the auditor's words about it would sit outside its sealed files")
@@ -140,7 +147,7 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
 def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backend:
     """The backend writing with the command's generator and reading with its reader, at their
     prices (the fakes' list-like); live, a Gemini reader calls Vertex (``backend.gemini_chat``).
-    ``generate`` also takes ``--repair`` and ``--keep-failed``."""
+    ``generate`` also takes ``--repair``, ``--keep-off`` and ``--keep-failed``."""
     if args.command not in ("generate", "generate-pairs"):
         return backend
     writes, reads = generator(args), reader(args)
@@ -150,7 +157,8 @@ def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backe
                                     generator_rate=generator_rate(args) or (FAKE_GENERATOR_RATE if backend.fake else None))
     if args.command == "generate":
         found = dataclasses.replace(found, repair=getattr(args, "repair", False),
-                                    keep_failed=getattr(args, "keep_failed", False))
+                                    keep_failed=getattr(args, "keep_failed", False),
+                                    keep_off=getattr(args, "keep_off", False))
     if reads.model is not None:
         limit = Limiter(args.vertex_concurrency, None if backend.fake else args.vertex_rpm or None)  # the command's one
         found = dataclasses.replace(found, read_by=reads, reader_rate=reader_rate(args), read_limit=limit,

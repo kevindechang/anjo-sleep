@@ -282,6 +282,45 @@ def test_an_audit_naming_a_day_has_that_day_written_again(tmp_path: Path) -> Non
     assert asked["day"] == 4 and issue in asked["reason"]
 
 
+def test_an_undated_audit_issue_has_the_day_it_quotes_written_again(tmp_path: Path) -> None:
+    # Arrange: day 4 as first written draws a conclusion, and the audit quotes it without a date
+    issue = f"The script draws a conclusion: {MARK.lower().rstrip('.')}"
+    writer, auditor = LeakyDay(day=4), AuditsOnce((issue,))
+    made = gen_batch.generate_life(SPEC, _backend(tmp_path, life_chat=writer, auditor=auditor, repair=True))
+    assert made.attempts == 1 and made.repaired == 1 and auditor.audits == 2
+    (asked,) = writer.repairs
+    assert asked["day"] == 4 and issue in asked["reason"]
+
+
+def _saying(life: Life, said: str, *days: int) -> Life:
+    return dataclasses.replace(life, sessions=tuple(
+        dataclasses.replace(session, text=f"{session.text}\n\n{said}") if index in days else session
+        for index, session in enumerate(life.sessions)))
+
+
+def test_an_undated_issue_names_the_one_day_holding_the_longest_phrase_it_quotes() -> None:
+    life, problems = _life()
+    audit = GateVerdict("script_audit", None, False, "1 issue(s) found")
+    issue = "Script describes feelings with Feels strange to be at the end."
+    reason = repair.AUDIT_REASON.format(issue=issue)
+    felt = _saying(life, "Feels strange to be at the end of the shoot.", 3)
+    assert repair.fixes(felt, problems, (audit,), (issue,)) == {3: (reason,)}
+    # a shorter run of its words on another day loses to the longest
+    assert repair.fixes(_saying(felt, "I need to be at the yard by six.", 5), problems, (audit,), (issue,)) == {3: (reason,)}
+    # no run of QUOTE_WORDS words in any day's messages, or the longest on two days: a fresh attempt, as today
+    assert repair.fixes(life, problems, (audit,), (issue,)) is None
+    assert repair.fixes(_saying(life, "Feels strange.", 3), problems, (audit,), (issue,)) is None
+    assert repair.fixes(_saying(life, "Feels strange to be at the end of it.", 3, 5), problems, (audit,), (issue,)) is None
+
+
+def test_a_day_written_again_keeps_the_topics_it_was_first_given(tmp_path: Path) -> None:
+    writer = LeakyDay()
+    backend = _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True, keep_off=True)
+    made = gen_batch.generate_life(SPEC, backend)
+    (asked,) = writer.repairs
+    assert made.repaired == 1 and asked["keep_off"] == [item.topic for item in made.problems.items]
+
+
 # ── An origin day the reader missed ───────────────────────────────────────────
 
 

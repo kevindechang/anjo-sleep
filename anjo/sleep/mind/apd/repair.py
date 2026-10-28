@@ -6,11 +6,12 @@ thrown away whole: the days the failure names are written again, the rest kept.
 - **What is repaired** (``fixes``): a leak verdict names the window it flagged (``gates.flagged``,
   ``gates.flagged_window``: one day, or two), and its days are written again, told which view
   gave the item away; a failed script audit names its days by date in its issues, and each is
-  written again with the issues that name it; a discoverability reader that missed an origin day
+  written again with the issues that name it (an issue naming no date names the one day whose
+  messages hold the longest run of its words, ``quoted_day``); a discoverability reader that missed an origin day
   (``gates.missed_origin_days``) has each origin day it passed over written again, told to make the
   planted fact findable without stating a conclusion. Any other discoverability verdict, an issue
-  that names no day of the life, or more than ``REPAIR_DAYS`` days in one round is left to a fresh
-  attempt.
+  that names no day of the life and quotes none, or more than ``REPAIR_DAYS`` days in one round is
+  left to a fresh attempt.
 - **How a day is written again** (``rewritten``): the writer gets ``life_v1.md``, the same beats
   and ``repair_v1.md``, with the days before it as they now stand, the day as it was, why, and the
   days after it, which it keeps to. The day is extracted again on the targets held before it, its
@@ -63,6 +64,8 @@ DISCOVER_REASON: Final = 'A reader looking for the {family} about "{topic}" did 
                          "what the person says here. Make that fact findable: say it plainly, in a message of its " \
                          "own, without stating any conclusion, and write nothing else about {topic} on this day."
 _DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+QUOTE_WORDS: Final = 4  # the fewest of an undated issue's words in a row that name the day holding them
+_WORD: Final = re.compile(r"[\w']+")
 
 
 @dataclass
@@ -141,6 +144,8 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
     if any(verdict.gate == "script_audit" for verdict in failed):
         for issue in issues:
             days = sorted({life.days.index(day) for day in _dates(issue) if day in life.days})
+            if not days and (quoted := quoted_day(life, issue)) is not None:
+                days = [life.days.index(quoted)]
             if not days:
                 return None
             for index in days:
@@ -148,6 +153,26 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
     if not found or len(found) > REPAIR_DAYS:
         return None
     return {index: tuple(reasons) for index, reasons in sorted(found.items())}
+
+
+def quoted_day(life: Life, issue: str) -> date | None:
+    """The day an issue naming no date quotes: the one day whose messages hold the longest run of
+    its words, at least ``QUOTE_WORDS`` long (case and punctuation aside); ``None`` when no run that
+    long is in any day's messages, or the longest is in more than one day's."""
+    said: dict[date, list[str]] = {}
+    for session in life.sessions:
+        said.setdefault(session.day, []).extend(_words(session.text))
+    words, texts = _words(issue), {day: f" {' '.join(found)} " for day, found in said.items() if day in life.days}
+    for size in range(len(words), QUOTE_WORDS - 1, -1):
+        runs = {" ".join(words[start:start + size]) for start in range(len(words) - size + 1)}
+        days = {day for day, text in texts.items() if any(f" {run} " in text for run in runs)}
+        if days:
+            return next(iter(days)) if len(days) == 1 else None
+    return None
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(text.replace("\u2019", "'").lower())
 
 
 def _repairable(verdict: GateVerdict) -> bool:
@@ -191,7 +216,7 @@ def rewritten(tried: Tried, found: Mapping[int, Sequence[str]], round_: int,
 
 def refolded(draft: Draft, days: Sequence[WrittenDay]) -> Draft:
     """``draft``'s life holding ``days``, its targets folded again from the first."""
-    found = Draft(draft.life_id, draft.field, draft.seed, draft.model)
+    found = Draft(draft.life_id, draft.field, draft.seed, draft.model, keep_off=draft.keep_off)
     for done in days:
         found = found.add(done)
     return found
