@@ -8,8 +8,11 @@ nothing. ``--parallel N`` (default 8) runs that many life-arms at once against t
 other value (``SERIAL_COMMANDS``).
 
 A real run makes paid calls, so it is refused without ``--live``; ``--live`` prints the command's
-plan (its Colab session and hard timeout, and every hold on every pool) and stops, and only
-``--live --yes`` runs it. Glimmer's pinned revision comes from the serving settings
+plan (its Colab session and hard timeout, every hold on every pool, and its ceiling) and stops, and
+only ``--live --yes`` runs it. ``generate``, ``run``, ``timing`` and ``judge`` take ``--max-usd``
+(default $20): before each new unit the command sums what its own holds have settled and, once that
+reaches the ceiling, starts nothing more and stops with exit code 5, saying how far it got and what
+it spent (``ceiling``). Glimmer's pinned revision comes from the serving settings
 (``ServeConfig.from_env``), the ledger from the data dir (``budget.default_ledger``).
 
 A run whose model call still fails after its retries fails alone, recorded; the others go on, and
@@ -52,6 +55,8 @@ from typing import Final
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
+from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
+from anjo.sleep.mind.apd.ceiling import DEFAULT_MAX_USD, UNITS, Ceiling, CeilingReached, RunLedger, max_usd
 from anjo.sleep.mind.apd.journal import SpendJournal
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.live import RunFailed
@@ -85,6 +90,7 @@ FAKE_KILL_AT: Final = 12
 REFUSED_CODE: Final = 2
 STOPPED: Final = 3
 BUSY: Final = 4
+CEILING: Final = 5  # the run's settled spend reached --max-usd
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
 SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that call Spark Open
@@ -126,6 +132,10 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("report", help="the APD report, with 17b's section")
     killed = commands.add_parser("kill-resume", help="kill-resume on held-out lives")
     killed.add_argument("--kill-at", type=int, required=True)
+    for name in CEILING_COMMANDS:
+        commands.choices[name].add_argument(
+            "--max-usd", type=max_usd, default=DEFAULT_MAX_USD,
+            help=f"stop starting new work once this run has settled this many dollars (default {DEFAULT_MAX_USD:.0f})")
     return parser
 
 
@@ -199,6 +209,13 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
     return plan.Plan("report: reads what is on disk", None, ())
 
 
+def _plan_with_ceiling(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
+    if args.command not in CEILING_COMMANDS:
+        return found
+    parallel = _parallel(args) if args.command in ("run", "timing") else 1
+    return dataclasses.replace(found, ceiling_usd=args.max_usd, ceiling_unit=UNITS[args.command], parallel=parallel)
+
+
 # ── Steps ─────────────────────────────────────────────────────────────────────
 
 
@@ -240,9 +257,20 @@ def _say_swept(swept: MindSweep | None, out: Out) -> None:
         f"from killed runs' journals and {swept.holds_settled} stale MIND hold(s) at their full bound.")
 
 
+def _ceiling(args: argparse.Namespace, backend: backends.Backend) -> Ceiling | None:
+    """The command's ``--max-usd`` over the holds it takes, for the commands that take one."""
+    if args.command not in CEILING_COMMANDS or backend.ledger is None:
+        return None
+    if not isinstance(backend.ledger, RunLedger):
+        raise TypeError("a paid APD command holds through a RunLedger, which keeps its own keys")
+    return Ceiling(args.max_usd, backend.ledger)
+
+
 def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend, out: Out) -> int:
     """One command under MIND's lock, after its sweep; failed runs, a session that can't carry the
-    next run, or a hold with no room coming stop it cleanly."""
+    next run, a hold with no room coming, or the run's ceiling stop it cleanly."""
+    ceiling = _ceiling(args, backend)
+    backend = dataclasses.replace(backend, ceiling=ceiling)
     try:
         if args.command in SERVING_COMMANDS:
             backend.preflight()  # the CLI, ssh and ssh-keygen, before the sweep, a hold or a VM
@@ -259,6 +287,9 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
     except (RunFailed, colab_vllm.SessionEnding, BudgetStop) as error:
         out(f"Stopped: {error}. What finished is kept, and a rerun goes on from there.")
         return STOPPED
+    except CeilingReached as error:
+        out(ceiling.stopped() if ceiling is not None else f"Ceiling: {error}.")
+        return CEILING
 
 
 def _exit_on_signal(signum: int, _frame: object) -> None:
@@ -399,9 +430,7 @@ def _fake_backend(data: DataDir, provider: SparkProvider) -> backends.Backend:
     """The fakes, reporting ``provider``'s Spark Open id, held and priced on a ledger of the data
     dir's own at the real caps, so the holds run as they would live (the fake prices are
     list-like; the fakes' tokens are tiny)."""
-    from anjo.sleep.budget import Ledger
-
-    return dataclasses.replace(backends.fake_backend(provider), ledger=Ledger(data.root / "fake-budget.jsonl"),
+    return dataclasses.replace(backends.fake_backend(provider), ledger=RunLedger(data.root / "fake-budget.jsonl"),
                                prices=FAKE_PRICES, rates=FAKE_RATES)
 
 
@@ -468,12 +497,13 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     if prices is None or rates is None:
         parser.error("--live needs --prices and --judge-prices to price its holds")
     data = DataDir(args.data)
-    out(plan.describe(_plan(args, data, Prices(*prices), rates, provider)))
+    out(plan.describe(_plan_with_ceiling(args, _plan(args, data, Prices(*prices), rates, provider))))
     if not args.yes:
         return 0
     from anjo.sleep.budget import default_ledger
     with _awake(live=True):
-        live = backends.live_backend(data.root, default_ledger(), Prices(*prices), rates, provider)
+        ledger = RunLedger(default_ledger().path)  # the shared ledger, keeping this run's own keys
+        live = backends.live_backend(data.root, ledger, Prices(*prices), rates, provider)
         return _guarded(args, data, live, out)
 
 
