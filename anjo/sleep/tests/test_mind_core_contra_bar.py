@@ -7,6 +7,7 @@ scorer and the ``contra`` command, on toy lives and on an export of them (CPU, o
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -178,3 +179,46 @@ def test_contra_runs_unchanged_on_an_export(tmp_path: Path, capsys: pytest.Captu
     assert "oracle" not in result["bar"]["val"]["lives"]["auc"]  # real latents have no generating parts
     assert result["methods"]["pair_scorer"]["chosen"] in {"0", "1"} and set(result["methods"]) == {"pair_scorer", "plain"}
     assert set(result["methods"]["plain"]["beats_bar"]) == {"lives"}
+
+
+# ── Guards on the measured claims (``cli contra``'s docstring) ──────────────────────────────────
+
+SLOW = pytest.mark.skipif(os.environ.get("ANJO_SLEEP_SLOW_TESTS") != "1",
+                          reason="trains two cores for minutes: set ANJO_SLEEP_SLOW_TESTS=1")
+GUARD_MARGIN = 0.1  # the pair scorer's measured lower bounds are +0.33 / +0.39; this fit's, +0.26 / +0.42
+NO_CLEAR = 0.15  # the core recipes' test AUC over the bar's, measured -0.06 to +0.06
+
+
+def _stance(seed: int) -> tuple[tuple[contra_bar.Candidate, ...], ...]:
+    return (contra_bar.candidates(toy.lives(256, seed=seed, stance=True), contra_bar.in_toy),
+            contra_bar.candidates(toy.revision_lives(128, seed=seed, stance=True), contra_bar.in_toy))
+
+
+def test_the_pair_scorer_clears_the_bar_on_the_stance_toy() -> None:
+    """One seed and a shorter fit than ``contra``'s (30 epochs, about 25 s on one CPU), a loose margin."""
+    pytest.importorskip("torch")
+    from anjo.sleep.mind.core import contra_run, pair_scorer
+
+    val = [c for part in _stance(2) for c in part]
+    fitted = pair_scorer.fit(contra_run.toy_source, val, d=toy.DIM, rank=8, seed=0, epochs=30, patience=10)
+    for cands in _stance(3):
+        scores = fitted.scores(cands)
+        found = contra_bar.margin(scores, contra_bar.scored(contra_bar.unmatched, cands), cands)
+        assert found is not None and found[0] > GUARD_MARGIN, found
+
+
+@SLOW
+def test_the_core_recipes_do_not_clear_the_bar_on_the_stance_toy(tmp_path: Path) -> None:
+    """The contrast-revision recipe and the stance probe, seed 0, as ``toy --stance-lives`` trains them,
+    on ``contra``'s test split: neither lands more than ``NO_CLEAR`` over the bar."""
+    pytest.importorskip("torch")
+    from anjo.sleep.mind.core import cli, contra_run
+    from anjo.sleep.mind.core.api import Core
+
+    test = contra_run.toy_split(3)
+    for name, flags in (("contrast-rev", []), ("stance-probe", ["--stance", "--no-contrast"])):
+        cli.run_toy(cli.parser().parse_args(["toy", "--out", str(tmp_path / name), "--seed", "0", "--stance-lives", *flags]))
+        scores = contra_run._core_scores(Core.load(tmp_path / name / cli.MODEL_FILE), test)
+        for part, cands in test.cands.items():
+            core, line = contra_bar.auc(scores, cands), contra_bar.auc(contra_bar.scored(contra_bar.unmatched, cands), cands)
+            assert core is not None and line is not None and core - line < NO_CLEAR, (name, part, core, line)

@@ -26,15 +26,20 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
 - **Read**: the thought channel's ``mind_state`` is the core port's ``reading``: this dream's
   state, its id and the core's predictions, and the projector her last unit kept. Practice and
   training ask for it in the GPU session, after every CPU step, so always after the dream.
-- **Keep**: when the night ends, however it ends (unless the person was deleted), its unit is
-  saved: the core state, the projector and the adapter that serve her, together
-  (``mind.core.store``): tonight's projector (the training receipt's) only when tonight promoted
-  the adapter trained with it, else the one her last unit kept.
+- **Keep**: her unit (``mind.core.store``) holds the core state, the projector and the adapter
+  that serve her, together. A night that promotes keeps it first, with the adapter it trained and
+  the projector trained with it: if it can't be kept, nothing is promoted (the promote step fails),
+  so a new adapter never serves beside an old projector. Any other night keeps it when the night
+  ends, however it ends (unless the person was deleted), with the adapter that serves and the
+  projector the dream read her through. The dream reads her through her last unit's projector only
+  when that unit names the adapter that serves; else through the newest unit that does, or the
+  shared projector, and its record says so (``projector_fallback``).
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from anjo.sleep.night.deps import MindCall, NightDeps
@@ -67,7 +72,9 @@ class CoreSteps:
         """Her stored evidence through tonight, never a practice scene or a held-out item; the core
         observes only what its state has not."""
         evidence = [item for item in p.store.stored(p.night) if not item.held_out and item.kind != "practice"]
-        p.dreamt = self.deps.core.dream(self._call(p, "dream"), evidence)
+        serving = self.deps.registry.last_promoted(p.uid)
+        p.dreamt = self.deps.core.dream(replace(self._call(p, "dream"), serving=None if serving is None else serving.id),
+                                        evidence)
         return dict(p.dreamt.receipt)
 
     def _seeded(self, p: PersonNight) -> list[Evidence]:
@@ -99,22 +106,27 @@ class CoreSteps:
         said = receipt.get("surprise_weights")
         return {"surprise_weights": said if isinstance(said, str) else "not applied (the training job did not report)"}
 
-    def _projector(self, p: PersonNight) -> str | None:
-        """The projector that serves her with the adapter that serves her: tonight's, trained with the
-        LoRA, when tonight promoted (none when the channel was off); else the one her last unit kept."""
-        if p.status != "promoted":
-            return p.dreamt.projector
+    def _promoted_unit(self, p: PersonNight, adapter: str) -> dict[str, Any]:
+        """Her unit with the adapter about to serve and the projector trained with it (none when the
+        channel was off), kept before the promotion; a failure to keep it raises, and nothing is promoted."""
+        if p.dreamt.state_id is None or self.deps.cancel(p.uid):
+            return {}
         trained = p.receipts.get("train", {}).get("receipt", {}).get("projector")
-        return trained if isinstance(trained, str) else None
+        unit = self.deps.core.keep(self._call(p, "promote"), p.dreamt, lora=adapter,
+                                   projector=trained if isinstance(trained, str) else None)
+        return {"mind_unit": dict(unit)}
 
     def _kept(self, p: PersonNight) -> dict[str, Any]:
-        """The night's unit, for the summary; a disk or store failure to keep it is recorded, not raised."""
+        """The night's unit, for the summary: the one its promotion kept, else kept now; a disk or store
+        failure to keep it is recorded, not raised."""
+        if "mind_unit" in p.receipts.get("promote", {}):
+            return {"mind_unit": p.receipts["promote"]["mind_unit"]}
         if p.dreamt.state_id is None or self.deps.cancel(p.uid):  # a deleted person's mind is never written again
             return {}
         serving = self.deps.registry.last_promoted(p.uid)
         try:
             unit = self.deps.core.keep(self._call(p, "finish"), p.dreamt, lora=None if serving is None else serving.id,
-                                       projector=self._projector(p))
+                                       projector=p.dreamt.projector)
         except (OSError, ValueError) as error:  # the night already ended: its summary says the unit wasn't kept
             return {"mind_unit": None, "mind_unit_error": type(error).__name__}
         return {"mind_unit": dict(unit)}

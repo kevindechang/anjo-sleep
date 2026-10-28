@@ -271,10 +271,22 @@ class CoreNight:
                            for b in dream.boundaries],
             "pressure": round(pressure, 6),
         }
-        own = start.unit is not None and start.unit.model == self.core.model_id  # a projector reads this core's states
+        projector, fallback = self._paired(held, start.unit, call.serving)
         return Dreamt(state_id=state_id, state=slept, rehearse=() if picks is None else picks.evidence_ids,
                       weights=weights, view=bridge.CoreView(decision, seen, self._targets_of(call, cited)),
-                      projector=start.unit.projector if own and start.unit is not None else None, receipt=receipt)
+                      projector=projector, receipt={**receipt, **fallback})
+
+    def _paired(self, held: store.MindStore, unit: store.Unit | None, serving: str | None) -> tuple[str | None, dict[str, Any]]:
+        """The projector she is read through: her last unit's, when it reads this core's states and names
+        the adapter that serves her; else the newest unit's that does, or the shared one (None), logged."""
+        if unit is None or unit.model != self.core.model_id:
+            return None, {}
+        if unit.lora == serving:
+            return unit.projector, {}
+        found = next((u for u in reversed(held.units()) if u.lora == serving and u.model == self.core.model_id), None)
+        logger.warning("MIND's last unit names another adapter than the one serving; its projector is not used")
+        return (None if found is None else found.projector), {"projector_fallback": {
+            "unit": unit.version, "unit_lora": unit.lora, "serving": serving, "from_unit": None if found is None else found.version}}
 
     def _imagined(self, held: store.MindStore, dream: Dream, picks: curriculum.Picks | None) -> list[dict[str, Any]]:
         """Each imagined state about the picked threads (every one, with no curriculum), kept by id."""
