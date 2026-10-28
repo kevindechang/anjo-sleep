@@ -124,14 +124,16 @@ def test_every_spark_open_call_held_on_baseten_mind_usd(tmp_path: Path, vm: fake
         live.run_live("M", _development(), session, spark, ledger=ledger, prices=PRICES)
     assert SCREEN_PROMPT in spark.systems and RESOLVE_PROMPT in spark.systems  # the screen's calls too
     assert ledger.open_holds() == () and ledger.used("baseten_mind_usd") > 0
-    capped = live.SparkCalls(fakes.FakeSparkChat(), PRICES, limit=2)
+    capped = live.SparkCalls(fakes.FakeSparkChat(), PRICES, ledger, "capped", per_night=2)
     with pytest.raises(Exception, match="holds"):
         for _ in range(3):
             capped([{"role": "system", "content": SCREEN_PROMPT}, {"role": "user", "content": "x"}], 10)
     assert capped.calls == 2 and capped.chat.calls == 2  # type: ignore[attr-defined]
+    assert len(ledger.open_holds()) == 1  # held before the first call, open while the night runs
+    capped.close()
+    assert ledger.open_holds() == ()
     with pytest.raises(ValueError, match="priced"):
-        with live.held_run(ledger, "unpriced", live.SparkCalls(fakes.FakeSparkChat(), None, limit=1)):
-            pass
+        live.SparkCalls(fakes.FakeSparkChat(), None, ledger)([{"role": "user", "content": "x"}], 10)
 
 
 def test_replay_accepts_a_recorded_m_run_and_refuses_an_unrecorded_one(vm: fakes.FakeColab) -> None:
@@ -153,7 +155,7 @@ def test_replay_accepts_a_recorded_m_run_and_refuses_an_unrecorded_one(vm: fakes
                        sample.start_states(life, dataclasses.replace(run, written=stranger))
                        if s.ancestry is not None and "unknown-model" in s.ancestry)
         labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeSparkChat()))
-        spark = live.spark_calls(fakes.FakeSparkChat(), None, life)
+        spark = live.SparkCalls(fakes.FakeSparkChat(), None)
         arm = live.arm_models(session, spark)
         models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=arm.world, screen=arm.screen,
                                      resolver_chat=fakes.FakeSparkChat())

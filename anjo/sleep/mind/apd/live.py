@@ -13,18 +13,20 @@
 - **Provenance:** the model each world answer's and resolver verdict's reply named, as its API
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
 
-``run_live`` holds a run's Spark Open worst case before its first call (``held_run``) and settles
-what it priced. The GPU is held once, by the serving session itself (``colab_vllm.serve``).
+``SparkCalls`` holds each night's Spark Open worst case before that night's first call and settles
+what it priced, as the night's MIND step does. The GPU is held once, by the serving session itself
+(``colab_vllm.serve``).
 """
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Final
 
-from anjo.sleep.budget import Ledger
+from anjo.sleep.budget import Ledger, Reservation
 from anjo.sleep.mind.apd.arms import MindCore, run_arm
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
 from anjo.sleep.mind.apd.types import ArmModels, ArmName, ArmRun, Life, NightClock, Reported, WrittenPort
@@ -34,7 +36,7 @@ from anjo.sleep.mind.replay.spend import SPARK_POOL, colab_client
 from anjo.sleep.mind.screen import SparkScreen
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.night.holds import held, spark_usd, spark_worst_usd, usd
+from anjo.sleep.night.holds import hold, spark_usd, spark_worst_usd, usd
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving.client import ServingError, VllmClient
@@ -88,24 +90,54 @@ class GlimmerWorld:
 
 @dataclass
 class SparkCalls:
-    """Every Spark Open call of one run: no call past ``limit``, the count its hold covers (the
-    port then refuses or says undetermined, as for a failed call), and each priced as it returns
-    (``prices`` ``None``: unpriced, with nothing held)."""
+    """Every Spark Open call of one run, held a night at a time as the night's MIND step holds them:
+    at a night's first call (``clock``), its worst case of ``per_night`` calls is held on
+    ``baseten_mind_usd`` (the night before settled at what it priced), and a call past that count
+    is refused (the port then refuses or says undetermined, as for a failed call). Without a
+    ledger nothing is held; without prices nothing is priced."""
 
     chat: ChatFn
     prices: Prices | None
-    limit: int
-    calls: int = 0
-    usd: float = 0.0
+    ledger: Ledger | None = None
+    key: str = "spark"
+    per_night: int = MIND_SPARK_CALLS
+    clock: NightClock | None = None
+    night: date | None = None
+    calls: int = 0  # this night's
+    usd: float = 0.0  # this night's
+    _held: Reservation | None = field(default=None, repr=False)
 
     def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
-        if self.calls >= self.limit:
-            raise ModelApiError("past the Spark Open calls this run holds")
+        self._turn()
+        if self.calls >= self.per_night:
+            raise ModelApiError("past the Spark Open calls this night holds")
         self.calls += 1
         result = self.chat(messages, max_tokens)
         if self.prices is not None:
             self.usd += spark_usd(self.prices, result.input_tokens, result.output_tokens)
         return result
+
+    def _turn(self) -> None:
+        day = None if self.clock is None else self.clock.day
+        if day == self.night and (self.ledger is None or self._held is not None):
+            return
+        self.close()
+        self.night, self.calls, self.usd = day, 0, 0.0
+        if self.ledger is not None:
+            if self.prices is None:
+                raise ValueError("a held run is priced")
+            self._held = hold(self.ledger, f"apd:{self.key}:{day}", (SPARK_POOL,),
+                              usd(spark_worst_usd(self.prices, self.per_night)))
+
+    def close(self) -> None:
+        """Settle the open night's hold at what it priced, or release it."""
+        held_now, self._held = self._held, None
+        if held_now is None:
+            return
+        if self.usd > 0:
+            held_now.settle(self.usd)
+        else:
+            held_now.release()
 
     def reporting(self, reported: Reported, port: WrittenPort) -> ChatFn:
         """These calls, each reply's model going to ``reported`` as ``port``'s."""
@@ -119,15 +151,12 @@ class SparkCalls:
         return chat
 
 
-def spark_calls(chat: ChatFn, prices: Prices | None, life: Life) -> SparkCalls:
-    """A run's Spark Open calls: at most ``MIND_SPARK_CALLS`` a night, as a night's MIND step."""
-    return SparkCalls(chat, prices, len(life.days) * MIND_SPARK_CALLS)
-
-
 def arm_models(session: ColabSession, spark: SparkCalls, *, adapter: CheckpointRef | None = None) -> ArmModels:
     """One run's models: Glimmer on ``session`` (``adapter`` for M+replay and M+shuffled) as the
-    thinker and the world query, Spark Open through ``spark`` as the screen and the resolver."""
+    thinker and the world query, Spark Open through ``spark`` as the screen and the resolver, all
+    on one night clock."""
     clock, reported = NightClock(), Reported()
+    spark.clock = clock
     client = colab_client(session)
     return ArmModels(
         thinker=arm_thinker(session, adapter, clock), world=GlimmerWorld(GlimmerChat(client, clock), reported),
@@ -137,16 +166,12 @@ def arm_models(session: ColabSession, spark: SparkCalls, *, adapter: CheckpointR
 
 
 @contextmanager
-def held_run(ledger: Ledger | None, key: str, spark: SparkCalls) -> Iterator[None]:
-    """A run's Spark Open worst case held on ``baseten_mind_usd`` before its first call, settled
-    at what it priced. Without a ledger (tests and ``--fake``) nothing is held."""
-    if ledger is None:
-        yield
-        return
-    if spark.prices is None:
-        raise ValueError("a held run is priced")
-    with held(ledger, f"apd:{key}", (SPARK_POOL,), usd(spark_worst_usd(spark.prices, spark.limit)), lambda: spark.usd):
-        yield
+def held_run(spark: SparkCalls) -> Iterator[SparkCalls]:
+    """A run's Spark Open calls, the last night's hold settled on the way out."""
+    try:
+        yield spark
+    finally:
+        spark.close()
 
 
 def run_live(
@@ -155,7 +180,7 @@ def run_live(
     core: MindCore | None = None, brief: str | None = None,
 ) -> ArmRun:
     """One arm through ``life`` on the live models, its Spark Open calls held first."""
-    spark = spark_calls(spark_chat, prices, life)
+    spark = SparkCalls(spark_chat, prices, ledger, f"run:{life.id}:{arm}")
     models = arm_models(session, spark, adapter=adapter)
-    with held_run(ledger, f"run:{life.id}:{arm}", spark):
+    with held_run(spark):
         return run_arm(arm, life, models, budget=budget, core=core, brief=brief)
