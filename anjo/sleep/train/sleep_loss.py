@@ -5,6 +5,8 @@ so the person's LoRA is the expansion slot: only its parameters ever train, and 
 One job trains every term, with these weights (``WEIGHTS``):
 
 - ``sft`` 1.0: the night's rows as today (her best replies and the critic's Spark Open corrections);
+  each row's loss, and each DPO pair's, is multiplied by its own ``weight`` before the mean: MIND's
+  surprise at the evidence it came from (the Sleep link, 0.5 to 2.0 at mean 1; 1.0 when it has none);
 - ``dpo`` 1.0: today's DPO pass, unchanged in strength (``_dpo_block``): the (best, worst) pairs, beta
   0.1, against the same model with its adapter off, on their own AdamW at today's DPO rate
   (``Plan.dpo_lr``, 5e-6), with today's accumulation and epochs rule and its own cosine, after the main
@@ -63,6 +65,7 @@ from pathlib import Path
 from typing import Any, Final
 
 WEIGHTS: Final = {"sft": 1.0, "dpo": 1.0, "seed": 1.0, "imitate": 0.25, "dream": 0.5}
+SURPRISE_TERMS: Final = ("sft", "dpo")  # the terms whose rows carry MIND's surprise weight
 ON_POLICY_SHARE: Final = 0.25  # GKD's lambda: the seed rows scored on a fresh student sample
 FRESH_TOKENS: Final = 192
 IMITATION_ROWS: Final = 4
@@ -88,6 +91,7 @@ Ids = tuple[int, ...]
 class Seq:
     prompt: Ids
     reply: Ids
+    weight: float = 1.0  # MIND's surprise weight on an SFT row (the Sleep link); a dream's is always 1.0
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,7 @@ class PairSeq:
     prompt: Ids
     chosen: Ids
     rejected: Ids
+    weight: float = 1.0  # MIND's surprise weight on the pair
 
 
 @dataclass(frozen=True)
@@ -449,17 +454,23 @@ class _Run:
             return loss
         return sft_loss(self.model, row)  # sft and dream
 
+    def backward(self, chunk: Sequence[tuple[str, Any]]) -> None:
+        """Each row's weighted loss, its share of the chunk's mean, into the adapter's gradient: the
+        term's weight, and on an SFT row or a DPO pair its own surprise weight."""
+        for term, row in chunk:
+            with self.clock(term):
+                loss = self.loss(term, row)
+                if loss is not None:
+                    surprise = row.weight if term in SURPRISE_TERMS else 1.0
+                    (WEIGHTS[term] * surprise * loss / len(chunk)).backward()
+                    self.losses[term].append(float(loss.detach()))
+
     def step(self, chunk: Sequence[tuple[str, Any]], optimizer: Any = None, rate: Any = None) -> None:
         """One update on ``chunk``: the main block's optimizer and schedule unless others are given."""
         import torch
 
         optimizer, rate = optimizer or self.optimizer, rate or self.rate
-        for term, row in chunk:
-            with self.clock(term):
-                loss = self.loss(term, row)
-                if loss is not None:
-                    (WEIGHTS[term] * loss / len(chunk)).backward()
-                    self.losses[term].append(float(loss.detach()))
+        self.backward(chunk)
         if self.steps == 0:
             self.check_grads()
         torch.nn.utils.clip_grad_norm_(self.params, MAX_GRAD_NORM)

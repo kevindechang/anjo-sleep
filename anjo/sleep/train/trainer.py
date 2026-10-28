@@ -36,6 +36,7 @@ class LoraTrainer:
             publish=self._publish, revision=self._revision,
         )
         done = dataclasses.asdict(receipt)
-        if receipt.terms is None:  # only sft_dpo_seed reports its terms: today's receipt is unchanged
-            del done["terms"]
+        for key in ("terms", "surprise_weights"):  # only sft_dpo_seed's terms, only weighted rows': today's unchanged
+            if done[key] is None:
+                del done[key]
         return ckpt, done

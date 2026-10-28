@@ -224,6 +224,7 @@ class TrainReceipt:
     objective: str = "sft"  # what the job trained under: sft_dpo falls back to sft for a night with no pair
     pairs: int = 0  # the (best, worst) pairs sent when it trained sft_dpo; a count, never the words
     terms: Mapping[str, object] | None = None  # sft_dpo_seed's receipt: rows, minutes and loss per term, dreams kept
+    surprise_weights: str | None = None  # whether the rows' surprise weights reached the loss; None when none had one
 
 
 AdapterPublisher = Callable[[Path, str], None]
@@ -340,6 +341,7 @@ def train_lora_with_receipt(
         dropped_truncated=int(_number(outputs, "dropped_truncated")),
         objective=trained_objective, pairs=trained_pairs,
         terms=dict(terms) if cfg.objective == "sft_dpo_seed" and isinstance(terms, Mapping) else None,
+        surprise_weights=str(outputs["surprise_weights"]) if outputs.get("surprise_weights") else None,
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

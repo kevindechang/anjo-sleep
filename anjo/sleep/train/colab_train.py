@@ -91,6 +91,7 @@ OBJECTIVES = ("sft", "sft_dpo", "sft_dpo_seed")
 SEED_OBJECTIVE = "sft_dpo_seed"
 LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
 KINDS = ("seed", "dream", "anchor")
+SURPRISE_RANGE = (0.5, 2.0)  # MIND's surprise weight on a row (the Sleep link); a row without one weighs 1.0
 MAX_MATCH_MINUTES = 100.0
 MAX_DPO_LR = 1e-5
 MAX_ACCUMULATION = 16
@@ -259,6 +260,24 @@ def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[d
     with a ``kind`` belong to ``sft_dpo_seed`` alone (``term_rows``)."""
     plain = [row for row in rows if "kind" not in row]
     return [row for row in plain if "completion" in row], [row for row in plain if "chosen" in row]
+
+
+def row_weight(row: dict[str, Any]) -> float:
+    """The row's surprise weight, 1.0 when it carries none; a weight outside ``SURPRISE_RANGE`` stops the job."""
+    weight = row.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, int | float) or not SURPRISE_RANGE[0] <= weight <= SURPRISE_RANGE[1]:
+        raise ValueError(f"row {row.get('id')}'s weight is a number from {SURPRISE_RANGE[0]} to {SURPRISE_RANGE[1]}")
+    return float(weight)
+
+
+def surprise_weights(objective: str, rows: list[dict[str, Any]]) -> str | None:
+    """The receipt's ``surprise_weights``: every weight checked first; None when no row carries one,
+    ``applied`` when the one loss takes them, else said not to be (TRL's passes have no row weight)."""
+    for row in rows:
+        row_weight(row)
+    if not any("weight" in row for row in rows):
+        return None
+    return "applied" if objective == SEED_OBJECTIVE else f"not applied (objective {objective})"
 
 
 def term_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -543,8 +562,9 @@ def seed_batch(loss: Any, tokenizer: Any, kept: list[tuple[dict[str, Any], dict[
               if cfg["terms"]["dreams"] else [])  # dream rows train only when the recipe asks for them
     fit = [(seq, kind) for seq, kind in dreams if len(seq.prompt) + len(seq.reply) <= limit]
     batch = loss.Batch(
-        sft=tuple(loss.Seq(prompt(row), reply(row)) for row, _ in kept),
-        pairs=tuple(loss.PairSeq(prompt(row), reply(row, "chosen"), reply(row, "rejected")) for row, _ in pairs),
+        sft=tuple(loss.Seq(prompt(row), reply(row), row_weight(row)) for row, _ in kept),
+        pairs=tuple(loss.PairSeq(prompt(row), reply(row, "chosen"), reply(row, "rejected"), row_weight(row))
+                    for row, _ in pairs),
         seeds=tuple(row for row in seeds if len(row.teacher) + len(row.reply) <= limit),
         dreams=tuple(seq for seq, _ in fit), dream_groups=tuple(kind for _, kind in fit),
         anchors=tuple(loss.AnchorSeq(prompt(row), tuple(tuple(reply_ids(tokenizer, c, end=False)) for c in row["choices"]),
@@ -656,6 +676,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     template = template_kwargs(cfg)
     every = _rows(Path(os.environ["ANJO_TRAIN_DATASET"]))
     rows, pair_rows = split_rows(every)
+    surprise = surprise_weights(cfg["objective"], [*rows, *pair_rows])  # checked before the model loads
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
     seeded = cfg["objective"] == SEED_OBJECTIVE
@@ -673,6 +694,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
             "dropped_truncated": len(rows) - len(kept), "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu",
             "objective": cfg["objective"], "dpo_steps": 0, "pairs_dropped_truncated": len(pair_rows) - len(pairs),
             "dpo_reference": "adapter_off", "rendering": cfg["rendering"],
+            **({"surprise_weights": surprise} if surprise else {}),
         }
         (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
         return 0
@@ -711,6 +733,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
         "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
         **({"match_minutes": cfg["match_minutes"], "match_steps": matched} if "match_minutes" in cfg else {}),
+        **({"surprise_weights": surprise} if surprise else {}),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0
