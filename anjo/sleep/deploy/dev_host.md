@@ -522,8 +522,10 @@ The night runs as its own process, so a long night can't take down the server.
   exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
   checkpoint that serves, in the same process. It first reads the marker of the day it closes: a
   missing, short or failed day fails the night at `simulate` (`day_missing`, `short_day` or the
-  day's failure code), and nothing is scored. A failed night is never scored. This timer keeps
-  `Persistent=true`: the night lock makes a catch-up safe.
+  day's failure code), and nothing is scored. A failed night is never scored. Its JSON line says how
+  the morning went (`morning`: `ok`, `failed (<reason>)`, `skipped (nap)` or `skipped (night failed)`);
+  it exits 1 when the night failed and 3 when the morning failed after a promotion (new weights
+  serve unscored). This timer keeps `Persistent=true`: the night lock makes a catch-up safe.
 - The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=film_founder=<account id>` in the env file.
   The env file also holds `ANJO_SLEEP_HOST=1`, the backend's names (§1.4, or Modal's URL and token),
   `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.

@@ -36,6 +36,9 @@ records the morning ``skipped``, and no Dailies line is made. ``--force-deep`` m
 sleep whatever its pressure (the demo); the month's cap (``ANJO_SLEEP_MONTH_USD``) still wins. A
 morning that fails (a judge that can't be read, ``TooManyNoVerdicts``, or one that timed out) is
 logged ``failed`` with its reason and its unread verdicts, and a promoted night still gets its line.
+The night's JSON line says how the morning went (``morning``: ``ok``, ``failed (<reason>)``,
+``skipped (nap)`` or ``skipped (night failed)``), read back from the night's log, and the night phase
+exits 3 when the morning failed after a promotion (new weights serve unscored), 1 when the night failed.
 
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
 for example ``film_founder=<account id>``.
@@ -77,6 +80,8 @@ DAILIES: Final = "anjo.sleep.app.demo_pairs:after_night"
 MARKERS: Final = "daily"  # under $ANJO_SLEEP_DATA_DIR/sleep/
 DAY_MISSING: Final = "day_missing"
 SHORT_DAY: Final = "short_day"
+MORNING_FAILED: Final = "morning failed: "  # the failed morning step's ``why`` starts with this
+UNSCORED_EXIT: Final = 3  # the night promoted and its morning failed: new weights serve unscored
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +212,7 @@ def _score_morning(
         logger.warning("the morning for %s failed: %s", night.isoformat(), type(error).__name__)
         unread: dict[str, Any] = {"no_verdict": error.no_verdict} if isinstance(error, TooManyNoVerdicts) else {}
         log.step("morning", "failed", uses="new", system=None, seconds=round(timer() - started, 3),
-                 why=f"morning failed: {safe_error(error)}", **unread)
+                 why=f"{MORNING_FAILED}{safe_error(error)}", **unread)
         return
     receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
     if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
@@ -218,6 +223,20 @@ def _score_morning(
     if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
         receipt["retries"] = retries
     log.step("morning", "ok", uses="new", system=None, **receipt)
+
+
+def morning_outcome(result: NightResult) -> str:
+    """How the night's morning went, from its log: ``ok``, ``failed (<reason>)``, ``skipped (nap)`` or
+    ``skipped (night failed)``."""
+    if result.status in ("failed", "napped"):
+        return "skipped (night failed)" if result.status == "failed" else "skipped (nap)"
+    steps = [step for step in NightLog(result.log_path.parent).steps() if step.get("step") == "morning"]
+    if not steps:
+        return "skipped (not logged)"  # the log was removed (a delete), or never written
+    last = steps[-1]
+    if last["status"] == "failed":
+        return f"failed ({str(last.get('why', '')).removeprefix(MORNING_FAILED)})"
+    return str(last["status"])
 
 
 def _pregenerate(
@@ -282,10 +301,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     mind = args.mind or os.environ.get(MIND_ENV, "").strip() == "1"
     result = run_night_phase(user, args.persona, now, markers=marker_dir(), label=args.label,
                              for_date=args.for_date, mind=mind, force_deep=args.force_deep)
+    morning = morning_outcome(result)
     print(json.dumps({"phase": "night", "night": night.night.isoformat(), "status": result.status,
                       "mind": mind, "force_deep": args.force_deep, "failed_at": result.failed_at,
-                      "log": str(result.log_path)}))
-    return 0 if result.status != "failed" else 1
+                      "morning": morning, "log": str(result.log_path)}))
+    if result.status == "failed":
+        return 1
+    return UNSCORED_EXIT if result.status == "promoted" and morning.startswith("failed") else 0
 
 
 if __name__ == "__main__":
