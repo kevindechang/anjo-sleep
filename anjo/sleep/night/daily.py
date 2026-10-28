@@ -15,7 +15,11 @@ after midnight, and the morning probe run right after the night, in the same pro
   the day was lived on), through the night command's ``execute`` (the same lock, sweep, wake,
   training and upload). It reads that day's marker first: a missing, short or failed day fails the
   night at ``simulate`` (``day_missing``, ``short_day`` or the failure code) and nothing is scored.
-  Otherwise the morning probe run scores the checkpoint that is serving.
+  Otherwise the morning probe run scores the checkpoint that is serving. After a night that promoted
+  new weights, the demo's Dailies line is pre-generated (``app.demo_pairs.after_night``) while
+  Glimmer is still awake: the scene answered by the checkpoint before the night and by the new one.
+  Its failure is logged in the night's log and never fails the night. Both steps log how long they
+  took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time.
 
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
 for example ``film_founder=<account id>``.
@@ -24,15 +28,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
 from typing import Final
 
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
+from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
 from anjo.sleep.probes.morning import run_morning
 from anjo.sleep.serving.backend import phase
@@ -47,9 +54,12 @@ SEED: Final = 20261028
 WIRING: Final = "anjo.sleep.app.night:build"
 SIMULATE: Final = "anjo.sleep.app.sim_transport:simulate"
 MORNING: Final = "anjo.sleep.app.morning:build"
+DAILIES: Final = "anjo.sleep.app.demo_pairs:after_night"
 MARKERS: Final = "daily"  # under $ANJO_SLEEP_DATA_DIR/sleep/
 DAY_MISSING: Final = "day_missing"
 SHORT_DAY: Final = "short_day"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -132,6 +142,7 @@ def run_night_phase(
     user: str, persona: str, now: datetime, *, markers: Path, label: str = "development",
     nights: Callable[..., dict[str, NightResult]] = night_command.execute,
     score: Callable[..., object] = run_morning, morning: Callable[..., object] | None = None,
+    dailies: Callable[..., object] | None = None, timer: Callable[[], float] = monotonic,
 ) -> NightResult:
     plan = night_plan(now)
     missed = missed_day(markers, persona, plan)
@@ -140,9 +151,31 @@ def run_night_phase(
                         windows={user: plan.window}, days={} if missed is None else {user: missed},
                         as_of={user: plan.window[1]})[user]  # real time: the night's clock is the wall's
         if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
+            log, started = NightLog(result.log_path.parent), timer()
             ports = (morning or _morning())(user, persona, plan.night)
             score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")
+            log.step("morning", "ok", uses="new", system=None, seconds=round(timer() - started, 3))
+            if result.status == "promoted":  # new weights: the line he'd now say differently
+                _pregenerate(log, dailies, timer, user, persona, plan.night, result)
     return result
+
+
+def _pregenerate(
+    log: NightLog, dailies: Callable[..., object] | None, timer: Callable[[], float],
+    user: str, persona: str, night: date, result: NightResult,
+) -> None:
+    """The Dailies line for ``night``, logged ``ok`` or ``failed`` (by error type) with its time."""
+    started, error = timer(), None
+    try:  # optional: the demo's line never fails the night or the morning
+        (dailies or night_command._named(DAILIES))(user, persona, night, result)
+    except Exception as failure:
+        error = type(failure).__name__
+        logger.warning("dailies line for %s failed: %s", night.isoformat(), error)
+    seconds = round(timer() - started, 3)
+    if error is None:
+        log.step("dailies", "ok", uses="new", system=None, seconds=seconds)
+    else:
+        log.step("dailies", "failed", uses="new", system=None, seconds=seconds, error=error)
 
 
 def _morning() -> Callable[..., object]:

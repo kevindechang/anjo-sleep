@@ -9,10 +9,12 @@
 <title>{{page_title}}</title>
 <link rel="stylesheet" href="/sleep/demo/demo.css">
 <link rel="stylesheet" href="/sleep/demo/mind.css">
+<link rel="stylesheet" href="/sleep/demo/dailies.css">
 <script type="application/json" id="demo-copy">{{@copy}}</script>
 <script src="/sleep/demo/app.js" defer></script>
 <script src="/sleep/demo/nights.js" defer></script>
 <script src="/sleep/demo/mind.js" defer></script>
+<script src="/sleep/demo/dailies.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#chat">{{skip}}</a>
@@ -96,6 +98,23 @@
     <ol id="thread" class="thread" aria-label="{{thread_label}}"></ol>
   </main>
 </div>
+
+<section id="dailies" class="dailies" aria-labelledby="dailies-heading" hidden>
+  <header class="dailies-head">
+    <div class="dailies-title">
+      <p class="kicker">{{dailies_kicker}}</p>
+      <h2 id="dailies-heading">{{dailies_heading}}</h2>
+      <p class="note">{{dailies_note}}</p>
+    </div>
+    <label class="field dailies-pick" for="dailies-night">
+      <span>{{dailies_pick}}</span>
+      <select id="dailies-night" disabled></select>
+    </label>
+  </header>
+  <article id="dailies-sheet" class="sheet" aria-live="polite" aria-busy="true">
+    <p class="sheet-state">{{dailies_loading}}</p>
+  </article>
+</section>
 
 <section id="mind" class="mind" aria-labelledby="mind-heading" hidden>
   <header class="mind-head">

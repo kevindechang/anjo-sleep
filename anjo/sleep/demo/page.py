@@ -23,6 +23,8 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "nights.js": "text/javascript; charset=utf-8",  # the full step: the night slider and the toggles
     "mind.js": "text/javascript; charset=utf-8",  # her mind panel and its chart
     "mind.css": "text/css; charset=utf-8",
+    "dailies.js": "text/javascript; charset=utf-8",  # Dailies: the morning card
+    "dailies.css": "text/css; charset=utf-8",
 })
 COPY_SLOT: Final = "{{@copy}}"
 _SLOT = re.compile(r"\{\{([a-z0-9_]+)\}\}")

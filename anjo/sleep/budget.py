@@ -249,6 +249,11 @@ class Ledger:
         """Every hold not yet settled or released, in ledger order."""
         return tuple(Reservation(job, hold.pools, hold.bound, self) for job, hold in self._holds().items() if hold.open)
 
+    def settled(self) -> dict[str, float]:
+        """What each settled job really cost, by its key, in ledger order; open and released holds
+        are not in it."""
+        return {job: hold.spent for job, hold in self._holds().items() if hold.spent is not None and not hold.released}
+
     def overages(self) -> tuple[str, ...]:
         """The jobs whose overage still blocks their pools, in ledger order."""
         return tuple(job for job, hold in self._holds().items() if hold.overage)

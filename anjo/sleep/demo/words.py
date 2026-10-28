@@ -48,6 +48,16 @@ SCENES: Final[tuple[Scene, ...]] = (
 )
 
 # COPY-PENDING(kevin)
+# Dailies' before and after (``dailies``): the one scene each morning's card asks both checkpoints.
+# It is not a starter scene, so showing its answers never unblinds a starter scene's pair
+# (``service``'s ``vote_first``); the decontamination test holds it to the same rules.
+DAILY_SCENE: Final = Scene(
+    "export-bug", "The apology email",
+    "The beta's export bug cost one of my editors three hours of work tonight. I have to email her "
+    "before I sleep, and I don't want it to read like a support ticket. How do I open it?",
+)
+
+# COPY-PENDING(kevin)
 COPY: Final[Mapping[str, str]] = MappingProxyType({
     # the page
     "page_title": "Anjo Sleep: two replies, one person",
@@ -347,6 +357,59 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "ledger_never_pushed": "it hasn't been published yet.",
     "ledger_head": "Head: {hash}",
     "ledger_note": "Every file, prompt and threshold registered before the results existed, newest first, by hash.",
+    # ── dailies: the morning sheet ──
+    "unknown_night": "That night isn't one he has slept yet.",
+    "dailies_kicker": "Dailies",
+    "dailies_heading": "The morning after each night",
+    "dailies_note": (
+        "In film, dailies are what the crew reviews each morning. Here: what his model took from the night, "
+        "one line it would now say differently, and what the night cost. Read from his logs, on his own clock."
+    ),
+    "dailies_loading": "Loading this morning's sheet…",
+    "dailies_none": "He hasn't slept yet, so there are no dailies.",
+    "dailies_unavailable": "This morning's sheet can't be read right now.",
+    "dailies_pick": "Morning after",
+    "dailies_option": "Night {night} · {date}",
+    "dailies_slate_night": "Night",
+    "dailies_slate_morning": "Morning of",
+    "dailies_slate_status": "The night",
+    "dailies_withheld": "Held back by a check before it reached this page.",
+    "dailies_learned": "What he took from last night",
+    "dailies_learned_none": "Nothing new reached him that night, and he chose nothing.",
+    "dailies_opened": "new",
+    "dailies_moved": "came back",
+    "dailies_more": "and {n} more",
+    "dailies_question": "A new question he asked himself",
+    "dailies_line": "One line he'd now say differently",
+    "dailies_asked": "The same question, asked the evening before and the morning after:",
+    "dailies_before": "Before · night {night}",
+    "dailies_before_base": "Before · the base model",
+    "dailies_after": "After · night {night}",
+    "dailies_line_source": "Pre-generated · his weights alone, every note off · generated {date}",
+    "dailies_line_same": "He'd still say it the same way.",
+    "dailies_line_no_new_checkpoint": (
+        "No new weights were promoted that night, so there is no before and after. Nothing was generated."
+    ),
+    "dailies_line_not_generated": "This night's before and after hasn't been generated yet.",
+    "dailies_cost": "What the night cost",
+    "dailies_cost_note": "At list prices. Dollars from {source}; GPU-minutes only where a step timed itself.",
+    "cost_source_summary": "the night's own summary, the day and the morning from the budget ledger",
+    "cost_source_ledger": "the budget ledger's settlements for this night",
+    "cost_part_day": "His simulated day",
+    "cost_part_practice": "Practice",
+    "cost_part_training": "Training",
+    "cost_part_morning": "The morning run",
+    "cost_part_rest": "Everything else that night",
+    "cost_col_part": "Part",
+    "cost_col_usd": "Dollars",
+    "cost_col_gpu": "GPU-min",
+    "cost_total": "Total",
+    "cost_unrecorded": "not recorded",
+    "cost_month": "A month at his pace so far: {month} of the {ceiling} ceiling.",
+    "cost_month_worst": "If every night trained: {worst}.",
+    "cost_month_label": "Projection, development",
+    "cost_month_none": "Not enough nights to project a month yet.",
+    "cost_ceiling": "{ceiling} ceiling",
     "footer": (
         "Votes keep only your choice, which side was which and the time. Your questions are never "
         "stored."

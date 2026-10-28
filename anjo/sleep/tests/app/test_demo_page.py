@@ -198,7 +198,7 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
     page = page_html()
     scripts = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")]
     styles = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".css")]
-    assert len(scripts) == 3 and len(styles) == 2  # app.js, nights.js and mind.js; demo.css and mind.css
+    assert len(scripts) == 4 and len(styles) == 3  # app, nights, mind and dailies; demo, mind and dailies css
     for text in (page, *scripts, *styles):
         assert "http://" not in text and "https://" not in text and "//cdn" not in text
         assert "@import" not in text and "url(" not in text
