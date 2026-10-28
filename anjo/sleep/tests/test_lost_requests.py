@@ -107,19 +107,24 @@ def test_status_error_is_not_retried(status: int) -> None:
 
 
 class Proxied(LiveVllm):
-    """vLLM behind Modal's proxy: the first requests to /v1/completions meet ``script`` in turn, a
-    status the proxy answers by itself while vLLM is healthy, or a transport error; then vLLM answers.
-    ``late`` moves ``waits``' clock by that much as each one is met."""
+    """vLLM behind Modal's proxy: the first requests to ``path`` meet ``script`` in turn, a status the
+    proxy answers by itself while vLLM is healthy, or a transport error; then vLLM answers. Each body
+    sent to ``path`` is kept (``bodies``). ``late`` moves ``waits``' clock by that much as each is met."""
 
-    def __init__(self, *script: int | type[httpx.TransportError], waits: Waits | None = None, late: float = 0.0) -> None:
+    def __init__(
+        self, *script: int | type[httpx.TransportError], path: str = COMPLETIONS, waits: Waits | None = None,
+        late: float = 0.0,
+    ) -> None:
         super().__init__()
-        self.script, self.waits, self.late = script, waits, late
+        self.script, self.path, self.waits, self.late = script, path, waits, late
         self.sent = 0
+        self.bodies: list[dict[str, Any]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path != COMPLETIONS:
+        if request.url.path != self.path:
             return super().__call__(request)
         self.sent += 1
+        self.bodies.append(json.loads(request.content))
         if self.waits is not None:
             self.waits.now += self.late
         if self.sent > len(self.script):
@@ -139,6 +144,36 @@ def test_a_proxy_status_goes_again_once(status: int) -> None:
     assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
     assert fake.sent == 2 and waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1
     assert fake.probes == []  # a status is no sign of a wedge: /v1/models is never asked
+
+
+def test_an_unseeded_sampled_completion_goes_again_too() -> None:
+    """Every post through the night client meets the one retry, a sampled one with no seed included:
+    vLLM's first answer never reached the client, so the second draw is the only one read."""
+    fake, waits = Proxied(502), Waits()
+    client = _client(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0).text == "hello"
+    assert fake.sent == 2 and waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1
+    first, again = fake.bodies
+    assert first == again and "seed" not in first and first["temperature"] == 1.0  # the same post, unseeded
+
+
+def test_a_proxy_status_on_tokenize_goes_again_once() -> None:
+    plain = Proxied(path="/tokenize")
+    _client(plain, Waits()).complete(None, MESSAGES, temperature=1.0, seed=3)  # how many a reply tokenizes
+    fake, waits = Proxied(502, path="/tokenize"), Waits()
+    client = _client(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert fake.sent == plain.sent + 1 and fake.bodies[0] == fake.bodies[1]
+    assert waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1 and fake.probes == []
+
+
+def test_a_proxy_status_on_an_adapter_load_is_not_sent_again() -> None:
+    fake, waits = Proxied(502, path=vllm.LOAD_PATH), Waits()
+    client = _client(fake, waits)
+    with pytest.raises(ServingError, match=f"^{vllm.LOAD_PATH} returned HTTP 502$") as raised:
+        client.complete(ADAPTER, MESSAGES, temperature=1.0, seed=3)
+    assert not isinstance(raised.value, vllm.ProxyFailed | vllm.TransportFailed)
+    assert fake.sent == 1 and waits.slept == [] and client.retries() == 0 and fake.probes == []
 
 
 def test_a_proxy_status_goes_again_only_once() -> None:
