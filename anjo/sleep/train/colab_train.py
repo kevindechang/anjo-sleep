@@ -8,10 +8,12 @@ night's recipe into the library settings offline, which the tests check.
 The recipe (``anjo.sleep.train.lora``): Glimmer in 4-bit NF4 with double quantization and bf16
 compute, a LoRA of rank r (at most 32) and alpha 2r on the attention and MLP projections, the loss
 on the completion (her reply) only, no packing, and every row longer than ``max_seq_length``
-dropped and counted rather than cut. A warm start loads the previous adapter as trainable.
+dropped and counted rather than cut; a recipe with ``keep_every_row`` (Task 17b) instead stops
+before the model loads if any row would be dropped (``check_every_row_kept``). A warm start loads the previous adapter as trainable.
 
 **Train as served.** Each row goes to TRL as plain text, rendered the way the server renders a
-request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` with the
+request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` (or the
+row's own ``current_date``, for replay's rows, each served on its own night) with the
 generation prompt (``<|start|>assistant``), then the reply's channel header ``" to=user<|message|>"``
 on the prompt side, and the reply closed by ``<|eot|>``. So the loss falls on the reply and
 ``<|eot|>`` only. (TRL's conversational form would train the header too.) The host cleaned every
@@ -136,6 +138,10 @@ def load_config(raw: str) -> dict[str, Any]:
     _int(cfg, "batch_size", 1, 1)
     if cfg["packing"] is not False or cfg["objective"] not in OBJECTIVES:
         raise ValueError(f"packing stays off and the objective is one of {', '.join(OBJECTIVES)}")
+    if "max_steps" in cfg:
+        _int(cfg, "max_steps", 1, 100_000)
+    if not isinstance(cfg.get("keep_every_row", False), bool):
+        raise ValueError("keep_every_row is true or false")
     if cfg["objective"] == "sft_dpo":
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
@@ -163,7 +169,8 @@ def lora_targets(names: Sequence[str]) -> str:
 
 def build_settings(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """The library settings for ``cfg``: bitsandbytes, PEFT's LoraConfig and TRL's SFTConfig, and
-    TRL's DPOConfig for ``sft_dpo``."""
+    TRL's DPOConfig for ``sft_dpo``. A recipe's ``max_steps`` (Task 17b's two adapters) caps SFT at
+    that many updates, which TRL then takes over the epochs as needed."""
     settings = {
         "quantization": {
             "load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_use_double_quant": True,
@@ -180,6 +187,7 @@ def build_settings(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "learning_rate": cfg["learning_rate"], "seed": cfg["seed"], "data_seed": cfg["seed"],
             "gradient_checkpointing": True, "lr_scheduler_type": "cosine", "warmup_steps": WARMUP,
             "logging_steps": 1, "save_strategy": "no", "report_to": "none",
+            **({"max_steps": cfg["max_steps"]} if "max_steps" in cfg else {}),
         },
     }
     if cfg["objective"] == "sft_dpo":
@@ -241,6 +249,17 @@ def template_kwargs(cfg: dict[str, Any]) -> dict[str, str]:
     return {"reasoning_strength": cfg["reasoning_strength"], "current_date": cfg["current_date"]}
 
 
+def row_template(template: dict[str, str], row: dict[str, Any]) -> dict[str, str]:
+    """``template`` for one row: a row that carries its own ``current_date`` (replay's rows, each
+    served on its own night, Task 17b) is rendered on that date, any other on the run's."""
+    if "current_date" not in row:
+        return template
+    day = row["current_date"]
+    if not isinstance(day, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+        raise ValueError(f"row {row.get('id')}'s current_date is YYYY-MM-DD")
+    return {**template, "current_date": day}
+
+
 def check_clean(row: dict[str, Any]) -> None:
     """A row as the host cleaned it: no special token's text anywhere, and no reasoning phrase in a
     system turn, which would stop the template writing the night's strength."""
@@ -259,7 +278,8 @@ def plain_row(tokenizer: Any, row: dict[str, Any], template: dict[str, str]) -> 
     on, which puts the BOS first itself, so the template's own BOS is left off: one BOS, as the
     server has."""
     check_clean(row)
-    prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False, **template)
+    prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False,
+                                           **row_template(template, row))
     if not isinstance(prompt, str) or not prompt.startswith(tokenizer.bos_token):
         raise ValueError("the chat template's prompt starts with the BOS")
     return {"prompt": prompt[len(tokenizer.bos_token):] + USER_CHANNEL,
@@ -279,13 +299,21 @@ def _rendered(tokenizer: Any, rows: list[dict[str, Any]], max_length: int,
     return [(row, plain) for row, plain in both if _fits(tokenizer, plain, max_length)]
 
 
+def check_every_row_kept(cfg: dict[str, Any], rows: int, kept: int) -> None:
+    """A recipe with ``keep_every_row`` (Task 17b, whose rows are whole trajectories) trains on
+    every row or not at all: a row too long for ``max_seq_length``, counted with the real
+    tokenizer, stops the run here, before the model loads or a step is taken."""
+    if cfg.get("keep_every_row") and kept != rows:
+        raise ValueError(f"{rows - kept} of {rows} rows are longer than max_seq_length, and this run keeps every row")
+
+
 def _check_tokens(tokenizer: Any, row: dict[str, Any], side: str, prompt_ids: Sequence[int],
                   reply_ids: Sequence[int], template: dict[str, str]) -> None:  # pragma: no cover - needs the training stack
     """What TRL prepared for one side of ``row`` is what the server renders: the prompt is the
     template's prompt with the generation prompt, then the header (as the night's client asks vLLM
     to tokenize them), the trained tokens are the reply and ``<|eot|>``, and the two together are
     the template's own render of the conversation, reply included."""
-    ids = {"tokenize": True, "return_dict": False, **template}
+    ids = {"tokenize": True, "return_dict": False, **row_template(template, row)}
     served = [*tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, **ids),
               *tokenizer(USER_CHANNEL, add_special_tokens=False)["input_ids"]]
     reply = [*tokenizer(_reply(row[side]), add_special_tokens=False)["input_ids"],
@@ -410,6 +438,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     template = template_kwargs(cfg)
     rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
+    check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
     pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
     model = _load_model(cfg, settings, smoke)
     peft_config = None

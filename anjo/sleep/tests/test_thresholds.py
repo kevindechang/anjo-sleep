@@ -51,6 +51,15 @@ def test_night_token_cap_is_present_and_marked_placeholder():
     assert "night_token_cap" in T["placeholders"]
 
 
+def test_replays_token_penalty_is_registered_here_as_a_dated_placeholder():
+    from anjo.sleep.mind.replay import settings
+
+    assert settings.token_penalty() == T["replay_token_penalty"] == 0.01
+    note = T["placeholders"]["replay_token_penalty"]
+    assert note.startswith("2026-10-28:") and "a priori on fakes" in note and "not set on development" in note
+    assert "before the Nov 1 12:00 ET registration" in note
+
+
 def test_gate_sets_match_thresholds():
     from anjo.sleep.sets.loader import load_collapse, load_general
 
@@ -105,7 +114,7 @@ def test_thresholds_pin_the_review_items():
     assert "retired before any" in T["hand_written"]["film_pair"]
 
 
-def test_only_the_three_development_keys_differ_from_the_registered_version():
+def test_only_the_development_keys_and_replays_placeholder_differ_from_the_registered_version():
     import copy
 
     frozen = json.loads((Path(__file__).parent / "frozen" / "thresholds_registered.json").read_text())
@@ -114,6 +123,8 @@ def test_only_the_three_development_keys_differ_from_the_registered_version():
         obj["development"].pop("pooled_lives")
         obj["donor_rule"].pop("dev_lives")
         obj.pop("hand_written")
+    now.pop("replay_token_penalty")  # Task 17b's λ, added after registration as a dated placeholder
+    now["placeholders"].pop("replay_token_penalty")
     assert now == frozen  # the final-test rule cannot drift
     assert T["development"]["pooled_lives"] == [
         "founder", "founder_donor", "researcher", "researcher_donor"]

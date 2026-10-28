@@ -5,6 +5,7 @@
  "placeholders": {
   "bootstrap.seed": "filled in (20261101) but provisional; the committed seed is registered with the final analysis",
   "night_token_cap": "filled in (16384) but provisional; set during development, frozen at the Nov 1 freeze",
+  "replay_token_penalty": "2026-10-28: 0.01 chosen a priori on fakes (a night spent to the 20,000-token cap then costs 0.2, a tenth of the Brier score's range of 2), not set on development; to be confirmed on development lives before the Nov 1 12:00 ET registration",
   "nights_per_life_final": "set at the Nov 1 freeze, before the reveal (null until then)",
   "human_check.sample_seed": "set at the Nov 1 freeze, before the reveal (null until then)"
  },
@@ -212,6 +213,7 @@
   ]
  },
  "night_token_cap": 16384,
+ "replay_token_penalty": 0.01,
  "min_new_examples": 1,
  "hand_written": {
   "founder_and_researcher_pairs_taste_ab": "Development personas only: the 16 shared taste_ab items of the founder pair and of the researcher pair were written by hand (Claude, as the build worker), not by a Muse Spark call. The final lives' taste_ab items come from the isolated Muse Spark call that sees only the pair's field (5.1). Held-out items were meaning-checked twice against the visible part; development results may still overstate generalization, which is why the headline comes only from held-out lives.",
