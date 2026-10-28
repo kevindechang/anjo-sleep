@@ -156,3 +156,53 @@ def test_day_phase_marker_carries_the_intended_date(monkeypatch: pytest.MonkeyPa
     marker = json.loads((tmp_path / "sleep" / "daily" / "founder-2026-10-30.json").read_text())
     assert marker == {"persona": "founder", "date": "2026-10-30", "day_index": 2, "status": "ok",
                       "failure": None, "failed_turns": 0}
+
+
+# ── dailies: the morning card's before and after, while Glimmer is still awake ─
+
+
+def _promoted(tmp_path: Path) -> Any:
+    folder = tmp_path / "night"
+    folder.mkdir()
+    return lambda **kw: {"acct": NightResult("promoted", None, None, {}, (), 0.0, {}, folder / "log.jsonl")}
+
+
+def test_night_phase_runs_dailies_after_morning_and_survives_its_failure(tmp_path: Path) -> None:
+    from anjo.sleep.serving.backend import phase
+
+    order: list[str] = []
+
+    def score(*args: Any, **kw: Any) -> None:
+        with phase(lambda: order.append("sleep")):  # the morning's own phase: its sleep waits for the outer one
+            order.append("morning")
+
+    def dailies(user: str, persona: str, night: date, result: NightResult) -> None:
+        order.append("dailies")
+        assert (user, persona, night, result.status) == ("acct", "founder", daily.night_plan(AT_2AM).night, "promoted")
+        raise RuntimeError("Glimmer lost the thread")
+
+    ticks = iter([0.0, 90.0, 90.0, 102.5])
+    result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=_promoted(tmp_path),
+                                   morning=lambda *a: None, score=score, dailies=dailies, timer=lambda: next(ticks))
+    assert result.status == "promoted"  # a failed line never fails the night
+    assert order == ["morning", "dailies", "sleep"]  # after the morning, before Glimmer is put to sleep
+    steps = [json.loads(line) for line in result.log_path.read_text().splitlines()]
+    assert [(s["step"], s["status"]) for s in steps] == [("morning", "ok"), ("dailies", "failed")]
+    assert steps[0]["seconds"] == 90.0 and steps[1]["seconds"] == 12.5  # the card's GPU-minutes, measured
+    assert steps[1]["error"] == "RuntimeError" and "thread" not in json.dumps(steps)  # a type, never a message
+
+    ran: list[str] = []
+    daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / "again"),
+                          nights=_promoted(tmp_path / "again"), morning=lambda *a: None, score=lambda *a, **kw: None,
+                          dailies=lambda *a: ran.append("dailies"))
+    steps = [json.loads(line) for line in (tmp_path / "again" / "night" / "log.jsonl").read_text().splitlines()]
+    assert ran == ["dailies"] and [(s["step"], s["status"]) for s in steps] == [("morning", "ok"), ("dailies", "ok")]
+
+
+@pytest.mark.parametrize("status", ["rejected", "nothing_new"])
+def test_night_phase_generates_no_line_without_a_new_checkpoint(tmp_path: Path, status: str) -> None:
+    ran: list[str] = []
+    night = NightResult(status, None, None, {}, (), 0.0, {}, tmp_path / "log.jsonl")  # type: ignore[arg-type]
+    daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path), nights=lambda **kw: {"acct": night},
+                          morning=lambda *a: None, score=lambda *a, **kw: None, dailies=lambda *a: ran.append("x"))
+    assert ran == []  # nothing to say differently: the card says so, and nothing is generated

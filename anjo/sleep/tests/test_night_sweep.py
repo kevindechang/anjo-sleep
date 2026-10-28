@@ -48,6 +48,16 @@ def test_a_killed_runs_gpu_and_colab_holds_are_settled_once_at_the_next_start(tm
         assert ledger.used("modal_usd") == pytest.approx(2 * GPU.amount)
 
 
+def test_a_killed_runs_dailies_line_hold_is_swept(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    line = attempt_key(f"dailies:{NIGHT.isoformat()}:u1", 1)  # the morning's pre-generated line (the demo)
+    bound = Bound(1.95, 900.0)
+    assert ledger.reserve(line, ("modal_usd", "baseten_sleep_usd"), bound) is not None
+    with swept_night(ledger, lambda: (0, 0)) as swept:
+        assert swept.holds_settled == 1
+    assert ledger.open_holds() == () and ledger.used("modal_usd") == pytest.approx(bound.amount)
+
+
 def test_a_live_runs_holds_are_never_swept(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "budget.jsonl")
     stops: list[int] = []

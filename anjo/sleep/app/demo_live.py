@@ -413,7 +413,7 @@ def build_service(
 ) -> DemoService:
     """The page's service from the host's settings. ``serving``, ``arms`` and ``limits`` replace the
     ones the settings would give (tests)."""
-    from anjo.sleep.app import demo_mind
+    from anjo.sleep.app import demo_dailies, demo_mind
 
     require_sleep_host()
     serving, user = _from_env(serving)
@@ -434,5 +434,5 @@ def build_service(
         votes=_record_vote, waker=waker, upkeep=upkeep(serving, rate),
         stops=lambda: demo_mind.demo_stops(user), night_answers=demo_mind.night_answers,
         swaps=lambda: demo_mind.swaps(user), stop_arms=arms if isinstance(arms, (GlimmerArms, Unavailable)) else None,
-        mind=demo_mind.PanelCache(user).payload,
+        mind=demo_mind.PanelCache(user).payload, dailies=lambda night: demo_dailies.dailies_payload(user, night),
     )

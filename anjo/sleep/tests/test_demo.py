@@ -673,13 +673,13 @@ def test_starter_scenes_not_in_training_or_sealed_sets() -> None:
     texts += [c.prompt for c in load_collapse()]
     texts += [part for item in load_general() for part in (item.question, *item.choices)]
     assert len(texts) > 500
-    scenes = [text for scene in words.SCENES for text in (scene.title, scene.prompt)]
+    scenes = [text for scene in (*words.SCENES, words.DAILY_SCENE) for text in (scene.title, scene.prompt)]
     check = OverlapDecontaminator().check
 
     def probes(items: list[str]) -> list[Probe]:
         return [Probe(f"x{n}", "p", "new_work", text, None, None, ()) for n, text in enumerate(items)]
 
-    assert 3 <= len(words.SCENES) <= 6
+    assert 3 <= len(words.SCENES) <= 6 and words.DAILY_SCENE.id not in {s.id for s in words.SCENES}  # Dailies' own
     assert not any(check(scenes, probes(texts)))
     assert not any(check(texts, probes(scenes)))
 

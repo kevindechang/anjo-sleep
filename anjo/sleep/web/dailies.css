@@ -1,0 +1,230 @@
+/* The live demo page's Dailies: the morning sheet a film crew reads before the day's shoot. Built on
+   demo.css's tokens: a slate with a clapper stripe, then three numbered takes in a margin, like
+   scene numbers on a call sheet. Her new weights keep the product green; the evening before stays
+   ink; the cost reads like a production report, figures in mono, the total under a double rule. */
+
+:root {
+  --clap-a: #1d1b18;
+  --clap-b: #f2ede3;
+  --take-margin: 3.25rem;
+  --sheet-edge: #c9bea9;
+  --meter-track: #ded6c6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --clap-a: #eee6d6;
+    --clap-b: #1e1b17;
+    --sheet-edge: #463f35;
+    --meter-track: #2e2924;
+  }
+}
+
+.dailies {
+  max-width: 76rem;
+  margin: 0 auto var(--space-6);
+  padding: var(--space-6) var(--gutter) var(--space-5);
+  border-top: 1px solid var(--rule-strong);
+}
+
+.dailies-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: end;
+}
+@media (min-width: 48rem) {
+  .dailies-head { grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem); }
+}
+.dailies-head h2 { margin: var(--space-3) 0 0; font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.25rem); line-height: 1.1; max-width: 24ch; }
+.dailies-title > .note { margin-top: var(--space-3); max-width: var(--measure); }
+.dailies-pick select:disabled { opacity: 0.6; cursor: default; }
+
+/* ── the sheet ─────────────────────────────────────────────────────────── */
+
+.sheet {
+  margin-top: var(--space-5);
+  background: var(--paper-raised);
+  border: 1px solid var(--sheet-edge);
+  box-shadow: var(--lift);
+  transition: opacity var(--duration) var(--ease);
+}
+.sheet[aria-busy="true"] { opacity: 0.6; }
+.sheet-state { padding: var(--space-5); font: 400 var(--text-reply)/1.55 var(--serif); color: var(--ink-soft); }
+
+.clapper {
+  height: 0.875rem;
+  background: repeating-linear-gradient(-45deg, var(--clap-a) 0 14px, var(--clap-b) 14px 28px);
+  border-bottom: 2px solid var(--clap-a);
+}
+
+.slate-cells {
+  display: grid;
+  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr);
+  margin: 0;
+  border-bottom: 2px solid var(--ink);
+}
+.slate-cell { padding: var(--space-3) var(--space-4); border-right: 1px solid var(--rule); min-width: 0; }
+.slate-cell:last-child { border-right: 0; }
+.slate-status { grid-column: 1 / -1; border-top: 1px solid var(--rule); }
+@media (min-width: 40rem) {
+  .slate-cells { grid-template-columns: minmax(0, 0.5fr) minmax(0, 1fr) minmax(0, 1.4fr); }
+  .slate-status { grid-column: auto; border-top: 0; }
+}
+.slate-cell dt { font: 600 0.625rem/1.2 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
+.slate-cell dd { margin: var(--space-1) 0 0; font: 600 clamp(1.25rem, 1rem + 1vw, 1.75rem)/1.15 var(--serif); }
+.slate-night dd { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.slate-morning dd { font-family: var(--mono); font-weight: 500; font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem); padding-top: 0.2em; }
+.status-promoted dd { color: var(--product); }
+.status-failed dd { color: var(--alert); }
+
+/* ── the takes ─────────────────────────────────────────────────────────── */
+
+.takes > .take + .take { border-top: 1px dashed var(--rule-strong); }
+
+.take {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+}
+@media (min-width: 40rem) {
+  .take { grid-template-columns: var(--take-margin) minmax(0, 1fr); padding: var(--space-5) var(--space-5) var(--space-5) var(--space-3); }
+  .take-no { grid-row: 1 / span 2; }
+}
+.take-no {
+  margin: 0;
+  font: 500 0.75rem/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+@media (min-width: 40rem) {
+  .take-no { font-size: 1.375rem; text-align: right; padding-top: 0.15rem; color: var(--rule-strong); }
+}
+.take h3 { margin: var(--space-2) 0 0; font-size: var(--text-h2); line-height: 1.2; }
+@media (min-width: 40rem) { .take h3 { margin-top: 0; } }
+.take-body { min-width: 0; }
+.take-body > * { margin-top: var(--space-4); }
+.take-empty { font: 400 var(--text-reply)/1.55 var(--serif); color: var(--ink-soft); }
+
+/* 01 what she took from his day */
+.moves {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  column-gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.move {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: var(--space-1);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.move:last-child { border-bottom: 0; }
+.move .tag { justify-self: start; }
+.tag-opened { border-color: var(--product); color: var(--product); }
+.tag-moved { border-style: dashed; }
+.move-kind { font: 500 0.75rem/1.3 var(--mono); color: var(--ink-faint); }
+.move-label { font: 400 1.0625rem/1.4 var(--serif); }
+@media (max-width: 26rem) {
+  .moves { grid-template-columns: max-content minmax(0, 1fr); }
+  .move-label { grid-column: 1 / -1; }
+}
+.beaten { margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.beaten > li { padding: var(--space-2) 0; border-bottom: 1px solid var(--rule); color: var(--ink-soft); }
+.beaten > li:last-child { border-bottom: 0; }
+.beaten .row-text { font: 500 0.75rem/1.4 var(--mono); color: var(--ink-faint); }
+.beaten .reason { margin-left: var(--space-2); }
+.chose { font: 400 var(--text-reply)/1.55 var(--serif); color: var(--ink); max-width: var(--measure); }
+.asked { margin: var(--space-4) 0 0; padding-left: var(--space-4); border-left: 2px solid var(--accent); }
+.asked-text { display: block; margin-top: var(--space-1); font: italic 400 1.0625rem/1.45 var(--serif); }
+
+/* 02 one line she'd now say differently */
+.cue { padding: var(--space-3) var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
+.cue-title { margin-top: var(--space-2); font: 600 0.6875rem/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+.cue-prompt { margin-top: var(--space-1); font: 400 1rem/1.5 var(--serif); color: var(--ink-soft); max-width: var(--measure); }
+
+.versus {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: stretch;
+}
+@media (min-width: 48rem) {
+  .versus { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--space-3); }
+}
+.versus-arrow { align-self: center; justify-self: center; font: 400 1.5rem/1 var(--serif); color: var(--rule-strong); transform: rotate(90deg); }
+@media (min-width: 48rem) { .versus-arrow { transform: none; } }
+
+.side-take { margin: 0; padding: var(--space-4); border-left: 3px solid var(--rule-strong); background: var(--paper); }
+.side-before { border-left-style: dashed; }
+.side-before .line-text { color: var(--ink-soft); }
+.side-after { border-left-color: var(--product); background: var(--paper-raised); box-shadow: var(--lift); }
+.side-after .label { color: var(--product); }
+.line-text { margin: var(--space-3) 0 0; font: 400 var(--text-reply)/1.55 var(--serif); text-wrap: pretty; }
+.line-missing { color: var(--ink-faint); font-style: italic; }
+.line-source { font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.02em; }
+
+/* 03 what the night cost */
+.cost-sheet { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+@media (min-width: 56rem) {
+  .cost-sheet { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; }
+}
+.cost-table { width: 100%; border-collapse: collapse; font-size: 0.9375rem; overflow-wrap: normal; }
+.cost-table th, .cost-table td { padding: var(--space-2) var(--space-2); border-bottom: 1px solid var(--rule); text-align: left; vertical-align: baseline; }
+.cost-table thead th { font: 600 0.625rem/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); border-bottom: 1px solid var(--ink); }
+.cost-table tbody th { font-weight: 500; }
+.cost-table .num { text-align: right; font: 500 0.875rem/1.4 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.cost-table thead .num { font-size: 0.625rem; color: var(--ink-faint); }
+.cost-table .unrecorded { color: var(--ink-faint); font-family: var(--sans); font-style: italic; font-size: var(--text-small); font-weight: 400; white-space: normal; }
+@media (max-width: 26rem) {
+  .cost-table { font-size: 0.875rem; }
+  .cost-table th, .cost-table td { padding-inline: var(--space-1); }
+}
+.cost-table tbody tr:last-child th, .cost-table tbody tr:last-child td { border-bottom: 0; }
+.cost-table tfoot th, .cost-table tfoot td {
+  padding-top: calc(var(--space-2) + 4px);
+  border-bottom: 0;
+  font-weight: 700;
+  background:
+    linear-gradient(var(--ink), var(--ink)) 0 0 / 100% 1px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 3px / 100% 1px no-repeat;
+}
+.cost-table tbody tr:hover { background: var(--paper); }
+
+.projection { padding: var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
+.projection > * + * { margin-top: var(--space-3); }
+.projection-line { font: 400 1.0625rem/1.45 var(--serif); }
+
+.meter { position: relative; height: 0.75rem; margin-top: var(--space-6); background: var(--meter-track); border-radius: 1px; }
+.meter-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--product);
+  transform: scaleX(var(--v, 0));
+  transform-origin: left center;
+  transition: transform 420ms var(--ease);
+}
+.meter.over .meter-fill { background: var(--alert); }
+.meter-ceiling, .meter-worst { position: absolute; top: -0.35rem; bottom: -0.35rem; left: calc(var(--at) * 100%); width: 2px; background: var(--ink); }
+.meter-worst { width: 0; border-left: 2px dotted var(--ink-faint); background: none; }
+.meter-tick-label {
+  position: absolute;
+  bottom: calc(100% + 0.25rem);
+  right: 0;
+  font: 600 0.625rem/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+@media (hover: hover) {
+  .side-after { transition: transform var(--duration) var(--ease); }
+  .side-after:hover { transform: translateY(-1px); }
+}

@@ -178,7 +178,7 @@ def _targets(targets: Sequence[Target] | None, held: HeldOutText) -> list[dict[s
              "due": None if t.check_after is None else t.check_after.isoformat()} for t in open_]
 
 
-def _candidate_out(c: Candidate, labels: Mapping[str, str], held: HeldOutText) -> dict[str, Any]:
+def candidate_view(c: Candidate, labels: Mapping[str, str], held: HeldOutText) -> dict[str, Any]:
     return {"kind": c.kind, "target": held.item(labels.get(c.target_id or "")), "action": c.action,
             "strength": c.strength, "status": c.status, "reason": c.reason}
 
@@ -190,7 +190,7 @@ def _wants(nights: Sequence[NightRecord] | None, labels: Mapping[str, str], held
         return _section([], night=None)
     number, latest = numbered(nights)[0]
     ranked = sorted(latest.candidates, key=lambda c: c.status != "won")
-    return _section([_candidate_out(c, labels, held) for c in ranked], night=number)
+    return _section([candidate_view(c, labels, held) for c in ranked], night=number)
 
 
 def _choices(nights: Sequence[NightRecord] | None, labels: Mapping[str, str], held: HeldOutText) -> list[dict[str, Any]] | None:
@@ -198,7 +198,7 @@ def _choices(nights: Sequence[NightRecord] | None, labels: Mapping[str, str], he
         return None
     return [{"night": n, "date": r.night.isoformat(), "status": r.status, "action": r.action,
              "target": held.item(labels.get(r.target_id or "")), "outcome": r.outcome, "note": r.note,
-             "beat": [_candidate_out(c, labels, held) for c in r.candidates if c.status != "won"]}
+             "beat": [candidate_view(c, labels, held) for c in r.candidates if c.status != "won"]}
             for n, r in numbered(nights)]
 
 

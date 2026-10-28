@@ -37,6 +37,8 @@ The full step (Nov 2) adds, with no vote on any of them:
   refuse). Else 403 ``vote_first``: arm 3 shares arm 4's weights, so its answers seen first would let
   a visitor match the style and vote informed. ``nights`` lists the scenes this address has voted on.
 - ``mind``: her mind panel, built by the app (``panel``, ``record``) with the held-out text filtered.
+- ``dailies``: the morning card for one night, or her latest (``dailies``), built by the app with the
+  held-out text filtered; 404 ``unknown_night`` for a night she hasn't run. No model.
 
 A stop whose checkpoint was trained under another rendering than the one serving answers nothing,
 pre-generated or live (409 ``stop_unavailable``); nothing ever answers in its place.
@@ -276,6 +278,7 @@ class DemoService:
         night_answers: Callable[[], NightAnswers | None] = lambda: None,
         swaps: Callable[[], SwapSet | None] = lambda: None, stop_arms: StopArms | None = None,
         mind: Callable[[], Mapping[str, Any]] | None = None,
+        dailies: Callable[[int | None], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self.config = config
         self._upkeep = upkeep
@@ -294,6 +297,7 @@ class DemoService:
         self._swaps = swaps
         self._stop_arms = stop_arms
         self._mind = mind
+        self._dailies = dailies
 
     def scenes(self, client: str, now: datetime) -> PageView:
         self._limiter.request(client, now)
@@ -406,6 +410,17 @@ class DemoService:
         if self._mind is None:
             raise Refused(503, "resting")
         return self._mind()
+
+    def dailies(self, client: str, token: str, night: int | None, now: datetime) -> Mapping[str, Any]:
+        """Night ``night``'s morning card (by its number), or the latest night's when None."""
+        self._visit(token, now)
+        self._limiter.request(client, now)
+        if self._dailies is None:
+            raise Refused(503, "resting")
+        card = self._dailies(night)
+        if card is None:
+            raise Refused(404, "unknown_night")
+        return card
 
     def vote(self, client: str, token: str, pair_id: str, choice: str, now: datetime) -> Reveal:
         visit = self._visit(token, now)

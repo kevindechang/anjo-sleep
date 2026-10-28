@@ -46,10 +46,11 @@ from anjo.sleep.app.storage import (
     target_store,
     workspace_log,
 )
+from anjo.sleep.demo.dailies import NightFiles
 from anjo.sleep.demo.heldout import HeldOutText, persona_texts
 from anjo.sleep.demo.night_answers import NightAnswers
 from anjo.sleep.demo.night_answers import load as load_answers
-from anjo.sleep.demo.panel import MindSources, NightRecord, mind_view, night_record
+from anjo.sleep.demo.panel import MindSources, NightRecord, mind_view
 from anjo.sleep.demo.record import chart_view, ledger_view, task16_view
 from anjo.sleep.demo.slider import NightMark, Stop, plan_stops
 from anjo.sleep.demo.toggles import SwapSet, load_swaps
@@ -87,7 +88,8 @@ def _folders(root: Path) -> Iterator[Path]:
     return iter(sorted((f for f in root.iterdir() if (f / SUMMARY).is_file()), key=key))
 
 
-def night_records(user: str) -> tuple[NightRecord, ...]:
+def night_files(user: str) -> tuple[NightFiles, ...]:
+    """Each night's summary and log records, in run order."""
     out = []
     for folder in _folders(night_logs(user)):
         summary = json.loads((folder / SUMMARY).read_text(encoding="utf-8"))
@@ -95,8 +97,12 @@ def night_records(user: str) -> tuple[NightRecord, ...]:
         steps = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line] if log.exists() else []
         if not isinstance(summary, dict):
             raise ValueError(f"{folder.name}'s summary is not a record")
-        out.append(night_record(summary, steps))
+        out.append(NightFiles(summary, tuple(steps)))
     return tuple(out)
+
+
+def night_records(user: str) -> tuple[NightRecord, ...]:
+    return tuple(files.record for files in night_files(user))
 
 
 def serving_rendering() -> str:
