@@ -7,21 +7,27 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from anjo.sleep.night.daily import UNSCORED_EXIT, morning_outcome
 from anjo.sleep.night.deps import NightDeps
+from anjo.sleep.night.nightlog import STORY
 from anjo.sleep.night.run import day_window
+from anjo.sleep.night.story import MORNING_FAILED, SELF_MODEL_NOT_YET, Failed, NotRun, Wake, story_from
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
-from anjo.sleep.probes.morning import MorningError
+from anjo.sleep.probes.morning import MorningError, TooManyNoVerdicts
 from anjo.sleep.sim.day import DayRun
-from anjo.sleep.types import CheckpointRef
+from anjo.sleep.types import CheckpointRef, NightResult
+from anjo.sleep.tests import accelerated_rig
 from anjo.sleep.tests.accelerated_rig import CLOCK_START, FAKE_SHA, FakeAccelerated
+from anjo.sleep.tests.night_fakes import step
 
 START = date(2026, 10, 20)  # before the rig's wall clock (2026-10-28): an accelerated life is dated in the past
 PERSONAS = Path(__file__).parents[1] / "personas"
@@ -237,3 +243,64 @@ def test_a_napped_night_is_not_scored_and_the_report_says_how_each_night_slept(t
     report = accelerated._report([*results, *slept], fake=True, days=3, sha=FAKE_SHA)
     assert [n["sleep"] for n in report["nights"]] == ["nap", "nap", "deep"]
     assert [n["status"] for n in report["nights"]] == ["napped", "napped", "promoted"]
+
+
+# ── a morning that fails (the judge) never stops the run ──────────────────────
+
+
+def _flaky(fake: FakeAccelerated, error: Exception) -> tuple[Callable[..., object], list[date]]:
+    """The fake's scoring, failing with ``error`` on the run's first morning only."""
+    original, mornings = fake.score, []
+
+    def score(uid: str, night: date, label: str, result: NightResult) -> object:
+        mornings.append(night)
+        if len(mornings) == 1:
+            raise error
+        return original(uid, night, label, result)
+
+    return score, mornings
+
+
+def test_a_judge_that_fails_one_morning_is_logged_and_the_run_goes_on(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    unread = TooManyNoVerdicts("the judge gave no readable verdict on 3 of 3 probes", no_verdict=3)
+    score, mornings = _flaky(fake, unread)
+    scored: list[float] = []
+    results = run_accelerated("u1", FOUNDER, 2, START,
+                              rig=replace(fake.rig(), score=score, on_scoring=lambda uid, s: scored.append(s)))
+    assert [r.status for r in results] == ["promoted", "promoted"] and mornings == [START, START + timedelta(days=1)]
+    assert len(scored) == 2  # the VM is told about the failed morning's time too
+    first = step(results[0].log_path, "morning")
+    assert first["status"] == "failed" and first["no_verdict"] == 3
+    assert first["why"] == f"{MORNING_FAILED}TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes"
+    assert step(results[1].log_path, "morning")["status"] == "ok"
+    assert [morning_outcome(r) for r in results] == [
+        "failed (TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes)", "ok"]
+    told = story_from(json.loads((results[0].log_path.parent / STORY).read_text(encoding="utf-8")))
+    assert told.wake == Wake(Failed("morning", "TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes"),
+                             NotRun(SELF_MODEL_NOT_YET))  # the story told again with its wake, as the daily run does
+
+
+def test_a_failed_morning_never_quotes_another_librarys_error(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    score, _ = _flaky(fake, TimeoutError("POST https://judge.example/v1 timed out for u1"))
+    results = run_accelerated("u1", FOUNDER, 1, START, rig=replace(fake.rig(), score=score))
+    assert step(results[0].log_path, "morning")["why"] == f"{MORNING_FAILED}TimeoutError"
+
+
+def test_the_command_exits_3_when_a_morning_failed_and_says_which(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original, calls = accelerated_rig.FakeAccelerated.score, []
+
+    def score(self: FakeAccelerated, uid: str, night: date, label: str, result: NightResult) -> object:
+        calls.append(night)
+        if len(calls) == 1:
+            raise TooManyNoVerdicts("the judge gave no readable verdict", no_verdict=2)
+        return original(self, uid, night, label, result)
+
+    monkeypatch.setattr(accelerated_rig.FakeAccelerated, "score", score)
+    assert accelerated.main(["--fake", "--days", "2"]) == UNSCORED_EXIT == 3
+    report = json.loads(capsys.readouterr().out)
+    assert [n["status"] for n in report["nights"]] == ["promoted", "promoted"]
+    assert [n["morning"] for n in report["nights"]] == ["failed (TooManyNoVerdicts: the judge gave no readable verdict)", "ok"]

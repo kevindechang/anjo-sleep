@@ -4,6 +4,9 @@
   `build_general.py`; see `PROVENANCE.md` for sources, revisions and sampling.
 - `collapse.jsonl`: 60 prompts outside any one field, judged for being dragged into the person's field.
   The gate drops prompts whose `domain` matches the person's field.
+- `anchors.jsonl`: 32 hand-written multiple-choice items (written for this repo, no outside source). The
+  training job scores them before and after the dream block. No gate scores them, and `tests/test_sets.py`
+  holds them disjoint from every gate item, so training never sees one.
 
 ## Attribution and licences
 

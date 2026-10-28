@@ -80,16 +80,17 @@ class DailiesError(LookupError):
 
 @dataclass(frozen=True)
 class NightFiles:
-    """One night's ``summary.json`` and its ``log.jsonl`` records (``night.nightlog``), parsed as it
-    is made: a malformed night raises ``PanelError`` where the app reads it, so its read fails and
-    the card is ``unavailable``, never an error."""
+    """One night's ``summary.json``, its ``log.jsonl`` records and its ``story.json`` when it has one
+    (``night.nightlog``), parsed as it is made: a malformed night raises ``PanelError`` where the app
+    reads it, so its read fails and the card is ``unavailable``, never an error."""
 
     summary: Mapping[str, Any]
     steps: Sequence[Mapping[str, Any]] = ()
+    story: Mapping[str, Any] | None = None
     record: NightRecord = field(init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "record", night_record(self.summary, self.steps))
+        object.__setattr__(self, "record", night_record(self.summary, self.steps, self.story))
 
 
 @dataclass(frozen=True)

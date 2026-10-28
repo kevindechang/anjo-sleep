@@ -9,7 +9,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -45,7 +47,15 @@ ROOT = Path(__file__).parents[1]
 # Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment
 # (the thought channel's pretraining targets included: generated lives, on MIND's Spark pool, never a night).
 FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
-                   "mind/replay/", "tools/thought_channel.py", "tests/", "deploy/")
+                   "mind/replay/", "tests/", "deploy/")
+# Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) is the one Sleep file
+# that may name Fireworks, and never MIND's pool, Spark Open provider or setting: Sleep's Spark Open stays
+# on Baseten.
+CRITIC_HOME = "practice/critics.py"
+# Per-file allowances: the thought channel's tool asks MIND's provider which Spark Open to use, and may
+# name that module alone; Fireworks, the provider's setting and MIND's pool stay forbidden there.
+ALLOWED: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {"tools/thought_channel.py": frozenset({"spark_provider"})})
 
 
 def _ok(model: str) -> dict[str, Any]:
@@ -221,11 +231,11 @@ def test_every_fireworks_call_held_on_fireworks_mind_usd(tmp_path: Path, monkeyp
     spark = [job for job, pools in reserved if "fireworks_mind_usd" in pools]
     assert spark and any(job.startswith("apd:kill:") for job in spark)  # kill-resume's children too
     assert not any("baseten_mind_usd" in pools or "baseten_sleep_usd" in pools for _, pools in reserved)
-    assert "the $90 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
+    assert "the $80 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
 
 
 def test_a_fireworks_night_never_waits_on_sleeps_baseten_holds(tmp_path: Path) -> None:
-    assert CAPS["fireworks_mind_usd"] == 90.0
+    assert CAPS["fireworks_mind_usd"] == 80.0
     ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
     assert ledger.reserve("night:sleep:a1", ("baseten_sleep_usd",), usd(CAPS["baseten_sleep_usd"] +
                                                                          CAPS["baseten_mind_usd"])) is not None
@@ -247,7 +257,9 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         if name.startswith(FIREWORKS_HOMES):
             continue
         text = path.read_text(encoding="utf-8").casefold()
-        for term in ("fireworks", "spark_provider", SETTING.casefold()):
+        terms = ("spark_provider", SETTING.casefold(), "fireworks_mind_usd") + (
+            () if name == CRITIC_HOME else ("fireworks",))
+        for term in (t for t in terms if t not in ALLOWED.get(name, frozenset())):
             assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten"
     monkeypatch.setenv(SETTING, "fireworks")
     posted: list[str] = []

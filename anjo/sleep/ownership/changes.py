@@ -1,7 +1,7 @@
 """What changed (Task 9): plain lines from a person's night logs and probe score deltas, and the
 night views the nights routes return.
 
-A person's results folder holds ``nights/<date>[.n]/{log.jsonl, summary.json}`` (``night/nightlog.py``)
+A person's results folder holds ``nights/<date>[.n]/{log.jsonl, summary.json, story.json}`` (``night/nightlog.py``)
 and ``scores/night-NN.json`` (``probes/morning.py``). Every line and view here is built from ids,
 codes, counts and gate names. None carries a person's words, a target's label or a gate's failure
 reason, which can name a safety case.

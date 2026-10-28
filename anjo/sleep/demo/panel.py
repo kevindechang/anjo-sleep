@@ -14,7 +14,11 @@ show yet) or ``unavailable`` (its source couldn't be read):
   the person's side shows so far (the topic came back, still open, or past its horizon and
   waiting for the scorer, whose held-out half the page never reads);
 - ``gates``: each night's gates, their values and thresholds. A gate's ``reason`` is never shown:
-  it can name the safety case that tripped.
+  it can name the safety case that tripped;
+- ``story``: her latest night as one loop, dream → rehearse → learn → check → wake
+  (``night_view.story_view``), from the night's ``story.json``, or told from its log for a night
+  from before stories (``night.story.tell``). A story that can't be read or told makes only this
+  section unavailable.
 
 Every free text (a question, a hypothesis, a prediction's claim, a target's label) passes the
 held-out filter (``heldout.HeldOutText``) and is sent as ``{"text": ..., "withheld": ...}``. Ids,
@@ -29,8 +33,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Final
 
 from anjo.sleep.demo.heldout import HeldOutText
+from anjo.sleep.demo.night_view import story_view
 from anjo.sleep.mind.inquiry.types import LIVE_STATUSES, Question, Workspace
 from anjo.sleep.night.sleep_pressure import SleepMark, SleepRecordError, sleep_mark
+from anjo.sleep.night.story import Story, StoryError, story_from, tell
 from anjo.sleep.types import Expectation, Target
 
 SHOWN_STATUSES: Final = (*sorted(LIVE_STATUSES), "parked")  # a question's statuses the panel shows
@@ -64,7 +70,8 @@ class Candidate:
 class NightRecord:
     """One night as its log recorded it: ids, codes and numbers only. ``outcome`` is what became
     of the chosen action (the choose step's receipt), ``note`` the note step's outcome, ``sleep`` a
-    nap or a deep sleep with its pressure and reason (None for a night from before naps)."""
+    nap or a deep sleep with its pressure and reason (None for a night from before naps), ``story``
+    the night as one loop (None when it can't be read or told)."""
 
     night: date
     status: str
@@ -75,6 +82,7 @@ class NightRecord:
     outcome: str | None
     note: str | None
     sleep: SleepMark | None = None
+    story: Story | None = None
 
 
 @dataclass(frozen=True)
@@ -119,8 +127,26 @@ def _step(steps: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
     return next((step for step in steps if step.get("step") == name), {})
 
 
-def night_record(summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]]) -> NightRecord:
-    """A night from its ``summary.json`` and its ``log.jsonl`` steps (``night.nightlog``)."""
+def _story(night: date, summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]],
+           raw: Mapping[str, Any] | None) -> Story | None:
+    """The night's ``story.json``, else (none, or one an older schema wrote) its story told from its
+    log; None when neither can be read."""
+    if raw is not None:
+        try:
+            return story_from(raw)
+        except StoryError:
+            pass  # an older version, or a broken file: the log tells it again
+    try:
+        return tell(night, str(summary.get("status")), steps)
+    except StoryError:
+        return None
+
+
+def night_record(
+    summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]], story: Mapping[str, Any] | None = None,
+) -> NightRecord:
+    """A night from its ``summary.json``, its ``log.jsonl`` steps (``night.nightlog``) and its
+    ``story.json`` when it has one."""
     try:
         night = date.fromisoformat(str(summary["night"]))
     except (KeyError, ValueError):
@@ -140,7 +166,7 @@ def night_record(summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]])
         candidates=tuple(_candidate(c) for c in first.get("considered") or []),
         gates=_gates(summary.get("gates") or {}),
         outcome=_text(receipt.get("outcome")) if isinstance(receipt, dict) else None,
-        note=_text(_step(steps, "note").get("outcome")), sleep=sleep,
+        note=_text(_step(steps, "note").get("outcome")), sleep=sleep, story=_story(night, summary, steps, story),
     )
 
 
@@ -264,4 +290,5 @@ def mind_view(sources: MindSources, held: HeldOutText) -> dict[str, Any]:
         "choices": _section(_choices(sources.nights, labels, held)),
         "expectations": _section(_expectations(sources, labels, as_of, held)),
         "gates": _section(_gate_nights(sources.nights)),
+        "story": story_view(None if sources.nights is None else [(n, r.story) for n, r in numbered(sources.nights)]),
     }

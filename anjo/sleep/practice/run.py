@@ -67,6 +67,19 @@ class PracticeRun:
     # full practice: Spark Open's calls by role (person, teacher, critic), the provider's tokens in
     # and out, and the replies cut at the role's cap; counts only, for the night log and the cost model
     spark: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
+    # full practice: who played each role (``practice.roles``), a third-party critic's calls and tokens,
+    # and its dollars at its list price (Spark Open's are metered by the night)
+    roles: Mapping[str, str] = field(default_factory=dict)
+    third_party: Mapping[str, int] = field(default_factory=dict)
+    critic_usd: float = 0.0
+    flagged: int = 0  # full practice: candidates the critic listed as missing a constraint, over kept scenes
+
+    def spend_record(self) -> dict[str, Any]:
+        """Full practice's counts for the night log: Spark Open's by role, who played each role, and a
+        third-party critic's calls and dollars; empty for practice that has none."""
+        return {**({"spark": self.spark, "capped_scenes": self.capped_scenes} if self.spark else {}),
+                **({"roles": dict(self.roles), "flagged": self.flagged} if self.roles else {}),
+                **({"critic": dict(self.third_party), "critic_usd": self.critic_usd} if self.third_party else {})}
 
 
 def has_cue(message: str) -> bool:

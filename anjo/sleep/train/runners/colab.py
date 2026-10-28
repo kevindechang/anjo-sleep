@@ -176,6 +176,9 @@ def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
     dataset = Path(str(inputs["dataset_path"]))
     if dataset.name != DATASET_FILE or dataset.parent != workdir:
         raise ColabError("only the night's dataset file is uploaded")
+    recipe = inputs.get("config")
+    if isinstance(recipe, Mapping) and recipe.get("objective") == "sft_dpo_seed":  # before any hold or VM
+        raise ColabError("sft_dpo_seed trains on Modal only: its loss file ships in Modal's image, and Colab runs one file")
     files = [(dataset, f"{REMOTE_DIR}/{DATASET_FILE}")]
     prev = inputs.get("prev_adapter_dir")
     if prev is not None:

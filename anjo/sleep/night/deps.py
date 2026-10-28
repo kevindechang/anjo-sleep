@@ -36,6 +36,7 @@ from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
 from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
+from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
 from anjo.sleep.note.hold import Fact, NoteWriter
@@ -49,6 +50,7 @@ from anjo.sleep.ports import (
     TargetStore,
 )
 from anjo.sleep.practice.full import CappedChat
+from anjo.sleep.practice.roles import Roles
 from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.serving.client import WakeResult
@@ -409,6 +411,9 @@ class NightDeps:
     sleep: Callable[[], None] | None = None
     # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
     retries: Callable[[], int] = field(default=lambda: 0)
+    # sft_dpo_seed's extra rows (``night/dreams.py``): off unless the night command's switches say so.
+    terms: Terms = field(default_factory=Terms)
+    dreams: DreamSource = field(default_factory=NoDreams)
     # Nap or deep sleep (``sleep_pressure.py``); None: every night may train, the night before naps (tests, fakes).
     sleep_policy: SleepPolicy | None = None
     # The person's own turns inside the night's window, a count; None counts none.
@@ -428,7 +433,8 @@ class NightOptions:
     collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``.
     ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7);
     ``mind_inquiry`` turns on MIND's inquiry (Task 17); ``force_deep`` makes tonight a deep sleep
-    whatever its pressure (``night/sleep_pressure.py``)."""
+    whatever its pressure (``night/sleep_pressure.py``); ``practice_roles`` who plays practice's roles
+    (``practice.roles``; None reads ``ANJO_SLEEP_PRACTICE_ROLES``, as the night does)."""
 
     night: date
     personas: Mapping[str, str]
@@ -437,6 +443,7 @@ class NightOptions:
     practice_teacher: bool = True
     mind_inquiry: bool = False
     force_deep: bool = False
+    practice_roles: Roles | None = None
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]

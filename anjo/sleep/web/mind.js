@@ -363,6 +363,7 @@
     band.hidden = false;
     try {
       const view = await call("/mind");
+      document.dispatchEvent(new CustomEvent("demo:mind", { detail: view })); // night.js draws last night's loop
       const night = view.choices.items[0];
       byId("mind-asof").textContent = night ? fill(copy.mind_asof, { night: night.night, date: day(night.date) }) : copy.mind_asof_none;
       byId("mind-glance").textContent = glance(view);
@@ -371,6 +372,7 @@
         ledger(view.ledger));
     } catch (error) {
       byId("mind-glance").textContent = error.message;
+      document.dispatchEvent(new CustomEvent("demo:mind", { detail: null }));
     }
   }
 

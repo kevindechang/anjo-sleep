@@ -37,7 +37,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
     records this offer's decision point too, before the note settles its target, offered or not: a
     night with no second offer records one that allows nothing. A nap writes none: nothing shares, and
     the note is ``deferred``, its target unsettled.
-11. ``finish``: the ``NightResult`` and every receipt.
+11. ``finish``: the ``NightResult``, every receipt, and the night told as one loop (``story.py``).
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
@@ -55,7 +55,6 @@ from datetime import date, datetime, timedelta
 from typing import Any, Final
 
 from anjo.sleep.night.deps import (
-    ALL_ACTIONS,
     STUDY_ACTIONS,
     NightDeps,
     StudyOutcome,
@@ -70,7 +69,7 @@ from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.night.past import paid_within, spent_within
-from anjo.sleep.night.sleep_night import DEFER_WHY, deferred_note, mind_on, put_off, sleep_step, unnoticed
+from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, catch_up, deferred_note, mind_on, offered_tonight, owed_tonight, put_off, sleep_step, unnoticed
 from anjo.sleep.night.state import GPU_STEPS as GPU_STEPS
 from anjo.sleep.night.state import PersonNight, checkpoint_id, note_error, safe_error, study_outcome
 from anjo.sleep.night.state import Window as Window
@@ -84,6 +83,7 @@ from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.train.dataset import build_night_dataset
 from anjo.sleep.train.lora import fresh_adapter_name
+from anjo.sleep.train.terms import attach_night_terms
 from anjo.sleep.types import (
     MAX_NIGHT_ACTIONS,
     Choice,
@@ -306,7 +306,8 @@ class NightRunner(CoreSteps):
     def _extract(self, p: PersonNight) -> Mapping[str, Any]:
         p.spend.part = "extract"
         source = self.deps.extractor(p.spend.wrap_extract(self.deps.extract_chat))
-        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS):
+        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS * (1 + len(owed := owed_tonight(self.deps, p)))):
+            catch_up(source, p, owed)  # the days capped naps left, oldest first (sleep_night), then tonight's
             items = source.extract_day(p.uid, p.night, p.window, p.as_of)
         since = self._since(p)
         fresh = [
@@ -386,19 +387,11 @@ class NightRunner(CoreSteps):
             p.targets.record_expectation(made)
         return made.id
 
-    def _offered(self, p: PersonNight) -> frozenset[str]:
-        offered = set(ALL_ACTIONS)
-        if not self.deps.homework.available:
-            offered -= STUDY_ACTIONS
-        if not self._mind() or p.napped:  # a nap's question stays live for her next deep sleep
-            offered.discard("inquire")
-        return frozenset(offered)
-
     def _choose(self, p: PersonNight) -> Mapping[str, Any]:
         deps = self.deps
         raw = self._raw(p)
         state = points.build(raw)
-        offered = self._offered(p)
+        offered = offered_tonight(deps, p)
         ctx = ChoiceContext(policy=deps.policy, allowance=p.wonder.allowance(p.actions_left), allowed_actions=offered)
         choice = deps.chooser.choose("away", deps.chooser.derive(state), ctx)
         p.choices.append(choice)
@@ -407,7 +400,7 @@ class NightRunner(CoreSteps):
         cap = deps.settings.wonder_usd_month
         month = {"cap_usd": cap, "spent_usd": round(p.wonder_month_spent, 6),
                  "left_usd": round(max(0.0, cap - p.wonder_month_spent), 6)}
-        homework = "available" if deps.homework.available else "no-op: no study offered"
+        homework = (CAPPED_WHY if p.capped else "available") if deps.homework.available else "no-op: no study offered"
         if deps.homework.available and month["left_usd"] <= 0:
             homework = f"capped: the monthly Wonder cap of ${cap:.2f} is spent, so no study runs"
         done: dict[str, Any] = {
@@ -496,12 +489,13 @@ class NightRunner(CoreSteps):
         kept = self.deps.transcripts(p.uid).for_night(p.night)
         if kept:  # a rerun of the night reuses the practice it already paid for
             p.store.add([transcript.evidence() for transcript in kept])
-            return {"scenes": len(kept), "reused": True, "homework": None}
+            return {"scenes": len(kept), "reused": True, "reused_from": p.night.isoformat(), "homework": None}
         started = self._timer(), self.deps.retries()
         p.spend.part = "practice"
         runner, channel = channel_night.practice(self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
             run = runner.run(p.uid, p.night, self._seeded(p), None, at=p.stamp)
+        p.spend.add("practice", run.critic_usd)  # a third-party critic's, held per call on its own pool
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
@@ -511,7 +505,7 @@ class NightRunner(CoreSteps):
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}), **channel,
+                "homework": None, **run.spend_record(), **channel,
                 **self._serving(p, "practice", started)}
 
     def _dataset(self, p: PersonNight) -> Mapping[str, Any]:
@@ -524,12 +518,15 @@ class NightRunner(CoreSteps):
         if not data.examples:
             raise ValueError("no training example survived the dataset's checks")
         p.data = data = self._weighted(p, data)
-        return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
+        done = {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
                 **({"mind_weighted": sum(e.weight != 1.0 for e in data.examples)} if p.dreamt.state_id else {}),
                 "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
                 "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
+        if self.deps.terms.seed:  # sft_dpo_seed's rows (train/terms.py); off, the night is today's
+            p.data, done["terms"] = attach_night_terms(self.deps, p.uid, p.night, p.store, p.sealed, data, p.spend)
+        return done
 
     def _train(self, p: PersonNight) -> Mapping[str, Any]:
         registry = self.deps.registry
@@ -686,7 +683,7 @@ class NightRunner(CoreSteps):
             "steps": [record["step"] for record in p.log.steps()], **self._kept(p),
             **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
             **({} if p.gpu_batch is None else {"gpu_batch": {"digest": p.gpu_batch[0], "people": p.gpu_batch[1]}}),
-        })
+        }, night=p.night)
         return result
 
 

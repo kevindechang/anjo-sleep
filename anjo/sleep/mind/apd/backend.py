@@ -22,7 +22,10 @@ pool, and its Muse Spark calls on ``meta_usd`` (a call past either count is refu
 attempt can make: a writer and an extractor call a day, every leak window of both views and a
 discoverability read for each planted item, an identify call for each and the script audit. A transient Spark Open failure is
 tried again from the extra tries (``retry``), each try a call of its own, and a failed try is
-priced at one call's worst case, so the hold stays a true bound. Every generation reply goes out
+priced at one call's worst case, so the hold stays a true bound; a 429 waits longer (its hint, or
+``retry.rate_limit_wait``) and is priced at nothing, as it is billed. The Muse auditor, whose hold
+has no extra tries, tries again on a 429 only. A wait or a cool-down (``pause``) ends early once
+the command is ending. Every generation reply goes out
 capped at ``retry.REPLY_MAX_TOKENS`` (``gen_chat``), the cap one call is held for. Side by side, an
 attempt whose hold finds no room waits for the command's other attempts in flight to end
 (``Flight``), and once the command is ending (``halt``) no attempt or call starts (``Halted``). A
@@ -44,7 +47,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -59,7 +62,10 @@ from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
 from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
-from anjo.sleep.model_api import ChatResult, ModelApiError
+
+if TYPE_CHECKING:  # the limiter waits on this module's halt, so it imports this one
+    from anjo.sleep.mind.apd.limiter import Limiter
+from anjo.sleep.model_api import ChatResult, ModelApiError, RateLimited
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.mind.spark_provider import BASETEN, SparkProvider
@@ -127,6 +133,7 @@ class Backend:
     generator_rate: Rate | None = None  # its list prices, when it isn't Spark Open
     read_by: Reader = SPARK_READER  # who reads a core split's and the pairs' gates (``readers``), through ``reader``
     reader_rate: Rate | None = None  # its list prices, when it isn't Spark Open
+    read_limit: Limiter | None = field(default=None, compare=False)  # the run's one limit on the reader's calls
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -220,9 +227,12 @@ def gemini_chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_
 
 
 def _vertex_error(error: Exception, timeout_s: float) -> ModelApiError:
-    """``model_api``'s message for the failure, the SDK's text left out."""
+    """``model_api``'s message for the failure, the SDK's text left out. A 429 (or
+    ``RESOURCE_EXHAUSTED``) is ``RateLimited``, with its ``RetryInfo`` delay when it gave one."""
     where = "Gemini on Vertex"
     code = getattr(error, "code", None)
+    if code == 429 or getattr(error, "status", None) == "RESOURCE_EXHAUSTED":
+        return RateLimited(f"{where} returned HTTP 429", retry_after_s=_retry_delay(getattr(error, "details", None)))
     if isinstance(code, int):
         return ModelApiError(f"{where} returned HTTP {code}")
     if isinstance(error, httpx.TimeoutException):
@@ -230,6 +240,21 @@ def _vertex_error(error: Exception, timeout_s: float) -> ModelApiError:
     if isinstance(error, httpx.HTTPError):
         return ModelApiError(f"{where} failed in transport ({type(error).__name__})")
     return ModelApiError(f"{where} failed before a reply ({type(error).__name__})")
+
+
+def _retry_delay(details: object) -> float | None:
+    """A Vertex error's ``RetryInfo`` delay in seconds (``"17s"``), the only field read from it."""
+    body = details.get("error", details) if isinstance(details, dict) else None
+    found = body.get("details") if isinstance(body, dict) else None
+    for item in found if isinstance(found, list) else []:
+        delay = item.get("retryDelay") if isinstance(item, dict) else None
+        if isinstance(delay, str) and delay.endswith("s"):
+            try:
+                seconds = float(delay[:-1])
+            except ValueError:
+                return None
+            return seconds if seconds > 0 else None
+    return None
 
 
 def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str, Rate],
@@ -255,6 +280,21 @@ class Halted(RuntimeError):
 def halted(halt: threading.Event | None) -> None:
     if halt is not None and halt.is_set():
         raise Halted("the command is ending: no further attempt or call")
+
+
+def pause(seconds: float, sleep: Callable[[float], None], halt: threading.Event | None) -> None:
+    """Wait ``seconds``, then ``Halted`` if the command is ending. Live (``time.sleep``) the wait is
+    on the halt itself, so a kill ends it at once."""
+    if halt is not None and sleep is time.sleep:
+        halt.wait(seconds)
+    else:
+        sleep(seconds)
+    halted(halt)
+
+
+def cool_down(backend: Backend) -> None:
+    """The wait before the attempt after one a call ended (``retry.ATTEMPT_COOL_DOWN_S``)."""
+    pause(retry.ATTEMPT_COOL_DOWN_S, backend.sleep, backend.halt)
 
 
 class Flight:
@@ -294,20 +334,29 @@ class Flight:
 @dataclass
 class Retries:
     """The extra tries one attempt holds for transient failures (a 429, a 5xx, a timeout or a
-    reset), shared by its Spark Open calls; each waits its backoff (``retry.backoff``) first."""
+    reset), shared by its writer's and reader's calls; each waits first (``wait``). With
+    ``rate_limits_only`` (the auditor's, whose hold has none) only a 429, never billed, is tried."""
 
     left: int = GEN_SPARK_RETRIES
     sleep: Callable[[float], None] = time.sleep
     rand: Callable[[], float] = random.random
+    halt: threading.Event | None = None
+    rate_limits_only: bool = False
 
-    def take(self, error: ModelApiError, attempt: int) -> bool:
-        """Whether try ``attempt``'s failure is tried again: transient, under ``retry.ATTEMPTS``
-        tries of that call, and an extra try still held. Waits the backoff when it is."""
-        if attempt >= retry.ATTEMPTS or not retry.transient(error) or self.left < 1:
-            return False
+    def wait(self, error: ModelApiError, attempt: int) -> float | None:
+        """The wait before trying again a call whose try ``attempt`` failed with ``error``, one extra
+        try spent; ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``,
+        up to ``retry.RATE_LIMIT_ATTEMPTS`` tries; another transient failure ``retry.backoff``, up
+        to ``retry.ATTEMPTS``."""
+        limited = retry.rate_limited(error)
+        tries = retry.RATE_LIMIT_ATTEMPTS if limited else retry.ATTEMPTS
+        if self.left < 1 or attempt >= tries or not retry.transient(error) or (self.rate_limits_only and not limited):
+            return None
         self.left -= 1
-        self.sleep(retry.backoff(attempt, self.rand))
-        return True
+        return retry.rate_limit_wait(attempt, retry.hint(error), self.rand) if limited else retry.backoff(attempt, self.rand)
+
+    def pause(self, seconds: float) -> None:
+        pause(seconds, self.sleep, self.halt)
 
 
 @dataclass
@@ -337,9 +386,13 @@ class CountedChat:
             try:
                 result = self.inner(model, messages, tools, timeout_s, temperature=temperature)
             except ModelApiError as error:
-                self._priced(messages, 0, 0, 0.0 if self.rate is None else self.rate.worst, failed=True)
-                if self.retries is None or not self.retries.take(error, attempt):
+                limited = retry.rate_limited(error)  # a 429 is billed nothing; another failure at worst
+                wait = None if self.retries is None else self.retries.wait(error, attempt)
+                self._priced(messages, 0, 0, 0.0 if limited or self.rate is None else self.rate.worst, failed=True,
+                             rate_limited=limited, wait_s=wait)
+                if self.retries is None or wait is None:
                     raise
+                self.retries.pause(wait)
                 attempt += 1
                 continue
             self._priced(messages, result.input_tokens, result.output_tokens,
@@ -348,12 +401,13 @@ class CountedChat:
             return result
 
     def _priced(self, messages: list[dict[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
-                failed: bool = False, reply: ChatResult | None = None) -> None:
+                failed: bool = False, reply: ChatResult | None = None, rate_limited: bool = False,
+                wait_s: float | None = None) -> None:
         self.usd += usd
         if self.log is not None:
             self.log.add(messages, tokens_in, tokens_out, usd, failed=failed,
                          reply_chars=None if reply is None else len(reply.text),
-                         finish=None if reply is None else reply.finish_reason)
+                         finish=None if reply is None else reply.finish_reason, rate_limited=rate_limited, wait_s=wait_s)
 
 
 def spark_rate(prices: Prices | None) -> Rate | None:
@@ -438,12 +492,15 @@ def held_attempt(backend: Backend, key: str, calls: GenCalls = WORST_LIFE,
     """One attempt's writer, reader and auditor, at most ``calls``, its worst case held first on
     every pool it uses (``attempt_holds``: the provider's, with the extra tries its calls share, the
     reader's own when it has one, and Muse Spark's), each try logged to ``log`` when given.
-    Nothing starts once ``backend.halt`` is set; a hold without room waits (``_room``)."""
+    Nothing starts once ``backend.halt`` is set, a read queued at the run's limiter
+    (``read_limit``) included; a hold without room waits (``_room``)."""
     halted(backend.halt)
-    retries = Retries(calls.retries, sleep=backend.sleep)
+    retries = Retries(calls.retries, sleep=backend.sleep, halt=backend.halt)
     spark = CountedChat(backend.life_chat, calls.writes, write_rate(backend), retries, halt=backend.halt, log=log)
-    reader = CountedChat(backend.reader, calls.reads, read_rate(backend), retries, halt=backend.halt, log=log)
+    reads = backend.reader if backend.read_limit is None else backend.read_limit.limit(backend.reader, backend.halt)
+    reader = CountedChat(reads, calls.reads, read_rate(backend), retries, halt=backend.halt, log=log)
     auditor = CountedChat(backend.auditor, calls.muse, None if backend.rates is None else backend.rates[MUSE],
+                          Retries(calls.retries, sleep=backend.sleep, halt=backend.halt, rate_limits_only=True),
                           halt=backend.halt, log=log)
     if backend.ledger is None:
         yield spark, reader, auditor

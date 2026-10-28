@@ -138,6 +138,118 @@
   #mind-questions, #mind-choices, #mind-chart { grid-column: 1 / -1; }
 }
 
+/* ── last night as one loop (night.js): dream → rehearse → learn → check → wake ── */
+
+.night-loop {
+  margin-top: var(--space-6);
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--product);
+  box-shadow: var(--lift);
+}
+.night-loop h3 { margin: var(--space-3) 0 0; font: 400 clamp(1.375rem, 1.15rem + 1vw, 2rem)/1.1 var(--serif); }
+.night-lede {
+  margin-top: var(--space-2);
+  max-width: var(--measure);
+  font: italic 400 var(--text-base)/1.5 var(--serif);
+  color: var(--ink-soft);
+  text-wrap: pretty;
+}
+.loop-sleep { margin-top: var(--space-4); font: 500 0.8125rem/1.5 var(--mono); color: var(--ink-soft); }
+.loop-nap {
+  display: inline-block;
+  margin-top: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: 1px dashed var(--rule-strong);
+  font: 400 1rem/1.4 var(--serif);
+}
+
+.loop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: stage;
+}
+.loop-stage {
+  position: relative;
+  counter-increment: stage;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--product);
+}
+/* the loop's arrows: down while the stages stack, right once they sit side by side */
+.loop-stage + .loop-stage::before {
+  content: "↓";
+  content: "↓" / "";
+  position: absolute;
+  top: calc(-1 * var(--space-5));
+  left: var(--space-4);
+  font: 500 1rem/1.5rem var(--mono);
+  color: var(--ink-faint);
+}
+@media (min-width: 62rem) {
+  .loop { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-4); }
+  .loop-stage + .loop-stage::before {
+    content: "→";
+    content: "→" / "";
+    top: 50%;
+    left: calc(-1 * var(--space-4));
+    width: var(--space-4);
+    text-align: center;
+    line-height: 1;
+    transform: translateY(-50%);
+  }
+}
+.loop.napped .loop-stage:nth-child(2)::before { content: "‖"; content: "‖" / ""; color: var(--ink); }
+
+.stage-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.stage-name { font: 600 0.6875rem/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+.stage-name::before { content: counter(stage, decimal-leading-zero) "  "; content: counter(stage, decimal-leading-zero) "  " / ""; color: var(--ink-faint); }
+.stage-line { font: 400 1.0625rem/1.45 var(--serif); color: var(--ink); text-wrap: pretty; }
+.stage-key { font: 600 1.625rem/1 var(--serif); color: var(--product); font-variant-numeric: lining-nums tabular-nums; }
+.stage-numbers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--text-small);
+  color: var(--ink-soft);
+}
+.stage-numbers dd { margin: 0; text-align: right; }
+.stage-numbers dd[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.stage-gates { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; font-size: var(--text-small); }
+.stage-gates li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+.stage-cites { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+.stage-cites code { padding: 0 0.3rem; background: var(--paper-sunk); border-radius: var(--radius); font: 500 0.6875rem/1.5 var(--mono); }
+.stage-link {
+  justify-self: start;
+  font: 600 0.8125rem/1.3 var(--sans);
+  color: var(--product);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-thickness var(--duration) var(--ease);
+}
+.stage-link:hover { text-decoration-thickness: 2px; }
+.stage-link::after { content: " →"; content: " →" / ""; }
+
+/* a stage that didn't run is greyed, with the reason the night wrote; a failed one says where it stopped */
+.loop-stage.state-not_run { background: transparent; border-style: dashed; border-top: 3px dashed var(--rule-strong); }
+.loop-stage.state-not_run .stage-line { font-size: 0.9375rem; font-style: italic; color: var(--ink-faint); }
+.loop-stage.state-failed { border-top-color: var(--fail); }
+.loop-stage.state-reused { border-top-style: dashed; }  /* ran on an earlier run: kept, never redone */
+.loop-stage.state-failed .stage-line { color: var(--fail); }
+
 .mind-section { background: var(--paper-raised); border: 1px solid var(--rule); border-left: 3px solid var(--rule-strong); }
 .mind-section[open] { border-left-color: var(--ink); box-shadow: var(--lift); }
 .mind-section > summary {

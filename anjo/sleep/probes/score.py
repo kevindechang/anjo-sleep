@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -104,12 +105,36 @@ def parse_verdict(text: str) -> Verdict:
     raise JudgeError("the judge's verdict is not A, B or tie")
 
 
+class JudgeTokens:
+    """The judge's calls that reported their usage, and their tokens in and out, from any thread. A
+    reply that reports none (0 in and 0 out) is left out: the morning settles it at its hold's per-call
+    bound and marks it estimated."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = self._in = self._out = 0
+
+    def record(self, result: ChatResult) -> None:
+        if result.input_tokens <= 0 and result.output_tokens <= 0:
+            return
+        with self._lock:
+            self._calls, self._in, self._out = (self._calls + 1, self._in + result.input_tokens,
+                                                self._out + result.output_tokens)
+
+    def read(self) -> tuple[int, int, int]:
+        """Calls with usage, tokens in, tokens out."""
+        with self._lock:
+            return self._calls, self._in, self._out
+
+
 @dataclass(frozen=True)
 class MuseJudge:
-    """Muse Spark with ``judge_v1.md``. ``brief_for`` gives the judge brief (``judge_brief``)."""
+    """Muse Spark with ``judge_v1.md``. ``brief_for`` gives the judge brief (``judge_brief``); ``tokens``,
+    when given, records every reply's usage, an unreadable one's too (it is billed all the same)."""
 
     chat: JudgeChat
     brief_for: Callable[[str], str]
+    tokens: JudgeTokens | None = None
 
     def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
         return self._ask(probe, first, second, None)
@@ -125,6 +150,8 @@ class MuseJudge:
                   if max_tokens is None else
                   self.chat(JUDGE_MODEL, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE,
                             max_tokens=max_tokens))
+        if self.tokens is not None:
+            self.tokens.record(result)
         try:
             return parse_verdict(result.text)
         except JudgeError as error:

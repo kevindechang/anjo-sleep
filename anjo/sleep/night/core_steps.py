@@ -20,8 +20,9 @@ off (``NoCore``), every hook here leaves the night as it was, and her night log 
 - **Learn**: each of tonight's training rows carries its loss weight, the mean surprise of the
   evidence it was made from (the Sleep link); the core state it was made under is the thought
   channel's row field (``core``, its ``state`` is ``p.dreamt.state_id``). The training step's
-  record says whether the training job applied the weights (``surprise_weights``): its loss reads
-  no row weight yet, so a weighted night says so instead of claiming it.
+  record says what the training job did with the weights (``surprise_weights``), as its receipt
+  reports it (applied in ``sft_dpo_seed``'s one loss, not under another objective), or that the job
+  did not say.
 - **Read**: the thought channel's ``mind_state`` is the core port's ``reading``: this dream's
   state, its id and the core's predictions, and the projector her last unit kept. Practice and
   training ask for it in the GPU session, after every CPU step, so always after the dream.

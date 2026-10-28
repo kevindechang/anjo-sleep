@@ -11,6 +11,7 @@ from anjo.sleep.mind import receipt
 from anjo.sleep.night.deps import Dreamt, InquiryOutcome, StudyOutcome
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.nightlog import NightLog
+from anjo.sleep.night.nightlog import safe_error as safe_error  # the log's own (the story's failures use it); read here too
 from anjo.sleep.ports import EvidenceStore, TargetStore
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import CheckpointRef, Choice, GateResult, NightStatus, Probe
@@ -40,6 +41,8 @@ class PersonNight:
     as_of: datetime  # the night's clock: the virtual night end, which the window's end is in real time
     failed_at: str | None = None
     status: NightStatus | None = None
+    capped: bool = False  # a nap at the month's cap: its paid steps wait (``sleep_night.CAPPED_WHY``)
+    caught_up: tuple[date, ...] = ()  # owed days tonight's extract settled (``sleep_night.catch_up``)
     due: bool = False
     gated: bool = False
     notice_from: date | None = None  # with a sleep policy: the first day tonight's notice pass reads
@@ -73,13 +76,6 @@ class PersonNight:
     @property
     def napped(self) -> bool:
         return self.status == "napped"
-
-
-def safe_error(error: BaseException) -> str:
-    """The error's type, and its message only when Sleep raised it (never another library's text,
-    which could quote a request)."""
-    name = type(error).__name__
-    return f"{name}: {error}" if type(error).__module__.startswith("anjo.sleep") else name
 
 
 def checkpoint_id(ckpt: CheckpointRef | None) -> str | None:

@@ -254,7 +254,9 @@ Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) 
 | Setting | Value |
 |---|---|
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
-| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default) or `sft`; any other value stops the night, the accelerated run and the example before they start |
+| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default), `sft`, or `sft_dpo_seed` (the sleep paradigm's one loss, `train/sleep_loss.py`; Modal only); any other value stops the night, the accelerated run and the example before they start |
+| `ANJO_SLEEP_ADAPTER_FOLD`, `ANJO_SLEEP_DREAMS` | `1` turns on the nightly fold into one rank-32 adapter, or dreams from MIND's dream seeds; only with `sft_dpo_seed`, unset or `0` is off |
+| `ANJO_SLEEP_PRESSURE` | the live comparison sets `0` in every arm (`tools/sleep_objective_live.py`), so sleep pressure never changes how much a night trains; its matched control is no setting but a per-run `--match-file` to `sim.accelerated`, so no host value can pad a real night |
 | App, function | `anjo-sleep-train`, `train` (`train/modal_app.py`); the runner calls the deployed function by name |
 | GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 21 minutes (the start, the return and a cancel's margin) |
 | Volumes | `anjo-sleep-weights` mounted read-only (Glimmer at the pinned revision), `anjo-sleep-adapters` read-write |
@@ -523,8 +525,10 @@ The night runs as its own process, so a long night can't take down the server.
   exactly as `python -m anjo.sleep.night` does, and then runs the morning probe run on the
   checkpoint that serves, in the same process. It first reads the marker of the day it closes: a
   missing, short or failed day fails the night at `simulate` (`day_missing`, `short_day` or the
-  day's failure code), and nothing is scored. A failed night is never scored. This timer keeps
-  `Persistent=true`: the night lock makes a catch-up safe.
+  day's failure code), and nothing is scored. A failed night is never scored. Its JSON line says how
+  the morning went (`morning`: `ok`, `failed (<reason>)`, `skipped (nap)` or `skipped (night failed)`);
+  it exits 1 when the night failed and 3 when the morning failed after a promotion (new weights
+  serve unscored). This timer keeps `Persistent=true`: the night lock makes a catch-up safe.
 - The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=film_founder=<account id>` in the env file.
   The env file also holds `ANJO_SLEEP_HOST=1`, the backend's names (§1.4, or Modal's URL and token),
   `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.
@@ -641,8 +645,9 @@ below.
   `--prices 1.25,4.25,<train_gpu_hour>,<serve_gpu_hour>`. The ledger prices every input token at
   the full rate, cached or not, so it never counts less than Fireworks bills.
 - **The budget.** Every Spark Open call of the experiment on Fireworks, the screen's included, is
-  held first on `fireworks_mind_usd`, capped at $90 ($10 under the $100 credit). Fireworks shares
-  no credit with Sleep, so a MIND night there waits only on other MIND nights. With `baseten`,
+  held first on `fireworks_mind_usd`, capped at $80 (with Sleep's $20 `fireworks_sleep_usd`, the
+  $100 credit; the full core set needs about $21). The two pools borrow nothing from each
+  other, so a MIND night there waits only on other MIND nights. With `baseten`,
   the calls hold `baseten_mind_usd` as before. `--live` prints the provider, the model and the
   pool before anything runs.
 - **The run's ceiling.** `generate`, `run`, `timing` and `judge` take `--max-usd` (default $20).

@@ -26,7 +26,12 @@ one clock. A start after that is refused before any day is simulated or any nigh
 
 Each night naps or sleeps deep by the same decision as every night (``night/sleep_pressure.py``,
 under the wiring's policy), and the report says which. After each night that slept deep the morning
-probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Real runs train synthetic
+probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Each morning is logged in
+its night's log as the daily run logs it (``night/daily.py``), ``ok`` or ``failed`` with its reason,
+and the night's story is told again with its wake. A judge that fails one morning never stops the
+run: the next night goes on, the report says which morning failed, and the command exits 3
+(``UNSCORED_EXIT``) when every night ran but a morning failed. The morning's own refusal
+(``MorningError``: a rerun, or a checkpoint that moved since the night) still stops it. Real runs train synthetic
 people only, on the runner ``ANJO_SLEEP_TRAIN_RUNNER`` names (``train/runners/choice.py``): Modal by
 default, one call a night, or Colab, one VM per life (``ColabLives``).
 """
@@ -42,17 +47,19 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+from anjo.sleep.night.daily import UNSCORED_EXIT, log_failed_morning, morning_outcome, morning_receipt
 from anjo.sleep.night.deps import NightDeps, NightOptions
+from anjo.sleep.night.dreams import Terms
 from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
-from anjo.sleep.probes.morning import run_morning
+from anjo.sleep.probes.morning import MorningError, run_morning
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -146,6 +153,28 @@ def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: M
     os.replace(pending, path)
 
 
+def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult) -> None:
+    """The morning probe run after a night, logged in its night's log, and the night's story told
+    again with its wake. A failure is that morning's alone; the morning's refusal stops the run."""
+    assert rig.score is not None
+    log, began, failure = NightLog(result.log_path.parent), rig.timer(), None
+    try:
+        done = rig.score(uid, night, label, result)
+    except MorningError:
+        raise  # a rerun, or a checkpoint that moved since the night: the run's own rule broke
+    except Exception as error:  # a judge that can't be read, timed out or is down: this morning only
+        failure = error
+    finally:
+        seconds = max(0.0, rig.timer() - began)
+        if rig.on_scoring is not None:
+            rig.on_scoring(uid, seconds)
+    if failure is not None:
+        log_failed_morning(log, night, failure, seconds)
+    else:
+        log.step("morning", "ok", uses="new", system=None, **morning_receipt(done, seconds))
+    log.tell(night, result.status)
+
+
 def run_accelerated_batch(
     lives: Sequence[tuple[str, Persona]], days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
     label: str = "development", sweep: Sweep | None = None,
@@ -181,10 +210,7 @@ def run_accelerated_batch(
         if rig.score is not None:
             for uid, result in results.items():
                 if result.status not in ("failed", "napped"):  # nothing new to score, and a nap runs no GPU morning
-                    began = rig.timer()
-                    rig.score(uid, night, kind, result)
-                    if rig.on_scoring is not None:
-                        rig.on_scoring(uid, max(0.0, rig.timer() - began))
+                    _morning(rig, uid, night, kind, result)
     return out
 
 
@@ -239,11 +265,19 @@ def _report(
     digest = hashlib.sha256(json.dumps([summaries, timeless], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
-               "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), **_trained(r)}
+               "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), "morning": morning_outcome(r),
+               **_trained(r)}
               for s, r in zip(summaries, results, strict=True)]
     return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
             "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
+
+
+def _exit(results: Sequence[NightResult]) -> int:
+    """1 when a night failed; ``UNSCORED_EXIT`` (3) when every night ran but a morning failed; else 0."""
+    if any(r.status == "failed" for r in results):
+        return 1
+    return UNSCORED_EXIT if any(morning_outcome(r).startswith("failed") for r in results) else 0
 
 
 def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: datetime) -> date:
@@ -268,7 +302,7 @@ def _fake(days: int, start: date | None, seed: int, mind: bool, parser: argparse
         results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
-    return 0 if all(r.status != "failed" for r in results) else 1
+        return _exit(results)  # while the run's folder still holds its logs
 
 
 def _named(path: str) -> Any:
@@ -278,6 +312,26 @@ def _named(path: str) -> Any:
     return getattr(importlib.import_module(module), name)
 
 
+def match_by_night(path: Path, start: date, days: int) -> tuple[tuple[date, float], ...]:
+    """The live comparison's matched control (``--match-file``): a JSON object of each night's date
+    and its training budget in minutes, one for every night of the run, checked before anything runs."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        budgets = {date.fromisoformat(night): minutes for night, minutes in raw.items()}
+    except (OSError, ValueError, AttributeError) as error:
+        raise AcceleratedError(f"the match file isn't each night's date and minutes ({error})") from None
+    nights = [start + timedelta(days=i) for i in range(days)]
+    missing = [night.isoformat() for night in nights if night not in budgets]
+    if missing or not all(isinstance(m, int | float) and not isinstance(m, bool) for m in budgets.values()):
+        raise AcceleratedError(f"the match file has no budget, in minutes, for {', '.join(missing) or 'every night'}")
+    return tuple((night, float(budgets[night])) for night in nights)
+
+
+def _with_terms(deps: NightDeps, terms: Terms) -> NightDeps:
+    """The wiring's ports with sft_dpo_seed's terms; with every switch off, untouched (today's night)."""
+    return replace(deps, terms=terms) if terms != Terms() else deps
+
+
 def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.budget import default_ledger
     from anjo.sleep.checkpoints import DATA_DIR_ENV
@@ -285,6 +339,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.night.sweep import NightBusy, swept_night
     from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
+    from anjo.sleep.train import objective
+    from anjo.sleep.train.lora import LoraCfgError
     from anjo.sleep.train.trainer import LoraTrainer
 
     if not (args.wiring and args.simulate and args.morning and args.users and args.personas):
@@ -293,6 +349,12 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
+    if args.match_file is not None:
+        try:
+            cfg = replace(cfg, match_by_night=match_by_night(args.match_file, start, args.days))
+        except (AcceleratedError, LoraCfgError) as error:
+            parser.error(str(error))
+    terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows, as the night command sets them
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
@@ -312,8 +374,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
                                   publish=night_command._publisher(chosen.name),
                                   revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
-            rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas,
-                                                                          mind_inquiry=args.mind)),
+            rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
+                night=night, personas=personas, mind_inquiry=args.mind)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       score=score, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
@@ -324,7 +386,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     sha = git_sha()
     print(json.dumps({uid: _report(done, fake=False, days=args.days, sha=sha) for uid, done in results.items()},
                      indent=1, sort_keys=True))
-    return 0 if all(r.status != "failed" for done in results.values() for r in done) else 1
+    return _exit([r for done in results.values() for r in done])
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -341,6 +403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--user", action="append", default=[], dest="users")
     parser.add_argument("--persona", action="append", default=[], dest="personas")
     parser.add_argument("--mind", action="store_true", help="MIND's inquiry in each night (Task 17)")
+    parser.add_argument("--match-file", type=Path, default=None,
+                        help="the live comparison's matched control only: JSON of each night's date and budget minutes")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days is at least 1")

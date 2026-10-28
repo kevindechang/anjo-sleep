@@ -19,6 +19,7 @@ from anjo.sleep.gates.safety import SKIPPED_REASON, SafetyCases, SafetyGate
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night import cost
 from anjo.sleep.night.nightlog import gate_record
+from anjo.sleep.night.sleep_pressure import SleepPolicy
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.ownership.changes import night_views, what_changed
 from anjo.sleep.reports.results import Night, gate_cell
@@ -149,7 +150,8 @@ def test_the_cost_model_shows_the_safety_gate_skipped() -> None:
     assert cost.CURRENT.safety_gate is False and cost.BEFORE.safety_gate is True
     off = cost._gate_s(cost.CURRENT, units)
     on = cost._gate_s(replace(cost.CURRENT, safety_gate=True), units)
-    assert on - off == pytest.approx(units.safety_cases * units.safety_reply_tokens / cost._rate(8, units))
+    rate = cost._rate(cost.CURRENT.gate_concurrency, cost.CURRENT)  # the serving GPU's, at the gates' concurrency
+    assert on - off == pytest.approx(units.safety_cases * units.safety_reply_tokens / rate)
     report = "\n".join(cost._projection_report([cost.project(s, units, cost.DEFAULT_PRICES, cost.Measured(
-        extract=0.0, brief=0.0, training=None)) for s in (cost.BEFORE, cost.CURRENT)], 1.0))
+        extract=0.0, brief=0.0, training=None)) for s in (cost.BEFORE, cost.CURRENT)], [cost.ACTIVE], SleepPolicy()))
     assert "safety gate: skipped in current (off for the hackathon)" in report

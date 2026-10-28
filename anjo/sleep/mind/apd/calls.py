@@ -42,17 +42,20 @@ class Call:
     failed: bool = False
     reply_chars: int | None = None  # the reply's length, never its text
     finish: str | None = None  # its finish reason, as the provider gave it
+    rate_limited: bool = False  # a failed try answered 429
+    wait_s: float | None = None  # the wait before the call was tried again, after this try failed
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> Call:
-        chars, finish = raw.get("reply_chars"), raw.get("finish")
+        chars, finish, wait = raw.get("reply_chars"), raw.get("finish"), raw.get("wait_s")
         return cls(str(raw["kind"]), int(raw["attempt"]), None if raw["item"] is None else int(raw["item"]),
                    None if raw["days"] is None else int(raw["days"]), int(raw["tokens_in"]), int(raw["tokens_out"]),
                    float(raw["usd"]), bool(raw.get("failed", False)), None if chars is None else int(chars),
-                   None if finish is None else str(finish))
+                   None if finish is None else str(finish), bool(raw.get("rate_limited", False)),
+                   None if wait is None else float(wait))
 
 
 def kind_of(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -79,10 +82,16 @@ class CallLog:
     _items: dict[tuple[int, str], int] = field(default_factory=dict)
 
     def add(self, messages: Sequence[Mapping[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
-            failed: bool = False, reply_chars: int | None = None, finish: str | None = None) -> None:
+            failed: bool = False, reply_chars: int | None = None, finish: str | None = None,
+            rate_limited: bool = False, wait_s: float | None = None) -> None:
         kind, payload = kind_of(messages), _payload(messages)
         self.calls.append(Call(kind, self.attempt, self._item(kind, payload), _days(kind, payload), tokens_in,
-                               tokens_out, usd, failed, reply_chars, finish))
+                               tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s))
+
+    def rate_limits(self) -> tuple[int, tuple[float, ...]]:
+        """The attempt's tries answered 429, and the waits they were tried again after (0.1 s)."""
+        mine = [call for call in self.calls if call.attempt == self.attempt and call.rate_limited]
+        return len(mine), tuple(round(call.wait_s, 1) for call in mine if call.wait_s is not None)
 
     def last(self) -> Call | None:
         """The attempt's last call, if it made one."""
