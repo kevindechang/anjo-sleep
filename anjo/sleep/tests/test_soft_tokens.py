@@ -16,9 +16,10 @@ import pytest
 
 from anjo.sleep.budget import Ledger
 from anjo.sleep.serving import config, soft_tokens
-from anjo.sleep.serving.client import ServingError, VllmClient
+from anjo.sleep.serving.client import REQUEST_TIMEOUT_S, ServingError, VllmClient
 from anjo.sleep.serving.soft_tokens import SoftTokenError, SoftTokens
 from anjo.sleep.tools import soft_tokens_live
+from anjo.sleep.train import latent_job
 
 NIGHT = date(2026, 10, 28)
 BOS, EOT, START = 200_000, 200_008, 200_022
@@ -157,6 +158,9 @@ class Clock:
         return self.now
 
 
+PRICES = {"ANJO_SLEEP_PRICES": "0.6,2.4,2.5,1.95"}
+
+
 def test_the_live_test_plans_first_and_holds_before_its_first_request(tmp_path: Any) -> None:
     ledger, lines, fake = Ledger(tmp_path / "budget.jsonl"), list[str](), FakeVllm()
     seen_holds: list[int] = []
@@ -170,14 +174,15 @@ def test_the_live_test_plans_first_and_holds_before_its_first_request(tmp_path: 
 
     rows = Rows()
     assert soft_tokens_live.main([], out=lines.append, client=client, rows=rows, ledger=ledger,
-                                 encode=lambda m: "B64", clock=Clock(), wake=lambda: True) == 0
+                                 encode=lambda m: "B64", clock=Clock(), wake=lambda: True, environ=PRICES) == 0
     plan = "\n".join(lines)
-    hold = soft_tokens_live.hold_bound().amount
+    hold = soft_tokens_live.hold_bound(1.95).amount  # the serving GPU's hour from ANJO_SLEEP_PRICES
     assert f"hold ${hold:.2f}" in plan and "modal_usd" in plan and config.PROMPT_EMBEDS_ENV in plan
     assert fake.requests == [] and rows.asked == [] and not ledger.path.exists()  # touched nothing
 
     assert soft_tokens_live.main(["--yes", "--concurrency", "4"], out=lines.append, client=client, rows=rows,
-                                 ledger=ledger, encode=lambda m: "B64", clock=Clock(), wake=lambda: True) == 0
+                                 ledger=ledger, encode=lambda m: "B64", clock=Clock(), wake=lambda: True,
+                                 environ=PRICES) == 0
     assert seen_holds and min(seen_holds) == 1  # every request ran under the hold
     assert ledger.open_holds() == () and 0 < sum(ledger.settlements().values()) <= hold
     embeds = [body for path, body in fake.requests if path == "/v1/completions" and "prompt_embeds" in body]
@@ -191,3 +196,36 @@ def test_the_live_splice_finds_the_words_the_full_turn_adds_before_its_end() -> 
     assert soft_tokens_live._inserted(full, cut) == [33, 34]
     assert soft_tokens_live._inserted(cut, cut) is None  # nothing added
     assert soft_tokens_live._inserted([BOS, 20, 22, EOT, 31, 32, 33, EOT, START, 41], cut) is None  # not only added
+
+
+class Work:
+    """Time that passes only while a request is out: each one takes nearly its whole timeout."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_the_live_test_never_passes_its_ceiling_or_its_hold(tmp_path: Any) -> None:
+    ledger, lines, fake, work = Ledger(tmp_path / "budget.jsonl"), list[str](), FakeVllm(), Work()
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        work.now += REQUEST_TIMEOUT_S - 10.0
+        return fake(request)
+
+    def client() -> VllmClient:
+        return VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(slow))
+
+    run = {"out": lines.append, "client": client, "rows": Rows(), "ledger": ledger, "encode": lambda m: "B64",
+           "wake": lambda: True}
+    assert soft_tokens_live.main(["--yes"], clock=work, environ=PRICES, **run) == 1  # type: ignore[arg-type]
+    assert any(line.startswith("stopped before") for line in lines)
+    assert work.now <= soft_tokens_live.TEST_S
+    assert 0 < sum(ledger.settlements().values()) <= soft_tokens_live.hold_bound(1.95).amount
+    assert soft_tokens_live.main(["--yes"], clock=work, environ={}, **run) == 2  # type: ignore[arg-type]
+    assert "ANJO_SLEEP_PRICES" in lines[-1] and len(ledger.settlements()) == 1  # no price, nothing held
+    with pytest.raises(SystemExit):
+        soft_tokens_live.main(["--requests", str(soft_tokens_live.MAX_REQUESTS + 1)], environ=PRICES, **run)  # type: ignore[arg-type]
+    assert soft_tokens.EMBED_TIMEOUT_S == latent_job.EMBED_TIMEOUT_S

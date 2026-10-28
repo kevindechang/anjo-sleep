@@ -101,5 +101,6 @@ def encode_latents(job: str, spec_json: str, exec_s: float) -> dict[str, Any]:
     volumes={config.WEIGHTS_DIR: weights.read_only()}, secrets=[],
 )
 def embed_rows(ids: list[int]) -> bytes:
-    """The raw bf16 rows of Glimmer's input embedding table for ``ids`` (``latent_job.embedding_rows``)."""
+    """The raw bf16 rows of Glimmer's input embedding table for ``ids`` (``latent_job.embedding_rows``).
+    No hold of its own: only a caller holding one that covers it calls it (``tools.soft_tokens_live``)."""
     return latent_job.embedding_rows(modal_job.base_folder(Path(config.WEIGHTS_DIR), REVISION, REVISION), ids)

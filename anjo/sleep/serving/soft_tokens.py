@@ -47,6 +47,7 @@ RMS_RANGE: Final = (0.5, 2.0)  # a token's post-norm row has RMS 1
 RMS_EPS: Final = 1e-5  # Glimmer's rms_norm_eps, its embedding norm's epsilon
 TRAIN_APP: Final = "anjo-sleep-train"  # train.modal_job.APP_NAME (serving never imports train)
 EMBED_FUNCTION: Final = "embed_rows"  # train.latent_job.EMBED_FUNCTION
+EMBED_TIMEOUT_S: Final = 300.0  # train.latent_job.EMBED_TIMEOUT_S, the call's hard timeout
 
 
 class SoftTokenError(ValueError):
@@ -121,7 +122,8 @@ class CachedRows:
 
 
 class ModalEmbeddingRows(CachedRows):
-    """The rows from the training app's ``embed_rows`` (a CPU call on the weights volume)."""
+    """The rows from the training app's ``embed_rows`` (a CPU call on the weights volume). It takes no
+    hold of its own: use it only under a hold that covers it, as ``tools.soft_tokens_live`` does."""
 
     def __init__(self, app_name: str = TRAIN_APP, function: str = EMBED_FUNCTION) -> None:
         def fetch(ids: list[int]) -> bytes:

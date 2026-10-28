@@ -13,8 +13,16 @@ Steps, each printed with its latency:
 4. **adapter** (``--adapter``): step 3 on a person's adapter, LoRA with prompt embeddings.
 5. **load**: ``--requests`` turns, half with K soft tokens, at ``--concurrency``.
 
+**The ceiling.** The hold is ``TEST_S`` of the serving GPU (its hour is the fourth of
+``ANJO_SLEEP_PRICES``) and the embedding call, then the idle window. Each request is sent once
+(``VllmClient.once``, an adapter's load waited on once), and a step or a load turn starts only while
+one more turn's worst case (its requests' timeouts and an embedding call's) still fits in ``TEST_S``,
+so the wall time, and the spend settled from it, stay within the hold. ``--requests`` is at most
+``MAX_REQUESTS``.
+
 It needs the serving app redeployed with ``ANJO_SLEEP_PROMPT_EMBEDS=1``, the training app redeployed
-(``embed_rows``), ``ANJO_SLEEP_MODAL_URL`` and ``ANJO_SLEEP_MODAL_TOKEN`` set, and torch on this host.
+(``embed_rows``), ``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN`` and ``ANJO_SLEEP_PRICES`` set,
+and torch on this host.
 """
 from __future__ import annotations
 
@@ -22,8 +30,9 @@ import argparse
 import os
 import statistics
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Final
 
@@ -32,15 +41,18 @@ import numpy as np
 from anjo.sleep.budget import Bound, Ledger, default_ledger
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import backend, config, soft_tokens
-from anjo.sleep.serving.client import ServingError, VllmClient
+from anjo.sleep.serving.client import REQUEST_TIMEOUT_S, ServingError, VllmClient
 from anjo.sleep.serving.soft_tokens import EmbeddingRows, Matrix, SoftTokens
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.types import CheckpointRef
 
 POOL: Final = "modal_usd"
-SERVE_USD_PER_HOUR: Final = 2.61  # one L40S with its CPU and memory, rounded up to the serving list price
+PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # app.night.PRICES_ENV: "spark_in,spark_out,train_gpu_hour,serve_gpu_hour"
 EMBED_USD_PER_HOUR: Final = 0.10  # the CPU container that sends the embedding rows
-TEST_S: Final = 1800.0  # the test's own hard ceiling
+TEST_S: Final = 3600.0  # the test's own hard ceiling
+POSTS_PER_TURN: Final = 4  # two /tokenize calls, an adapter's load at most once, the completion
+STEP_MAX_S: Final = POSTS_PER_TURN * REQUEST_TIMEOUT_S + soft_tokens.EMBED_TIMEOUT_S  # one turn, after one embedding call
+MAX_REQUESTS: Final = 64
 IDLE_S: Final = float(config.SCALEDOWN_S)  # the server stays up this long after the last request
 MAX_TOKENS: Final = 24
 SYSTEM: Final = "Answer in one short sentence."
@@ -48,9 +60,35 @@ FULL: Final = "We wrapped the night shoot at the harbour. Say back the last word
 CUT: Final = "We wrapped the night shoot at the harbour. Say back the last word of this message:"
 
 
-def hold_bound() -> Bound:
+def serve_rate(environ: Mapping[str, str]) -> float:
+    """The serving GPU's list price an hour: the fourth of ``ANJO_SLEEP_PRICES``."""
+    parts = environ.get(PRICES_ENV, "").split(",")
+    try:
+        rate = float(parts[3]) if len(parts) == 4 else -1.0
+    except ValueError:
+        rate = -1.0
+    if not rate > 0:
+        raise ValueError(f"{PRICES_ENV} holds four prices, the serving GPU's hour last")
+    return rate
+
+
+def hold_bound(serve_usd_per_hour: float) -> Bound:
     """The worst case: the serving GPU and the embedding call for the whole test, then the idle window."""
-    return Bound(SERVE_USD_PER_HOUR + EMBED_USD_PER_HOUR, TEST_S + IDLE_S)
+    return Bound(serve_usd_per_hour + EMBED_USD_PER_HOUR, TEST_S + IDLE_S)
+
+
+@dataclass(frozen=True)
+class _Deadline:
+    clock: Callable[[], float]
+    ends: float
+
+    def room(self) -> bool:
+        """Whether one more step's worst case still ends within the test's ceiling."""
+        return self.clock() + STEP_MAX_S <= self.ends
+
+
+class _OutOfTime(Exception):
+    """The next step might pass the ceiling: the steps stop here."""
 
 
 def _turn(text: str) -> list[dict[str, str]]:
@@ -78,8 +116,7 @@ def _inserted(full: Sequence[int], cut: Sequence[int]) -> list[int] | None:
     return list(full[at:at + extra]) if ok and list(full[at + extra:]) == list(cut[at:]) else None
 
 
-def _plan(args: argparse.Namespace, out: Callable[[str], None]) -> None:
-    bound = hold_bound()
+def _plan(args: argparse.Namespace, bound: Bound, out: Callable[[str], None]) -> None:
     out("soft tokens live test: plan only, nothing sent, nothing held")
     out(f"needs: the serving app redeployed with {config.PROMPT_EMBEDS_ENV}=1 (vLLM --enable-prompt-embeds); "
         f"the training app redeployed (embed_rows); {backend.MODAL_URL_ENV} and {backend.MODAL_TOKEN_ENV} set; "
@@ -88,67 +125,76 @@ def _plan(args: argparse.Namespace, out: Callable[[str], None]) -> None:
         f"{'; the same on adapter ' + args.adapter if args.adapter else ''}; "
         f"{args.requests} turns at concurrency {args.concurrency}, half with soft tokens")
     out(f"hold ${bound.amount:.2f} on {POOL} (${bound.rate_per_hour:.2f}/h for {TEST_S / 60:.0f} min of test and "
-        f"{IDLE_S / 60:.0f} min idle); settled at the wall time plus the idle window")
+        f"{IDLE_S / 60:.0f} min idle); no step starts that could pass {TEST_S / 60:.0f} min; settled at the wall "
+        "time plus the idle window")
     out("run again with --yes to send")
 
 
-def _timed(out: Callable[[str], None], clock: Callable[[], float], name: str, call: Callable[[], str]) -> str:
-    started = clock()
-    text = call()
-    out(f"{name}: {clock() - started:.2f} s, {text!r}")
-    return text
-
-
 def _steps(args: argparse.Namespace, live: VllmClient, rows: _Recording, out: Callable[[str], None],
-           clock: Callable[[], float]) -> None:
+           deadline: _Deadline) -> None:
+    clock = deadline.clock
+
     def ask(text: str, soft: SoftTokens | None = None, adapter: CheckpointRef | None = None) -> str:
         return live.complete(adapter, _turn(text), temperature=0.0, seed=0, max_tokens=MAX_TOKENS, soft=soft).text
 
-    by_ids = _timed(out, clock, "parity, token ids", lambda: ask(FULL))
-    by_rows = _timed(out, clock, "parity, embeddings (K=0)", lambda: ask(FULL, SoftTokens.none()))
+    def step(name: str, call: Callable[[], str]) -> str:
+        if not deadline.room():
+            raise _OutOfTime(name)
+        started = clock()
+        text = call()
+        out(f"{name}: {clock() - started:.2f} s, {text!r}")
+        return text
+
+    by_ids = step("parity, token ids", lambda: ask(FULL))
+    by_rows = step("parity, embeddings (K=0)", lambda: ask(FULL, SoftTokens.none()))
     full_ids = rows.last
     out(f"parity: {'match' if by_ids == by_rows else 'DIFFER'}")
-    _timed(out, clock, "splice, cut turn (K=0)", lambda: ask(CUT, SoftTokens.none()))
+    step("splice, cut turn (K=0)", lambda: ask(CUT, SoftTokens.none()))
     word = _inserted(full_ids, rows.last)
     if word is None:
         out("splice: the last word isn't a clean insertion at the turn's end; skipped")
     else:
-        spliced = _timed(out, clock, f"splice, its {len(word)} rows as soft tokens",
+        spliced = step(f"splice, its {len(word)} rows as soft tokens",
                          lambda: ask(CUT, SoftTokens(rows.rows(word))))
         out(f"splice: {'match' if spliced == by_rows else 'DIFFER'}")
     random = SoftTokens(soft_tokens.normalize(np.random.default_rng(0).standard_normal((args.k, soft_tokens.HIDDEN))))
-    _timed(out, clock, f"soft, K={args.k}", lambda: ask(FULL, random))
+    step(f"soft, K={args.k}", lambda: ask(FULL, random))
     if args.adapter:
         ref = CheckpointRef(args.adapter, "live-test", date.today(), "", None, live.rendering)
-        _timed(out, clock, f"adapter, K={args.k}", lambda: ask(FULL, random, ref))
-    _load(args, ask, random, out, clock)
+        step(f"adapter, K={args.k}", lambda: ask(FULL, random, ref))
+    _load(args, ask, random, out, deadline)
 
 
 def _load(args: argparse.Namespace, ask: Callable[[str, SoftTokens | None], str], random: SoftTokens,
-          out: Callable[[str], None], clock: Callable[[], float]) -> None:
-    def one(i: int) -> tuple[bool, float, bool]:
-        started, soft = clock(), (random if i % 2 else None)
+          out: Callable[[str], None], deadline: _Deadline) -> None:
+    clock = deadline.clock
+
+    def one(i: int) -> tuple[bool, float, str]:
+        soft = random if i % 2 else None
+        if not deadline.room():
+            return soft is not None, 0.0, "skipped"
+        started = clock()
         try:
             ask(FULL, soft)
-            return soft is not None, clock() - started, True
+            return soft is not None, clock() - started, "answered"
         except ServingError:  # counted and reported below
-            return soft is not None, clock() - started, False
+            return soft is not None, clock() - started, "failed"
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         results = list(pool.map(one, range(args.requests)))
     for soft in (False, True):
-        times = sorted(seconds for kind, seconds, ok in results if kind == soft and ok)
-        failed = sum(1 for kind, _, ok in results if kind == soft and not ok)
+        times = sorted(seconds for kind, seconds, how in results if kind == soft and how == "answered")
+        counts = {how: sum(1 for kind, _, said in results if kind == soft and said == how) for how in ("failed", "skipped")}
         p50 = statistics.median(times) if times else float("nan")
         p95 = times[min(len(times) - 1, int(0.95 * len(times)))] if times else float("nan")
-        out(f"load, {'soft' if soft else 'plain'}: {len(times)} answered, {failed} failed, "
-            f"p50 {p50:.2f} s, p95 {p95:.2f} s")
+        out(f"load, {'soft' if soft else 'plain'}: {len(times)} answered, {counts['failed']} failed, "
+            f"{counts['skipped']} skipped at the ceiling, p50 {p50:.2f} s, p95 {p95:.2f} s")
 
 
 def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="soft_tokens_live", description=__doc__.split("\n\n")[0] if __doc__ else "")
     parser.add_argument("--k", type=int, default=8, choices=range(1, soft_tokens.MAX_SOFT_TOKENS + 1), metavar="K")
-    parser.add_argument("--requests", type=int, default=16)
+    parser.add_argument("--requests", type=int, default=16, choices=range(2, MAX_REQUESTS + 1), metavar="N")
     parser.add_argument("--concurrency", type=int, default=4, choices=range(1, config.CONCURRENT_REQUESTS + 1),
                         metavar="C")
     parser.add_argument("--adapter", default="")
@@ -156,8 +202,6 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     args = parser.parse_args(list(argv))
     if args.adapter:
         config.check_adapter_name(args.adapter)
-    if args.requests < 2:
-        parser.error("--requests is at least 2")
     return args
 
 
@@ -165,11 +209,16 @@ def main(
     argv: Sequence[str] | None = None, *, out: Callable[[str], None] = print,
     client: Callable[[], VllmClient] | None = None, rows: EmbeddingRows | None = None, ledger: Ledger | None = None,
     encode: Callable[[Matrix], str] = soft_tokens.encode_embeds, clock: Callable[[], float] = time.monotonic,
-    wake: Callable[[], bool] | None = None,
+    wake: Callable[[], bool] | None = None, environ: Mapping[str, str] | None = None,
 ) -> int:
     args = _parse([] if argv is None else argv)
+    try:
+        bound = hold_bound(serve_rate(os.environ if environ is None else environ))
+    except ValueError as error:
+        out(f"not run: {error}")
+        return 2
     if not args.yes:
-        _plan(args, out)
+        _plan(args, bound, out)
         return 0
     if client is None or wake is None:
         url, token = os.environ.get(backend.MODAL_URL_ENV, ""), os.environ.get(backend.MODAL_TOKEN_ENV, "")
@@ -179,7 +228,6 @@ def main(
         serving = backend.ModalServing(url, token)
         client = client or serving.client
         wake = wake or (lambda: serving.wake().ok)
-    bound = hold_bound()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     try:
         reservation = hold(ledger or default_ledger(), f"soft_tokens_live:{stamp}", (POOL,), bound)
@@ -192,11 +240,15 @@ def main(
             out("not run: the server didn't wake")
             return 1
         recording = _Recording(rows or soft_tokens.ModalEmbeddingRows())
-        _steps(args, client().with_soft_tokens(recording, encode=encode), recording, out, clock)
+        _steps(args, client().once().with_load_wait(0).with_soft_tokens(recording, encode=encode), recording, out,
+               _Deadline(clock, started + TEST_S))
         return 0
+    except _OutOfTime as stopped:
+        out(f"stopped before {stopped}: one more step might pass the {TEST_S / 60:.0f}-minute ceiling")
+        return 1
     finally:
         elapsed = clock() - started
-        usd = min(bound.amount, (elapsed + IDLE_S) * bound.rate_per_hour / 3600.0)
+        usd = (elapsed + IDLE_S) * bound.rate_per_hour / 3600.0  # within the hold: no step starts that could pass it
         reservation.settle(usd)
         out(f"spend: ${usd:.2f} settled on {POOL} for {elapsed:.0f} s and the idle window (hold ${bound.amount:.2f})")
 
