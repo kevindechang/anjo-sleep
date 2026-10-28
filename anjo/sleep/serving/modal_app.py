@@ -62,6 +62,8 @@ def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
         env[config.SNAPSHOT_ENV] = "1"
     if settings.hf_secret is not None:
         env[config.HF_SECRET_ENV] = settings.hf_secret
+    if settings.prompt_embeds:
+        env[config.PROMPT_EMBEDS_ENV] = "1"
     return env
 
 

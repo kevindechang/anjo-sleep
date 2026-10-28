@@ -25,6 +25,10 @@ an adapter's base model with the path the server was started on, not the served 
 Modal container sees the adapters volume as it was when it started, so it reloads the volume every
 ``ADAPTER_REFRESH_S``. ``check_adapter`` holds a folder to what the server needs before it is
 uploaded.
+
+**Prompt embeddings** (a stretch, off by default): ``ANJO_SLEEP_PROMPT_EMBEDS=1`` adds
+``--enable-prompt-embeds``, so a request may carry its whole prompt as Glimmer's post-norm input
+embeddings with MIND's soft tokens spliced in (``serving.soft_tokens``). Off, the command is today's.
 """
 from __future__ import annotations
 
@@ -55,6 +59,7 @@ TOOL_PARSER_ENV: Final = "ANJO_SLEEP_TOOL_CALL_PARSER"
 REASONING_STRENGTH_ENV: Final = "ANJO_SLEEP_REASONING_STRENGTH"
 SNAPSHOT_ENV: Final = "ANJO_SLEEP_GPU_SNAPSHOT"
 VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
+PROMPT_EMBEDS_ENV: Final = "ANJO_SLEEP_PROMPT_EMBEDS"
 # The vLLM release both backends serve with (Modal's image installs it, SageMaker's image is built
 # FROM vllm/vllm-openai at this tag) unless the deploy names another. 0.28.0 is the first release
 # whose model registry has Glimmer's architecture, MuseGlimmerForConditionalGeneration (vLLM #51655,
@@ -147,7 +152,8 @@ class ServeConfig:
     """The deploy-time settings. ``revision`` is the Glimmer commit the weights are pinned to,
     ``tool_parser`` vLLM's tool-call parser for Glimmer (``muse_glimmer``; None serves without tools),
     ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
-    ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without)."""
+    ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without), and
+    ``prompt_embeds`` whether a request may send input embeddings (soft tokens; off by default)."""
 
     precision: Precision
     revision: str | None
@@ -155,6 +161,7 @@ class ServeConfig:
     gpu_snapshot: bool
     vllm_version: str
     hf_secret: str | None = None
+    prompt_embeds: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:
@@ -174,7 +181,7 @@ class ServeConfig:
         return cls(
             precision=SERVING, revision=revision, tool_parser=parser,
             gpu_snapshot=env.get(SNAPSHOT_ENV, "").strip() == "1", vllm_version=version,
-            hf_secret=hf_secret,
+            hf_secret=hf_secret, prompt_embeds=env.get(PROMPT_EMBEDS_ENV, "").strip() == "1",
         )
 
     def pinned_revision(self) -> str:
@@ -223,6 +230,8 @@ def vllm_command(
         command += ["--quantization", config.precision.quantization]
     if config.tool_parser is not None:
         command += ["--enable-auto-tool-choice", "--tool-call-parser", config.tool_parser]
+    if config.prompt_embeds:
+        command += ["--enable-prompt-embeds"]
     return command
 
 

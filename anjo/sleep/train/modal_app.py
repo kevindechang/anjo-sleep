@@ -23,7 +23,8 @@ The weights volume must already hold that revision (the serving app's ``download
 
 ``encode_latents`` reads a job's events through Glimmer's hidden states on the same image and GPU,
 with the weights read-only and the latents volume read-write (``latent_job``); the host's side is
-``latent_runner``, which holds before it calls.
+``latent_runner``, which holds before it calls. ``embed_rows`` sends the raw rows of Glimmer's input
+embedding table for some token ids (no GPU, weights read-only), for ``serving.soft_tokens``.
 """
 from __future__ import annotations
 
@@ -93,3 +94,12 @@ def encode_latents(job: str, spec_json: str, exec_s: float) -> dict[str, Any]:
     )
     latents.commit()
     return done
+
+
+@app.function(
+    timeout=latent_job.EMBED_TIMEOUT_S, scaledown_window=latent_job.SCALEDOWN_S,
+    volumes={config.WEIGHTS_DIR: weights.read_only()}, secrets=[],
+)
+def embed_rows(ids: list[int]) -> bytes:
+    """The raw bf16 rows of Glimmer's input embedding table for ``ids`` (``latent_job.embedding_rows``)."""
+    return latent_job.embedding_rows(modal_job.base_folder(Path(config.WEIGHTS_DIR), REVISION, REVISION), ids)

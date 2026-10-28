@@ -19,6 +19,8 @@ CORE = (
     "anjo.sleep.serving",
     "anjo.sleep.serving.config",
     "anjo.sleep.serving.client",
+    "anjo.sleep.serving.soft_tokens",
+    "anjo.sleep.tools.soft_tokens_live",
     "anjo.sleep.checkpoints",
     "anjo.sleep.gates.general",
     "anjo.sleep.gates.collapse",

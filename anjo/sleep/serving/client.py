@@ -72,7 +72,7 @@ from typing import Any, Final, Protocol, TypeVar
 import httpx
 
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.serving import config, framing
+from anjo.sleep.serving import config, framing, soft_tokens
 from anjo.sleep.types import CheckpointRef
 
 TOP_P: Final = 0.95
@@ -435,6 +435,7 @@ class VllmClient:
         self._loaded: set[str] = set()
         self._loading: dict[str, threading.Lock] = {}  # one lock per adapter, held while it loads
         self._load_lock = threading.Lock()  # guards both; shared with every copy ``on``, ``with_load_wait`` and ``once`` make
+        self._soft: tuple[soft_tokens.EmbeddingRows, Callable[[soft_tokens.Matrix], str]] | None = None
 
     def on(self, day: date) -> VllmClient:
         """This client, its prompts dated ``day``; the poster is shared."""
@@ -458,6 +459,16 @@ class VllmClient:
         single.__dict__.update(self.__dict__)
         single._requests = replace(self._requests, attempts=1)
         return single
+
+    def with_soft_tokens(
+        self, rows: soft_tokens.EmbeddingRows, *, encode: Callable[[soft_tokens.Matrix], str] = soft_tokens.encode_embeds,
+    ) -> VllmClient:
+        """This client, able to send a turn with soft tokens (``complete(..., soft=...)``) as its whole
+        prompt's embeddings (``serving.soft_tokens``); a turn without them is sent as today."""
+        switched = type(self).__new__(type(self))
+        switched.__dict__.update(self.__dict__)
+        switched._soft = (rows, encode)
+        return switched
 
     @property
     def attempts(self) -> int:
@@ -541,17 +552,27 @@ class VllmClient:
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
-        seed: int | None = None, max_tokens: int | None = None,
+        seed: int | None = None, max_tokens: int | None = None, soft: soft_tokens.SoftTokens | None = None,
     ) -> ChatResult:
-        """One reply; ``max_tokens`` caps this call alone (MIND's thinker passes its allowance)."""
-        return self._served(adapter, lambda model: self._complete(model, messages, temperature, seed, max_tokens))
+        """One reply; ``max_tokens`` caps this call alone (MIND's thinker passes its allowance). ``soft``
+        puts soft tokens in the latest user turn, on a client ``with_soft_tokens`` only."""
+        if soft is not None and self._soft is None:
+            raise ServingError("soft tokens are sent only by a client switched on with with_soft_tokens")
+        if soft is not None and (not messages or messages[-1].get("role") != "user"):
+            raise ServingError("soft tokens go in the latest turn, which is the user's")
+        return self._served(adapter, lambda model: self._complete(model, messages, temperature, seed, max_tokens, soft))
 
     def _complete(
         self, model: str, messages: list[dict[str, str]], temperature: float, seed: int | None, max_tokens: int | None,
+        soft: soft_tokens.SoftTokens | None = None,
     ) -> ChatResult:
         prompt = self._prompt(model, messages)
+        sent: dict[str, Any] = {"prompt": prompt}
+        if soft is not None and self._soft is not None:  # the whole prompt as embeddings, the soft tokens spliced in
+            rows, encode = self._soft
+            sent = {"prompt_embeds": encode(soft_tokens.splice(prompt, rows, soft))}
         body: dict[str, Any] = {
-            "model": model, "prompt": prompt, "temperature": temperature, "top_p": TOP_P, "top_k": TOP_K,
+            "model": model, **sent, "temperature": temperature, "top_p": TOP_P, "top_k": TOP_K,
             "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
             "stop_token_ids": list(config.REPLY_STOPS),
         }

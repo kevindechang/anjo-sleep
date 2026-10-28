@@ -353,3 +353,28 @@ def test_the_app_encodes_on_one_a100_with_weights_read_only_and_no_secret(monkey
     assert volumes[config.WEIGHTS_DIR].ro and volumes[config.WEIGHTS_DIR].name == config.WEIGHTS_VOLUME
     assert volumes[latent_job.VOLUME_DIR].name == latent_job.VOLUME and not volumes[latent_job.VOLUME_DIR].ro
     assert ("train" in declared) and any(remote.endswith("/train/latent_job.py") for _, remote in files)
+    rows = declared[latent_job.EMBED_FUNCTION]  # soft tokens' embedding rows: no GPU, weights read-only
+    assert "gpu" not in rows and rows["secrets"] == [] and rows["timeout"] == latent_job.EMBED_TIMEOUT_S
+    assert set(rows["volumes"]) == {config.WEIGHTS_DIR} and rows["volumes"][config.WEIGHTS_DIR].ro
+
+
+def test_embedding_rows_are_read_by_offset_from_the_safetensors_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(latent_job, "VOCAB", 5)
+    table: np.ndarray = np.arange(5 * latent_job.HIDDEN, dtype="<u2").reshape(5, latent_job.HIDDEN)  # bf16 bits
+    key = latent_job.EMBED_KEYS[0]
+    header = json.dumps({"other": {"dtype": "BF16", "shape": [2], "data_offsets": [0, 4]},
+                         key: {"dtype": "BF16", "shape": [5, latent_job.HIDDEN],
+                               "data_offsets": [4, 4 + table.nbytes]}}).encode()
+    (tmp_path / "model-00002-of-00002.safetensors").write_bytes(
+        len(header).to_bytes(8, "little") + header + b"\0" * 4 + table.tobytes())
+    (tmp_path / latent_job.SAFETENSORS_INDEX).write_text(
+        json.dumps({"weight_map": {key: "model-00002-of-00002.safetensors"}}), encoding="utf-8")
+    data = latent_job.embedding_rows(tmp_path, [3, 0, 3])
+    assert np.array_equal(np.frombuffer(data, dtype="<u2").reshape(3, -1), table[[3, 0, 3]])
+    for bad in ([], [5], [-1], [True]):
+        with pytest.raises(latent_job.LatentSpecError, match="ids"):
+            latent_job.embedding_rows(tmp_path, bad)
+    with pytest.raises(latent_job.LatentSpecError, match="no input embedding"):
+        latent_job.embedding_rows(tmp_path / "missing", [0])

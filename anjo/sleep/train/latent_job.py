@@ -21,6 +21,10 @@ fraction of the model. The texts arrive cleaned of special tokens' text (``servi
 (``batches``); a sequence longer than that goes alone. Padding is on the right, under the attention
 mask, so the causal model's real tokens never see it.
 
+**Embedding rows** (``embedding_rows``, the ``embed_rows`` CPU function): the raw bf16 rows of
+Glimmer's input embedding table for some token ids, read by offset straight out of the safetensors
+file that holds the table, for ``serving.soft_tokens`` (which normalizes them as vLLM does).
+
 It imports the standard library, numpy, ``serving/config.py`` and ``modal_job.py`` only, and loads
 torch and transformers inside ``encode_on_volume``: the training image carries these files and
 nothing else of Anjo.
@@ -59,6 +63,12 @@ SEPARATOR: Final = "\n\n"  # between the context and the event
 RENDERING: Final = "bos+context+blank-line+event/v1"
 BOS_ID: Final = config.FIRST_SPECIAL_ID  # <|begin_of_text|>
 DEFAULT_BATCH_TOKENS: Final = 16_384
+EMBED_FUNCTION: Final = "embed_rows"
+EMBED_TIMEOUT_S: Final = 300
+VOCAB: Final = 202_048
+MAX_EMBED_IDS: Final = 16_384  # one call's ids: about 218 MB of rows back
+EMBED_KEYS: Final = ("model.language_model.embed_tokens.weight", "model.embed_tokens.weight")  # canonical, legacy
+SAFETENSORS_INDEX: Final = "model.safetensors.index.json"
 _SPEC_KEYS: Final = frozenset({
     "encoder", "model", "revision", "layers", "d", "pooling", "rendering", "max_context_tokens",
     "max_event_tokens", "batch_tokens",
@@ -179,6 +189,44 @@ def read_events(path: Path) -> list[dict[str, str]]:
                 isinstance(value, str) for value in row.values()) or not row["text"]:
             raise LatentSpecError("an uploaded event is a key, a non-empty text and a context")
     return rows
+
+
+def embedding_rows(base: Path, ids: Sequence[int]) -> bytes:
+    """Each id's raw row of the input embedding table, little-endian bf16, ``HIDDEN`` values a row."""
+    if not 0 < len(ids) <= MAX_EMBED_IDS or any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < VOCAB
+                                                for i in ids):
+        raise LatentSpecError(f"embedding rows are asked for 1 to {MAX_EMBED_IDS} ids, each 0 to {VOCAB - 1}")
+    path, key = _embedding_file(base)
+    with path.open("rb") as handle:
+        size = int.from_bytes(handle.read(8), "little")
+        entry = json.loads(handle.read(size)).get(key)
+        if not isinstance(entry, dict) or entry.get("dtype") != "BF16" or entry.get("shape") != [VOCAB, HIDDEN]:
+            raise LatentSpecError("the embedding table isn't Glimmer's bf16 table")
+        start, row = 8 + size + int(entry["data_offsets"][0]), HIDDEN * 2
+        parts = []
+        for i in ids:
+            handle.seek(start + i * row)
+            parts.append(handle.read(row))
+    data = b"".join(parts)
+    if len(data) != len(ids) * row:
+        raise LatentSpecError("the embedding table is cut short")
+    return data
+
+
+def _embedding_file(base: Path) -> tuple[Path, str]:
+    index = base / SAFETENSORS_INDEX
+    if index.is_file():
+        weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map", {})
+        for key in EMBED_KEYS:
+            if key in weight_map:
+                return base / Path(weight_map[key]).name, key
+    elif (base / "model.safetensors").is_file():
+        with (base / "model.safetensors").open("rb") as handle:
+            header = json.loads(handle.read(int.from_bytes(handle.read(8), "little")))
+        for key in EMBED_KEYS:
+            if key in header:
+                return base / "model.safetensors", key
+    raise LatentSpecError("the weights hold no input embedding table")
 
 
 def encode_on_volume(
