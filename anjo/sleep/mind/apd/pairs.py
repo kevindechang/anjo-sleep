@@ -52,6 +52,7 @@ from anjo.sleep.mind.apd.gen_batch import (
     failing,
     last_call,
     made_record,
+    recorder,
     refuse_mixed,
     report_failures,
     side_by_side,
@@ -256,7 +257,7 @@ def _name(spec: PairSpec) -> str:
 
 
 def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
-    log, made = CallLog(), None
+    log, made = CallLog(on_failure=recorder(data, "generate-pairs-attempt", _name(spec))), None
     try:
         made = generate_pair(spec, backend, log)
     except SKIPPED as error:
@@ -288,7 +289,7 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
     with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
         for outcome in results:
             found = outcome.found
-            report_failures(data, out, "generate-pairs-attempt", _name(outcome.spec), outcome.failed)
+            report_failures(out, _name(outcome.spec), outcome.failed)
             if isinstance(found, _Skip):
                 name = _name(found.spec)
                 data.record_failed({"what": "generate-pairs", "pair": name, "error": found.error})

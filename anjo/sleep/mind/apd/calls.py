@@ -15,7 +15,7 @@ Pure.
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
@@ -79,6 +79,7 @@ class CallLog:
     attempt: int = 0
     calls: list[Call] = field(default_factory=list)
     failures: list[Any] = field(default_factory=list)  # ``failures.AttemptFailure``, one per failed attempt
+    on_failure: Callable[[Any], None] | None = None  # each failure as it is kept (``gen_batch.recorder``)
     _items: dict[tuple[int, str], int] = field(default_factory=dict)
 
     def add(self, messages: Sequence[Mapping[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
@@ -125,10 +126,14 @@ def _sum(calls: Iterable[Call]) -> tuple[int, int, int, float]:
 
 
 def _line(label: str, calls: Iterable[Call]) -> str:
-    count, tokens_in, tokens_out, usd = _sum(calls)
+    found = list(calls)
+    count, tokens_in, tokens_out, usd = _sum(found)
     mean_in, mean_out = (tokens_in / count, tokens_out / count) if count else (0.0, 0.0)
+    worst = [call for call in found if call.failed and call.usd > 0]  # failed tries, priced at their worst case
+    held = "" if not worst else (f" (of it ${sum(c.usd for c in worst):.4f} for {len(worst)} failed tries priced at "
+                                 f"their worst case)")
     return (f"  {label}: {count} call(s), {tokens_in:,} in / {tokens_out:,} out tokens (each {mean_in:,.0f} / "
-            f"{mean_out:,.0f}), ${usd:.4f}")
+            f"{mean_out:,.0f}), ${usd:.4f}{held}")
 
 
 def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:

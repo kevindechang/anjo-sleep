@@ -21,15 +21,20 @@ the next attempt starts after ``ATTEMPT_COOL_DOWN_S``.
 
 - **Generation** (``backend.CountedChat``): the lives' writer, extractor and gate readers try a
   transient failure again inside the attempt's own hold, from ``GEN_SPARK_RETRIES`` extra tries the
-  attempt holds; a failed try is priced at one call's worst case, a 429 at nothing (it was billed
-  nothing). The Muse auditor tries again only on a 429.
+  attempt holds; a failed try is priced at one call's worst case. A 429 is priced at nothing (it
+  was billed nothing) and never spends those tries, so a burst of 429s across an attempt's reads
+  is waited out; only one call answered 429 ``RATE_LIMIT_ATTEMPTS`` times ends the attempt. The Muse auditor tries again only on a
+  429.
 
 **How long a reply may take.** A generation call goes out capped at ``REPLY_MAX_TOKENS``
 (``backend.gen_chat``), which is the most one call is held for, and waits ``reply_timeout_s`` of
 that cap: the first token's allowance, then every token at a slow but healthy decode speed. A long
 reply that is still coming is never cut off; a call that passes even that wait is a stalled one,
 and its retry gets the same long wait (2026-10-28: an uncapped extraction reply passed a flat
-180 s twice in a row on Fireworks).
+180 s twice in a row on Fireworks). That allowance is Spark Open's decode: a Gemini gate read, a
+verdict, waits ``backend.GEMINI_READ_TIMEOUT_S`` (2026-10-29: a Vertex read given the 470 s
+allowance stalled a run for 16 minutes), and every generation call's wait is a deadline that fires
+whatever its transport does (``backend.bounded``).
 
 Only the APD runner retries. The night's calls, ``spark_inquiry``'s single attempt for Sleep and
 ``model_api`` are unchanged.
@@ -51,7 +56,7 @@ ATTEMPTS: Final = 3  # tries in all, the first included
 BACKOFF_S: Final = 2.0  # before the second try; doubled before each next one
 JITTER: Final = (0.5, 1.5)  # each wait is its backoff times a uniform draw in this range
 RETRIED: Final = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)  # timeouts and resets
-RATE_LIMIT_ATTEMPTS: Final = 5  # tries in all of a call answered 429, while the attempt's extra tries last
+RATE_LIMIT_ATTEMPTS: Final = 5  # tries in all of a call answered 429; they never spend the billed extra tries
 RATE_BACKOFF_S: Final = 5.0  # before a 429's second try, without a hint; doubled before each next one
 MAX_WAIT_S: Final = 60.0  # the longest any one wait for a 429 lasts, a hint included (before its jitter)
 HINT_JITTER: Final = 0.2  # a hinted wait is the hint plus up to this share of it
