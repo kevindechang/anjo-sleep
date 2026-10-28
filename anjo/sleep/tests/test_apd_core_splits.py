@@ -16,9 +16,11 @@ import pytest
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import core_families, core_splits, families, gen_batch, plan
+from anjo.sleep.mind.apd.judging import MUSE, Rate
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import CORE_SPLITS, FAMILIES, MAX_PREVALENCE, CoreSplit
 from anjo.sleep.mind.spark_provider import FIREWORKS
+from anjo.sleep.night.deps import Prices
 
 # Numbers a core resolution may state that are sums or products of its facts' numbers.
 DERIVED = {
@@ -147,7 +149,9 @@ def test_generate_run_and_judge_b12_on_fakes(tmp_path: Path) -> None:
 def test_the_core_generate_plan_holds_each_life_at_its_own_prevalence(tmp_path: Path) -> None:
     lines: list[str] = []
     live = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
-    assert cli.main([*live, "--data", str(tmp_path), "generate", "--split", "core-train"], out=lines.append) == 0
+    assert cli.main([*live, "--data", str(tmp_path), "generate", "--split", "core-train", "--generator", "spark",
+                     "--reader", "spark"], out=lines.append) == 0
     text = "\n".join(lines)
-    expected = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(s))) for s in core_splits.core_specs("core-train"))
+    on = plan.pricing(Prices(1.25, 4.25, 1.5, 2.61), {MUSE: Rate(1.25, 4.25)}, FIREWORKS)
+    expected = sum(sum(plan.life_expected(plan.surface_days(s), on).values()) for s in core_splits.core_specs("core-train"))
     assert "generate 120 lives of core-train" in text and f"Expected: about ${expected:,.2f} for 120 lives" in text

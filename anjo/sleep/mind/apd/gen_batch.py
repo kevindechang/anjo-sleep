@@ -1,7 +1,8 @@
 """APD's lives generated side by side, each failure alone (Task 17; MIND's data).
 
 - **One life** (``generate_life``): ``generate.generate``'s attempts, written by the backend's
-  generator (``generators``; a split never mixes two), each attempt's worst case,
+  generator (``generators``) and read by its reader (``readers``; a split never mixes two of
+  either), saved with its record of both (``made``) and its calls (``calls``), each attempt's worst case,
   sized to the life's planted items, held before it starts (``backend.held_attempt``), after the
   run's ceiling is checked. A
   transient Spark Open failure is tried again inside the attempt's own hold (``backend``).
@@ -37,8 +38,9 @@ from functools import partial
 from types import TracebackType
 from typing import Final, TypeVar
 
-from anjo.sleep.mind.apd import gates, generate
+from anjo.sleep.mind.apd import gates, generate, readers
 from anjo.sleep.mind.apd.backend import Backend, Flight, held_attempt, life_calls
+from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
@@ -136,15 +138,18 @@ def side_by_side(backend: Backend, work: Sequence[Callable[[Backend], T]], paral
 # ── One life ──────────────────────────────────────────────────────────────────
 
 
-def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
+def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None) -> Generated:
     """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
-    the backend's generator (``generators``), read by the gates on Spark Open."""
-    model, writes = backend.provider.model, backend.generator.writes_with(backend.provider)
+    the backend's generator (``generators``), its gates read by its reader (``readers``), every
+    try logged to ``log`` when given."""
+    model, writes = backend.read_by.reads_with(backend.provider), backend.generator.writes_with(backend.provider)
     for attempt in range(generate.MAX_ATTEMPTS):
         if backend.ceiling is not None:
             backend.ceiling.check()  # before the attempt's hold
+        if log is not None:
+            log.attempt = attempt
         with held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
-                          life_calls(spec.prevalence)) as (writer, reader, auditor):
+                          life_calls(spec.prevalence), log) as (writer, reader, auditor):
             try:
                 built, problems = generate.life(spec.field, spec.families, spec.prevalence,
                                                 generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
@@ -172,13 +177,36 @@ def spec_name(spec: LifeSpec) -> str:
 # ── Many lives ────────────────────────────────────────────────────────────────
 
 
-def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str) -> None:
-    """``StoreError`` when another generator wrote any of ``lives``: a mismatch, never a reuse."""
-    other = mixed(lives, backend.generator.writes_with(backend.provider))
+def _named(ids: Sequence[str]) -> str:
+    return f"{', '.join(ids[:3])}{', ...' if len(ids) > 3 else ''}"
+
+
+def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str, data: DataDir | None = None,
+                 made: Iterable[str] = ()) -> None:
+    """``StoreError`` when another generator wrote any of ``lives``, or (given ``data``) another
+    reader read any of them or of ``made`` (the ids their records are kept under): a mismatch,
+    never a reuse."""
+    found = list(lives)
+    other = mixed(found, backend.generator.writes_with(backend.provider))
     if other:
         raise StoreError(f"{where} holds {len(other)} written by another generator than {backend.generator.name} "
-                         f"({', '.join(other[:3])}{', ...' if len(other) > 3 else ''}); one never mixes generators: "
-                         "go on with theirs, or start a new data dir")
+                         f"({_named(other)}); one never mixes generators: go on with theirs, or start a new data dir")
+    if data is None:
+        return
+    ids = list(made) or [life.id for life in found]
+    records = {made_id: str(record.get("reader")) for made_id in ids if (record := data.made(made_id)) is not None}
+    read = readers.mixed(ids, records, backend.read_by.name)
+    if read:
+        raise StoreError(f"{where} holds {len(read)} read by another reader than {backend.read_by.name} "
+                         f"({_named(read)}); one never mixes readers: go on with theirs, or start a new data dir")
+
+
+def made_record(backend: Backend) -> dict[str, object]:
+    """Who wrote and read a life or pair, and why its lives may train the MIND core (``None``: no
+    clearance recorded for its writer)."""
+    return {"writer": backend.generator.name, "writer_model": backend.generator.writes_with(backend.provider),
+            "trains": backend.generator.trains, "reader": backend.read_by.name,
+            "reader_model": backend.read_by.reads_with(backend.provider)}
 
 
 @dataclass(frozen=True)
@@ -190,10 +218,13 @@ class Skip:
 
 
 def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Generated | Skip:
+    log = CallLog()
     try:
-        made = generate_life(spec, backend)
+        made = generate_life(spec, backend, log)
     except SKIPPED as error:
         return Skip(spec, str(error) or type(error).__name__)
+    data.save_made(made.life.id, made_record(backend))
+    data.save_calls(made.life.id, [call.to_json() for call in log.calls])
     data.save_life(made.life, made.problems)
     return made
 
@@ -205,7 +236,8 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end."""
     for split in dict.fromkeys(spec.split for spec in specs):
         check(split, backend.generator, backend.provider)
-        refuse_mixed(data.lives(split), backend, split)
+        readers.check(split, backend.read_by)
+        refuse_mixed(data.lives(split), backend, split, data)
     todo = [spec for spec in specs if not any(data.has_life(life_id) for life_id in spec_ids(spec))]
     if backend.ceiling is not None:
         backend.ceiling.begin("life(s) generated", len(todo))

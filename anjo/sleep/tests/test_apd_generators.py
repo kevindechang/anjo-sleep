@@ -18,9 +18,9 @@ from anjo.sleep import fireworks_api
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import core_splits, fakes, gen_batch, generate, generators, pairs, plan, retry
+from anjo.sleep.mind.apd import core_splits, costs, fakes, gen_batch, generate, generators, pairs, plan, retry
 from anjo.sleep.mind.apd.ceiling import RunLedger
-from anjo.sleep.mind.apd.judging import Rate
+from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.spark_provider import FIREWORKS
 from anjo.sleep.model_api import ChatResult
@@ -31,7 +31,7 @@ GPT_ID, GLM_ID = fireworks_api.GPT_OSS_120B, fireworks_api.GLM_5P3_FLASH
 GPT_PRICES, GLM_PRICES = Rate(0.15, 0.60), Rate(0.15, 0.50)
 LIVE = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
 PRICES = Prices(1.25, 4.25, 1.5, 2.61)
-RATES = cli._rates("1.25,4.25,0.75,3.75")
+RATES = {MUSE: Rate(1.25, 4.25), GEMINI: Rate(0.75, 3.75)}
 
 
 class Seen:
@@ -132,28 +132,30 @@ def test_apd_splits_refuse_a_non_spark_generator(tmp_path: Path, capsys: pytest.
 def test_plan_prices_the_chosen_generator(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # Arrange
     specs = core_splits.core_specs("core-test")
-    scale = plan.write_scale(GPT_PRICES, PRICES)
-    expected = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(spec)), scale) for spec in specs)
-    spark = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(spec))) for spec in specs)
+    gpt, spark = plan.pricing(PRICES, RATES, FIREWORKS, GPT, GPT_PRICES), plan.pricing(PRICES, RATES, FIREWORKS)
+    expected = sum(sum(plan.life_expected(plan.surface_days(spec), gpt).values()) for spec in specs)
+    on_spark = sum(sum(plan.life_expected(plan.surface_days(spec), spark).values()) for spec in specs)
     held = [backends.gen_holds(PRICES, RATES, FIREWORKS.pool, backends.life_calls(spec.prevalence), GPT_PRICES)
             for spec in specs]
     lines: list[str] = []
 
     # Act
     assert cli.main([*LIVE, "--data", str(tmp_path), "generate", "--split", "core-test", "--generator", "gpt-oss-120b",
-                     "--generator-prices", "0.15,0.60"], out=lines.append) == 0
+                     "--generator-prices", "0.15,0.60", "--reader", "spark"], out=lines.append) == 0
     assert cli.main([*LIVE, "--data", str(tmp_path), "generate-pairs", "--generator", "glm-5p3-flash",
-                     "--generator-prices", "0.15,0.50"], out=lines.append) == 0
+                     "--generator-prices", "0.15,0.50", "--reader", "spark"], out=lines.append) == 0
 
     # Assert: the writes at the generator's prices, the reads at Spark Open's, in the holds and the expected
     text = "\n".join(lines)
     mean = sum(h[FIREWORKS.pool] for h in held) / len(held)
     assert f"Hold on {FIREWORKS.pool}: ${mean:.2f} each" in text
-    assert f"Expected: about ${expected:,.2f} for 40 lives" in text and 0 < scale < 1 and expected < spark
+    assert f"Expected: about ${expected:,.2f} for 40 lives" in text and expected < on_spark
     assert GPT_ID in text and "reasoning effort low" in text
-    pair = plan.expected_usd(pairs.PAIR_EXPECTED, plan.write_scale(GLM_PRICES, PRICES))
-    assert f"Expected: about ${20 * pair:,.2f} for 20 pairs" in text and GLM_ID in text
-    # a generator without its prices is refused
+    glm = plan.pricing(PRICES, RATES, FIREWORKS, GLM, GLM_PRICES)
+    pair = plan.expected(costs.pair_tokens((pairs.LAST_DAY,) * pairs.PAIR_ITEMS, len(pairs.OUTCOME_DAYS), thinks=False),
+                         glm)
+    assert f"Expected: about ${20 * sum(pair.values()):,.2f} for 20 pairs" in text and GLM_ID in text
+    # a generator without checked list prices or --generator-prices is refused
     with pytest.raises(SystemExit) as stopped:
         cli.main([*LIVE, "--data", str(tmp_path), "generate", "--split", "core-test", "--generator", "gpt-oss-120b"],
                  out=lines.append)

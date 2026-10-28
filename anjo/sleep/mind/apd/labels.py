@@ -3,7 +3,9 @@
 ::
 
     <out>/manifest.json          the export: its schema, split, subset, whether its labels are
-                                 sealed, and each life's id, field, days and event count
+                                 sealed, and each life's id, field, days, event count and
+                                 provenance (who wrote and read it, and why it may train the
+                                 core: ``provenance``)
     <out>/events/<life>.jsonl    the life's events in order, one per line
     <out>/labels/<life>.json     its planted items as labels: labelled splits only
 
@@ -42,6 +44,7 @@ from typing import Any, Final
 
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd.core_splits import in_subset
+from anjo.sleep.mind.apd.generators import GENERATORS, generator_of
 from anjo.sleep.mind.apd.store import DataDir, write_text
 from anjo.sleep.mind.apd.types import (
     CORE_SPLITS,
@@ -141,12 +144,25 @@ def export(data: DataDir, split: LifeSplit, out: Path, *, subset: str | None = N
                       "items": list(item_labels(life, data.labelled_problems(life.id)))}
             write_text(out / "labels" / f"{life.id}.json", json.dumps(labels, ensure_ascii=False, sort_keys=True))
         manifest.append({"life_id": life.id, "field": life.field, "first_day": life.days[0].isoformat(),
-                         "last_day": life.days[-1].isoformat(), "events": len(stream)})
+                         "last_day": life.days[-1].isoformat(), "events": len(stream),
+                         "provenance": provenance(data, life)})
         total += len(stream)
     write_text(out / "manifest.json", json.dumps({
         "schema": SCHEMA, "split": split, "subset": subset, "sealed": sealed, "lives": manifest,
     }, ensure_ascii=False, sort_keys=True, indent=1))
     return Exported(tuple(life.id for life in lives), total, sealed)
+
+
+def provenance(data: DataDir, life: Life) -> dict[str, Any]:
+    """Who wrote and read ``life``, and why it may train the MIND core (``trains``: ``None`` when no
+    clearance is recorded for its writer), from its record (``DataDir.made``); a life made before
+    records were kept was written and read by Spark Open."""
+    record = data.made(life.id)
+    if record is None:
+        writer = GENERATORS[generator_of(life)]
+        return {"writer": writer.name, "writer_model": sorted({s.model for s in life.sessions})[0],
+                "trains": writer.trains, "reader": "spark", "reader_model": None}
+    return {key: record.get(key) for key in ("writer", "writer_model", "trains", "reader", "reader_model")}
 
 
 def _item_ids(item: PlantedItem) -> dict[str, Any]:

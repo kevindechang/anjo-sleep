@@ -7,6 +7,9 @@
                                       and the core's labels for ``LABELLED_SPLITS`` (``labels``)
     <data>/runs/<life>.<arm>.json     each finished run (``ArmRun``), written once
     <data>/pairs/<pair>.json          each counterfactual pair, both histories (``pairs``)
+    <data>/made/<id>.json             who wrote and read each life or pair made since readers are
+                                      recorded, and why its lives may train the core (``made``)
+    <data>/calls/<id>.jsonl           each of its calls' kind, tokens and price (``calls``)
     <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
     <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
     <data>/failed.jsonl               each run or snapshot-edit that failed alone, never saved
@@ -39,7 +42,7 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -343,6 +346,31 @@ class DataDir:
         if found.life_id != life_id:
             raise StoreError(f"{life_id}'s sealed file holds another life's problems")
         return found
+
+    def save_made(self, made_id: str, record: Mapping[str, object]) -> None:
+        """Who wrote and read the life or pair ``made_id``; saved before it, so none is on disk
+        without its record."""
+        write_text(self.root / "made" / f"{check_id(made_id)}.json", json.dumps(record, sort_keys=True))
+
+    def made(self, made_id: str) -> dict[str, Any] | None:
+        """Its record, or ``None`` for one made before records were kept (Spark Open wrote and read it)."""
+        path = self.root / "made" / f"{check_id(made_id)}.json"
+        if not path.exists():
+            return None
+        found: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        return found
+
+    def save_calls(self, made_id: str, records: Sequence[Mapping[str, object]]) -> None:
+        """Every call made for the life or pair ``made_id``, its attempts' included (``calls``)."""
+        path = self.root / "calls" / f"{check_id(made_id)}.jsonl"
+        path.unlink(missing_ok=True)  # a rerun's log replaces the last, never doubles it
+        append_records(path, PLAIN, list(records))
+
+    def call_logs(self) -> dict[str, list[dict[str, Any]]]:
+        """Every saved call log, by the id it was made for."""
+        folder = self.root / "calls"
+        paths = sorted(folder.glob("*.jsonl")) if folder.is_dir() else []
+        return {path.stem: read_records(path, PLAIN) for path in paths}
 
     def _pair(self, pair_id: str) -> Path:
         return self.root / "pairs" / f"{check_id(pair_id)}.json"

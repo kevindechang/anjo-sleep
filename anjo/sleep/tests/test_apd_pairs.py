@@ -16,11 +16,13 @@ import pytest
 
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import core_families, gates, labels, pairs, plan
+from anjo.sleep.mind.apd import core_families, costs, gates, generators, labels, pairs, plan, readers
+from anjo.sleep.mind.apd.judging import MUSE, Rate
 from anjo.sleep.mind.apd.generate import life_days as pair_days
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import PAIR_DECISIONS, CounterfactualPair, GateVerdict, Life, ProblemFile
 from anjo.sleep.mind.spark_provider import FIREWORKS
+from anjo.sleep.night.deps import Prices
 
 SPEC = pairs.pair_specs()[0]
 
@@ -198,8 +200,13 @@ def test_the_pairs_plan_prints_worst_case_and_expected(tmp_path: Path) -> None:
     live = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
     assert cli.main([*live, "--data", str(tmp_path), "generate-pairs"], out=lines.append) == 0
     text = "\n".join(lines)
-    expected = 20 * plan.expected_usd(pairs.PAIR_EXPECTED)
-    assert "generate 20 pairs" in text and f"Expected: about ${expected:,.2f} for 20 pairs" in text
+    # the default: written by DeepSeek V4.1 Flash, read by Gemini, each priced on its own pool
+    on = plan.pricing(Prices(1.25, 4.25, 1.5, 2.61), {MUSE: Rate(1.25, 4.25)}, FIREWORKS, generators.DEEPSEEK,
+                      Rate(0.30, 1.20), readers.GEMINI_READER, Rate(0.75, 3.75))
+    one = plan.expected(costs.pair_tokens((pairs.LAST_DAY,) * pairs.PAIR_ITEMS, len(pairs.OUTCOME_DAYS), thinks=True), on)
+    assert "generate 20 pairs" in text and f"Expected: about ${20 * sum(one.values()):,.2f} for 20 pairs" in text
+    for pool in (FIREWORKS.pool, "vertex_mind_usd", "meta_usd"):
+        assert f"On {pool}: worst case $" in text and f"expected about ${20 * one[pool]:,.2f} for 20 pairs" in text
     assert "Worst case: $" in text
     assert list(tmp_path.iterdir()) == []
 

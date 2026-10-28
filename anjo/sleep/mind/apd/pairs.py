@@ -22,7 +22,8 @@ differ (the slot's decision: speak in the failed history, wait in the kept one) 
 not (the unrelated item, the last day).
 
 **Many pairs** (``generate_pairs``): as ``gen_batch.generate_lives``, side by side, written by the
-backend's generator (``generators``) and never mixed with another's, each attempt held before it
+backend's generator (``generators``) and read by its reader (``readers``), never mixed with
+another's, each saved with its record and its calls, each attempt held before it
 starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling checked before
 each attempt. Pairs are test material: the core never trains on them.
 """
@@ -37,12 +38,13 @@ from typing import Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
-from anjo.sleep.mind.apd import gates
+from anjo.sleep.mind.apd import gates, readers
 from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, held_attempt, item_reads
 from anjo.sleep.mind.apd.batch import Out, check_failed
+from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
 from anjo.sleep.mind.apd.families import Template
-from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, refuse_mixed, side_by_side
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, made_record, refuse_mixed, side_by_side
 from anjo.sleep.mind.apd.generate import (
     AWAY_DAYS,
     MAX_ATTEMPTS,
@@ -192,14 +194,16 @@ class GeneratedPair:
     verdicts: tuple[GateVerdict, ...]
 
 
-def generate_pair(spec: PairSpec, backend: Backend) -> GeneratedPair:
+def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) -> GeneratedPair:
     """``write_pair``'s attempts, each held before it starts, written by the backend's generator,
-    both histories gated on Spark Open."""
-    model, writes = backend.provider.model, backend.generator.writes_with(backend.provider)
+    both histories gated by its reader, every try logged to ``log`` when given."""
+    model, writes = backend.read_by.reads_with(backend.provider), backend.generator.writes_with(backend.provider)
     for attempt in range(MAX_ATTEMPTS):
         if backend.ceiling is not None:
             backend.ceiling.check()
-        with held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS) as (writer, reader, auditor):
+        if log is not None:
+            log.attempt = attempt
+        with held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS, log) as (writer, reader, auditor):
             try:
                 made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes)
             except GenerationFailed:
@@ -218,10 +222,13 @@ class _Skip:
 
 
 def _one(data: DataDir, spec: PairSpec, backend: Backend) -> GeneratedPair | _Skip:
+    log = CallLog()
     try:
-        made = generate_pair(spec, backend)
+        made = generate_pair(spec, backend, log)
     except SKIPPED as error:
         return _Skip(spec, str(error) or type(error).__name__)
+    data.save_made(made.pair.id, made_record(backend))
+    data.save_calls(made.pair.id, [call.to_json() for call in log.calls])
     data.save_pair(made.pair)
     return made
 
@@ -231,7 +238,10 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
     """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
     a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end."""
     check("core-test", backend.generator, backend.provider)
-    refuse_mixed((life for pair in data.pairs() for life in (pair.failed, pair.kept)), backend, "the pairs")
+    readers.check("core-test", backend.read_by)
+    on_disk = data.pairs()
+    refuse_mixed((life for pair in on_disk for life in (pair.failed, pair.kept)), backend, "the pairs", data,
+                 [pair.id for pair in on_disk])
     todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
     if backend.ceiling is not None:
         backend.ceiling.begin("pair(s) generated", len(todo))

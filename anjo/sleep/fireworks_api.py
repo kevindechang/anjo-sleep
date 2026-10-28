@@ -6,7 +6,8 @@ when ``ANJO_SLEEP_MIND_SPARK`` says so (``mind.spark_provider``); Sleep's night 
 It's served through Fireworks' OpenAI-compatible API. The key comes from
 ``ANJO_FIREWORKS_API_KEY``, read at call time. ``generate`` calls the cheaper models that may write
 MIND's core splits and pairs instead (``mind.apd.generators``); they are not Spark Open, and
-``provenance`` doesn't clear them for training.
+``provenance`` doesn't clear them for Glimmer's training (``generators`` records which may train
+the MIND core, and why).
 """
 from __future__ import annotations
 
@@ -22,9 +23,11 @@ SPARK_OPEN: Final = "accounts/fireworks/models/muse-spark-open"
 # Cheaper writers of MIND's core splits and pairs (``mind.apd.generators``); never Spark Open's stand-in.
 GPT_OSS_120B: Final = "accounts/fireworks/models/gpt-oss-120b"
 GLM_5P3_FLASH: Final = "accounts/fireworks/models/glm-5p3-flash"
+DEEPSEEK_V4P1_FLASH: Final = "accounts/fireworks/models/deepseek-v4p1-flash"
 
 SparkOpenModel = Literal["accounts/fireworks/models/muse-spark-open"]
-GeneratorModel = Literal["accounts/fireworks/models/gpt-oss-120b", "accounts/fireworks/models/glm-5p3-flash"]
+GeneratorModel = Literal["accounts/fireworks/models/gpt-oss-120b", "accounts/fireworks/models/glm-5p3-flash",
+                         "accounts/fireworks/models/deepseek-v4p1-flash"]
 
 
 def chat(

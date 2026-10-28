@@ -19,10 +19,12 @@ from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import fakes, gates, gen_batch, generate, plan, retry
 from anjo.sleep.mind.apd.ceiling import RunLedger
+from anjo.sleep.mind.apd.judging import MUSE, Rate
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import LIFE_DAYS
 from anjo.sleep.mind.spark_provider import FIREWORKS
 from anjo.sleep.model_api import ChatResult, ModelApiError
+from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import SPARK_MAX_OUT_TOKENS
 
 EXTRACT = "# extract_open_v1"
@@ -252,7 +254,8 @@ def test_generate_plan_prints_worst_case_and_expected(tmp_path: Path, monkeypatc
     text = "\n".join(lines)
     specs = generate.development_specs()
     lives = len(specs)
-    expected = sum(plan.expected_usd(plan.expected_calls(plan.surface_days(spec))) for spec in specs)
+    on = plan.pricing(Prices(1.25, 4.25, 1.5, 2.61), {MUSE: Rate(1.25, 4.25)}, FIREWORKS)
+    expected = sum(sum(plan.life_expected(plan.surface_days(spec), on).values()) for spec in specs)
     worst = sum(float(line.split("at most $")[1].split(" ")[0].replace(",", ""))
                 for line in text.splitlines() if line.startswith("Hold on "))
     assert f"Worst case: ${worst:,.2f} for {lives} lives" in text

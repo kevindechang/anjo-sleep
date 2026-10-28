@@ -89,7 +89,7 @@ def test_val_and_test_labels_stay_sealed(tmp_path: Path, monkeypatch: pytest.Mon
     assert sorted(path.name for path in out.iterdir()) == ["events", "manifest.json"]
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["sealed"] is True and set(manifest["lives"][0]) == {"life_id", "field", "first_day", "last_day",
-                                                                        "events"}
+                                                                        "events", "provenance"}
     written = "".join(path.read_text(encoding="utf-8") for path in out.rglob("*") if path.is_file())
     for item in problems.items:
         assert item.resolution not in written and item.template not in written and item.id not in written
