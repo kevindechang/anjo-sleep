@@ -24,13 +24,29 @@ downloaded):
    The script checks the chat template's hash and every row's tokens against the template before
    it trains;
 5. checks each receipt (both long rows dropped and counted, every row's tokens checked, the DPO
-   reference the model with its adapter switched off) and each adapter: it records the rendering,
+   reference the model with its adapter switched off, and with every switch off exactly today's
+   receipt, no ``terms``) and each adapter: it records the rendering,
    ``target_modules`` is the text-decoder pattern, and every tensor in ``adapter_model.safetensors``
    is a LoRA on one of the text decoder's projections, every projection of every layer covered,
    none in the vision tower;
 6. sends every trained row's prompt through the night's ``VllmClient``, with the tokenizer standing
    in for vLLM's ``/tokenize`` (``smoke_model.tokenize``), and checks that the ids it would send
    ``/v1/completions`` are the prompt ids TRL trained on, token for token.
+
+7. runs ``sft_dpo_seed`` (2026-10-29) for two more nights on the same rows plus seeding, dream and
+   anchor rows: night 3 cold with the fold and dreams on, night 4 warm from night 3 with the fold on.
+   Each receipt must show gradients on the adapter only, the teacher's logits (the night-start adapter,
+   the day in context) unmoved by the adapter's updates, the seeding KL moved, the DPO block at today's rate, and
+   the adapter folded: night 3 to its own rank, night 4 (the long-term rank plus the night's) to the
+   set rank, 32, which PEFT then loads as a plain LoRA with the file's weights (``smoke_model --load``).
+8. runs the live comparison's matched control, cold, for a few seconds each: night 5 ``sft_dpo`` with
+   its SFT stretched by the clock, night 6 ``sft_dpo_seed`` (dreams off) with its main block stretched.
+   Each receipt's ``match`` must have used its budget, give or take one step, in more steps than the
+   step plan, and the DPO pass must still follow.
+9. runs the thought channel with the one loss (``sleep_job``): night 7 ``sft_dpo_seed`` with a
+   ``channel`` block, cold, the fold on, on rows made under core states (a fresh projector trained with
+   the LoRA in one loop, seeding's teacher on the night-start adapter and projector), then night 8 the
+   channel's own run (``channel_train``, ``sft_dpo``) warm from night 7's adapter and projector.
 
 It prints one line per step and exits 1 on the first failed check.
 
@@ -62,18 +78,21 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.budget import Bound, BudgetError, Ledger, Pool, default_ledger
+from anjo.sleep.mind.core.projector import Reading
+from anjo.sleep.night.core_snapshot import CoreSnapshot
 from anjo.sleep.night.sweep import NightBusy, swept_night
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import VllmClient
 from anjo.sleep.stops import BudgetStop
-from anjo.sleep.train import colab_train, modal_job, smoke_model
-from anjo.sleep.train.dataset import Dataset, Example, Pair
+from anjo.sleep.train import channel_train, colab_train, modal_job, smoke_model
+from anjo.sleep.train.dataset import AnchorRow, Dataset, DreamRow, Example, Pair, SeedRow
 from anjo.sleep.train.lora import (
     DATASET_FILE,
     DEFAULT_TARGET_MODULES,
@@ -99,6 +118,16 @@ SMOKE_TIMEOUT_S: Final = 3600.0  # the GPU smoke's hard timeout, held in full be
 PRICES: Final[Mapping[str, tuple[Pool, float]]] = {
     "modal": (modal_runner.POOL, modal_runner.A100_USD_PER_HOUR), "colab": (colab.POOL, colab.A100_CU_PER_HOUR),
 }
+# The receipt today's objectives write (2026-10-28): a night with every switch off writes exactly these.
+TODAY_RECEIPT: Final = frozenset({
+    "steps", "epochs", "train_minutes", "examples", "dropped_truncated", "gpu", "objective", "dpo_steps", "pairs",
+    "pairs_dropped_truncated", "rows_checked", "dpo_reference", "rendering",
+})
+TEACHER_TOLERANCE: Final = 1e-5  # fp32 on the CPU: the night-start teacher's logits don't move at all
+CONTROL_MINUTES: Final = 0.04  # the CPU control nights' budget: a few seconds, many tiny steps
+CONTROL_SLACK_MINUTES: Final = 0.05  # one CPU step past the budget, at most
+CHANNEL: Final = {"k": 4, "d": 8, "width": 16}  # the channel nights' projector; the tiny model's width is 64
+CHANNEL_GAP: Final = 1e-3  # fp32 on the CPU: embeddings and the projector's torch and numpy agree this closely
 _LORA_KEY: Final = re.compile(
     rf"base_model\.model\.(?P<module>{colab_train.TEXT_DECODER}\.(?P<name>[a-z0-9_]+))\.lora_[AB]\.weight")
 
@@ -151,6 +180,58 @@ def smoke_dataset() -> Dataset:
     ) + (Pair(id="p-long", prompt=prompt, chosen="that is fine", rejected=" ".join([words[13]] * LONG_WORDS),
               chosen_from="glimmer", rejected_from="glimmer", tokens=LONG_WORDS),)
     return Dataset(examples=examples, tokens=sum(e.tokens for e in examples), dropped={}, pairs=pairs)
+
+
+def seed_smoke_dataset() -> Dataset:
+    """``smoke_dataset`` with ``sft_dpo_seed``'s rows: a seeding row per short example (the day in
+    the teacher's context), three dreams (two at a decision boundary, one on a random thread) and two
+    anchor items."""
+    data, words = smoke_dataset(), smoke_model.WORDS
+    seeds = tuple(SeedRow(id=e.id, context="she remembers the tomatoes were late this year", message=e.prompt[-1][1],
+                          reply=e.completion, tokens=60) for e in data.examples[:4])
+    dreams = tuple(DreamRow(id=f"d{i}", thread=f"the garden {words[20 + i]} rain came early", message="what did i say",
+                            reply=" ".join(words[24:30 + i]), tokens=40, kind="random" if i == 2 else "boundary")
+                   for i in range(3))
+    anchors = (AnchorRow(id="a0", question="what were late", choices=("tomatoes", "rain"), answer=0),
+               AnchorRow(id="a1", question="when did we plant them", choices=("may", "next time"), answer=0))
+    return Dataset(examples=data.examples, tokens=data.tokens, dropped={}, pairs=data.pairs, seeds=seeds,
+                   dreams=dreams, anchors=anchors)
+
+
+def check_seed_receipt(receipt: Mapping[str, Any], *, folded_to: int, long_term: int, dpo_lr: float) -> None:
+    """An ``sft_dpo_seed`` night's receipt: only the adapter got gradients, the teacher didn't move,
+    the seeding KL did, the DPO block ran at today's rate, and the adapter was folded to ``folded_to``."""
+    terms = receipt.get("terms")
+    if receipt.get("objective") != "sft_dpo_seed" or not isinstance(terms, Mapping):
+        raise SmokeError(f"the night trained {receipt.get('objective')!r} without its terms")
+    drift = terms.get("teacher_drift")
+    if not terms.get("grads_adapter_only"):
+        raise SmokeError("the gradient check never ran")
+    if not isinstance(drift, float) or drift > TEACHER_TOLERANCE:
+        raise SmokeError(f"the teacher's logits moved by {drift} while only the adapter trained")
+    if terms.get("seed_kl_before") == terms.get("seed_kl_after") or terms.get("seed_kl_after") is None:
+        raise SmokeError(f"the seeding KL didn't move ({terms.get('seed_kl_before')} -> {terms.get('seed_kl_after')})")
+    dpo = terms.get("dpo") or {}
+    if dpo.get("lr") != dpo_lr or not dpo.get("steps"):
+        raise SmokeError(f"the DPO block ran {dpo}, not today's pass at {dpo_lr}")
+    if terms.get("folded_to") != folded_to or terms.get("long_term_rank") != long_term:
+        raise SmokeError(f"folded to {terms.get('folded_to')} over {terms.get('long_term_rank')} long-term ranks, "
+                         f"expected {folded_to} over {long_term}")
+    if long_term and terms.get("long_term_drift") != 0.0:
+        raise SmokeError(f"the frozen long-term ranks moved by {terms.get('long_term_drift')}")
+    rows = terms.get("rows") or {}
+    if not rows.get("seed") or not rows.get("imitate"):
+        raise SmokeError(f"the seeding rows didn't train: {rows}")
+
+
+def check_peft_load(python: str, base: Path, adapter: Path, rank: int) -> dict[str, Any]:
+    """The folded adapter loads through PEFT as a plain LoRA of ``rank``, alpha 2r, with the file's weights."""
+    done = _run([python, "-I", str(Path(smoke_model.__file__)), "--load", str(base), str(adapter)],
+                env={**os.environ, **OFFLINE}, label="the PEFT load")
+    loaded: dict[str, Any] = json.loads(done.stdout.strip().splitlines()[-1])
+    if (loaded["r"], loaded["alpha"], loaded["rank_pattern"]) != (rank, 2 * rank, {}) or loaded["max_diff"] != 0.0:
+        raise SmokeError(f"PEFT loaded {loaded}, not a plain rank-{rank} LoRA with the file's weights")
+    return loaded
 
 
 def check_control_tokens(folder: Path) -> int:
@@ -211,7 +292,8 @@ def _night(python: str, base: Path, work: Path, cfg: Mapping[str, object], data:
     """One night of ``colab_train.py`` on the tiny model, as the runner would start it."""
     work.mkdir(parents=True)
     dataset = work / DATASET_FILE
-    dataset.write_text(data.to_jsonl(pairs=cfg["objective"] == "sft_dpo"), encoding="utf-8")
+    dataset.write_text(data.to_jsonl(pairs=cfg["objective"] in ("sft_dpo", "sft_dpo_seed"),
+                                     terms=cfg["objective"] == "sft_dpo_seed"), encoding="utf-8")
     inherited = {key: value for key, value in os.environ.items() if not key.startswith("ANJO_TRAIN_")}
     env = {
         **inherited, **OFFLINE, "HF_HOME": str(work / "hf"), "ANJO_TRAIN_CONFIG": json.dumps(cfg),
@@ -287,10 +369,13 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
     """The whole run in ``root``, on Glimmer's tokenizer in ``tokenizer`` or the tiny one; returns
     the lines it reports."""
     lines = []
-    missing = pin_mismatches(_installed(python))
+    found = _installed(python)
+    # The CPU run never quantizes, so bitsandbytes may be absent here; any other pin, or a wrong one, fails.
+    missing = [pin for pin in pin_mismatches(found) if not (pin.startswith("bitsandbytes==") and found.get("bitsandbytes") is None)]
     if missing:
         raise SmokeError(f"the training Python doesn't have the pins: {', '.join(missing)}")
-    lines.append("pins: " + ", ".join(f"{name} {version}" for name, version in pins().items()))
+    lines.append("pins: " + ", ".join(f"{name} {found.get(name) or 'absent (the CPU run never quantizes)'}"
+                                      for name in pins()))
     if tokenizer is not None:
         lines.append(f"tokenizer: Glimmer's, {check_control_tokens(tokenizer)} special tokens, "
                      "each one in CONTROL_TOKENS at its id")
@@ -303,7 +388,11 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
     template = {} if tokenizer else {"template_sha256": hashlib.sha256(smoke_model.CHAT_TEMPLATE.encode()).hexdigest()}
     cold = LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS)
     cold_cfg = {**training_config(cold, len(data.examples), warm=False, revision=REVISION, night=NIGHT), **template}
+    if "terms" in cold_cfg or "match_minutes" in cold_cfg:
+        raise SmokeError("with every switch off the recipe carries a sleep-objective key")
     first = _night(python, base, root / "night1", cold_cfg, data, None)
+    if set(first) != TODAY_RECEIPT:
+        raise SmokeError(f"with every switch off the receipt differs from today's: {sorted(set(first) ^ TODAY_RECEIPT)}")
     _expect(first, examples=4, dropped_truncated=1, pairs=2, pairs_dropped_truncated=1, steps=MIN_STEPS,
             objective="sft_dpo", gpu="cpu", rows_checked=6, dpo_reference="adapter_off",
             rendering=cold_cfg["rendering"])
@@ -327,6 +416,8 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
     second = _night(python, base, root / "night2", warm_cfg, data, root / "night1" / "out")
     _expect(second, examples=4, dropped_truncated=1, steps=MIN_STEPS, dpo_steps=0, objective="sft", rows_checked=4,
             dpo_reference="none")
+    if set(second) != TODAY_RECEIPT:
+        raise SmokeError(f"with every switch off the receipt differs from today's: {sorted(set(second) ^ TODAY_RECEIPT)}")
     check_adapter(root / "night2" / "out", layers=layers, r=warm.r, rendering=warm_cfg["rendering"])
     check_served(python, base, root / "night2")
     lines.append(f"night 2 (sft, warm from night 1): {second['steps']} SFT steps, adapter and served prompts "
@@ -336,7 +427,143 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
         if not set(config.ADAPTER_FILES) <= set(present):
             raise SmokeError(f"{night} wrote {present}, without the files the runner downloads")
     lines.append(f"target_modules: {colab_train.lora_targets(DEFAULT_TARGET_MODULES)}")
+    lines.append("switches off: both nights' recipes and receipts are exactly today's (no terms, no match_minutes)")
+    return [*lines, *seed_nights(python, base, root, template), *control_nights(python, base, root, template),
+            *channel_nights(python, base, root, template)]
+
+
+def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """``sft_dpo_seed`` on the tiny model: night 3 cold with the fold and dreams, night 4 warm with the
+    fold, then the folded rank-32 adapter loaded through PEFT."""
+    data = seed_smoke_dataset()
+    cfg = LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS, fold_rank=config.MAX_LORA_RANK, dreams=True)
+    cold = {**training_config(cfg, len(data.examples), warm=False, revision=REVISION, night=NIGHT), **template}
+    third = _night(python, base, root / "night3", cold, data, None)
+    check_seed_receipt(third, folded_to=cfg.r, long_term=0, dpo_lr=cfg.dpo_lr)
+    _expect(third, examples=4, dropped_truncated=1, pairs=2, pairs_dropped_truncated=1, gpu="cpu",
+            dpo_reference="adapter_off", rendering=cold["rendering"])
+    check_adapter(root / "night3" / "out", layers=smoke_model.LAYERS, r=cfg.r, rendering=cold["rendering"])
+    terms: Mapping[str, Any] = third["terms"]  # type: ignore[assignment]
+    dreams = terms["dreams"] or {}
+    lines = [f"night 3 (sft_dpo_seed, cold, fold and dreams): {third['steps']} steps; rows {terms['rows']}; "
+             f"gradients on the adapter only; teacher drift {terms['teacher_drift']:.1e}; seeding KL "
+             f"{terms['seed_kl_before']:.6g} -> {terms['seed_kl_after']:.6g}; DPO {terms['dpo']['steps']} steps at "
+             f"{terms['dpo']['lr']:g} (largest step {terms['dpo']['max_update']:.2g}); imitation reward "
+             f"{terms['imitation_reward']} (a random model never comes close: no gradient); dreams {dreams.get('kept')}/{dreams.get('candidates')} kept by the filter, "
+             f"block kept {dreams.get('block_kept')}; folded to rank {terms['folded_to']}"]
+    warm = {**training_config(replace(cfg, dreams=False), len(data.examples), warm=True, revision=REVISION, night=NIGHT),
+            **template}
+    fourth = _night(python, base, root / "night4", warm, replace(data, dreams=(), anchors=()), root / "night3" / "out")
+    rank = config.MAX_LORA_RANK
+    check_seed_receipt(fourth, folded_to=rank, long_term=cfg.r, dpo_lr=cfg.dpo_lr)
+    check_adapter(root / "night4" / "out", layers=smoke_model.LAYERS, r=rank, rendering=warm["rendering"])
+    loaded = check_peft_load(python, base, root / "night4" / "out", rank)
+    held: Mapping[str, Any] = fourth["terms"]  # type: ignore[assignment]
+    lines.append(f"night 4 (sft_dpo_seed, warm, fold): ranks {cfg.r} long-term (frozen: moved "
+                 f"{held['long_term_drift']}) + {cfg.r} fresh, folded to "
+                 f"{rank}; PEFT loads it as a plain LoRA, r {loaded['r']}, alpha {loaded['alpha']}, "
+                 f"{loaded['modules']} modules, the file's weights exactly")
     return lines
+
+
+def check_match(receipt: Mapping[str, Any], planned: int) -> Mapping[str, Any]:
+    """A matched control's receipt: its budget used, give or take one step, in more steps than ``planned``."""
+    match = receipt.get("match") or {}
+    budget, used, steps = match.get("budget_minutes"), match.get("minutes"), match.get("steps")
+    if budget != CONTROL_MINUTES or not isinstance(used, float) or not budget <= used <= budget + CONTROL_SLACK_MINUTES:
+        raise SmokeError(f"the control used {used} of its {budget} minutes")
+    if not isinstance(steps, int) or steps <= planned:
+        raise SmokeError(f"the control took {steps} steps, no more than the plan's {planned}")
+    return match
+
+
+def control_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """The live comparison's matched control on the tiny model, cold: night 5 ``sft_dpo`` (its SFT
+    stretched), night 6 ``sft_dpo_seed`` with dreams off (its main block stretched)."""
+    lines = []
+    for night, cfg, data in (
+        ("night5", LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS), smoke_dataset()),
+        ("night6", LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS), replace(seed_smoke_dataset(),
+                                                                                             dreams=(), anchors=())),
+    ):
+        recipe = {**training_config(replace(cfg, match_by_night=((NIGHT, CONTROL_MINUTES),)), len(data.examples),
+                                    warm=False, revision=REVISION, night=NIGHT), **template}
+        done = _night(python, base, root / night, recipe, data, None)
+        seeded = cfg.objective == "sft_dpo_seed"
+        dpo = done["terms"]["dpo"]["steps"] if seeded else done["dpo_steps"]  # type: ignore[index]
+        match = check_match(done, MIN_STEPS)
+        if not isinstance(dpo, int) or dpo < 1:
+            raise SmokeError(f"{night}: the DPO pass didn't follow the stretched block")
+        if not seeded and set(done) != TODAY_RECEIPT | {"match"}:
+            raise SmokeError(f"{night}: the control's receipt is today's plus its match, not {sorted(done)}")
+        lines.append(f"{night[:5]} {night[5:]} ({cfg.objective} matched control, cold): {match['steps']} steps in "
+                     f"{match['minutes'] * 60:.1f} s of a {CONTROL_MINUTES * 60:.1f} s budget, one warmup and one decay "
+                     f"by the clock, then {dpo} DPO steps")
+    return lines
+
+
+def channel_core(seed: int) -> str:
+    """A row's ``core``: a seeded reading in the snapshot the night stamps on a transcript."""
+    import numpy as np
+
+    rng, k, d = np.random.default_rng(seed), CHANNEL["k"], CHANNEL["d"]
+    reading = Reading(rng.standard_normal((k - 1, channel_train.features(d))).astype(np.float32),
+                      np.linspace(1.0, 0.3, k - 1, dtype=np.float32), rng.standard_normal(2 * d).astype(np.float32), 0.8)
+    return json.dumps(CoreSnapshot("smoke-core", f"state-{seed}", 3, "state", reading).to_json())
+
+
+def channel_dataset() -> Dataset:
+    """``seed_smoke_dataset`` without dreams, each short example, its seeding row and each pair made under a core state."""
+    data = replace(seed_smoke_dataset(), dreams=(), anchors=())
+    return replace(data, examples=tuple(replace(e, core=channel_core(i)) if i < 4 else e for i, e in enumerate(data.examples)),
+                   seeds=tuple(replace(row, core=channel_core(i)) for i, row in enumerate(data.seeds)),
+                   pairs=tuple(replace(pair, core=channel_core(10 + i)) for i, pair in enumerate(data.pairs)))
+
+
+def check_channel_receipt(receipt: Mapping[str, Any], folder: Path, *, fresh: bool) -> Mapping[str, Any]:
+    """A channel night's receipt: the projector it started from (fresh or warm) moved and saved beside the
+    adapter, the model's embeddings and the projector's two copies agreeing, the DPO reference the channel's."""
+    channel = receipt.get("channel")
+    if not isinstance(channel, Mapping) or channel.get("fresh") is not fresh:
+        raise SmokeError(f"the channel's receipt is {channel!r}, not a {'fresh' if fresh else 'warm'} projector's")
+    if channel.get("projector") == channel.get("projector_from") or not (folder / channel_train.PROJECTOR_FILE).is_file():
+        raise SmokeError("the projector didn't train, or wasn't saved beside the adapter")
+    if not all(isinstance(channel.get(gap), float) and channel[gap] < CHANNEL_GAP for gap in ("embeds_gap", "forward_gap")):
+        raise SmokeError(f"the channel's checks failed: {channel.get('embeds_gap')}, {channel.get('forward_gap')}")
+    if receipt.get("dpo_reference") != "adapter_off+projector_start":
+        raise SmokeError(f"the DPO reference is {receipt.get('dpo_reference')}, not the channel's")
+    return channel
+
+
+def channel_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """Night 7: ``sft_dpo_seed`` and the thought channel in one job, cold, the fold on. Night 8: the
+    channel's own run (``sft_dpo``), warm from night 7's adapter and projector."""
+    data = channel_dataset()
+    block = channel_train.block(**CHANNEL, arm="state", exec_s=RUN_TIMEOUT_S)
+    seeded = LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS, fold_rank=config.MAX_LORA_RANK)
+    recipe = {**training_config(seeded, len(data.examples), warm=False, revision=REVISION, night=NIGHT, channel=block),
+              **template}
+    seventh = _night(python, base, root / "night7", recipe, data, None)
+    check_seed_receipt(seventh, folded_to=seeded.r, long_term=0, dpo_lr=seeded.dpo_lr)
+    first = check_channel_receipt(seventh, root / "night7" / "out", fresh=True)
+    check_adapter(root / "night7" / "out", layers=smoke_model.LAYERS, r=seeded.r, rendering=recipe["rendering"])
+    terms: Mapping[str, Any] = seventh["terms"]  # type: ignore[assignment]
+    if terms.get("out_of_time") or not first.get("rows_with_state") or "projector_only_updates" not in first:
+        raise SmokeError(f"night 7's channel didn't train in the loop: {dict(first)}")
+    plain = LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS)
+    warm = {**training_config(plain, len(data.examples), warm=True, revision=REVISION, night=NIGHT, channel=block),
+            **template}
+    eighth = _night(python, base, root / "night8", warm, data, root / "night7" / "out")
+    second = check_channel_receipt(eighth, root / "night8" / "out", fresh=False)
+    if second.get("projector_from") != first.get("projector"):
+        raise SmokeError("night 8's channel didn't warm from the projector night 7 saved")
+    return [f"night 7 (sft_dpo_seed + thought channel, cold, fold): one job, {seventh['steps']} steps; a fresh "
+            f"projector (K {first['k']}) trained with the LoRA on {first['rows_with_state']} states "
+            f"({first['projector_only_updates']} updates alone first), taught by sft and dpo only; seeding KL "
+            f"{terms['seed_kl_before']:.6g} -> {terms['seed_kl_after']:.6g}, teacher drift {terms['teacher_drift']:.1e} "
+            f"(night-start adapter and projector); folded to {terms['folded_to']}; projector saved beside the adapter",
+            f"night 8 (sft_dpo + thought channel, warm from night 7): the channel's own run from night 7's adapter "
+            f"and projector, {eighth['steps']} steps, {eighth['dpo_steps']} DPO steps"]
 
 
 def _money(runner: str, amount: float) -> str:
