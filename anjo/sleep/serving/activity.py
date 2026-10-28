@@ -10,7 +10,7 @@ request they send, from its start to its end (``turn``), in ``<data dir>/sleep/s
 - ``tracked``: written when the host registers its chat route (``track``). A host that never wrote
   it (an app from before this, another data dir) has turns the stop can't see, so it never stops.
   A turn whose marker can't be written (a full disk) runs unmarked and removes it: no stop follows
-  until the host registers again.
+  until the host registers again, and one already stopping still refuses it (``stopping``).
 - ``stopping``: the stop's own mark (``stopping``), written before its last look at ``in_flight/``.
   A turn writes its marker before it looks for this one, so whichever comes second sees the other:
   the stop skips, or the turn never reaches Glimmer (``GlimmerStopping``) and the chat route's
@@ -74,6 +74,17 @@ def _stopping(folder: Path, now: float) -> bool:
         return False
 
 
+def _stopping_unmarked(folder: Path, now: float) -> bool:
+    """``_stopping`` for a turn that runs unmarked: untracked, the host holds off every later stop, but
+    one already past its last look sees no marker. A mark it can't read counts as none (logged): the
+    folder the stop must write its mark in is failing, and chats aren't refused while it does."""
+    try:
+        return _stopping(folder, now)
+    except OSError as error:
+        logger.warning("an unmarked Glimmer turn can't read the GPU stop's mark (%s)", type(error).__name__)
+        return False
+
+
 def _untrack(folder: Path, error: OSError) -> None:
     logger.warning("a Glimmer turn runs unmarked (%s): the host stops counting as tracked, so no GPU stop "
                    "follows until it registers again", type(error).__name__)
@@ -81,6 +92,13 @@ def _untrack(folder: Path, error: OSError) -> None:
         (folder / TRACKED).unlink(missing_ok=True)
     except OSError as failed:
         logger.error("the host's turns stay marked tracked (%s) though one ran unmarked", type(failed).__name__)
+
+
+def _unmark_refused(marker: Path) -> None:
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as error:  # left behind, it holds off stops until it goes stale: never a cut
+        logger.warning("a refused Glimmer turn's marker stays (%s)", type(error).__name__)
 
 
 @contextmanager
@@ -100,11 +118,10 @@ def turn(folder: Path | None, *, clock: Callable[[], float] = time.time) -> Iter
         except OSError as error:
             marker = None
             _untrack(folder, error)
-    if refused and marker is not None:
-        try:
-            marker.unlink(missing_ok=True)
-        except OSError as error:  # left behind, it holds off stops until it goes stale: never a cut
-            logger.warning("a refused Glimmer turn's marker stays (%s)", type(error).__name__)
+            refused = _stopping_unmarked(folder, clock())
+    if refused:
+        if marker is not None:
+            _unmark_refused(marker)
         raise GlimmerStopping("the night is stopping Glimmer's container")
     try:
         yield
