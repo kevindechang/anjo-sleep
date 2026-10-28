@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -34,6 +36,10 @@ from anjo.sleep.sim.persona_sim import MAX_TURNS
 DEV_URL_ENV: Final = "ANJO_SLEEP_DEV_URL"  # the sleep host's own address, e.g. http://127.0.0.1:8000
 SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # a signed-in token for the synthetic account
 TURN_TIMEOUT_S: Final = 180.0
+DEFAULT_RETRY_AFTER_S: Final = 1.0  # a busy refusal without a usable ``Retry-After``
+MIN_RETRY_AFTER_S: Final = 0.1  # so the total wait always grows and the loop ends
+MAX_RETRY_AFTER_S: Final = 5.0  # one wait never exceeds this, whatever the server asks
+MAX_BUSY_WAIT_S: Final = 30.0  # all the waiting one turn does before it fails as busy
 
 
 def reply_text(stream: str) -> str:
@@ -52,22 +58,68 @@ def reply_text(stream: str) -> str:
     return reply
 
 
+BUSY: Final = "busy: a response is already in progress"
+STALE: Final = "stale session"
+
+
+def _body(response: httpx.Response) -> dict[str, object]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _refusal(response: httpx.Response) -> str:
+    """What a 409 is, never its words: the busy lease, a keyed refusal's ``code``, or a stale session."""
+    body = _body(response)
+    if body.get("retry") is True:
+        return BUSY
+    code = body.get("code")
+    return code if isinstance(code, str) and code.isidentifier() else STALE
+
+
+def _retry_after(response: httpx.Response) -> float:
+    try:
+        asked = float(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER_S))
+    except ValueError:
+        asked = DEFAULT_RETRY_AFTER_S
+    return min(max(asked, MIN_RETRY_AFTER_S), MAX_RETRY_AFTER_S) if asked == asked else DEFAULT_RETRY_AFTER_S
+
+
 class DevApiTransport:
     """``persona_sim.ChatTransport`` over the dev API, every session cleared."""
 
-    def __init__(self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
         self._http = httpx.Client(base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
                                   transport=transport, timeout=TURN_TIMEOUT_S)
         self._session: str | None = None
+        self._sleep = sleep
 
     def _post(self, path: str, body: dict[str, object]) -> httpx.Response:
-        try:
-            response = self._http.post(path, json=body)
-        except httpx.HTTPError as error:
-            raise TurnFailed(f"{path} failed in transport ({type(error).__name__})") from None
+        waited = 0.0
+        while True:
+            response = self._post_once(path, body)
+            if response.status_code != 409:
+                break
+            refusal = _refusal(response)
+            if refusal != BUSY:
+                raise TurnFailed(f"{path} returned HTTP 409 ({refusal})")
+            wait = _retry_after(response)
+            if waited + wait > MAX_BUSY_WAIT_S:
+                raise TurnFailed(f"{path} returned HTTP 409 ({BUSY}) for {waited:g}s")
+            self._sleep(wait)
+            waited += wait
         if response.is_error:
             raise TurnFailed(f"{path} returned HTTP {response.status_code}")
         return response
+
+    def _post_once(self, path: str, body: dict[str, object]) -> httpx.Response:
+        try:
+            return self._http.post(path, json=body)
+        except httpx.HTTPError as error:
+            raise TurnFailed(f"{path} failed in transport ({type(error).__name__})") from None
 
     def send(self, session_id: str, text: str, *, cleared: bool) -> str:
         if not cleared:
