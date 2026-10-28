@@ -37,7 +37,7 @@ from anjo.sleep.probes.arms import ArmDeps
 from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.judge_brief import judge_brief
 from anjo.sleep.probes.morning import Morning
-from anjo.sleep.probes.score import MuseJudge
+from anjo.sleep.probes.score import JudgeTokens, MuseJudge
 from anjo.sleep.serving import backend
 from anjo.sleep.types import Probe
 
@@ -84,7 +84,9 @@ def build(user_id: str, persona: str, night: date) -> Morning:
             ServedBriefs(brief_store), until=night, settings=RECALL),
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
     resent = _Resent()
-    judge = MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona))
+    tokens = JudgeTokens()  # the judge settles at its tokens, priced at ANJO_SLEEP_PRICES' Spark lines
+    judge = MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona),
+                      tokens=tokens)
     return Morning(arms=arms, sealed=probes, judge=judge, prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
                    wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ),
-                   retries=lambda: client.retries() + resent.count)
+                   retries=lambda: client.retries() + resent.count, judge_tokens=tokens)

@@ -36,6 +36,10 @@ the shared pretraining's projector (``ANJO_SLEEP_CHANNEL_PROJECTOR``) or the per
 GPU session's hold adds the embedding rows' CPU container. It needs MIND's state of each person
 (``NightDeps.mind_state``), which MIND's store provides; set without it, the night stops at build.
 
+Who plays practice's roles is ``ANJO_SLEEP_PRACTICE_ROLES`` (``practice.roles``; unset, Spark Open plays
+all three). ``critic=deepseek`` scores a synthetic person's candidates with DeepSeek V4.1 Flash
+(``practice.critics``, each call held on its own pool); a real person's critic stays Spark Open.
+
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
@@ -102,7 +106,9 @@ from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
+from anjo.sleep.practice.critics import ThirdPartyCritic, deepseek_critic, held_critic
 from anjo.sleep.practice.full import CappedChat, FullPractice
+from anjo.sleep.practice.roles import practice_roles
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.probes.clients import ModelClient
@@ -231,6 +237,12 @@ def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
                      serving=_Served(serving.name, client))
 
 
+def deepseek_practice_critic(night: date, ledger: Ledger | None) -> ThirdPartyCritic:
+    """DeepSeek V4.1 Flash as the critic of a synthetic person's practice, each call held on
+    ``practice.critics.POOL``."""
+    return held_critic(deepseek_critic(), ledger, f"night:practice:{night.isoformat()}")
+
+
 def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...]]:
     """Each synthetic person's fields from their persona file; anyone else's from ``$ANJO_SLEEP_FIELDS``."""
     known = {uid: load_person_file(PERSONAS / f"{name}.json").visible.field_domains for uid, name in personas.items()}
@@ -277,12 +289,16 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
+    roles = options.practice_roles or practice_roles(os.environ)  # and so does a role practice doesn't have
     gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
     def practice(chat: CappedChat, night: date, channel: ModelClient | None = None) -> FullPractice:
+        critic = deepseek_practice_critic(night, ledger) if roles.critic == "deepseek" else None
         return FullPractice(chat=chat, client=client if channel is None else channel, adapter=registry.last_promoted,
                             snapshot=context.snapshot, seed=night_settings.seed, scenes=night_settings.practice_scenes,
-                            teacher=night_settings.practice_teacher, concurrency=calls)
+                            teacher=night_settings.practice_teacher, concurrency=calls,
+                            glimmer_person=roles.person == "glimmer", critic=critic, third_party=is_synthetic,
+                            lazy_teacher=roles.teacher == "lazy")
 
     mind_state: MindState | None = None  # MIND's store fills this (each person's night after the dream step)
     channel = channel_setup(os.environ, client, practice, mind_state)

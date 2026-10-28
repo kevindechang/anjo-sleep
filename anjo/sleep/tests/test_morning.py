@@ -272,6 +272,51 @@ def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
     assert settled["amount"] <= held["amount"] and not ledger.open_holds()
 
 
+class MeteredChat:
+    """Muse Spark answering a JSON verdict; its usage is reported unless ``usage`` is off (a reply with
+    0 tokens in and out)."""
+
+    def __init__(self, *, usage: bool) -> None:
+        self.usage, self.calls = usage, 0
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None, max_tokens: int | None = None) -> Any:
+        from anjo.sleep.model_api import ChatResult
+
+        self.calls += 1
+        tokens = (3_000, 500) if self.usage else (0, 0)
+        return ChatResult(json.dumps({"verdict": "A", "reason": "x"}), (), "m", *tokens, "stop")
+
+
+def _metered_run(tmp_path: Path, *, usage: bool) -> tuple[Any, MeteredChat, dict[str, Any]]:
+    from anjo.sleep.probes.score import JudgeTokens, MuseJudge
+
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    rig, chat, tokens = Rig(tmp_path, ledger=ledger), MeteredChat(usage=usage), JudgeTokens()
+    rig.morning = replace(rig.morning, judge=MuseJudge(chat=chat, brief_for=lambda pid: "brief", tokens=tokens),
+                          judge_tokens=tokens)
+    done = rig.run()
+    events = read_records(ledger.path, PLAIN)
+    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd"])
+    settled = next(e for e in events if e["op"] == "settle" and e["job"] == held["job"])
+    return done, chat, settled
+
+
+def test_a_judge_call_with_usage_settles_at_its_tokens(tmp_path: Path) -> None:
+    done, chat, settled = _metered_run(tmp_path, usage=True)
+    usd = chat.calls * (3_000 * PRICES.spark_in_per_m + 500 * PRICES.spark_out_per_m) / 1e6
+    assert chat.calls > 0 and done.judge_calls == chat.calls and done.judge_estimated == 0
+    assert done.judge_usd == pytest.approx(usd) and settled["amount"] == pytest.approx(usd)
+
+
+def test_a_judge_call_without_usage_settles_at_the_bound_marked_estimated(tmp_path: Path) -> None:
+    from anjo.sleep.probes.morning import JUDGE_USD_PER_CALL
+
+    done, chat, settled = _metered_run(tmp_path, usage=False)
+    assert chat.calls > 0 and done.judge_estimated == done.judge_calls == chat.calls
+    assert done.judge_usd == pytest.approx(chat.calls * JUDGE_USD_PER_CALL) == settled["amount"]
+
+
 def test_all_no_verdict_is_missing_not_a_tie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.demo.record import chart_view
     from anjo.sleep.probes import morning as morning_module

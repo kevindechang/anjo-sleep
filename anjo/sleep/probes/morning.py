@@ -16,7 +16,10 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
   under ``unavailable`` (specificity is then inconclusive); it is never filled in.
 - Every paid call is held first, the way ``night/holds.py`` does it: the arms on ``modal_usd`` and
   ``baseten_sleep_usd``, the judge on ``meta_usd``. The judge's hold is taken before any arm runs, so
-  a pool without room stops the run before the first call.
+  a pool without room stops the run before the first call. The judge's hold is ``JUDGE_USD_PER_CALL`` a
+  call; it settles at the replies' tokens at the judge's list price (``Morning.judge_tokens``, priced at
+  ``Morning.prices``' Spark lines, ANJO_SLEEP_PRICES), and a call that reported no usage (or failed) at
+  that per-call bound, counted in ``MorningResult.judge_estimated``.
 - With ``concurrency`` above 1 every arm's question is prepared first, on the calling thread
   (``arms.prepare``: adapters, context C, the stored evidence), then the questions are asked side by
   side, then every (pair, probe) is judged side by side, at most ``concurrency`` at once
@@ -68,6 +71,7 @@ from anjo.sleep.probes.score import (
     REPORTED,
     BootstrapConfig,
     JudgeError,
+    JudgeTokens,
     NoVerdict,
     PairScore,
     PairwiseJudge,
@@ -86,7 +90,8 @@ ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2F", "3", "3x", "4")
 BASELINE: Final[Arm] = "1"
 PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C")}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
-JUDGE_USD_PER_CALL: Final = 0.02  # a Muse Spark judge call, until the Oct 30 timing measures it
+# The judge's hold a call, and what a call that reported no usage (or failed) settles at, marked estimated.
+JUDGE_USD_PER_CALL: Final = 0.02
 JUDGE_RETRY_SHARE: Final = 0.1  # retries of unreadable answers a run may send, as a share of its judge calls (1 in 257 seen)
 NO_VERDICT: Final = "no_verdict"
 # Past this share of a comparison's judged probes without a verdict, the morning stops. One answer in
@@ -169,6 +174,7 @@ class Morning:
     sleep: Callable[[], None] | None = None  # puts it back to sleep when the run ends, however it ends
     concurrency: int = 1  # model calls at once (``parallel.Calls``); 1 is the serial run
     retries: Callable[[], int] = field(default=lambda: 0)  # the arms' running count of requests sent again (the night log's)
+    judge_tokens: JudgeTokens | None = None  # the judge's metered usage (``MuseJudge.tokens``); None: every call estimated
 
 
 @dataclass(frozen=True)
@@ -177,6 +183,8 @@ class MorningResult:
     replies: int
     judge_calls: int
     no_verdict: int = 0  # (comparison, probe) pairs the judge gave no readable verdict on
+    judge_usd: float = 0.0  # what the judge's hold settled at
+    judge_estimated: int = 0  # judge calls in it at the per-call bound, with no usage reported
 
 
 class _Pinned:
@@ -227,6 +235,19 @@ class _Counting:
             reason = str(error) if isinstance(error, JudgeError) else type(error).__name__
             logger.warning("judge: probe %s unreadable again (%s): no verdict", probe.id, reason)
             raise NoVerdict(reason) from None
+
+
+def _judge_usage(morning: Morning) -> tuple[int, int, int]:
+    return (0, 0, 0) if morning.judge_tokens is None else morning.judge_tokens.read()
+
+
+def _judge_spend(judge: _Counting, morning: Morning, before: tuple[int, int, int]) -> tuple[float, int]:
+    """The judge's dollars since ``before``: its replies' tokens at its list price, and every call that
+    reported no usage (or failed) at ``JUDGE_USD_PER_CALL``, the hold's bound; and how many those were."""
+    metered, tokens_in, tokens_out = (now - then for now, then in zip(_judge_usage(morning), before, strict=True))
+    estimated = max(0, judge.calls - metered)
+    tokens = (tokens_in * morning.prices.spark_in_per_m + tokens_out * morning.prices.spark_out_per_m) / 1e6
+    return tokens + estimated * JUDGE_USD_PER_CALL, estimated
 
 
 def _next_file(folder: Path, night: date) -> Path:
@@ -363,13 +384,13 @@ def _run_morning(
     worst_judge = _worst_judge_calls(probes, arms)
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
     judge = _Counting(morning.judge, retries)
+    spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
     key = f"morning:{night.isoformat()}:{user_id}"
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
         holds.enter_context(held(morning.ledger, f"{key}:judge", JUDGE_POOLS,
-                                 usd((worst_judge + retries) * JUDGE_USD_PER_CALL),
-                                 lambda: judge.calls * JUDGE_USD_PER_CALL))
+                                 usd((worst_judge + retries) * JUDGE_USD_PER_CALL), lambda: spend()[0]))
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
                                  lambda: morning.prices.serve_gpu_per_hour * max(0.0, morning.timer() - started) / 3600.0))
@@ -417,7 +438,9 @@ def _run_morning(
     pending = target.with_name(f".{target.name}.tmp")
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")
     os.replace(pending, target)
-    return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()))
+    judge_usd, estimated = spend()
+    return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()),
+                         judge_usd, estimated)
 
 
 __all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",

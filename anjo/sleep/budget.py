@@ -18,9 +18,11 @@ still counts after the clearing.
 
 The caps are §12.1's. Baseten's $100 credit is two pools, and Sleep has priority: when
 ``baseten_sleep_usd`` runs short it may take MIND's unspent balance, so the two together never
-pass $100 and MIND never passes its own $40. Fireworks' $100 credit is one pool,
-``fireworks_mind_usd``, for MIND's experiment alone when it runs Spark Open there
-(``mind.spark_provider``); it shares nothing with Baseten's. ``vertex_mind_usd`` holds MIND's data's
+pass $100 and MIND never passes its own $40. Fireworks' $100 credit is two pools that together
+never pass it (``FIREWORKS_TOTAL``): ``fireworks_mind_usd`` ($80), for MIND's experiment when it runs
+Spark Open there (``mind.spark_provider``; the full core set needs about $21), and
+``fireworks_sleep_usd`` ($20), Sleep's practice critic when DeepSeek V4.1 Flash plays it
+(``practice.critics``). They share nothing with Baseten's. ``vertex_mind_usd`` holds MIND's data's
 Gemini gate reads (``mind.apd.readers``), apart from ``vertex_usd``'s diagnostic judge.
 
 The ledger is an append-only JSON Lines file in the data dir (``anjo/sleep/evidence/jsonl.py``,
@@ -48,7 +50,7 @@ from anjo.sleep.serving.config import SCALEDOWN_S, SERVE_TIMEOUT_S
 
 Pool = Literal[
     "modal_usd", "colab_cu", "meta_usd", "baseten_sleep_usd", "baseten_mind_usd", "fireworks_mind_usd",
-    "vertex_usd", "vertex_mind_usd", "judge_usd",
+    "fireworks_sleep_usd", "vertex_usd", "vertex_mind_usd", "judge_usd",
 ]
 POOLS: Final[tuple[Pool, ...]] = get_args(Pool)
 
@@ -60,7 +62,8 @@ CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "meta_usd": 140.0,  # $10 under the $150 credit, for billing lag
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b
-    "fireworks_mind_usd": 90.0,  # Tasks 17 and 17b on Fireworks: $10 under its $100 credit
+    "fireworks_mind_usd": 80.0,  # Tasks 17 and 17b on Fireworks; with Sleep's $20, the $100 credit
+    "fireworks_sleep_usd": 20.0,  # Sleep's practice critic on DeepSeek V4.1 Flash (coordinator, 2026-10-29)
     "vertex_usd": 50.0,  # the Gemini diagnostic judge
     "vertex_mind_usd": 150.0,  # MIND's data: Gemini's gate reads of the core splits and the pairs (GCP credits)
     "judge_usd": 100.0,  # judges' sleep-now nights, inside the totals above
@@ -69,6 +72,8 @@ UNITS: Final[Mapping[Pool, str]] = MappingProxyType(
     {pool: "cu" if pool == "colab_cu" else "usd" for pool in POOLS}
 )
 BASETEN_TOTAL: Final = CAPS["baseten_sleep_usd"] + CAPS["baseten_mind_usd"]
+FIREWORKS_CREDIT_USD: Final = 100.0
+FIREWORKS_TOTAL: Final = CAPS["fireworks_mind_usd"] + CAPS["fireworks_sleep_usd"]
 
 # The time caps every paid job runs under (§12.1). A GPU runner passes these as hard timeouts,
 # and a job's Bound is its rate over the same timeout.

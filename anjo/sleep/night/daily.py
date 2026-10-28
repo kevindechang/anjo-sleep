@@ -235,8 +235,9 @@ def morning_receipt(done: object, seconds: float) -> dict[str, Any]:
     cost model's morning lines) and the verdicts it couldn't read, counted."""
     receipt: dict[str, Any] = {"seconds": round(seconds, 3)}
     if isinstance(done, MorningResult):
-        receipt.update(replies=done.replies, judge_calls=done.judge_calls,
-                       **({"no_verdict": done.no_verdict} if done.no_verdict else {}))
+        receipt.update(replies=done.replies, judge_calls=done.judge_calls, judge_usd=round(done.judge_usd, 6),
+                       judge_estimated=done.judge_estimated,  # calls in judge_usd at the hold's bound, no usage
+                       **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
     return receipt
 
 

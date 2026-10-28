@@ -8,7 +8,7 @@ the weights volume read-only and lands each adapter on the adapters volume. Thre
 - ``download_weights``: fetches the pinned Glimmer revision onto the weights volume, once. It
   holds no secret unless the deploy names a Hugging Face one (the repo isn't gated).
 - ``Serve``: vLLM's OpenAI-compatible server on one GPU at the precision ``config.SERVING``
-  names, with LoRA on, so the base model and every personal adapter share it. It holds only the
+  names (or ``ANJO_SLEEP_SERVE_GPU``'s, deployed as a second app: ``config.serve_app_name``), with LoRA on, so the base model and every personal adapter share it. It holds only the
   serving secret (VLLM_API_KEY). It runs one container at most (``config.MAX_CONTAINERS``), scales
   to zero after ten idle minutes, and every function has a timeout. vLLM loads an adapter only
   when the client asks it to (``/v1/load_lora_adapter``, ``serving.client``).
@@ -67,6 +67,10 @@ def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
         env[config.HF_SECRET_ENV] = settings.hf_secret
     if settings.prompt_embeds:
         env[config.PROMPT_EMBEDS_ENV] = "1"
+    if settings.precision is not config.SERVING:  # a second app's GPU; today's image env is unchanged
+        env[config.SERVE_GPU_ENV] = settings.precision.gpu
+    if settings.max_inputs != config.DEFAULT_MAX_INPUTS:
+        env[config.MAX_INPUTS_ENV] = str(settings.max_inputs)
     return env
 
 
@@ -79,7 +83,7 @@ image = (
     .add_local_file(_HERE / "__init__.py", "/root/anjo/sleep/serving/__init__.py")
     .add_local_file(_HERE / "config.py", "/root/anjo/sleep/serving/config.py")
 )
-app = modal.App(config.APP_NAME, image=image)
+app = modal.App(config.serve_app_name(SETTINGS.precision), image=image)
 weights = modal.Volume.from_name(config.WEIGHTS_VOLUME, create_if_missing=True)
 adapters = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
 serve_secret = modal.Secret.from_name(config.SECRET_NAME)
@@ -163,7 +167,7 @@ def stage_adapter(read: Callable[[str], Iterable[bytes]], name: str, root: Path)
     max_containers=config.MAX_CONTAINERS,
     **_SNAPSHOT_OPTIONS,
 )
-@modal.concurrent(max_inputs=config.CONCURRENT_REQUESTS)
+@modal.concurrent(max_inputs=SETTINGS.max_inputs)
 class Serve:
     @modal.enter(snap=_SNAPSHOT)
     def start(self) -> None:
