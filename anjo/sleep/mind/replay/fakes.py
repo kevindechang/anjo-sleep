@@ -73,15 +73,16 @@ def _noon(day: date) -> datetime:
     return datetime.combine(day, time(12, 0), tzinfo=timezone.utc)
 
 
-def fake_life(seed: int, *, split: Split = "development") -> Life:
-    """Scene 4 over ``len(DAYS)`` virtual days, the life's own ids throughout."""
+def fake_life(seed: int, *, split: Split = "development", model: str = SPARK_OPEN) -> Life:
+    """Scene 4 over ``len(DAYS)`` virtual days, the life's own ids throughout, written by
+    ``model`` (one provider's Spark Open id)."""
     life_id = f"{split}-fake-film-{seed}"
     days = tuple(FAKE_DAY0 + timedelta(days=n) for n in range(len(DAYS)))
     evidence = tuple(
         Evidence(
             id=f"{life_id}:d{n}:e{i}", person_id=life_id, day=day, kind="lesson", text=text,
             source=f"session:{life_id}:d{n}", held_out=False, created_at=_noon(day) + timedelta(minutes=i),
-            model=SPARK_OPEN, ancestry=frozenset({SPARK_OPEN}), target_id=target,
+            model=model, ancestry=frozenset({model}), target_id=target,
         )
         for n, (day, items) in enumerate(zip(days, DAYS, strict=True)) for i, (text, target) in enumerate(items)
     )
@@ -90,7 +91,7 @@ def fake_life(seed: int, *, split: Split = "development") -> Life:
         check_after=_noon(days[0] + timedelta(days=5)), status="open", revision=1, acted_revision=0,
         confidence=None, last_mentioned=days[0],
     )
-    sessions = tuple(Session(day, " ".join(text for text, _ in items), SPARK_OPEN) for day, items in zip(days, DAYS))
+    sessions = tuple(Session(day, " ".join(text for text, _ in items), model) for day, items in zip(days, DAYS))
     return Life(
         id=life_id, field="indie film", seed=seed, split=split, days=days, sessions=sessions, evidence=evidence,
         targets={day: (shoot,) for day in days},
@@ -274,17 +275,19 @@ class FakeResolverChat:
                           input_tokens=len(str(messages[-1]["content"])) // 4, output_tokens=8, finish_reason="stop")
 
 
-def fake_replay_models() -> ReplayModels:
-    """The branches' models: the thinker at ``BRANCH_TEMPERATURE`` with each branch's seed."""
+def fake_replay_models(model: str = SPARK_OPEN) -> ReplayModels:
+    """The branches' models: the thinker at ``BRANCH_TEMPERATURE`` with each branch's seed, the
+    resolver reporting ``model``."""
     return ReplayModels(thinker_for=_branch_thinker, world=FakeWorld(), screen=FakeScreen(),
-                        resolver_chat=FakeResolverChat())
+                        resolver_chat=FakeResolverChat(model))
 
 
 @dataclass
 class FakeLabelChat:
     """Spark Open's labeller (a ``ChatFn``): the locked courtyard settles the kitchen hypothesis;
-    nothing else settles anything. It keeps every prompt it was sent."""
+    nothing else settles anything, under ``model``. It keeps every prompt it was sent."""
 
+    model: str = SPARK_OPEN
     sent: list[list[dict[str, Any]]] = field(default_factory=list)
 
     def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
@@ -294,7 +297,7 @@ class FakeLabelChat:
         evidence = user.split("Evidence:", 1)[-1].casefold()
         holds = letters.get(KITCHEN) if "locked" in evidence and KITCHEN in letters else None
         text = json.dumps({"holds": holds or "undetermined"})
-        return ChatResult(text=text, tool_calls=(), model=SPARK_OPEN, input_tokens=len(user) // 4,
+        return ChatResult(text=text, tool_calls=(), model=self.model, input_tokens=len(user) // 4,
                           output_tokens=min(12, max_tokens), finish_reason="stop")
 
 

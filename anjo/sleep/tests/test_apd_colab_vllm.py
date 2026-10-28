@@ -26,7 +26,8 @@ TIMEOUT_S = 3 * 3600.0
 SETTINGS = ServeConfig(precision=config.SERVING, revision="a" * 40, tool_parser=None, gpu_snapshot=False,
                        vllm_version=config.DEFAULT_VLLM_VERSION)
 KEYS = {"ANJO_BASETEN_API_KEY": "baseten-secret-1", "ANJO_META_API_KEY": "meta-secret-2",
-        "GOOGLE_API_KEY": "google-secret-3", "GEMINI_API_KEY": "gemini-secret-4"}
+        "GOOGLE_API_KEY": "google-secret-3", "GEMINI_API_KEY": "gemini-secret-4",
+        "ANJO_FIREWORKS_API_KEY": "fireworks-secret-5"}
 
 
 def _serve(vm: fakes.FakeColab, ledger: Ledger | None) -> AbstractContextManager[ColabSession]:

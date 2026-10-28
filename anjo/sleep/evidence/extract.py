@@ -5,8 +5,8 @@ at temperature 0 and lists what Anjo can learn from them, with any target each i
 plan the person dated, or a topic she was lost on or that stays open. Her own turns are never
 sent: they carry Anjo's untagged memory in their context (§3).
 
-- **Provenance:** an extracted item's ``model`` is Spark Open, and a reply that names any other
-  model (or none) is refused. Its ancestry is Spark Open plus the ancestry of every turn the call
+- **Provenance:** an extracted item's ``model`` is Spark Open (Baseten's id; APD's lives pass
+  their provider's), and a reply that names any other model (or none) is refused. Its ancestry is Spark Open plus the ancestry of every turn the call
   read, since the model saw them all: empty for a real person's words, {Spark Open} for a
   simulated person's, unknown (``None``) when any read turn's is unknown.
 - **Ids:** an extracted item's id comes from the person, the day, its source turn, its kind and
@@ -170,18 +170,21 @@ def extract(
     known_ids: frozenset[str],
     now: datetime,
     chat: ChatFn = spark_open,
+    model: str = SPARK_OPEN,
 ) -> Extraction:
-    """The day's new evidence, stamped with ``day`` and created at ``now`` (the night's clock)."""
+    """The day's new evidence, stamped with ``day`` and created at ``now`` (the night's clock).
+    ``model`` is the Spark Open id ``chat`` serves: Baseten's for the night, the experiment's
+    provider's for APD's lives."""
     own = own_turns(turns)
     found: list[tuple[Evidence, Mention | None]] = []
     refused: list[str] = []
     input_tokens = output_tokens = 0
     if own:
         reply = chat(_messages(day, own, targets))
-        if reply.model != SPARK_OPEN:
+        if reply.model != model:
             raise ExtractionError("the extraction reply doesn't name the extraction model")
         input_tokens, output_tokens = reply.input_tokens, reply.output_tokens
-        found, refused = _read_reply(person_id, day, own, targets, now, reply.text)
+        found, refused = _read_reply(person_id, day, own, targets, now, reply.text, model)
     for item in imported:
         found.append((Evidence(
             id="e-" + _hash(person_id, "imported", item.source)[:20], person_id=person_id, day=day,
@@ -198,10 +201,11 @@ def _read_reply(
     targets: Sequence[Target],
     now: datetime,
     text: str,
+    model: str,
 ) -> tuple[list[tuple[Evidence, Mention | None]], list[str]]:
     shown = {target.id: target for target in targets}
     read = _read_ancestry(own)
-    ancestry = None if read is None else read | {SPARK_OPEN}
+    ancestry = None if read is None else read | {model}
     found: list[tuple[Evidence, Mention | None]] = []
     refused: list[str] = []
     ordinals: dict[tuple[str, str], int] = {}
@@ -218,7 +222,7 @@ def _read_reply(
         found.append((Evidence(
             id="e-" + _hash(person_id, day.isoformat(), turn.source, hit.kind, str(ordinal))[:20],
             person_id=person_id, day=day, kind=hit.kind, text=hit.text, source=turn.source,
-            held_out=False, created_at=now, model=SPARK_OPEN, ancestry=ancestry,
+            held_out=False, created_at=now, model=model, ancestry=ancestry,
         ), mention))
     return found, refused
 

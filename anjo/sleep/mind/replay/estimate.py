@@ -1,7 +1,8 @@
 """The dry run's estimate of what replay would spend (Task 17b), before any of it runs: the
 labels' Spark Open dollars from their prompts' sizes, each reply at its cap, beside the Spark Open
-hold of the labels and the branches' resolver calls; and the most A100 minutes and compute units
-the branches and the 17b arms can keep Glimmer busy (their ``colab_cu`` holds, ``replay.spend``)."""
+hold of the labels and the branches' resolver calls, on the provider's pool; and the most A100
+minutes and compute units the branches and the 17b arms can keep Glimmer busy (their ``colab_cu``
+holds, ``replay.spend``)."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -11,8 +12,9 @@ from typing import Final
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.replay.resolve import LABEL_MAX_TOKENS, label_messages, later_evidence
-from anjo.sleep.mind.replay.spend import SPARK_POOL, glimmer_seconds
+from anjo.sleep.mind.replay.spend import glimmer_seconds
 from anjo.sleep.mind.replay.types import REPLAY_K, StartState
+from anjo.sleep.mind.spark_provider import BASETEN, SparkProvider
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import spark_usd, spark_worst_usd
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
@@ -69,11 +71,12 @@ def _usd(value: float | None) -> str:
     return "unpriced (no list prices given)" if value is None else f"${value:,.2f}"
 
 
-def describe(found: SpendEstimate) -> str:
+def describe(found: SpendEstimate, provider: SparkProvider = BASETEN) -> str:
     return "\n".join((
-        "Replay spend plan (Glimmer on Colab vLLM, Spark Open on Baseten; each step held before it runs):",
+        f"Replay spend plan (Glimmer on Colab vLLM, Spark Open on {provider.label} ({provider.model}); "
+        "each step held before it runs):",
         f"- Spark Open: {found.label_calls} label calls reading about {found.label_tokens:,} tokens, about "
-        f"{_usd(found.label_usd)}. On {SPARK_POOL} the labels hold at most {_usd(found.label_hold_usd)}, and each "
+        f"{_usd(found.label_usd)}. On {provider.pool} the labels hold at most {_usd(found.label_hold_usd)}, and each "
         f"start state's branches (their resolver calls) at most {_usd(found.branch_spark_hold_usd)}, each "
         "settled at what it cost.",
         f"- Glimmer: {found.branch_runs} branch nights and {found.arm_runs} arm runs, at most "

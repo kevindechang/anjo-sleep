@@ -418,7 +418,8 @@ class FakeSparkChat:
 @dataclass
 class FakeLifeChat:
     """``generate``'s writer and extractor (``context.brief.ChatFn``): each beat in a message of its
-    own, one lesson per message, and the first lesson of each day mentions the plan."""
+    own, one lesson per message, and the first lesson of each day mentions the plan. Each reply
+    names the model asked for, as a provider's does."""
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
                  temperature: float | None = None) -> ChatResult:
@@ -428,7 +429,7 @@ class FakeLifeChat:
             for beat in [*body["plant"], *body["ask"]]:
                 placed[beat["beat"]] = len(out)
                 out.append(f"By the way, {beat['say']}")
-            return _reply(json.dumps({"messages": out, "placed": placed}))
+            return _reply(json.dumps({"messages": out, "placed": placed}), model)
         held = body["open_targets"]
         due = (date.fromisoformat(body["today"]) + timedelta(days=5)).isoformat()
         target = {"kind": "commitment", "label": PLAN, "check_after": due, "existing_id": held[0]["id"] if held else None,
@@ -437,19 +438,21 @@ class FakeLifeChat:
                  for m in body["messages"]]
         if items:
             items[0]["target"] = target
-        return _reply(json.dumps({"items": items}))
+        return _reply(json.dumps({"items": items}), model)
 
 
 @dataclass
 class FakeGateReader:
-    """The leak reader never flags; the discoverability reader always finds."""
+    """The leak reader never flags; the discoverability reader always finds. Each reply names the
+    model asked for."""
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
                  temperature: float | None = None) -> ChatResult:
         body = json.loads(messages[-1]["content"])
         if str(messages[0]["content"]).startswith("# leak_v1"):
-            return _reply(json.dumps({"flag": False}))
-        return _reply(json.dumps({"found": True, "statement": "found it", "days": [d["date"] for d in body["days"]]}))
+            return _reply(json.dumps({"flag": False}), model)
+        return _reply(json.dumps({"found": True, "statement": "found it", "days": [d["date"] for d in body["days"]]}),
+                      model)
 
 
 @dataclass

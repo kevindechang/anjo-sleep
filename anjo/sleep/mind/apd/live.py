@@ -7,9 +7,10 @@
   adapter, dated the same, as the night wires it (``app/mind_night.py``): the world query asks the
   thinker's own model.
 - **The screen and the blind resolver:** Spark Open (``mind.screen.SparkScreen``, with no names,
-  since a synthetic life has none, and ``SparkResolver``). Every Spark Open call of a run, the
-  screen's included, goes through one ``SparkCalls``: counted against the run's hold on
-  ``baseten_mind_usd`` (no call past it) and priced as it returns.
+  since a synthetic life has none, and ``SparkResolver``) on the experiment's provider
+  (``mind.spark_provider``). Every Spark Open call of a run, the screen's included, goes through
+  one ``SparkCalls``: counted against the run's hold on the provider's pool (``baseten_mind_usd``
+  or ``fireworks_mind_usd``; no call past it) and priced as it returns.
 - **Provenance:** the model each world answer's and resolver verdict's reply named, as its API
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
 - **No run with a failed call:** a transient failure (a 429, a 5xx, a timeout or a reset) is
@@ -24,10 +25,11 @@
 what it priced, as the night's MIND step does, and journals every call before it returns
 (``journal``), so a night its process never closed is settled from the journal. A night refused
 its hold waits for room (``room_wait``): for one of the other runs' nights to settle (runs go in
-parallel), up to ``ROOM_WAIT_S``; for Sleep's open holds on the shared Baseten credit, which has
-Sleep's priority, up to ``SHARED_WAIT_S``, then stops cleanly (``BudgetStop``); and when neither
+parallel), up to ``ROOM_WAIT_S``; on Baseten, for Sleep's open holds on the shared credit, which
+has Sleep's priority, up to ``SHARED_WAIT_S``, then stops cleanly (``BudgetStop``); and when neither
 holds what it needs (MIND's own cap binds, or nothing open would free enough), no room is coming
-and it stops at once. The GPU is held once, by the serving session itself (``colab_vllm.serve``).
+and it stops at once. Fireworks' pool shares nothing with Sleep, so there only other MIND nights
+are waited on. The GPU is held once, by the serving session itself (``colab_vllm.serve``).
 ``Meter`` sums what a batch of runs used, for timing.
 """
 from __future__ import annotations
@@ -41,7 +43,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Final
 
-from anjo.sleep.budget import Ledger, Reservation
+from anjo.sleep.budget import Ledger, Pool, Reservation
 from anjo.sleep.mind.apd import retry
 from anjo.sleep.mind.apd.arms import MindCore, run_arm
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
@@ -140,8 +142,8 @@ class GlimmerWorld:
 @dataclass
 class SparkCalls:
     """Every Spark Open call of one run, held a night at a time as the night's MIND step holds them:
-    at a night's first call (``clock``), its worst case of ``per_night`` calls is held on
-    ``baseten_mind_usd`` (the night before settled at what it priced), and a call past that count
+    at a night's first call (``clock``), its worst case of ``per_night`` calls is held on ``pool``,
+    the provider's (the night before settled at what it priced), and a call past that count
     is refused (the port then refuses or says undetermined). Each call is journaled with its real
     tokens before it returns. A transient failure is tried again (``retry``), ``wait``-ing its
     backoff, each try a call of its own under the night's count; a failed try is priced at one
@@ -154,6 +156,7 @@ class SparkCalls:
     prices: Prices | None
     ledger: Ledger | None = None
     key: str = "spark"
+    pool: Pool = SPARK_POOL
     per_night: int = MIND_SPARK_CALLS
     clock: NightClock | None = None
     journal: SpendJournal | None = None
@@ -226,9 +229,9 @@ class SparkCalls:
         need, waited = usd(spark_worst_usd(prices, self.per_night)), 0.0
         while True:
             try:
-                return hold(ledger, f"apd:{self.key}:{day}", (SPARK_POOL,), need)
+                return hold(ledger, f"apd:{self.key}:{day}", (self.pool,), need)
             except BudgetStop:
-                limit = room_wait(ledger, need.amount)
+                limit = room_wait(ledger, need.amount, self.pool)
                 if limit is None or waited >= limit:
                     if limit == SHARED_WAIT_S:
                         raise BudgetStop(
@@ -262,14 +265,16 @@ class SparkCalls:
         return chat
 
 
-def room_wait(ledger: Ledger, need: float) -> float | None:
-    """How long a night refused ``need`` on MIND's Baseten pool may wait for room: ``ROOM_WAIT_S``
-    while other MIND nights hold the pool (one settles soon); ``SHARED_WAIT_S`` when only Sleep's
-    open holds stand in the way (the shared credit binds, not MIND's own cap, and what Sleep holds
-    would free enough); else ``None``, since no room is coming."""
+def room_wait(ledger: Ledger, need: float, pool: Pool = SPARK_POOL) -> float | None:
+    """How long a night refused ``need`` on MIND's ``pool`` may wait for room: ``ROOM_WAIT_S``
+    while other MIND nights hold the pool (one settles soon); on Baseten's pool, ``SHARED_WAIT_S``
+    when only Sleep's open holds stand in the way (the shared credit binds, not MIND's own cap, and
+    what Sleep holds would free enough); else ``None``, since no room is coming."""
     holds = ledger.open_holds()
-    if any(SPARK_POOL in held.pools for held in holds):
+    if any(pool in held.pools for held in holds):
         return ROOM_WAIT_S
+    if pool != SPARK_POOL:  # only Baseten's credit is shared with Sleep
+        return None
     sleep_held = sum(held.bound.amount for held in holds if SLEEP_POOL in held.pools)
     mind_room, shared_room = ledger.remaining(SPARK_POOL), ledger.remaining(SLEEP_POOL)
     if sleep_held <= 0 or mind_room + _EPSILON < shared_room or need > shared_room + sleep_held + _EPSILON:
@@ -326,10 +331,12 @@ def run_live(
     prices: Prices | None, adapter: CheckpointRef | None = None, budget: Budget = Budget(),
     core: MindCore | None = None, brief: str | None = None, key: str | None = None,
     journal: SpendJournal | None = None, meter: Meter | None = None, wait: Callable[[float], None] = time.sleep,
+    pool: Pool = SPARK_POOL,
 ) -> ArmRun:
-    """One arm through ``life`` on the live models, its Spark Open calls held a night at a time
-    under ``key`` and journaled; ``wait`` is how a call waits for room or a retry."""
-    spark = SparkCalls(spark_chat, prices, ledger, key or f"run:{life.id}:{arm}", journal=journal, wait=wait)
+    """One arm through ``life`` on the live models, its Spark Open calls held a night at a time on
+    ``pool`` under ``key`` and journaled; ``wait`` is how a call waits for room or a retry."""
+    spark = SparkCalls(spark_chat, prices, ledger, key or f"run:{life.id}:{arm}", pool=pool, journal=journal,
+                       wait=wait)
     models = arm_models(session, spark, adapter=adapter)
     with held_run(spark):
         found = run_arm(arm, life, models, budget=budget, core=core, brief=brief)

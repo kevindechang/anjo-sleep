@@ -13,8 +13,9 @@
   and the intervention test's when it has.
 - **kill-resume:** ``resume.kill_resume`` on held-out lives, one at a time (vLLM at temperature 0
   isn't batch-invariant, and the runs are compared token for token), its children attached to this
-  session (``kill_setup``). Each process holds its own Spark Open a night at a time and journals
-  every call; the killed child's open night is settled from its journal (``batch.settle_orphans``).
+  session (``kill_setup``), on the parent's Spark Open provider. Each process holds its own Spark
+  Open a night at a time on that provider's pool and journals every call; the killed child's open
+  night is settled from its journal (``batch.settle_orphans``).
 
 Times are measured with the clock passed in; nothing here reads the environment but
 ``kill_setup``, which runs in kill-resume's children.
@@ -47,6 +48,7 @@ from anjo.sleep.mind.apd.live import SparkCalls, arm_models
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, HELD_OUT_LIVES_CUT, ArmName, ArmRun, Life, LifeScore
 from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
+from anjo.sleep.mind.spark_provider import named
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.prereg.ledger import LedgerEntry
@@ -63,7 +65,7 @@ HELD_OUT_ARMS: Final[tuple[ArmName, ...]] = ("A", "B", "M", "M-persist", "M-kern
 REPLAY_ARMS: Final[tuple[ArmName, ...]] = ("M+replay", "M+shuffled")
 FREEZE_KIND: Final = "apd_freeze"
 DRAW_SEED_KIND: Final = "apd_draw_seed"
-SETUP_ENV: Final = "ANJO_APD_ATTACH"  # kill-resume's children: "<data>|<session>|<port>|<fake>"
+SETUP_ENV: Final = "ANJO_APD_ATTACH"  # kill-resume's children: "<data>|<session>|<port>|<fake>|<provider>"
 KEY_ENV: Final = "ANJO_APD_KEY"
 SPEND_ENV: Final = "ANJO_APD_SPEND"  # and "<ledger>|<four prices>" when their Spark Open is held
 SETUP: Final = "anjo.sleep.mind.apd.pilot:kill_setup"
@@ -77,15 +79,18 @@ class FreezeError(RuntimeError):
 
 
 def generate_life(spec: LifeSpec, backend: Backend) -> Generated:
-    """``generate.generate``'s attempts, each attempt's worst case held before it starts."""
+    """``generate.generate``'s attempts, each attempt's worst case held before it starts, Spark Open
+    on the backend's provider."""
+    model = backend.provider.model
     for attempt in range(generate.MAX_ATTEMPTS):
         with held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}") as (writer, reader, auditor):
             try:
                 built, problems = generate.life(spec.field, spec.families, spec.prevalence,
-                                                generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer)
+                                                generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
+                                                model=model)
             except GenerationFailed:
                 continue
-            verdicts = gates.check(built, problems, reader=reader, auditor=auditor)
+            verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
         if gates.passed(verdicts):
             return Generated(built, problems, attempt + 1, verdicts)
     raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts")
@@ -269,7 +274,8 @@ def _kill_one(data: DataDir, life: Life, kill_at: int, backend: Backend, out: Ou
 @contextmanager
 def _attached(data: DataDir, session: ColabSession, backend: Backend) -> Iterator[None]:
     before = {name: os.environ.get(name) for name in (SETUP_ENV, KEY_ENV, SPEND_ENV)}
-    os.environ[SETUP_ENV] = f"{data.root}|{session.session}|{session.local_port}|{int(backend.fake)}"
+    os.environ[SETUP_ENV] = (f"{data.root}|{session.session}|{session.local_port}|{int(backend.fake)}|"
+                             f"{backend.provider.name}")
     os.environ[KEY_ENV] = session.key
     ledger, prices = backend.ledger, backend.prices
     os.environ[SPEND_ENV] = "" if ledger is None or prices is None else (
@@ -292,22 +298,19 @@ def _settled(backend: Backend, spend: SpendJournal) -> None:
 def kill_setup(life_id: str) -> resume.KillSetup:
     """Kill-resume's setup in each process: the life from the data dir, and the run's models on
     the session the parent serves, attached through its tunnel (the fakes' own server with
-    ``--fake``). Each process holds its Spark Open a night at a time under a key of its own and
-    journals every call to the life's journal; ``close`` settles its last night."""
-    root, session, port, fake = os.environ[SETUP_ENV].split("|")
+    ``--fake``). Each process holds its Spark Open, on the parent's provider, a night at a time
+    under a key of its own on that provider's pool, and journals every call to the life's journal;
+    ``close`` settles its last night."""
+    root, session, port, fake, name = os.environ[SETUP_ENV].split("|")
+    provider = named(name)
     key = os.environ[KEY_ENV]
     data = DataDir(Path(root))
     transport = httpx.MockTransport(fakes.FakeVllm(key)) if fake == "1" else None
     attached = colab_vllm.attach(session, int(port), key, transport=transport)
     life = data.life(life_id)
-    chat: ChatFn
-    if fake == "1":
-        chat = fakes.FakeSparkChat()
-    else:
-        from anjo.sleep.spark_inquiry import spark_open
-        chat = spark_open
+    chat: ChatFn = fakes.FakeSparkChat(model=provider.model) if fake == "1" else provider.chat
     ledger, prices = _spend_env(os.environ.get(SPEND_ENV, ""))
-    spark = SparkCalls(chat, prices, ledger, f"kill:{life.id}:{os.getpid()}",
+    spark = SparkCalls(chat, prices, ledger, f"kill:{life.id}:{os.getpid()}", provider.pool,
                        journal=SpendJournal(data.journal(f"kill-{life.id}")))
     return resume.KillSetup(
         life=life, models=arm_models(attached, spark), core=mind_core(),

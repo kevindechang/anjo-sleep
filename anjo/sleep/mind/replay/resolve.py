@@ -72,7 +72,8 @@ def parse_label(text: str, start: StartState) -> tuple[str | None, bool]:
 
 @dataclass(frozen=True)
 class SparkLabeler:
-    """The labeller on Spark Open (a ``ChatFn``: ``spark_inquiry.spark_open`` live, a fake in tests)."""
+    """The labeller on Spark Open (a ``ChatFn``: the provider's ``chat`` live, ``mind.spark_provider``;
+    a fake in tests)."""
 
     chat: ChatFn
 

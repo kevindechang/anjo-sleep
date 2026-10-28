@@ -15,7 +15,7 @@ REPLAY = Path(__file__).parents[1] / "mind" / "replay"
 STDLIB = frozenset({"__future__", "collections.abc", "dataclasses", "datetime", "re", "types", "typing"})
 ALLOWED = {
     "types.py": STDLIB | {
-        "anjo.sleep.baseten_api",  # SPARK_OPEN, the model id, only
+        "anjo.sleep.provenance",  # SPARK_OPEN_IDS, the two providers' model ids, only
         "anjo.sleep.mind.apd.types", "anjo.sleep.mind.inquiry.types", "anjo.sleep.types",
     },
     "score.py": STDLIB | {"anjo.sleep.mind.replay.types"},
@@ -44,8 +44,8 @@ def test_replays_types_score_and_dataset_are_pure(module: str) -> None:
             names = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and not node.level:
             names = [node.module or ""]
-            if node.module == "anjo.sleep.baseten_api":
-                assert [alias.name for alias in node.names] == ["SPARK_OPEN"], f"{module} uses baseten_api"
+            if module == "types.py" and node.module == "anjo.sleep.provenance":
+                assert [alias.name for alias in node.names] == ["SPARK_OPEN_IDS"], f"{module} uses provenance"
         else:
             names = []
         for name in names:

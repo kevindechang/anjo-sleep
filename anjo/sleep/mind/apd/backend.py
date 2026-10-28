@@ -5,8 +5,9 @@ Live, and only after ``--live --yes``:
 - **Glimmer:** Colab vLLM behind an SSH tunnel (``colab_vllm``), every CLI call under its timeout,
   each session on a throwaway key made in the data dir's ``ssh`` folder, after a ``preflight`` of
   the CLI, ``ssh`` and ``ssh-keygen``;
-- **Spark Open** (Baseten): the life writer and extractor, the gates' readers, the screen, the
-  resolver and 17b's labels;
+- **Spark Open** on the experiment's provider (``mind.spark_provider``: Fireworks by default, or
+  Baseten): the life writer and extractor, the gates' readers, the screen, the resolver, 17b's
+  labels and the intervention test's writer;
 - **Muse Spark** (Meta's API): the gates' auditor and the APD judge;
 - **Gemini** (Vertex, ``probes.second_judge.MODEL_ID``): the rescoring judge. Its SDK is imported
   only when a live judge first calls it, with Vertex's own application-default credentials. Gemini
@@ -15,8 +16,8 @@ Live, and only after ``--live --yes``:
   they are counted with it.
 
 Every paid call is counted, priced and held through the shared budget ledger. Generation holds
-each attempt's worst case before it starts: ``GEN_SPARK_CALLS`` Spark Open calls on
-``baseten_mind_usd`` and ``GEN_MUSE_CALLS`` Muse Spark calls on ``meta_usd`` (a call past either
+each attempt's worst case before it starts: ``GEN_SPARK_CALLS`` Spark Open calls on the
+provider's pool and ``GEN_MUSE_CALLS`` Muse Spark calls on ``meta_usd`` (a call past either
 count is refused), the most one attempt can make: a writer and an extractor call a day, every
 leak window of both views and a discoverability read for each planted item, an identify call for
 each and the script audit.
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from anjo.sleep import baseten_api, meta_api
+from anjo.sleep import meta_api
 from anjo.sleep.budget import Ledger, Pool
 from anjo.sleep.context.brief import ChatFn as BriefChat
 from anjo.sleep.mind.apd import colab_vllm, fakes
@@ -42,8 +43,9 @@ from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
+from anjo.sleep.mind.spark_provider import BASETEN, SparkProvider
 from anjo.sleep.probes import second_judge
-from anjo.sleep.spark_inquiry import ChatFn, spark_open
+from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.train.runners.colab import COLAB_BIN, ColabCli
 
 GEN_WRITE_CALLS: Final = 2 * LIFE_DAYS  # the writer and the extractor, once a day
@@ -60,7 +62,8 @@ GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_to
 @dataclass(frozen=True)
 class Backend:
     """Every model and machine the pilot reaches, and where its spend is held (``ledger`` and the
-    prices: ``None`` with the fakes, which hold nothing)."""
+    prices: ``None`` with the fakes, which hold nothing). ``provider`` serves every Spark Open call
+    (``spark``, ``life_chat`` and ``reader``), held on its pool."""
 
     cli: ColabCli
     tunnels: TunnelOpener
@@ -71,6 +74,7 @@ class Backend:
     auditor: BriefChat
     muse: TextModel
     gemini: TextModel
+    provider: SparkProvider = BASETEN
     ledger: Ledger | None = None
     prices: Prices | None = None
     rates: Mapping[str, Rate] | None = None
@@ -90,15 +94,17 @@ def _text(complete: Callable[[str], str]) -> TextModel:
     return model
 
 
-def fake_backend() -> Backend:
-    """Everything offline: the fake VM, Glimmer, Spark Open, the gates and the judges."""
+def fake_backend(provider: SparkProvider = BASETEN) -> Backend:
+    """Everything offline: the fake VM, Glimmer, Spark Open (answering as ``provider``'s model), the
+    gates and the judges."""
     vm = fakes.FakeColab()
     return Backend(
         cli=ColabCli(Path("/fake/colab"), run=vm), tunnels=fakes.fake_tunnels(vm),
         wait=functools.partial(colab_vllm.ready, clock=fakes.Ticks(), sleep=lambda _s: None),
-        spark=fakes.FakeSparkChat(), life_chat=fakes.FakeLifeChat(), reader=fakes.FakeGateReader(),
+        spark=fakes.FakeSparkChat(model=provider.model), life_chat=fakes.FakeLifeChat(), reader=fakes.FakeGateReader(),
         auditor=fakes.FakeGateAuditor(), muse=_text(fakes.fake_judge(strict=False)),
-        gemini=_text(fakes.fake_judge(strict=True)), fake=True, claude=fakes.fake_judge(strict=False), vm=vm,
+        gemini=_text(fakes.fake_judge(strict=True)), provider=provider, fake=True, claude=fakes.fake_judge(strict=False),
+        vm=vm,
         clock=fakes.Ticks(1.0), sleep=lambda _s: None, keygen=fakes.fake_keygen,
     )
 
@@ -106,12 +112,16 @@ def fake_backend() -> Backend:
 # ── Live ──────────────────────────────────────────────────────────────────────
 
 
-def _brief_chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
-                temperature: float | None = None) -> ChatResult:
-    """Generation's calls: Muse Spark on Meta's API for the auditor, Spark Open on Baseten else."""
-    if model == "muse-spark":
-        return meta_api.chat("muse-spark", messages, tools, timeout_s, temperature=temperature)
-    return baseten_api.chat(model, messages, tools, timeout_s, temperature=temperature)
+def _brief_chat(provider: SparkProvider) -> BriefChat:
+    """Generation's calls: Muse Spark on Meta's API for the auditor, Spark Open on ``provider`` else."""
+
+    def chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+             temperature: float | None = None) -> ChatResult:
+        if model == "muse-spark":
+            return meta_api.chat("muse-spark", messages, tools, timeout_s, temperature=temperature)
+        return provider.write(model, messages, tools, timeout_s, temperature=temperature)
+
+    return chat
 
 
 def _muse(prompt: str) -> tuple[str, int, int]:
@@ -140,11 +150,14 @@ def _gemini(prompt: str) -> tuple[str, int, int]:
     return reply.text or "", int(usage.prompt_token_count or 0), out
 
 
-def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str, Rate]) -> Backend:
-    """The live services, held on ``ledger`` at ``prices`` and the judges' ``rates``."""
+def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str, Rate],
+                 provider: SparkProvider) -> Backend:
+    """The live services, Spark Open on ``provider``, held on ``ledger`` at ``prices`` and the
+    judges' ``rates``."""
+    chat = _brief_chat(provider)
     return Backend(
-        cli=ColabCli(), tunnels=colab_vllm.ssh_tunnel(root / "ssh"), wait=colab_vllm.ready, spark=spark_open,
-        life_chat=_brief_chat, reader=_brief_chat, auditor=_brief_chat, muse=_muse, gemini=_gemini,
+        cli=ColabCli(), tunnels=colab_vllm.ssh_tunnel(root / "ssh"), wait=colab_vllm.ready, spark=provider.chat,
+        life_chat=chat, reader=chat, auditor=chat, muse=_muse, gemini=_gemini, provider=provider,
         ledger=ledger, prices=prices, rates=rates, key_dir=root / "ssh",
         preflight=functools.partial(colab_vllm.preflight, COLAB_BIN),
     )
@@ -179,25 +192,27 @@ def spark_rate(prices: Prices | None) -> Rate | None:
     return None if prices is None else Rate(prices.spark_in_per_m, prices.spark_out_per_m)
 
 
-def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None) -> dict[Pool, float]:
-    """One generation attempt's worst case on each pool."""
+def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None,
+              spark_pool: Pool = BASETEN.pool) -> dict[Pool, float]:
+    """One generation attempt's worst case on each pool: Spark Open's on ``spark_pool``."""
     spark, muse = spark_rate(prices), None if rates is None else rates[MUSE]
-    return {"baseten_mind_usd": spark.worst * GEN_SPARK_CALLS if spark else 0.0,
+    return {spark_pool: spark.worst * GEN_SPARK_CALLS if spark else 0.0,
             "meta_usd": muse.worst * GEN_MUSE_CALLS if muse else 0.0}
 
 
 @contextmanager
 def held_attempt(backend: Backend, key: str) -> Iterator[tuple[CountedChat, CountedChat, CountedChat]]:
-    """One attempt's writer, reader and auditor, its worst case held first on both pools."""
+    """One attempt's writer, reader and auditor, its worst case held first on both pools (Spark
+    Open's on the provider's)."""
     spark = CountedChat(backend.life_chat, GEN_WRITE_CALLS, spark_rate(backend.prices))
     reader = CountedChat(backend.reader, GEN_READ_CALLS, spark.rate)
     auditor = CountedChat(backend.auditor, GEN_MUSE_CALLS, None if backend.rates is None else backend.rates[MUSE])
     if backend.ledger is None:
         yield spark, reader, auditor
         return
-    worst = gen_holds(backend.prices, backend.rates)
-    with held(backend.ledger, f"apd:gen:{key}:spark", ("baseten_mind_usd",), usd(worst["baseten_mind_usd"]),
-              lambda: spark.usd + reader.usd), \
+    pool = backend.provider.pool
+    worst = gen_holds(backend.prices, backend.rates, pool)
+    with held(backend.ledger, f"apd:gen:{key}:spark", (pool,), usd(worst[pool]), lambda: spark.usd + reader.usd), \
             held(backend.ledger, f"apd:gen:{key}:muse", ("meta_usd",), usd(worst["meta_usd"]), lambda: auditor.usd):
         yield spark, reader, auditor
 

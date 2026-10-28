@@ -20,9 +20,9 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Final
 
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.inquiry.types import Turn, WorkspaceEvent
+from anjo.sleep.provenance import SPARK_OPEN_IDS
 from anjo.sleep.types import Target
 
 REPLAY_K: Final = 4  # branches per start state
@@ -40,11 +40,11 @@ class ReplayRefused(PermissionError):
 def check_synthetic(life: Life) -> None:
     """Refuse a life that isn't a synthetic development life: an APD development id (``Life``
     already holds every item and target to its own id), with every session and item Spark Open's
-    writing."""
+    writing, by either provider's exact id."""
     if life.split != "development" or not APD_LIFE_ID.match(life.id):
         raise ReplayRefused(f"replay runs on synthetic development lives only, not {life.id!r}")
-    if any(session.model != SPARK_OPEN for session in life.sessions) or any(
-        item.model != SPARK_OPEN for item in life.evidence
+    if any(session.model not in SPARK_OPEN_IDS for session in life.sessions) or any(
+        item.model not in SPARK_OPEN_IDS for item in life.evidence
     ):
         raise ReplayRefused(f"life {life.id} holds writing Spark Open didn't produce")
 
@@ -86,8 +86,9 @@ class Label:
     @property
     def usable(self) -> bool:
         """Whether its start state may branch and train: determined, and written by Spark Open by
-        the API's own report. Any other model, or none reported, isn't cleared."""
-        return self.holds is not None and self.model == SPARK_OPEN
+        the API's own report (either provider's exact id). Any other model, or none reported,
+        isn't cleared."""
+        return self.holds is not None and self.model in SPARK_OPEN_IDS
 
 
 @dataclass(frozen=True)

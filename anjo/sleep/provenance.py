@@ -2,21 +2,25 @@
 
 Every evidence item and every training example carries its ancestry: each model whose output it
 derives from, through everything that model read. Training takes an item only when every
-ancestor is cleared: Spark Open (licensed for training) and Glimmer (open weights). The person's
-own words have no ancestor. Hosted Muse Spark and Wonder outputs train only once Meta allows it
-in writing, which ``hosted_in_training`` stands for. Unknown ancestry (``None``) and every other
-model (Claude, Gemini, OpenAI) never train.
+ancestor is cleared: Spark Open (licensed for training) and Glimmer (open weights). Spark Open is
+one open-weight model under one licence, served on Baseten and on Fireworks, so each provider's
+exact id for it is cleared, and no other id of theirs is. The person's own words have no
+ancestor. Hosted Muse Spark and Wonder outputs train only once Meta allows it in writing, which
+``hosted_in_training`` stands for. Unknown ancestry (``None``) and every other model (Claude,
+Gemini, OpenAI) never train.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Final
 
-from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep import baseten_api, fireworks_api
 from anjo.sleep.meta_api import PINNED_MODELS
 
 GLIMMER: Final = "meta-models/Muse-Glimmer-30B"
-CLEARED: Final = frozenset({SPARK_OPEN, GLIMMER})
+# Spark Open as each provider names it: the same weights under the Muse Model License.
+SPARK_OPEN_IDS: Final = frozenset({baseten_api.SPARK_OPEN, fireworks_api.SPARK_OPEN})
+CLEARED: Final = SPARK_OPEN_IDS | {GLIMMER}
 # A hosted output records its pinned, versioned id; the bare names are listed too.
 HOSTED: Final = frozenset(PINNED_MODELS) | frozenset(PINNED_MODELS.values())
 

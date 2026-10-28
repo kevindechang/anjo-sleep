@@ -18,7 +18,9 @@ still counts after the clearing.
 
 The caps are §12.1's. Baseten's $100 credit is two pools, and Sleep has priority: when
 ``baseten_sleep_usd`` runs short it may take MIND's unspent balance, so the two together never
-pass $100 and MIND never passes its own $40.
+pass $100 and MIND never passes its own $40. Fireworks' $100 credit is one pool,
+``fireworks_mind_usd``, for MIND's experiment alone when it runs Spark Open there
+(``mind.spark_provider``); it shares nothing with Baseten's.
 
 The ledger is an append-only JSON Lines file in the data dir (``anjo/sleep/evidence/jsonl.py``,
 in plain text: it holds no person's words), one event per line. Every reserve, settle, release
@@ -44,8 +46,8 @@ from anjo.sleep.evidence.jsonl import PLAIN, LogError, append_records, read_reco
 from anjo.sleep.serving.config import SCALEDOWN_S, SERVE_TIMEOUT_S
 
 Pool = Literal[
-    "modal_usd", "colab_cu", "meta_usd", "baseten_sleep_usd", "baseten_mind_usd", "vertex_usd",
-    "judge_usd",
+    "modal_usd", "colab_cu", "meta_usd", "baseten_sleep_usd", "baseten_mind_usd", "fireworks_mind_usd",
+    "vertex_usd", "judge_usd",
 ]
 POOLS: Final[tuple[Pool, ...]] = get_args(Pool)
 
@@ -57,6 +59,7 @@ CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "meta_usd": 140.0,  # $10 under the $150 credit, for billing lag
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b
+    "fireworks_mind_usd": 90.0,  # Tasks 17 and 17b on Fireworks: $10 under its $100 credit
     "vertex_usd": 50.0,  # the Gemini diagnostic judge
     "judge_usd": 100.0,  # judges' sleep-now nights, inside the totals above
 })
