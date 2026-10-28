@@ -47,6 +47,7 @@ AUDIT_PATH: Final = Path(__file__).parent / "prompts" / "audit_v1.md"
 IDENTIFY_PATH: Final = Path(__file__).parent / "prompts" / "identify_v1.md"
 CLAUDE_AUDIT_LIVES: Final = 4  # Claude reads this many lives of a cohort, or all of a smaller one
 _FLAGGED: Final = re.compile(r"(sessions|evidence) flagged from (\d{4}-\d{2}-\d{2})")  # ``_leak``'s reason
+MISSED_ORIGIN: Final = "the reader missed an origin day"  # ``_discoverability``'s reason
 
 
 class GateError(ValueError):
@@ -162,18 +163,14 @@ def flagged_window(life: Life, item: PlantedItem, verdict: GateVerdict, reader: 
 def _discoverability(
     life: Life, item: PlantedItem, days: list[dict[str, str]], reader: ChatFn, auditor: ChatFn, model: str,
 ) -> GateVerdict:
-    reply = _ask(reader, model, DISCOVER_PATH.read_text(encoding="utf-8"),
-                 {"topic": item.topic, "days": days})
-    found, cited, statement = reply.get("found"), reply.get("days"), reply.get("statement", "")
-    if not isinstance(found, bool) or not isinstance(cited, list) or not isinstance(statement, str):
-        raise GateError("the discoverability reply has no verdict")
+    found, cited, statement = _discover(item, days, reader, model)
     origin = _evidence_days(life, item.origin_ids)
     if origin is None:
         return GateVerdict("discoverability", item.id, False, "origin evidence is not in the life")
     if not found or not statement.strip():
         return GateVerdict("discoverability", item.id, False, "the reader found nothing")
     if not origin <= {str(day) for day in cited}:
-        return GateVerdict("discoverability", item.id, False, "the reader missed an origin day")
+        return GateVerdict("discoverability", item.id, False, MISSED_ORIGIN)
     judged = _ask(auditor, AUDITOR_MODEL, IDENTIFY_PATH.read_text(encoding="utf-8"),
                   {"statement": statement.strip(), "item": _sealed(life, item)})
     match = judged.get("match")
@@ -182,6 +179,25 @@ def _discoverability(
     if not match:
         return GateVerdict("discoverability", item.id, False, "the statement isn't the planted item")
     return GateVerdict("discoverability", item.id, True)
+
+
+def _discover(item: PlantedItem, days: list[dict[str, str]], reader: ChatFn,
+              model: str) -> tuple[bool, list[Any], str]:
+    """The discoverability reader's reply: whether it found something, the days it cited, its statement."""
+    reply = _ask(reader, model, DISCOVER_PATH.read_text(encoding="utf-8"), {"topic": item.topic, "days": days})
+    found, cited, statement = reply.get("found"), reply.get("days"), reply.get("statement", "")
+    if not isinstance(found, bool) or not isinstance(cited, list) or not isinstance(statement, str):
+        raise GateError("the discoverability reply has no verdict")
+    return found, cited, statement
+
+
+def missed_origin_days(life: Life, item: PlantedItem, reader: ChatFn, model: str = READER_MODEL) -> tuple[date, ...]:
+    """The days of ``item``'s origin facts its discoverability reader did not cite (``MISSED_ORIGIN``),
+    oldest first; none when it cited them all or they are not in the life. The gate's request is
+    asked again: a reader that keeps its replies (``repair.Memo``) answers without a call."""
+    _, cited, _ = _discover(item, _views(life, item)["sessions"], reader, model)
+    origin = _evidence_days(life, item.origin_ids) or set()
+    return tuple(sorted(date.fromisoformat(day) for day in origin - {str(day) for day in cited}))
 
 
 def _evidence_days(life: Life, ids: Sequence[str]) -> set[str] | None:

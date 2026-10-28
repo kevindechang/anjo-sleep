@@ -153,9 +153,9 @@ Keep = Callable[[repair.Tried, int, int], None]  # a failed check's life kept, b
 def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None, keep: Keep | None = None) -> Generated:
     """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
     the backend's generator (``generators``), its gates read by its reader (``readers``), every
-    try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak or
-    the script audit first takes up to ``repair.ROUNDS`` repair rounds, each held as an attempt
-    is; ``keep`` is handed each check that failed."""
+    try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak, a
+    missed origin day or the script audit first takes up to ``repair.ROUNDS`` repair rounds, each
+    held as an attempt is; ``keep`` is handed each check that failed."""
     on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(generate.MAX_ATTEMPTS):
         if on_call is not None:
@@ -218,11 +218,16 @@ def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
         verdicts = gates.check(built, problems, reader=read, auditor=audit, model=model)
         audited = all(verdict.passed for verdict in verdicts if verdict.gate == "script_audit")
         issues = () if audited else gates.audit_issues(built, problems, audit)  # the audit's reply, from the memo
+        if not backend.repair:
+            return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues)
         items = {item.id: item for item in problems.items}
-        windows = {} if not backend.repair else {  # each flagged window's days, its single day's reply from the memo
+        windows = {  # each flagged window's days, its single day's reply from the memo
             verdict.item_id: found for verdict in verdicts if verdict.item_id in items
             and (found := gates.flagged_window(built, items[verdict.item_id], verdict, read, model)) is not None}
-        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues, windows)
+        missed = {  # each origin day a discoverability reader passed over, its reply from the memo
+            verdict.item_id: gates.missed_origin_days(built, items[verdict.item_id], read, model)
+            for verdict in verdicts if verdict.item_id in items and verdict.reason == gates.MISSED_ORIGIN}
+        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues, windows, missed)
 
 
 class CallFailed(RuntimeError):

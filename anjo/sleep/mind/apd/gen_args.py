@@ -13,10 +13,10 @@ starts paced to ``--vertex-rpm`` a minute (default ``limiter.DEFAULT_PER_MINUTE`
 one; 0 leaves them unpaced), so lives side by side don't send Vertex more than its quota takes.
 The fakes stand in for Vertex and aren't paced.
 
-``generate``'s ``--repair`` gives a core split's attempt that fails only a leak or the script audit
-up to ``repair.ROUNDS`` repair rounds (``repair``); APD's own splits are regenerated whole, as
-registered. ``--keep-failed`` keeps each failed check's life under the data dir's ``quarantine``,
-on ``core-train`` only: every other split's items are sealed.
+``generate``'s ``--repair`` gives a core split's attempt that fails only a leak, a missed origin day
+or the script audit up to ``repair.ROUNDS`` repair rounds (``repair``); APD's own splits are
+regenerated whole, as registered. ``--keep-failed`` keeps each failed check's life under the data
+dir's ``quarantine``, on ``core-train`` only: every other split's items are sealed.
 """
 from __future__ import annotations
 
@@ -58,8 +58,8 @@ def add(command: argparse.ArgumentParser) -> None:
 
 def add_repair(command: argparse.ArgumentParser) -> None:
     command.add_argument("--repair", action="store_true",
-                         help=f"a core split's attempt failing only a leak or the script audit has the days named "
-                              f"written again, up to {repair.ROUNDS} rounds, each held as an attempt")
+                         help=f"a core split's attempt failing only a leak, a missed origin day or the script audit "
+                              f"has the days named written again, up to {repair.ROUNDS} rounds, each held as an attempt")
     command.add_argument("--keep-failed", action="store_true",
                          help=f"keep {KEEP_FAILED_SPLIT}'s failed attempts' lives under the data dir's quarantine "
                               f"({KEEP_FAILED_SPLIT} only)")
@@ -162,11 +162,12 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
     """The plan's note on ``--repair``, when it is given."""
     if not getattr(args, "repair", False):
         return ()
-    return (f"--repair: an attempt failing only a leak or the script audit takes up to {repair.ROUNDS} repair rounds, "
-            f"each writing at most {repair.REPAIR_DAYS} days again, extracting every later day again, and held "
-            f"before it starts at most as an attempt is (a full read again; only changed or unread windows are paid "
-            f"for), so the worst case can reach {1 + repair.ROUNDS} times the one shown. A round costs a share of the "
-            f"first check that grows the earlier its first day falls: on the fakes, about 63% for day 6 of a six-item life",)
+    return (f"--repair: an attempt failing only a leak, a missed origin day or the script audit takes up to "
+            f"{repair.ROUNDS} repair rounds, each writing at most {repair.REPAIR_DAYS} days again, extracting every "
+            f"later day again, and held before it starts at most as an attempt is (a full read again; only "
+            f"changed or unread windows are paid for), so the worst case can reach {1 + repair.ROUNDS} times the one "
+            f"shown. A round costs a share of the first check that grows the earlier its first day falls: on the "
+            f"fakes, about 63% for day 6 of a six-item life",)
 
 
 def pace_note(args: argparse.Namespace) -> str:
