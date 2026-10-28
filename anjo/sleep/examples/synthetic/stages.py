@@ -187,14 +187,15 @@ def build_dataset(night: Night, probes: list[Probe]) -> Dataset:
 
 
 def train(night: Night, data: Dataset) -> CheckpointRef:
-    """Step 5c: train a LoRA on Modal and put it where the server loads adapters from."""
+    """Step 5c: train a LoRA (on Modal by default) and put it where the server loads adapters from."""
     person = night.person
     name = fresh_adapter_name(f"{person.person_id}\x1f{night.run_id}", 1, frozenset())  # new on every run
     try:
         ckpt, done = train_lora_with_receipt(
             None, data, LoraCfg(), night.services.gpu, person_id=person.person_id, night=person.day,
             name=name, workdir=night.workdir / "train", adapter_cache=night.workdir / "adapters",
-            publish=night.services.serving.upload_adapter, revision=night.services.revision,
+            publish=night.services.publish or night.services.serving.upload_adapter,
+            revision=night.services.revision,
         )
     except config.ServeConfigError as error:
         raise ExampleError(f"the server's volume refused adapter {name}: {error}") from None

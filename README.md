@@ -109,10 +109,11 @@ export MODAL_TOKEN_SECRET=...
 export ANJO_META_API_KEY=...           # the Meta Model API (the judge)
 export BASETEN_API_KEY=...             # Muse Spark Open on Baseten
 export ANJO_SLEEP_GLIMMER_REVISION=... # the pinned commit of meta-models/Muse-Glimmer-30B
-# Glimmer's server on your Modal account, deployed once:
+# Glimmer's server and its training app on your Modal account, deployed once:
 modal secret create anjo-sleep-serve VLLM_API_KEY=<a token you choose>
 modal run anjo/sleep/serving/modal_app.py::download_weights
 modal deploy anjo/sleep/serving/modal_app.py
+modal deploy anjo/sleep/train/modal_app.py
 export ANJO_SLEEP_MODAL_URL=...        # the web URL modal deploy prints
 export ANJO_SLEEP_MODAL_TOKEN=...      # the token you chose above
 python -m anjo.sleep.examples.synthetic --persona persona.json --day day1.jsonl

@@ -24,7 +24,9 @@ one clock. A start after that is refused before any day is simulated or any nigh
         --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona film_founder \\
         --days 2                                                   # starts two days ago; --start 2026-10-01 dates it earlier
 
-After each night the morning probe run scores every arm (`probes.morning`). Real runs train on Colab, one VM per life (``ColabLives``), synthetic people only.
+After each night the morning probe run scores every arm (`probes.morning`). Real runs train synthetic
+people only, on the runner ``ANJO_SLEEP_TRAIN_RUNNER`` names (``train/runners/choice.py``): Modal by
+default, one call a night, or Colab, one VM per life (``ColabLives``).
 """
 from __future__ import annotations
 
@@ -36,7 +38,8 @@ import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -199,6 +202,21 @@ def _vm_record(lives: Any, user_id: str, night: str) -> dict[str, object] | None
     return next((r for r in lives.records(user_id) if r["night"] == night), None)
 
 
+@contextmanager
+def _per_life(runner: Any, life_s: float) -> Iterator[tuple[Any, dict[str, Any]]]:
+    """The runner the lives train on, and the rig's VM hooks. Colab keeps one VM per life
+    (``ColabLives``), told how long each day and scoring run took; Modal runs one call a night, so
+    there is no VM to keep between nights and nothing to tell it."""
+    from anjo.sleep.train.runners.colab import ColabRunner
+
+    if not isinstance(runner, ColabRunner):
+        yield runner, {}
+        return
+    with runner.lives(life_timeout_s=life_s) as lives:
+        yield lives, {"on_day": lives.note_day, "on_scoring": lives.note_scoring,
+                      "vm_record": lambda uid, night: _vm_record(lives, uid, night)}
+
+
 def _normal(summary: Mapping[str, Any]) -> dict[str, Any]:
     """A summary without the paths that differ between runs, for the fake gate's digest."""
     return {k: v for k, v in summary.items() if k != "log_path"}
@@ -256,7 +274,6 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.night.sweep import NightBusy, swept_night
     from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
-    from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
     from anjo.sleep.train.trainer import LoraTrainer
 
     if not (args.wiring and args.simulate and args.morning and args.users and args.personas):
@@ -267,8 +284,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
-    cli, ledger = ColabCli(), default_ledger()
-    runner = ColabRunner(cli=cli, ledger=ledger, is_synthetic=lambda uid: uid in personas, allow_real=False)
+    ledger = default_ledger()
+    chosen = night_command.chosen_runner(data_dir, ledger, personas)  # synthetic people only: no real one named
     life_s = LIFE_NIGHT_TIMEOUT_S * (LIFE_NIGHTS_HELD + args.days)
     wiring, simulate, morning = _named(args.wiring), _named(args.simulate), _named(args.morning)
 
@@ -279,15 +296,14 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                            promoted=result.status == "promoted")
 
     try:
-        with swept_night(ledger, lambda: stop_leftover_sessions(cli)) as swept, \
-                runner.lives(life_timeout_s=life_s) as lives:
-            trainer = LoraTrainer(lives, root=data_dir / "sleep" / "training", publish=night_command._publish,
+        with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, life_s) as (runner, hooks):
+            trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
+                                  publish=night_command._publisher(chosen.name),
                                   revision=os.environ.get(REVISION_ENV) or None)
             rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas,
                                                                           mind_inquiry=args.mind)),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      on_day=lives.note_day, on_scoring=lives.note_scoring, vm_record=lambda uid, night: _vm_record(lives, uid, night),
-                      score=score)
+                      score=score, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept)

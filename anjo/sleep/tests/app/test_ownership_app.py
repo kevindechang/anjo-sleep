@@ -329,3 +329,49 @@ def test_a_deleted_persons_forced_id_entry_stays_gone_across_a_restart(
     assert os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE
     monkeypatch.setenv("ANJO_SLEEP_FORCED_USER_IDS", f"{uid},{ALICE}")
     assert sleep_enabled_for(uid) is False and os.environ["ANJO_SLEEP_FORCED_USER_IDS"] == ALICE  # and at every read
+
+
+class _FakeModal:
+    """The ``modal`` package a delete reaches: calls it can cancel by id, and the adapters volume."""
+
+    def __init__(self, folders: set[str]) -> None:
+        from anjo.sleep.tests.ownership_fakes import FakeVolume
+
+        self.cancelled: list[tuple[str, bool]] = []
+        self.volume = FakeVolume(set(folders))
+        outer = self
+
+        class _Call:
+            def __init__(self, call_id: str) -> None:
+                self.call_id = call_id
+
+            def cancel(self, terminate_containers: bool = False) -> None:
+                outer.cancelled.append((self.call_id, terminate_containers))
+
+        self.FunctionCall = type("FunctionCall", (), {"from_id": staticmethod(_Call)})
+        self.Volume = type("Volume", (), {"from_name": staticmethod(lambda name, **kw: outer.volume)})
+
+
+def test_delete_cancels_a_running_modal_job(auth_client: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RF2 on Modal: the person's running training call is cancelled, and the adapters the Modal job wrote
+    come off the adapters volume, even while Glimmer serves from SageMaker (no Modal URL is set)."""
+    from anjo.sleep.app.ownership import delete_all, inventory
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.train.runners.modal import CALLS_DIR, CallRecords
+
+    uid = ALICE
+    _lay_down(uid, tmp_path, monkeypatch)
+    monkeypatch.delenv("ANJO_SLEEP_MODAL_URL", raising=False)
+    records = CallRecords(data_root() / SLEEP_DIR / CALLS_DIR)
+    records.add("p-aaaaaaaaaaaa-n2", "fc-00000001")  # her night, training now
+    records.add("p-bbbbbbbbbbbb-n1", "fc-00000002")  # somebody else's
+    fake = _FakeModal({"p-aaaaaaaaaaaa-n1", "p-aaaaaaaaaaaa-n2", "p-bbbbbbbbbbbb-n1"})
+    monkeypatch.setitem(sys.modules, "modal", fake)
+
+    report = delete_all(uid)
+
+    assert report.jobs_stopped == 1 and fake.cancelled == [("fc-00000001", True)]
+    assert records.items() == [("p-bbbbbbbbbbbb-n1", "fc-00000002")]
+    assert dict(report.remote_removed)["modal volume"] == 2
+    assert fake.volume.folders == {"p-bbbbbbbbbbbb-n1"}
+    assert inventory().pending() == []  # every remote delete finished: nothing left to retry

@@ -1,7 +1,7 @@
 """The batch's GPU session on the serving server (Task 5): ``modal_usd`` holds the batch's worst
 case before the first due person practises, and is settled with what the session really held.
 
-The worst case is the per-person hold (practice, a Colab training while the server may stay warm,
+The worst case is the per-person hold (practice, a training while the server may stay warm,
 and three gates) times the due people, at the serving GPU's hourly price. A batch the pool can't
 hold stops with ``BudgetStop`` before any GPU work, which fails every due person's night at
 practice (RF1) and leaves the rest of the batch's steps to run. The key names the night and the
@@ -20,7 +20,7 @@ from anjo.sleep.budget import Bound, Ledger
 from anjo.sleep.night.holds import attempt_key, hold
 
 POOL: Final = "modal_usd"
-DEFAULT_HOLD_PER_PERSON_S: Final = 3 * 3600.0  # practice, the Colab training's hard timeout, gates
+DEFAULT_HOLD_PER_PERSON_S: Final = 3 * 3600.0  # practice, the training's hard timeout, gates
 
 
 class ReservedGpu:

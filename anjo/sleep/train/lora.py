@@ -17,9 +17,10 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   the adapter switched off as the reference so no second model loads. It's a development ablation,
   registered at the freeze only if it wins.
 
-``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Colab for the
-night) under the training hard timeout, copies the finished adapter into the local adapter cache
-and onto the Modal volume through Task 4's upload, which refuses a name already there, and returns
+``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Modal for the
+night by default, or Colab) under the training hard timeout, copies the finished adapter into the local
+adapter cache and publishes it to the server: Task 4's upload, which refuses a name already there, or
+nothing more when Modal's job landed it on the adapters volume already (``runners/choice.py``). It returns
 the ``CheckpointRef``, which carries the rendering the adapter was trained under (an adapter whose
 ``adapter_config.json`` records another is refused before it is published). Adapter names are
 ``p-<hash>-n<night>`` and never reused.

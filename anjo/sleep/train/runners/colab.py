@@ -1,5 +1,6 @@
-"""The Colab ``GpuRunner`` the night trains on (Task 5; Kevin, 2026-10-27: "Colab trains, Modal
-serves").
+"""The Colab ``GpuRunner`` (Task 5; Kevin, 2026-10-27: "Colab trains, Modal serves"). Since 2026-10-28
+the night trains on Modal by default (``modal.py``) and here with ``ANJO_SLEEP_TRAIN_RUNNER=colab``
+(``choice.py``); MIND's jobs always train here.
 
 It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is one VM:
 

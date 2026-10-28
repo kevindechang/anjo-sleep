@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final
 from anjo.sleep.budget import Bound, BudgetError, Ledger, Pool, Reservation
 from anjo.sleep.stops import BudgetStop
 
-if TYPE_CHECKING:  # the Colab runner holds through here, and needs none of the night's ports
+if TYPE_CHECKING:  # the training runners hold through here, and need none of the night's ports
     from anjo.sleep.night.deps import Prices
 
 MAX_ATTEMPTS: Final = 50

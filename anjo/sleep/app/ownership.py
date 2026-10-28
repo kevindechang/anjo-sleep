@@ -3,10 +3,12 @@ over Anjo's own stores.
 
 - ``undo``, ``delete_all`` and ``what_changed`` are the spec's interfaces, with the checkpoint registry,
   the cancel flag and the results folder filled in.
-- ``delete_all`` cancels the person's night (``<data dir>/sleep/cancel/<id>``), stops their Colab VM,
-  removes their adapters from the SageMaker bucket and the Modal volume when those are configured, and
-  then removes the local files: the training copies, night logs and scores, sealed probes, registry,
-  a pending note, the forced-id entry, the encrypted sleep folder, and last MIND's workspace log.
+- ``delete_all`` cancels the person's night (``<data dir>/sleep/cancel/<id>``), stops their Colab VM
+  and cancels their running Modal training call, removes their adapters from the SageMaker bucket and
+  the Modal volume when those are configured (the volume also whenever this host has trained on Modal,
+  since the training job lands adapters there), and then removes the local files: the training copies,
+  night logs and scores, sealed probes, registry, a pending note, the forced-id entry, the encrypted
+  sleep folder, and last MIND's workspace log.
 - ``remote_cleanup`` is account erasure's hook (``anjo.core.erasure``). Erasure already removes the
   person's folder under its own locks, so the hook does everything else and leaves that folder alone.
   It writes the cleanup inventory first (``<data dir>/sleep/cleanup/<id>.json``, adapter names only,
@@ -245,6 +247,17 @@ class _MindWorkspace:
         return removed
 
 
+def _modal_calls() -> Any:
+    """The Modal runner's call records (``runners/modal.py``), loaded by name like the stoppers."""
+    modal = importlib.import_module("anjo.sleep.train.runners.modal")
+    return modal.CallRecords(data_root() / SLEEP_DIR / modal.CALLS_DIR)
+
+
+def _trained_on_modal() -> bool:
+    """Whether this host has started a Modal training call: its call records' folder exists."""
+    return bool(_modal_calls().used())
+
+
 def _remotes() -> tuple[RemoteAdapters, ...]:
     stores: list[RemoteAdapters] = []
     bucket = os.environ.get(BUCKET_ENV, "").strip()
@@ -252,7 +265,7 @@ def _remotes() -> tuple[RemoteAdapters, ...]:
         from anjo.sleep.serving.sagemaker.invoke import make_client
 
         stores.append(S3Adapters(bucket, make_client("s3", read_s=60.0, attempts=3)))
-    if os.environ.get(MODAL_URL_ENV, "").strip():
+    if os.environ.get(MODAL_URL_ENV, "").strip() or _trained_on_modal():
         from anjo.sleep.serving.config import ADAPTERS_VOLUME
 
         volume: Any = importlib.import_module("modal").Volume.from_name(ADAPTERS_VOLUME)
@@ -260,23 +273,28 @@ def _remotes() -> tuple[RemoteAdapters, ...]:
     return tuple(stores)
 
 
-class _ColabStopper:
-    """Stops the person's Colab sessions. Loaded by name: the app never imports the training code."""
+class _JobStopper:
+    """Stops the person's training jobs on one service. Loaded by name: the app never imports the
+    training code."""
 
-    name = "colab"
-
-    def __init__(self, stop: Callable[[Any, str, Names], int], cli: Any) -> None:
-        self._stop, self._cli = stop, cli
+    def __init__(self, name: str, stop: Callable[[str, Names], int]) -> None:
+        self.name, self._stop = name, stop
 
     def stop(self, user_id: str, adapters: Names) -> int:
-        return self._stop(self._cli, user_id, adapters)
+        return self._stop(user_id, adapters)
 
 
-def _stoppers() -> tuple[_ColabStopper, ...]:
+def _stoppers() -> tuple[_JobStopper, ...]:
+    found: list[_JobStopper] = []
     colab = importlib.import_module("anjo.sleep.train.runners.colab")
-    if not Path(colab.COLAB_BIN).is_file():
-        return ()  # no Colab CLI on this machine: nothing here can have started a VM
-    return (_ColabStopper(colab.stop_person_sessions, colab.ColabCli()),)
+    if Path(colab.COLAB_BIN).is_file():  # with no Colab CLI on this machine, nothing here started a VM
+        cli = colab.ColabCli()
+        found.append(_JobStopper("colab", lambda user_id, names: colab.stop_person_sessions(cli, user_id, names)))
+    records = _modal_calls()
+    if records.used():  # with no call ever started here, nothing to cancel and no Modal client made
+        stop = importlib.import_module("anjo.sleep.train.runners.modal").stop_person_calls
+        found.append(_JobStopper("modal", lambda user_id, names: stop(records, user_id, names)))
+    return tuple(found)
 
 
 def local_erasers(*, under_erasure: bool = False) -> Sequence[Any]:

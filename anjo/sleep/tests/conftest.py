@@ -58,3 +58,12 @@ def default_mind_spark(monkeypatch: pytest.MonkeyPatch) -> None:
     shell sets: a test that wants another provider or a key sets it."""
     monkeypatch.delenv("ANJO_SLEEP_MIND_SPARK", raising=False)
     monkeypatch.delenv("ANJO_FIREWORKS_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_colab_cli(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """No test finds this machine's Colab CLI, so a night's sweep never runs it; a test that wants an
+    installed CLI points ``COLAB_BIN`` at a file of its own and fakes the CLI."""
+    from anjo.sleep.train.runners import colab
+
+    monkeypatch.setattr(colab, "COLAB_BIN", tmp_path_factory.getbasetemp() / "no-colab" / "colab")

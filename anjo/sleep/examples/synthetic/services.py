@@ -1,7 +1,7 @@
 """What the example reaches outside through: one value, so a run is the same code live or fake.
 
-``live.build_services`` wires the real ones (Baseten, the Meta API, a Modal training job and the
-Modal vLLM server). ``fakes.fake_services`` wires offline stand-ins. Nothing else differs.
+``live.build_services`` wires the real ones (Baseten, the Meta API, the engine's training runner and
+the Modal vLLM server). ``fakes.fake_services`` wires offline stand-ins. Nothing else differs.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.ports import Chooser, GpuRunner
 from anjo.sleep.probes.clients import ModelClient, TokenLogprobs
 from anjo.sleep.serving.client import WakeResult
+from anjo.sleep.train.lora import AdapterPublisher
 
 
 class ExampleError(RuntimeError):
@@ -96,8 +97,11 @@ class Services:
     judge: ChatFn  # Muse Spark on the Meta API: the pairwise judge
     glimmer: Glimmer
     serving: Serving
-    gpu: GpuRunner  # the training job, on Modal
+    gpu: GpuRunner  # the training job: Modal's by default, or Colab's
     revision: str  # the Glimmer commit the training job pins
+    # How a trained adapter reaches the server; None uploads it (``serving.upload_adapter``). Modal's
+    # training job lands it on the server's volume itself, so nothing is uploaded after it.
+    publish: AdapterPublisher | None = None
     chooser: Chooser = StateChooser()
     fake: bool = False
     clock: Callable[[], float] = time.monotonic
