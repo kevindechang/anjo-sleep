@@ -133,7 +133,7 @@ def test_practice_ab_counts_a_dropped_scene_as_its_arms_loss(tmp_path: Path, cap
 
 
 PILOT = [*CASES[:2], "--arm-b", "critic=deepseek", "--pilot"]
-VERDICT_KEYS = ("non_inferior", "switch_default", "score_b", "lower_bound", "bar")
+VERDICT_KEYS = ("non_inferior", "switch_default", "score_b", "lower_bound", "bar", "win", "tie", "loss", "judge")
 
 
 def test_the_pilot_plan_is_one_case_with_its_own_small_holds(capsys: pytest.CaptureFixture[str]) -> None:
@@ -155,11 +155,14 @@ def test_the_pilot_reports_cost_a_scene_and_judge_agreement_and_never_a_verdict(
     arms, agreement, pilot = lines[:2], lines[2:4], lines[4]
     assert [a["arm"] for a in arms] == ["A", "B"] and len(lines) == 5
     assert len(judge.prompts) == 32 and [a["critic"] for a in agreement] == ["spark-retest", "deepseek"]
-    assert pilot["pilot"] is True and pilot["scenes"] == pilot["judged"] == 16
+    assert pilot["pilot"] is True and pilot["scenes"] == 16
+    assert pilot["dropped_scenes"] == pilot["unreadable_scenes"] == 0
     assert pilot["judge_order_agreement"] == 1.0  # this judge never flips with the order
     assert pilot["usd"]["judge"] > 0 and pilot["usd"]["critic"] > 0 and pilot["usd"]["spark"] > 0
     assert pilot["usd_per_scene"] == pytest.approx(pilot["usd"]["total"] / 16, abs=1e-4)
-    assert not any(key in line for line in lines for key in VERDICT_KEYS)  # no score, bound or switch
+    assert set(pilot) == {"pilot", "scenes", "judge_order_agreement", "dropped_scenes", "unreadable_scenes", "usd",
+                          "usd_per_scene"}
+    assert not any(key in line for line in lines for key in VERDICT_KEYS)  # no tally, score, bound or switch
     reserved = [e for e in read_records(ledger.path, PLAIN) if e["op"] == "reserve"]
     assert reserved and all(e["job"].startswith("practice_ab:pilot:") for e in reserved)
     (gpu,) = [e for e in reserved if e["pools"] == ["modal_usd"]]
@@ -168,4 +171,10 @@ def test_the_pilot_reports_cost_a_scene_and_judge_agreement_and_never_a_verdict(
 
 def test_the_pilot_counts_a_flip_against_the_judges_agreement(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _, _, lines = _go(tmp_path, Judge(always="1"), capsys, args=PILOT)  # picks whatever it sees first
-    assert lines[-1]["judge"]["flips"] == 16 and lines[-1]["judge_order_agreement"] == 0.0
+    assert lines[-1]["judge_order_agreement"] == 0.0
+
+
+def test_the_pilot_counts_scenes_dropped_or_left_unreadable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Arm B's critic cuts every 4th verdict (4 scenes dropped); the judge answers nothing readable
+    _, _, lines = _go(tmp_path, Judge(always="?"), capsys, args=PILOT, cut=lambda n: n % 4 == 0)
+    assert lines[-1]["dropped_scenes"] == 4 and lines[-1]["unreadable_scenes"] == 12

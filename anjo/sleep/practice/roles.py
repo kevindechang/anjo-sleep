@@ -4,7 +4,7 @@ as every night has. The setting is comma-separated ``role=player`` pairs:
 - ``person=glimmer``: Glimmer's base model writes the scenes (the person's messages) on the serving
   GPU that is awake for the night anyway, at the person's cap, instead of a Spark Open call. ``glimmer``
   alone means this.
-- ``critic=deepseek``: DeepSeek V4.1 Flash on Fireworks, non-thinking, scores the candidates of a
+- ``critic=deepseek``: DeepSeek V4.1 Flash (``practice.critics``), non-thinking, scores the candidates of a
   synthetic person only; a real person's critic stays Spark Open. A critic that may not train is safe
   here because its words never travel: the teacher writes from F and the message alone, and the
   critic's reply is read for its scores and the fixed category (the letters that miss a constraint)

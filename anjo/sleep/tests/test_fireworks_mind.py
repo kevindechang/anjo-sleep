@@ -45,9 +45,10 @@ ROOT = Path(__file__).parents[1]
 # Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment.
 FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
                    "mind/replay/", "tests/", "deploy/")
-# Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) may name Fireworks,
-# never MIND's Spark Open provider or its setting: Sleep's Spark Open stays on Baseten.
-CRITIC_HOMES = ("practice/critics.py", "practice/roles.py", "tools/practice_ab.py")
+# Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) is the one Sleep file
+# that may name Fireworks, and never MIND's pool, Spark Open provider or setting: Sleep's Spark Open stays
+# on Baseten.
+CRITIC_HOME = "practice/critics.py"
 
 
 def _ok(model: str) -> dict[str, Any]:
@@ -249,7 +250,8 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         if name.startswith(FIREWORKS_HOMES):
             continue
         text = path.read_text(encoding="utf-8").casefold()
-        terms = ("spark_provider", SETTING.casefold()) + (() if name in CRITIC_HOMES else ("fireworks",))
+        terms = ("spark_provider", SETTING.casefold(), "fireworks_mind_usd") + (
+            () if name == CRITIC_HOME else ("fireworks",))
         for term in terms:
             assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten"
     monkeypatch.setenv(SETTING, "fireworks")

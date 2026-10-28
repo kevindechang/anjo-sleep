@@ -30,7 +30,8 @@ counts and dollars, never a scene's words; both arms' transcripts go to ``--out`
 person's sleep folder, so nothing here trains.
 
 **Spend**, each held before its first call and settled at what it used: Spark Open's worst, an arm at a
-time, on ``baseten_sleep_usd``; DeepSeek's calls on ``fireworks_sleep_usd`` (its critic holds each);
+time, on ``baseten_sleep_usd``; DeepSeek's calls on its critic's own pool (``practice.critics.POOL``,
+each call held);
 each judge call on ``vertex_usd``; the serving GPU's ``CASE_MAX_S`` a case, the wake and Modal's idle
 window on ``modal_usd``.
 
@@ -226,6 +227,7 @@ def judge_case(ask: Callable[[str], str], known: Callable[[PracticeTranscript], 
             continue
         first, second = _verdict(ask(judge_prompt(known(a), a, b))), _verdict(ask(judge_prompt(known(a), b, a)))
         tally["unreadable"] += (first is None) + (second is None)
+        tally["unreadable_scenes"] += first is None or second is None
         b_first = {"2": 1.0, "1": 0.0}.get(first or "tie", 0.5)
         b_second = {"1": 1.0, "2": 0.0}.get(second or "tie", 0.5)
         tally["flips"] += b_first != b_second
@@ -402,7 +404,8 @@ def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]
     first = deps[0][0]
     rate, out = first.prices.serve_gpu_per_hour, Path(args.out)
     run_job = f"practice_ab:{'pilot:' if args.pilot else ''}{int(time.time())}"
-    tally = dict.fromkeys(("win", "tie", "loss", "flips", "unreadable", "dropped_a", "dropped_b", "dropped_both"), 0)
+    tally = dict.fromkeys(("win", "tie", "loss", "flips", "unreadable", "unreadable_scenes", "dropped_a", "dropped_b",
+                           "dropped_both"), 0)
     spend = dict.fromkeys(("spark", "critic", "judge", "gpu"), 0.0)
     points: list[float] = []
     base: list[Read | None] = []
@@ -448,12 +451,15 @@ def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]
 
 
 def pilot_line(tally: dict[str, int], scenes: int, spend: dict[str, float]) -> dict[str, Any]:
-    """What a pilot reports: its spend a scene and how often the judge held its verdict across orders.
-    It has no score, bound or switch: a pilot's scenes are too few to decide anything."""
-    judged = scenes - tally["dropped_a"] - tally["dropped_b"] - tally["dropped_both"]
+    """What a pilot reports: how often the judge held its verdict across the two orders, the scenes
+    dropped or left unreadable, and its spend a scene. No win, tie or loss count, score, bound or
+    switch: a pilot's scenes are too few to decide anything, so nothing here reads as one."""
+    dropped = tally["dropped_a"] + tally["dropped_b"] + tally["dropped_both"]
+    judged = scenes - dropped
     total = math.fsum(spend.values())
-    return {"pilot": True, "scenes": scenes, "judged": judged, "judge": tally,
+    return {"pilot": True, "scenes": scenes,
             "judge_order_agreement": round(1 - tally["flips"] / judged, 4) if judged else None,
+            "dropped_scenes": dropped, "unreadable_scenes": tally["unreadable_scenes"],
             "usd": {step: round(value, 4) for step, value in spend.items()} | {"total": round(total, 4)},
             "usd_per_scene": round(total / scenes, 4) if scenes else None}
 
