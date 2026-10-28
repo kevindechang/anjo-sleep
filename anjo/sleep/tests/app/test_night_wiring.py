@@ -231,6 +231,44 @@ def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice
     assert chosen.practice(lambda *a, **k: None, date(2026, 10, 28)).max_spark_calls == 1 + 20  # type: ignore[arg-type]
 
 
+def test_the_thought_channel_is_off_unless_asked_and_stops_the_build_when_not_wired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.practice.full import FullPractice
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    deps = night.build(NoTrainer(), options)
+    assert deps.channel is None and deps.mind_state is None  # off: today's night
+    assert deps.gpu._rate == deps.prices.serve_gpu_per_hour  # type: ignore[attr-defined]
+    channel = object()
+    practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28), channel)  # type: ignore[call-arg, arg-type]
+    assert isinstance(practice, FullPractice) and practice._client is channel  # practice over the channel
+
+    monkeypatch.setenv("ANJO_SLEEP_CHANNEL", "state")
+    with pytest.raises(ValueError, match="no MIND state is wired"):
+        night.build(NoTrainer(), options)
+
+    class Client:
+        def with_soft_tokens(self, rows: Any) -> str:
+            return "soft client"
+
+    shared = tmp_path / "shared.projector.npz"
+    env = {"ANJO_SLEEP_CHANNEL": "zero", night.CHANNEL_PROJECTOR_ENV: str(shared)}
+    with pytest.raises(ValueError, match="projector file"):
+        night.channel_setup(env, Client(), deps.practice, lambda uid, day: None)  # type: ignore[arg-type]
+    shared.write_bytes(b"npz")
+    setup = night.channel_setup(env, Client(), deps.practice, lambda uid, day: None)  # type: ignore[arg-type]
+    assert setup is not None and setup.arm == "zero" and setup.shared_projector == shared
+    assert setup.soft_client == "soft client"  # type: ignore[comparison-overlap]
+    with pytest.raises(ValueError, match="ANJO_SLEEP_CHANNEL is one of"):
+        night.channel_setup({"ANJO_SLEEP_CHANNEL": "on"}, Client(), deps.practice, None)  # type: ignore[arg-type]
+
+
 def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import night
     from anjo.sleep.night.deps import NightOptions

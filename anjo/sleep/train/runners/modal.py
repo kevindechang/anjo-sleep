@@ -166,9 +166,11 @@ class CallRecords:
         return [(name, str(call)) for name, call in found]
 
 
-def hold_base(night: str, person_id: str) -> str:
-    """The training's hold key before its attempt number: one night, one person."""
-    return f"{HOLD_KIND}:{night}:{person_id}"
+def hold_base(night: str, person_id: str, kind: str = HOLD_KIND) -> str:
+    """The training's hold key before its attempt number: one night, one person. ``kind`` is the
+    night's own (``modal_train``, swept by the night command) unless a caller with its own sweep names
+    another (the thought channel's pretraining)."""
+    return f"{kind}:{night}:{person_id}"
 
 
 def _cancel_each(records: CallRecords, calls: ModalCalls, found: Iterable[tuple[str, str]]) -> int:
@@ -213,9 +215,10 @@ class ModalRunner:
     def __init__(
         self, *, calls: ModalCalls, ledger: Ledger, records: CallRecords, is_synthetic: Callable[[str], bool],
         allow_real: Collection[str] = (), clock: Callable[[], float] = time.monotonic,
-        usd_per_hour: float = A100_USD_PER_HOUR,
+        usd_per_hour: float = A100_USD_PER_HOUR, hold_kind: str = HOLD_KIND,
     ) -> None:
         self.allow_real = frozenset(allow_real)
+        self._hold_kind = hold_kind
         self._calls = calls
         self._ledger = ledger
         self._records = records
@@ -235,7 +238,8 @@ class ModalRunner:
         except modal_job.ModalJobError as error:
             raise ModalTrainError(str(error)) from None
         remote = _remote_job(inputs, name, exec_s)
-        reservation = hold(self._ledger, hold_base(str(inputs["night"]), person), (POOL,), Bound(self._rate, timeout_s))
+        base = hold_base(str(inputs["night"]), person, self._hold_kind)
+        reservation = hold(self._ledger, base, (POOL,), Bound(self._rate, timeout_s))
         started = self._clock()
         call = _Call()
         try:

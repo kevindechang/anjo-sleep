@@ -24,6 +24,12 @@ it off the serving path). Everything else is here:
   what the server reports at the first gate (``gate_cache``: the root it serves Glimmer from and the
   revision that root names), never on this host's settings alone.
 
+The thought channel (``night.channel_night``) is on when ``ANJO_SLEEP_CHANNEL`` names its arm
+(``channel_setup``): practice then replies through the person's MIND state as soft tokens, read from
+the shared pretraining's projector (``ANJO_SLEEP_CHANNEL_PROJECTOR``) or the person's own, and the
+GPU session's hold adds the embedding rows' CPU container. It needs MIND's state of each person
+(``NightDeps.mind_state``), which MIND's store provides; set without it, the night stops at build.
+
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
@@ -80,6 +86,8 @@ from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.night.deps import (
     GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
 )
+from anjo.sleep.night.channel_night import ChannelSetup, MindState
+from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
@@ -90,7 +98,8 @@ from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.full import CappedChat, FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
-from anjo.sleep.serving import backend, config
+from anjo.sleep.probes.clients import ModelClient
+from anjo.sleep.serving import backend, config, soft_tokens
 from anjo.sleep.serving.client import TOP_K, TOP_P, ServingError, VllmClient
 from anjo.sleep.types import Probe
 
@@ -222,6 +231,27 @@ def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...
     return lambda user_id: known.get(user_id, real)
 
 
+CHANNEL_PROJECTOR_ENV: Final = "ANJO_SLEEP_CHANNEL_PROJECTOR"  # the shared pretraining's projector file
+
+
+def channel_setup(
+    env: Mapping[str, str], client: VllmClient, practice: Callable[[CappedChat, date, ModelClient], FullPractice],
+    mind_state: MindState | None,
+) -> ChannelSetup | None:
+    """The night's thought channel from ``ANJO_SLEEP_CHANNEL``, or None when it's off. Its arm, its
+    shared projector and MIND's state must all be there: a channel asked for and not wired stops the
+    night here. The zero arm's people are checked when the batch starts (generated lives only)."""
+    arm = channel_arm(env, synthetic=True)
+    if arm is None:
+        return None
+    if mind_state is None:
+        raise ValueError(f"{CHANNEL_ENV} is set, but no MIND state is wired into the night")
+    raw = env.get(CHANNEL_PROJECTOR_ENV, "").strip()
+    if not raw or not Path(raw).is_file():
+        raise ValueError(f"{CHANNEL_PROJECTOR_ENV} names the shared pretraining's projector file")
+    return ChannelSetup(arm, Path(raw), client.with_soft_tokens(soft_tokens.ModalEmbeddingRows()), practice)
+
+
 def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     require_sleep_host()
     for user_id, persona in options.personas.items():
@@ -241,10 +271,14 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
     gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
-    def practice(chat: CappedChat, night: date) -> FullPractice:
-        return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
-                            seed=night_settings.seed, scenes=night_settings.practice_scenes,
+    def practice(chat: CappedChat, night: date, channel: ModelClient | None = None) -> FullPractice:
+        return FullPractice(chat=chat, client=client if channel is None else channel, adapter=registry.last_promoted,
+                            snapshot=context.snapshot, seed=night_settings.seed, scenes=night_settings.practice_scenes,
                             teacher=night_settings.practice_teacher, concurrency=calls)
+
+    mind_state: MindState | None = None  # MIND's store fills this (each person's night after the dream step)
+    channel = channel_setup(os.environ, client, practice, mind_state)
+    gpu_rate = night_prices.serve_gpu_per_hour + (soft_tokens.EMBED_USD_PER_HOUR if channel is not None else 0.0)
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)
@@ -264,7 +298,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         note_check=passes_reply_check, ledger=ledger,
         logs=night_logs, cancel=cancel_flag().watcher(), purge=purge, is_synthetic=is_synthetic,
         settings=night_settings, prices=night_prices,
-        gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
+        gpu=ReservedGpu(ledger, options.night, usd_per_hour=gpu_rate), mind_state=mind_state, channel=channel,
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(),

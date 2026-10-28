@@ -258,8 +258,8 @@ def training_row(plan: Plan, readings: Mapping[str, CoreSnapshot], targets: Mapp
     own = readings.get(moment.key)
     if target is None or own is None:
         raise ReaderDataError(f"moment {moment.key} has no target or no reading")
-    row: dict[str, Any] = {"id": plan.row_id, "provenance": "teacher", "prompt": prompt_messages(moment.message),
-                           "core": own.to_json()}
+    row: dict[str, Any] = {"id": plan.row_id, "group": moment.life_id, "provenance": "teacher",
+                           "prompt": prompt_messages(moment.message), "core": own.to_json()}
     if not moment.open_items:
         return {**row, "completion": [{"role": "assistant", "content": framing.clean_text(target.plain)}]}
     if target.raised is None or plan.negative is None:

@@ -21,7 +21,7 @@ projector (``projector.npz``) beside the adapter's files, or send it alone, and 
 trained comes back with the adapter (``projector``), for the host to keep beside the person's core
 state; only the adapter lands on the volume.
 
-It imports the standard library, ``serving/config.py``, ``colab_train.py`` and ``channel_train.py``
+It imports the standard library, ``serving/config.py``, ``serving/projector_math.py``, ``colab_train.py`` and ``channel_train.py``
 only: the image carries those files and this one, and nothing else of Anjo.
 """
 from __future__ import annotations

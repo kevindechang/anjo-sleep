@@ -33,6 +33,7 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.note.hold import Fact, NoteWriter
 from anjo.sleep.ports import (
@@ -335,6 +336,10 @@ class NightDeps:
     sleep: Callable[[], None] | None = None
     # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
     retries: Callable[[], int] = field(default=lambda: 0)
+    # The thought channel (``channel_night``): MIND's state of a person as of the night, and the channel's
+    # setup. Either None is today's night: no soft tokens, no ``core`` on any row.
+    mind_state: MindState | None = None
+    channel: ChannelSetup | None = None
 
 
 @dataclass(frozen=True)

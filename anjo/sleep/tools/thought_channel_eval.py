@@ -1,6 +1,8 @@
 """The thought channel's evaluation, live (``mind.core.reader_eval``): plan first, then, with ``--yes``,
 the replies on the served Glimmer under a hold on ``modal_usd``, then the blind judge under a hold on
-``meta_usd``, each settled at what it used.
+``meta_usd``, each settled at what it used. Both run under MIND's lock after the thought channel's own
+sweep (``thought_channel.swept_channel``), their holds of its kind (``thought_channel:eval_serve:``,
+``thought_channel:eval_judge:``).
 
     python -m anjo.sleep.tools.thought_channel_eval --cases FILE --readings FILE --projector FILE
         --adapter NAME --out DIR [--export TEST] [--pairs DIR] [--data DIR] [--judge-prices IN,OUT]
@@ -21,7 +23,8 @@ the replies on the served Glimmer under a hold on ``modal_usd``, then the blind 
    ``JUDGE_MAX_TOKENS`` out at ``--judge-prices`` (dollars per million).
 
 ``DIR/report.json``: per arm, raise hits on the days a problem is open, false raises per 100
-person-days, the transplant's flip rate (pre-scored and judged), the judge's disagreements and mean
+person-days, the transplant's flip rate (pre-scored and judged) and how often it left the unrelated
+item as it was (raised on both sides or on neither, where the judge agreed on both), the judge's disagreements and mean
 reply tokens with the arm's share of the serving spend. If ``zero`` or ``shuffled`` does as well as
 ``state``, it says the channel carries nothing.
 """
@@ -35,7 +38,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
@@ -45,14 +47,16 @@ from anjo.sleep.mind.apd import labels
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.core import reader_data, reader_eval
 from anjo.sleep.mind.core.projector import Projector, Reading
+from anjo.sleep.mind.sweep import MindBusy
 from anjo.sleep.night.holds import hold, usd
 from anjo.sleep.serving import backend, config, soft_tokens
 from anjo.sleep.serving.client import REQUEST_TIMEOUT_S, ServingError, VllmClient
 from anjo.sleep.serving.soft_tokens import EmbeddingRows, SoftTokens
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tools import soft_tokens_live
-from anjo.sleep.tools.thought_channel import SHARED_PERSON
+from anjo.sleep.tools.thought_channel import HOLD_KIND, SHARED_PERSON, records_root, stamp, swept_channel
 from anjo.sleep.train import lora
+from anjo.sleep.train.runners.modal import SdkCalls
 from anjo.sleep.types import CheckpointRef
 
 SERVE_POOL: Final = "modal_usd"
@@ -154,8 +158,7 @@ def _serve(args: argparse.Namespace, readings: Mapping[str, tuple[Any, Any]], to
     keys = {p.reading for p in todo if p.reading is not None}
     soft = {k: projector.tokens(Reading.empty(projector.k, projector.d) if k == reader_eval.EMPTY else readings[k][0].reading)
             for k in keys}
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    reservation = hold(led, f"thought_channel_eval:serve:{stamp}", (SERVE_POOL,), bound)
+    reservation = hold(led, f"{HOLD_KIND}:eval_serve:{stamp()}", (SERVE_POOL,), bound)
     started = clock()
     try:
         if not wake():
@@ -258,10 +261,14 @@ def _arm_scores(arm: str, cases: Sequence[reader_eval.Case], replies: Mapping[tu
     flipped, scored = reader_eval.flips(pairs, texts, keywords=words)
     judged = sum(verdicts[a.case_id].raised == 0 and verdicts[b.case_id].agree and verdicts[b.case_id].raised != 0
                  for a, b in pairs if a.case_id in verdicts and b.case_id in verdicts)
+    both = [(verdicts[a.case_id], verdicts[b.case_id]) for a, b in pairs
+            if a.case_id in verdicts and b.case_id in verdicts and verdicts[a.case_id].agree and verdicts[b.case_id].agree]
+    stable = sum((va.raised == 1) == (vb.raised == 1) for va, vb in both)  # the unrelated item, listed second
     tokens = [int(replies[(c.case_id, arm)]["tokens_out"]) for c in cases if (c.case_id, arm) in replies]
     return {"replies": len(verdicts), "raise_days": len(raise_days), "raise_hit": hits / max(len(raise_days), 1),
             "false_per_100_days": 100.0 * false / max(len(days), 1), "pairs": scored,
             "flip_prescore": flipped / max(scored, 1), "flip_judged": judged / max(scored, 1),
+            "unrelated_stable": stable / max(len(both), 1), "unrelated_pairs": len(both),
             "disagree": sum(not v.agree for v in verdicts.values()) / max(len(verdicts), 1),
             "mean_tokens": sum(tokens) / max(len(tokens), 1), "tokens": sum(tokens)}
 
@@ -282,8 +289,7 @@ def _score(args: argparse.Namespace, cases: Sequence[reader_eval.Case], judge: J
     pair_lists, words = _pair_problems(data, cases)
     problems |= pair_lists
     cached = _CachedJudge(judge, args.out / "judge.jsonl", _judge_prices(args.judge_prices))
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    reservation = hold(led, f"thought_channel_eval:judge:{stamp}", (JUDGE_POOL,), usd(max(worst, 0.01)))
+    reservation = hold(led, f"{HOLD_KIND}:eval_judge:{stamp()}", (JUDGE_POOL,), usd(max(worst, 0.01)))
     try:
         arms = {arm: _arm_scores(arm, cases, replies, problems, words, cached) for arm in reader_eval.ARMS}
     finally:
@@ -334,7 +340,7 @@ def main(
     argv: Sequence[str] | None = None, *, out: Callable[[str], None] = print, ledger: Ledger | None = None,
     environ: Mapping[str, str] | None = None, client: Callable[[], VllmClient] | None = None,
     wake: Callable[[], bool] | None = None, rows: EmbeddingRows | None = None, judge: Judge | None = None,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Callable[[], float] = time.monotonic, records: Path | None = None,
 ) -> int:
     args = _parse([] if argv is None else argv)
     env = os.environ if environ is None else environ
@@ -372,11 +378,12 @@ def main(
             raise ValueError(f"{len(missing)} cases have no reading (first {missing[0]}): run thought_channel readings")
         prompts = reader_eval.arm_prompts(cases, _notes(cases, readings, args), seed=args.seed)
         todo = [p for p in prompts if (p.case_id, p.arm) not in done]
-        serve_usd = _serve(args, readings, todo, bound, led, client, wake, rows, clock, out) if todo else 0.0
-        if serve_usd is None:
-            return 1
-        report = _score(args, cases, judge or _muse, judge_worst, led, _serving_total(args.out, serve_usd), out)
-    except (BudgetStop, ValueError) as stop:
+        with swept_channel(led, args.out, records_root(env, records), SdkCalls):
+            serve_usd = _serve(args, readings, todo, bound, led, client, wake, rows, clock, out) if todo else 0.0
+            if serve_usd is None:
+                return 1
+            report = _score(args, cases, judge or _muse, judge_worst, led, _serving_total(args.out, serve_usd), out)
+    except (BudgetStop, MindBusy, ValueError) as stop:
         out(f"not run: {stop}")
         return 2
     (args.out / "report.json").write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")

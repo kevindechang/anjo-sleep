@@ -444,7 +444,7 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
          out: Path, template: dict[str, str], prompts: list[dict[str, Any]]) -> tuple[int, str]:  # pragma: no cover - GPU VM only
     """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off.
     Returns the steps taken and the reference used."""
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from trl import DPOConfig, DPOTrainer  # type: ignore[import-not-found, unused-ignore]
 
     data = Dataset.from_list([plain for _, plain in pairs])
@@ -468,7 +468,7 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
     import numpy  # type: ignore[import-not-found, unused-ignore]
     import torch  # type: ignore[import-not-found, unused-ignore]
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from peft import LoraConfig, PeftModel  # type: ignore[import-not-found, unused-ignore]
     from transformers import AutoTokenizer, set_seed  # type: ignore[import-not-found, unused-ignore]
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]

@@ -341,6 +341,53 @@ def test_plan_holds_before_any_call(tmp_path: Path) -> None:
     assert any("meta_usd" in line for line in eval_lines)
 
 
+def test_a_night_or_apd_sweep_leaves_a_live_pretraining_hold_alone(tmp_path: Path) -> None:
+    from anjo.sleep.budget import Bound
+    from anjo.sleep.mind import sweep as mind_sweep
+    from anjo.sleep.night import sweep as night_sweep
+    from anjo.sleep.train.runners import modal as modal_runner
+
+    # Arrange: a killed pretraining's leftovers (its recorded call, its open hold), then a rerun
+    rows = tmp_path / "rows.jsonl"
+    rows.write_text(json.dumps({"id": "r1", "prompt": [{"role": "user", "content": "hi"}],
+                                "completion": [{"role": "assistant", "content": "hello"}]}) + "\n", encoding="utf-8")
+    ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
+    records = tmp_path / "calls"
+    left = lora.adapter_name(thought_channel.SHARED_PERSON, 0, 7)
+    modal_runner.CallRecords(records).add(left, "fc-left1")
+    killed = ledger.reserve("thought_channel:train:2026-10-28:shared-reader:a1", ("modal_usd",), Bound(2.0, 3600.0))
+    assert killed is not None
+    seen: dict[str, Any] = {}
+
+    class Calls(_Calls):
+        def wait(self, call_id: str, timeout_s: float) -> dict[str, Any]:
+            # a night command, and an APD command's stale-hold settle, start while the call runs
+            with night_sweep.swept_night(self.ledger, lambda: (0, 0)) as swept:
+                seen["night"] = swept.holds_settled
+            seen["mind"] = mind_sweep.settle_stale(self.ledger)
+            seen["open"] = [held.job for held in self.ledger.open_holds()]
+            return super().wait(call_id, timeout_s)
+
+        def cancel(self, call_id: str) -> None:
+            self.seen.append(f"cancel {call_id}")
+
+    calls = Calls(ledger)
+    args = ["train", "--rows", str(rows), "--out", str(tmp_path / "out"), "--revision", "a" * 40, "--yes"]
+
+    # Act
+    assert thought_channel.main(args, out=print, ledger=ledger, calls=calls, records=records) == 0
+
+    # Assert: the rerun's sweep cancelled the killed call and settled its hold at the full bound, first;
+    # the night's and MIND's sweeps settled nothing while the live hold stood
+    assert calls.seen[0] == "cancel fc-left1" and calls.seen[1:3] == ["spawn", "wait"]
+    assert ledger.settlements()[killed.job] == pytest.approx(2.0)
+    assert seen["night"] == 0 and seen["mind"] == 0
+    assert [job.split(":")[:2] for job in seen["open"]] == [["thought_channel", "train"]]
+    assert ledger.open_holds() == () and modal_runner.CallRecords(records).items() == []
+    assert not any(kind.startswith(f"{thought_channel.HOLD_KIND}:") or f"{thought_channel.HOLD_KIND}:".startswith(kind)
+                   for kind in (*night_sweep.NIGHT_KINDS, *mind_sweep.MIND_KINDS))
+
+
 class _Served:
     """A fake served Glimmer: every arm's request recorded, every reply the same plain answer."""
 
@@ -422,11 +469,12 @@ def test_live_eval_replies_first_then_scores_from_sealed_problems(tmp_path: Path
     report = json.loads((out / "report.json").read_text())
     assert set(report["arms"]) == set(reader_eval.ARMS) and "carries nothing" in report["verdict"]
     assert report["arms"]["state"]["pairs"] == 1 and report["arms"]["state"]["raise_days"] >= 1
+    assert report["arms"]["state"]["unrelated_pairs"] == 1 and report["arms"]["state"]["unrelated_stable"] == 1.0
     assert asked and all(len(p) <= thought_channel_eval.JUDGE_IN_TOKENS for p in asked)
     assert ledger.open_holds() == ()
     settled = ledger.settlements()
-    assert any(job.startswith("thought_channel_eval:serve:") for job in settled)
-    assert any(job.startswith("thought_channel_eval:judge:") for job in settled)
+    assert any(job.startswith("thought_channel:eval_serve:") for job in settled)
+    assert any(job.startswith("thought_channel:eval_judge:") for job in settled)
 
     # A rerun asks nothing again: the replies and the judge's answers are kept
     before = (len(served.sent), len(asked))
@@ -528,7 +576,7 @@ def test_the_nights_job_trains_the_projector_with_the_lora_as_one_unit(tmp_path:
                                           tokens=10, new=True, core=core) for n in range(2)), tokens=20, dropped={})
     shared = tmp_path / "shared.projector.npz"
     shared.write_bytes(b"shared")
-    block = {**thought_channel.CHANNEL, "k": K, "d": D, "max_minutes": 30.0}
+    block = channel_train.block(k=K, d=D, width=16, arm="state", exec_s=3600.0)
     runner = Runner()
     name = lora.adapter_name("p1", 1, 0)
 

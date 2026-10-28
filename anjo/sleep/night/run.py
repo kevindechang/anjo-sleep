@@ -56,6 +56,7 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady
+from anjo.sleep.night import channel_night
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
@@ -185,6 +186,7 @@ class NightRunner:
         days: Mapping[str, DayRun] | None, sweep: Sweep | None, as_of: Mapping[str, datetime],
     ) -> dict[str, NightResult]:
         days = days or {}
+        channel_night.check(self.deps, nights)  # the thought channel's ports, before any step
         windows = {**(windows or {}), **{uid: day.window for uid, day in days.items()}}
         people = []
         for uid, night in nights.items():
@@ -537,7 +539,7 @@ class NightRunner:
             return {"scenes": len(kept), "reused": True, "homework": None}
         started = self._timer(), self.deps.retries()
         p.spend.part = "practice"
-        runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
+        runner, channel = channel_night.practice(self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
             run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.stamp)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
@@ -549,7 +551,8 @@ class NightRunner:
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}), **self._serving(p, "practice", started)}
+                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}), **channel,
+                **self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:
         settings = self.deps.settings
@@ -574,7 +577,7 @@ class NightRunner:
         number = len(registry.trained_nights(p.uid) - {p.night}) + 1
         name = fresh_adapter_name(p.uid, number, registry.trained_names(p.uid))
         registry.record_trained(p.uid, name, p.night)  # before training: a name is never reused
-        ckpt, receipt = self.deps.trainer.train(p.uid, p.night, prev, p.data, name)
+        ckpt, receipt = channel_night.train(self.deps, p.uid, p.night, prev, p.data, name)
         p.checkpoint = ckpt
         minutes = receipt.get("gpu_minutes")
         if isinstance(minutes, int | float) and math.isfinite(minutes):

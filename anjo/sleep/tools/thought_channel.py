@@ -28,7 +28,12 @@
 - ``cases`` (free): the evaluation's cases from a core-test export's events (never its labels) and the
   counterfactual pairs (``reader_eval``), for ``tools.thought_channel_eval``.
 
-Without ``--yes`` the paid steps print their plan and hold and touch nothing.
+Without ``--yes`` the paid steps print their plan and hold and touch nothing. Every paid step, and
+the evaluation's, runs under MIND's lock (``mind.sweep.mind_lock``) and first sweeps what a killed run
+of these tools left (``swept_channel``): the pretraining's recorded Modal calls cancelled, then every
+open hold of their own kind (``thought_channel:``) settled at its full bound. Neither the night's sweep
+(``night.sweep.NIGHT_KINDS``) nor MIND's (``mind.sweep.MIND_KINDS``) names that kind, so a night or an
+APD command never settles a live pretraining's hold, and these tools never settle theirs.
 """
 from __future__ import annotations
 
@@ -38,7 +43,8 @@ import json
 import os
 import shutil
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Final
@@ -47,7 +53,7 @@ from anjo.sleep.budget import DATA_DIR_ENV, Bound, Ledger, default_ledger
 from anjo.sleep.mind import spark_provider
 from anjo.sleep.mind.core import reader_data, reader_eval, reader_targets
 from anjo.sleep.mind.core.projector import K_DEFAULT, read
-from anjo.sleep.mind.sweep import lock_path, mind_lock
+from anjo.sleep.mind.sweep import MindBusy, lock_path, mind_lock
 from anjo.sleep.night import core_snapshot
 from anjo.sleep.night.holds import hold, usd
 from anjo.sleep.stops import BudgetStop
@@ -55,17 +61,15 @@ from anjo.sleep.train import channel_train, colab_train, lora, modal_job
 from anjo.sleep.train.runners import modal as modal_runner
 
 SHARED_PERSON: Final = "shared-reader"  # the pretraining's synthetic person: generated lives only
+HOLD_KIND: Final = "thought_channel"  # these tools' holds: no other sweep names this kind
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour"
 CALLS_DIR: Final = "reader_calls"  # under <data dir>/sleep/: the pretraining's own call records
 TOKENS_PER_S: Final = 350.0  # an estimate: QLoRA forward and backward on Glimmer, one A100-80GB
-LOAD_MINUTES: Final = 12.0  # Glimmer's 4-bit load from the weights volume, and the run's checks, about
-SAVE_MINUTES: Final = 5.0  # the held-out margins, the adapter and the projector written
 CHARS_PER_TOKEN: Final = 3.5  # the estimate; the hold counts every character as a token
 TEMPLATE_TOKENS: Final = 64  # the chat template's own tokens around a call's messages, at most
 TYPICAL_REPLY_TOKENS: Final = 250  # the estimate of a target call's reply; the hold takes its cap
 DEFAULT_D: Final = 64  # the core's state width, when no row carries a reading
-CHANNEL: Final = {"k": K_DEFAULT, "d": DEFAULT_D, "width": 256, "arm": "state", "projector_lr": 3e-4, "anchor_lr": 1e-5,
-                  "contrast_beta": 0.1, "contrast_weight": 1.0, "val_share": 0.1}
+WIDTH: Final = 256  # the projector's hidden width
 
 
 def _prices(environ: Mapping[str, str]) -> tuple[float, float, float, float]:
@@ -81,6 +85,31 @@ def _prices(environ: Mapping[str, str]) -> tuple[float, float, float, float]:
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def records_root(environ: Mapping[str, str], records: Path | None = None) -> Path:
+    """Where the pretraining records its Modal calls: never the night's records."""
+    return records or Path(environ.get(DATA_DIR_ENV, ".")) / "sleep" / CALLS_DIR
+
+
+@contextmanager
+def swept_channel(ledger: Ledger, root: Path, records: Path, calls: Callable[[], Any]) -> Iterator[int]:
+    """MIND's lock for one paid step of these tools, after a killed run's leftovers are cleared: its
+    recorded Modal calls cancelled (``calls`` is asked for a client only when one is recorded; a
+    cancel that fails raises and every hold stays open), then each open ``thought_channel:`` hold
+    settled at its full bound, the honest charge for work that may have run. Yields how many."""
+    with mind_lock(lock_path(ledger, root)):
+        found = modal_runner.CallRecords(records)
+        if found.items():
+            modal_runner.cancel_leftover_calls(found, calls())
+        stale = [held for held in ledger.open_holds() if held.job.startswith(f"{HOLD_KIND}:")]
+        for held in stale:
+            held.settle(held.bound.amount)
+        yield len(stale)
+
+
+def stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
 
 # ── Free steps ────────────────────────────────────────────────────────────────
@@ -176,7 +205,7 @@ def _cases(args: argparse.Namespace, out: Callable[[str], None]) -> int:
 
 
 def _targets(args: argparse.Namespace, out: Callable[[str], None], ledger: Ledger | None,
-             chat: reader_targets.Chat | None, environ: Mapping[str, str]) -> int:
+             chat: reader_targets.Chat | None, environ: Mapping[str, str], calls: Any, records: Path | None) -> int:
     export = reader_data.TrainingExport.open(args.export)
     moments = reader_data.moments_by_life(reader_data.read_plans(args.plans))
     done = reader_data.read_targets(args.out)
@@ -192,10 +221,9 @@ def _targets(args: argparse.Namespace, out: Callable[[str], None], ledger: Ledge
         out("run again with --yes to write them" if todo else "nothing to write")
         return 0
     led = ledger or default_ledger()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     writer = reader_targets.TargetWriter(chat or provider.chat)
-    with mind_lock(lock_path(led, args.out.parent)):
-        reservation = hold(led, f"apd:thought_channel_targets:{stamp}", (provider.pool,), usd(max(worst, 0.01)))
+    with swept_channel(led, args.out.parent, records_root(environ, records), lambda: calls or modal_runner.SdkCalls()):
+        reservation = hold(led, f"{HOLD_KIND}:targets:{stamp()}", (provider.pool,), usd(max(worst, 0.01)))
         try:
             found = writer.write(export, moments, done=done,
                                  keep=lambda key, t: reader_data.append_target(args.out, key, t))
@@ -209,8 +237,7 @@ def _targets(args: argparse.Namespace, out: Callable[[str], None], ledger: Ledge
 
 def _recipe(rows: list[dict[str, Any]], args: argparse.Namespace, exec_s: float) -> dict[str, object]:
     d = next((int(r["core"]["reading"]["d"]) for r in rows if r.get("core")), DEFAULT_D)
-    channel = {**CHANNEL, "k": args.k, "d": d,
-               "max_minutes": max(1.0, exec_s / 60.0 - LOAD_MINUTES - SAVE_MINUTES)}
+    channel = channel_train.block(k=args.k, d=d, width=WIDTH, arm="state", exec_s=exec_s)
     cfg = lora.LoraCfg(r=args.rank, lr=args.lr, objective="sft", warm_start=False)
     settings = lora.training_config(cfg, len(rows), warm=False, revision=args.revision, night=reader_data.READER_DAY,
                                     channel=channel)
@@ -252,14 +279,14 @@ def _train(args: argparse.Namespace, out: Callable[[str], None], ledger: Ledger 
         out("run again with --yes to train")
         return 0
     led = ledger or default_ledger()
-    root = records or Path(environ.get(DATA_DIR_ENV, ".")) / "sleep" / CALLS_DIR
+    root = records_root(environ, records)
     the_calls = calls or modal_runner.SdkCalls()
     runner = modal_runner.ModalRunner(calls=the_calls, ledger=led, records=modal_runner.CallRecords(root),
-                                      is_synthetic=lambda person: person == SHARED_PERSON)
+                                      is_synthetic=lambda person: person == SHARED_PERSON,
+                                      hold_kind=f"{HOLD_KIND}:train")
     args.out.mkdir(parents=True, exist_ok=True)
     dataset = args.out / lora.DATASET_FILE
-    with mind_lock(lock_path(led, args.out)):
-        modal_runner.cancel_leftover_calls(modal_runner.CallRecords(root), the_calls)  # a killed pretraining's call
+    with swept_channel(led, args.out, root, lambda: the_calls):
         shutil.copyfile(args.rows, dataset)
         try:
             outputs = runner.run(lora.JOB, {
@@ -343,12 +370,12 @@ def main(
         if args.step == "cases":
             return _cases(args, out)
         if args.step == "targets":
-            return _targets(args, out, ledger, chat, env)
+            return _targets(args, out, ledger, chat, env, calls, records)
         return _train(args, out, ledger, calls, records, env)
     except (reader_data.ReaderDataError, ValueError, modal_job.ModalJobError) as error:
         out(f"not run: {error}")
         return 2
-    except BudgetStop as stop:
+    except (BudgetStop, MindBusy) as stop:
         out(f"not run: {stop}")
         return 2
     finally:
