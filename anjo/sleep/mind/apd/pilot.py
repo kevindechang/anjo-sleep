@@ -4,84 +4,72 @@
   the held-out lives only at the freeze (``held_out_specs``). Each attempt's worst case is held
   first (``backend.held_attempt``). Each life's problem file is sealed (``store``).
 - **run:** every arm on every life of a split, in one Colab session (``serving``: the command's own
-  sweep of ``anjo-mind-`` leftovers first, then ``colab_vllm.serve``). A run already on disk is
-  skipped, so a rerun resumes; 17b's adapters go up to the session first (``ColabPublisher``).
-- **timing:** B and M on one development life, 17b's replay sampled from that M run (labels and
-  branches) and its training planned as a dry run; then compute units per life-arm and the
-  held-out projection for 16 and 12 lives, with and without M-control and 17b, against
-  ``COLAB_LINE``.
-- **judge** and **report:** ``judging`` and ``reports/apd.py``, with 17b's section when its arms ran.
-- **kill-resume:** ``resume.kill_resume`` on held-out lives, its children attached to this
-  session (``kill_setup``).
+  sweep of ``anjo-mind-`` leftovers first, then ``colab_vllm.serve``), ``parallel`` life-arms at a
+  time (``batch``). A run already on disk is skipped, so a rerun resumes; 17b's adapters go up to
+  the session first (``ColabPublisher``).
+- **timing** (``timing``) and the **intervention test** (``intervene``), on the same session.
+- **judge** and **report:** ``judging`` and ``reports/apd.py``, with 17b's section when its arms ran
+  and the intervention test's when it has.
+- **kill-resume:** ``resume.kill_resume`` on held-out lives, at once, its children attached to this
+  session (``kill_setup``). Each process holds its own Spark Open a night at a time and journals
+  every call; the killed child's open night is settled from its journal (``batch.settle_orphans``).
 
 Times are measured with the clock passed in; nothing here reads the environment but
 ``kill_setup``, which runs in kill-resume's children.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import re
-import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Final
 
 import httpx
 
+from anjo.sleep.budget import Ledger
 from anjo.sleep.mind.apd import colab_vllm, fakes, gates, generate, judging, resume
-from anjo.sleep.mind.apd.arms import load_brief, mind_core
+from anjo.sleep.mind.apd.arms import mind_core
 from anjo.sleep.mind.apd.backend import Backend, held_attempt
+from anjo.sleep.mind.apd.batch import Out, fresh_journal, in_parallel, run_lives, serial, settle_orphans
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
-from anjo.sleep.mind.apd.live import SparkCalls, arm_models, held_run, run_live
+from anjo.sleep.mind.apd.interventions import InterventionResult, Skipped
+from anjo.sleep.mind.apd.journal import SpendJournal
+from anjo.sleep.mind.apd.live import SparkCalls, arm_models
 from anjo.sleep.mind.apd.store import DataDir
-from anjo.sleep.mind.apd.types import (
-    DEVELOPMENT_LIVES,
-    HELD_OUT_LIVES,
-    HELD_OUT_LIVES_CUT,
-    ArmName,
-    ArmRun,
-    Life,
-    LifeScore,
-)
+from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, HELD_OUT_LIVES_CUT, ArmName, ArmRun, Life, LifeScore
 from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
-from anjo.sleep.mind.replay import dataset, resolve, sample, served, settings
-from anjo.sleep.mind.replay.spend import SPARK_POOL, Holds
-from anjo.sleep.mind.replay.types import REPLAY_K
-from anjo.sleep.night.holds import held, spark_worst_usd, usd
-from anjo.sleep.night.mind import MIND_SPARK_CALLS
+from anjo.sleep.night.deps import Prices
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.prereg.ledger import LedgerEntry
+from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.reports import apd as apd_report
 from anjo.sleep.reports import replay as replay_report
 from anjo.sleep.serving import config
 from anjo.sleep.serving.config import ServeConfig
-from anjo.sleep.train import thinker
-from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX, stop_leftover_sessions
-from anjo.sleep.types import CheckpointRef
+from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, stop_leftover_sessions
+
+__all__ = ["Out", "run_lives"]  # the runs live in ``batch``; the command reaches them here
 
 DEV_ARMS: Final[tuple[ArmName, ...]] = ("B", "M")
 HELD_OUT_ARMS: Final[tuple[ArmName, ...]] = ("A", "B", "M", "M-persist", "M-kernel", "M-control")
 REPLAY_ARMS: Final[tuple[ArmName, ...]] = ("M+replay", "M+shuffled")
-COLAB_LINE: Final = 300.0  # compute units the held-out runs must stay under
 FREEZE_KIND: Final = "apd_freeze"
 DRAW_SEED_KIND: Final = "apd_draw_seed"
 SETUP_ENV: Final = "ANJO_APD_ATTACH"  # kill-resume's children: "<data>|<session>|<port>|<fake>"
 KEY_ENV: Final = "ANJO_APD_KEY"
+SPEND_ENV: Final = "ANJO_APD_SPEND"  # and "<ledger>|<four prices>" when their Spark Open is held
 SETUP: Final = "anjo.sleep.mind.apd.pilot:kill_setup"
-KILL_RUNS: Final = 3  # uninterrupted, killed, resumed
-Out = Callable[[str], None]
 
 
 class FreezeError(RuntimeError):
     """Held-out lives asked for before the freeze, or from a seed not committed before it."""
-
-
-def cu(seconds: float) -> float:
-    return seconds / 3600.0 * A100_CU_PER_HOUR
 
 
 # ── Generation ────────────────────────────────────────────────────────────────
@@ -176,107 +164,6 @@ class ColabPublisher:
             session.upload_adapter(folder, name)
 
 
-def run_lives(
-    data: DataDir, lives: Sequence[Life], arms: Sequence[ArmName], session: ColabSession, backend: Backend, out: Out,
-    *, adapters: Mapping[ArmName, CheckpointRef] | None = None,
-) -> tuple[ArmRun, ...]:
-    """Every arm on every life, each run saved as it ends; a run already on disk is kept."""
-    runs: list[ArmRun] = []
-    for life in lives:
-        for arm in arms:
-            found = data.run(life.id, arm)
-            if found is None:
-                adapter = None if adapters is None else adapters.get(arm)
-                found = run_live(arm, life, session, backend.spark, ledger=backend.ledger, prices=backend.prices,
-                                 adapter=adapter)
-                data.save_run(found)
-                out(f"ran {arm} on {life.id}: {len(found.reports)} report(s)")
-            runs.append(found)
-    return tuple(runs)
-
-
-# ── Timing ────────────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class Timing:
-    """Measured compute units: one B and one M run of a development life, 17b's branches from that
-    M run, and the training plan's."""
-
-    b_cu: float
-    m_cu: float
-    branches_cu: float
-    training_cu: float
-    setup_cu: float
-
-    def held_out(self, lives: int, *, control: bool, replay: bool) -> float:
-        """The held-out runs' projection: A as B, every MIND arm as M, one session's setup."""
-        mind_arms = 4 + (1 if control else 0) + (2 if replay else 0)  # M, M-persist, M-kernel (+ M-control, 17b's)
-        total = self.setup_cu + lives * (2 * self.b_cu + mind_arms * self.m_cu)
-        return total + (DEVELOPMENT_LIVES * self.branches_cu + self.training_cu if replay else 0.0)
-
-
-def describe_timing(timing: Timing) -> str:
-    lines = [
-        f"Per life-arm: B {timing.b_cu:.2f} CU, M {timing.m_cu:.2f} CU (A at B's, every MIND arm at M's); "
-        f"17b branches {timing.branches_cu:.2f} CU per development life, training {timing.training_cu:.2f} CU; "
-        f"session setup {timing.setup_cu:.2f} CU.",
-    ]
-    for lives in (HELD_OUT_LIVES, HELD_OUT_LIVES_CUT):
-        for control in (True, False):
-            for replay in (False, True):
-                total = timing.held_out(lives, control=control, replay=replay)
-                lines.append(f"N={lives}, {'with' if control else 'without'} M-control, "
-                             f"{'with' if replay else 'without'} 17b: {total:.1f} CU "
-                             f"({'under' if total <= COLAB_LINE else 'OVER'} the {COLAB_LINE:.0f}-unit line)")
-    return "\n".join(lines)
-
-
-def _timed(clock: Callable[[], float], work: Callable[[], object]) -> tuple[object, float]:
-    started = clock()
-    found = work()
-    return found, max(0.0, clock() - started)
-
-
-def _timed_run(data: DataDir, arm: ArmName, life: Life, session: ColabSession, backend: Backend,
-               clock: Callable[[], float]) -> tuple[ArmRun, float]:
-    """One development run, timed, and kept as that life's run when it has none yet."""
-    found, seconds = _timed(clock, lambda: run_live(arm, life, session, backend.spark, ledger=backend.ledger,
-                                                    prices=backend.prices))
-    assert isinstance(found, ArmRun)
-    if data.run(life.id, arm) is None:
-        data.save_run(found)
-    return found, seconds
-
-
-def time_pilot(data: DataDir, life: Life, session: ColabSession, backend: Backend, out: Out, *, setup_s: float,
-               clock: Callable[[], float] = time.monotonic) -> Timing:
-    """B and M on ``life`` (kept as its development runs), 17b's labels and branches from that M
-    run, and a training dry run. ``setup_s`` is how long the session took to serve."""
-    _, b_s = _timed_run(data, "B", life, session, backend, clock)
-    m_run, m_s = _timed_run(data, "M", life, session, backend, clock)
-    starts = sample.start_states(life, m_run)
-    holds = None if backend.ledger is None or backend.prices is None else Holds(
-        backend.ledger, backend.prices, clock, job="apd-timing", gpu=False)
-    labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=backend.spark), holds=holds)
-    screen = SparkCalls(backend.spark, backend.prices, backend.ledger, f"timing:{life.id}:branch-screens",
-                        per_night=max(1, len(starts)) * REPLAY_K * MIND_SPARK_CALLS)
-    models = arm_models(session, screen)
-    replay_models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=models.world,
-                                        screen=models.screen, resolver_chat=backend.spark)
-    with held_run(screen):
-        branches, branch_s = _timed(clock, lambda: sample.sample_all([(life, starts)], replay_models, labels,
-                                                                     holds=holds))
-    assert isinstance(branches, Mapping)
-    replay = dataset.build([life], starts, branches, labels, brief=load_brief(), penalty=settings.token_penalty())
-    planned = thinker.plan(replay)
-    out(thinker.describe(planned))
-    out(f"17b on {life.id}: {len(starts)} start state(s), {sum(len(b) for b in branches.values())} branch(es), "
-        f"{len(replay.thinker1.examples)} thinker-1 row(s)")
-    return Timing(b_cu=cu(b_s), m_cu=cu(m_s), branches_cu=cu(branch_s), training_cu=planned.compute_units,
-                  setup_cu=cu(setup_s))
-
-
 # ── Judge and report ──────────────────────────────────────────────────────────
 
 
@@ -308,8 +195,10 @@ def judge_lives(data: DataDir, lives: Sequence[Life], backend: Backend, out: Out
     return judged
 
 
-def report(judged: judging.Judged) -> str:
-    """The APD claim and per-life table, and 17b's section when its arms ran."""
+def report(judged: judging.Judged,
+           interventions: tuple[tuple[InterventionResult, ...], tuple[Skipped, ...]] | None = None) -> str:
+    """The APD claim and per-life table, 17b's section when its arms ran, and the intervention
+    test's when it has."""
     if judged.pending:
         raise ValueError(f"{judged.pending} disagreement(s) still await Claude's blind audit")
     sheets = {arm: [s for s in judged.audited if s.score.arm == arm] for arm in ("M", "B")}
@@ -321,6 +210,8 @@ def report(judged: judging.Judged) -> str:
         replay = ("M", *REPLAY_ARMS)
         parts.append(replay_report.section([s.score for s in judged.audited if s.score.arm in replay],
                                            [s for s in judged.gemini if s.arm in replay]))
+    if interventions is not None:
+        parts.append(apd_report.intervention_section(*interventions))
     return "\n\n".join(parts)
 
 
@@ -328,38 +219,42 @@ def report(judged: judging.Judged) -> str:
 
 
 def kill_lives(data: DataDir, lives: Sequence[Life], session: ColabSession, kill_at: int, backend: Backend,
-               out: Out) -> tuple[resume.KillResume, ...]:
-    """``resume.kill_resume`` on each life, its children attached to ``session``. The children
-    hold nothing and report no spend, so each life's three runs are held here first, a night of
-    Spark Open per run-night, and settled at that worst case."""
-    found: list[resume.KillResume] = []
-    with _attached(data, session, backend.fake):
-        for life in lives:
-            with _kill_held(backend, life):
-                result = resume.kill_resume(SETUP, life.id, kill_at, workdir=data.root / "kill")
-            out(f"kill-resume {life.id} at {kill_at}: digest {'equal' if result.digest_equal else 'DIFFERS'}, "
-                f"conclusions {'agree' if result.conclusions_agree else 'differ'}")
-            found.append(result)
-    return tuple(found)
+               out: Out, *, parallel: int) -> tuple[resume.KillResume, ...]:
+    """``resume.kill_resume`` on each life, ``parallel`` lives at once, its children attached to
+    ``session``; a life done before is kept."""
+    say = serial(out)
+    with _attached(data, session, backend):
+        return tuple(in_parallel([partial(_kill_one, data, life, kill_at, backend, say) for life in lives], parallel))
+
+
+def _kill_one(data: DataDir, life: Life, kill_at: int, backend: Backend, out: Out) -> resume.KillResume:
+    found: resume.KillResume | None = data.kill_result(life.id)
+    if found is None:
+        name = f"kill-{life.id}"
+        spend = fresh_journal(data, name, backend, out, life_id=life.id, arm="kill-resume")
+        log = resume.kill_log(data.kill, life.id, kill_at)
+        if log.exists():  # an earlier attempt's: a kill starts on a fresh log
+            os.replace(log, log.with_name(f"{log.name}.discarded-{os.getpid()}"))
+        found = resume.kill_resume(SETUP, life.id, kill_at, workdir=data.kill,
+                                   on_killed=lambda: _settled(backend, spend))
+        data.save_kill_result(found)
+    else:
+        out(f"kill-resume {life.id} already done")
+    out(f"kill-resume {life.id} at {kill_at}: digest {'equal' if found.digest_equal else 'DIFFERS'}, "
+        f"conclusions {'agree' if found.conclusions_agree else 'differ'}")
+    return found
 
 
 @contextmanager
-def _kill_held(backend: Backend, life: Life) -> Iterator[None]:
-    if backend.ledger is None or backend.prices is None:
-        yield
-        return
-    worst = KILL_RUNS * len(life.days) * spark_worst_usd(backend.prices, MIND_SPARK_CALLS)
-    with held(backend.ledger, f"apd:kill:{life.id}", (SPARK_POOL,), usd(worst), lambda: worst):
-        yield
-
-
-@contextmanager
-def _attached(data: DataDir, session: ColabSession, fake: bool) -> Iterator[None]:
-    before = {name: os.environ.get(name) for name in (SETUP_ENV, KEY_ENV)}
-    os.environ[SETUP_ENV] = f"{data.root}|{session.session}|{session.local_port}|{int(fake)}"
+def _attached(data: DataDir, session: ColabSession, backend: Backend) -> Iterator[None]:
+    before = {name: os.environ.get(name) for name in (SETUP_ENV, KEY_ENV, SPEND_ENV)}
+    os.environ[SETUP_ENV] = f"{data.root}|{session.session}|{session.local_port}|{int(backend.fake)}"
     os.environ[KEY_ENV] = session.key
+    ledger, prices = backend.ledger, backend.prices
+    os.environ[SPEND_ENV] = "" if ledger is None or prices is None else (
+        f"{ledger.path}|{','.join(str(price) for price in dataclasses.astuple(prices))}")
     try:
-        (data.root / "kill").mkdir(parents=True, exist_ok=True)
+        data.kill.mkdir(parents=True, exist_ok=True)
         yield
     finally:
         for name, value in before.items():
@@ -369,23 +264,39 @@ def _attached(data: DataDir, session: ColabSession, fake: bool) -> Iterator[None
                 os.environ[name] = value
 
 
+def _settled(backend: Backend, spend: SpendJournal) -> None:
+    settle_orphans(backend, spend)
+
+
 def kill_setup(life_id: str) -> resume.KillSetup:
     """Kill-resume's setup in each process: the life from the data dir, and the run's models on
     the session the parent serves, attached through its tunnel (the fakes' own server with
-    ``--fake``). The parent holds the Spark Open these processes spend (``kill_lives``)."""
+    ``--fake``). Each process holds its Spark Open a night at a time under a key of its own and
+    journals every call to the life's journal; ``close`` settles its last night."""
     root, session, port, fake = os.environ[SETUP_ENV].split("|")
     key = os.environ[KEY_ENV]
     data = DataDir(Path(root))
     transport = httpx.MockTransport(fakes.FakeVllm(key)) if fake == "1" else None
     attached = colab_vllm.attach(session, int(port), key, transport=transport)
     life = data.life(life_id)
+    chat: ChatFn
     if fake == "1":
-        spark = SparkCalls(fakes.FakeSparkChat(), None)
+        chat = fakes.FakeSparkChat()
     else:
         from anjo.sleep.spark_inquiry import spark_open
-        spark = SparkCalls(spark_open, None)
+        chat = spark_open
+    ledger, prices = _spend_env(os.environ.get(SPEND_ENV, ""))
+    spark = SparkCalls(chat, prices, ledger, f"kill:{life.id}:{os.getpid()}",
+                       journal=SpendJournal(data.journal(f"kill-{life.id}")))
     return resume.KillSetup(
         life=life, models=arm_models(attached, spark), core=mind_core(),
-        open_log=lambda path: JsonlWorkspaceLog(path, life.id, codec=PLAIN, guard=NO_GUARD),
+        open_log=lambda path: JsonlWorkspaceLog(path, life.id, codec=PLAIN, guard=NO_GUARD), close=spark.close,
     )
+
+
+def _spend_env(text: str) -> tuple[Ledger | None, Prices | None]:
+    if not text:
+        return None, None
+    path, prices = text.split("|")
+    return Ledger(Path(path)), Prices(*(float(price) for price in prices.split(",")))
 

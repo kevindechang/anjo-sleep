@@ -22,6 +22,11 @@ functions and how to open the durable log at a path (for the pilot, 17-core's JS
 Reported: digest equality, then whether the final conclusions agree with the uninterrupted run,
 compared by question subject, kind and statement, since ids derive from log seqs and a resume
 logs one more ``RunStart``.
+
+``KillSetup.close`` ends what a process's models hold (for the pilot, the open night of Spark
+Open): each process calls it when its run ends, which the killed child never does; ``on_killed``
+runs in the parent once the kill is confirmed, before the rebuild, to settle what the killed child
+left open.
 """
 from __future__ import annotations
 
@@ -76,6 +81,7 @@ class KillSetup:
     open_log: Callable[[Path], WorkspaceLog]
     budget: Budget = Budget()
     brief: str | None = None
+    close: Callable[[], None] = lambda: None
 
     def ports(self, log: WorkspaceLog) -> InquiryPorts:
         return mind_ports(self.models, self.life, log, load_brief() if self.brief is None else self.brief)
@@ -197,14 +203,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     setup = load_setup(args.setup)(args.life)
     check_clock(setup.life)
-    if args.mode == "resume":
-        print(json.dumps(rebuild(setup, args.log)))
-        return 0
-    if args.kill_at is None:
+    if args.mode == "kill" and args.kill_at is None:
         parser.error("kill needs --kill-at")
-    log = KillingLog(setup.open_log(args.log), args.kill_at)
-    _nights(setup.life, setup.life.days, Workspace(), setup.ports(log), setup.budget, setup.core, setup.models.clock)
-    return RAN_OUT
+    try:
+        if args.mode == "resume":
+            print(json.dumps(rebuild(setup, args.log)))
+            return 0
+        log = KillingLog(setup.open_log(args.log), args.kill_at)
+        _nights(setup.life, setup.life.days, Workspace(), setup.ports(log), setup.budget, setup.core,
+                setup.models.clock)
+        return RAN_OUT
+    finally:
+        setup.close()  # never reached by the SIGKILL
 
 
 def _child(mode: str, setup: str, life_id: str, path: Path, timeout: float, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -230,16 +240,25 @@ class KillResume:
     uninterrupted: tuple[Conclusion, ...]
 
 
-def kill_resume(setup: str, life_id: str, kill_at: int, *, workdir: Path, timeout: float = CHILD_TIMEOUT) -> KillResume:
-    """Kill M's run on ``life_id`` right after operation ``kill_at``, rebuild it in a fresh process
-    from its log in ``workdir`` and resume it; compare with an uninterrupted run."""
+def kill_log(workdir: Path, life_id: str, kill_at: int) -> Path:
+    """Where ``kill_resume`` keeps the killed run's durable log."""
     if not _SAFE_ID.match(life_id):
         raise ValueError("a life id names a file: letters, digits, '.', '_' and '-' only")
+    return workdir / f"{life_id}.kill-{kill_at}.log"
+
+
+def kill_resume(setup: str, life_id: str, kill_at: int, *, workdir: Path, timeout: float = CHILD_TIMEOUT,
+                on_killed: Callable[[], None] = lambda: None) -> KillResume:
+    """Kill M's run on ``life_id`` right after operation ``kill_at``, rebuild it in a fresh process
+    from its log in ``workdir`` and resume it; compare with an uninterrupted run."""
+    path = kill_log(workdir, life_id, kill_at)
     made = load_setup(setup)(life_id)
     check_clock(made.life)
-    whole = _nights(made.life, made.life.days, Workspace(), made.ports(MemoryLog()), made.budget, made.core,
-                    made.models.clock)
-    path = workdir / f"{life_id}.kill-{kill_at}.log"
+    try:
+        whole = _nights(made.life, made.life.days, Workspace(), made.ports(MemoryLog()), made.budget, made.core,
+                        made.models.clock)
+    finally:
+        made.close()
     if path.exists():
         raise ValueError(f"{path.name} already exists: a kill starts on a fresh log")
     killed = _child("kill", setup, life_id, path, timeout, "--kill-at", str(kill_at))
@@ -247,6 +266,7 @@ def kill_resume(setup: str, life_id: str, kill_at: int, *, workdir: Path, timeou
         raise ValueError(f"the run ended before operation {kill_at}")
     if killed.returncode != -signal.SIGKILL:
         raise RuntimeError(f"the run to kill exited with {killed.returncode}, not by SIGKILL")
+    on_killed()
     rebuilt = _child("resume", setup, life_id, path, timeout)
     if rebuilt.returncode != 0:
         raise RuntimeError(f"the rebuild exited with {rebuilt.returncode}")

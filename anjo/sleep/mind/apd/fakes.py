@@ -355,6 +355,9 @@ def adapter_folder(folder: Path, rendering: str) -> Path:
 # ── Spark Open, the generator and the judges ──────────────────────────────────
 
 
+WRONG_STATEMENT: Final = "The shoot moved because the lens rental fell through"
+
+
 def _reply(text: str, model: str = SPARK_OPEN, *, cap: int = 64) -> ChatResult:
     return ChatResult(text=text, tool_calls=(), model=model, input_tokens=120, output_tokens=min(12, cap),
                       finish_reason="stop")
@@ -363,7 +366,8 @@ def _reply(text: str, model: str = SPARK_OPEN, *, cap: int = 64) -> ChatResult:
 @dataclass
 class FakeSparkChat:
     """Spark Open as a ``ChatFn``: the screen allows, the resolver says true, the labeller picks the
-    plan-change hypothesis. ``model`` names another model to test provenance."""
+    plan-change hypothesis, the intervention test's writer names a wrong one. ``model`` names
+    another model to test provenance."""
 
     model: str = SPARK_OPEN
     calls: int = 0
@@ -373,6 +377,8 @@ class FakeSparkChat:
         system, user = str(messages[0]["content"]), str(messages[-1]["content"])
         if system == RESOLVE_PROMPT:
             return _reply(json.dumps({"verdict": "true"}), self.model, cap=max_tokens)
+        if system.startswith("# wrong_hypothesis_v1"):
+            return _reply(json.dumps({"statement": WRONG_STATEMENT}), self.model, cap=max_tokens)
         letters = {m["statement"]: m["letter"] for m in (_LETTER.match(line) for line in user.splitlines()) if m}
         if letters:
             return _reply(json.dumps({"holds": letters.get(CHANGES, "undetermined")}), self.model, cap=max_tokens)

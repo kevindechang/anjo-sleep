@@ -1,4 +1,5 @@
-"""The APD report (Task 17): the claim table's sentence and the per-life table.
+"""The APD report (Task 17): the claim table's sentence, the per-life table and the intervention
+test's section.
 
 The claim is chosen by the registered rule:
 
@@ -11,13 +12,20 @@ The claim is chosen by the registered rule:
 The win and inconclusive sentences are the spec's. The spec asks only that a loss be stated
 plainly, so its sentence is new copy. Every sentence calls the result a pilot of N lives, makes no
 population claim and never says "conscious".
+
+The intervention section (``intervention_section``) gives, for each edit, how many snapshots were
+resumed and skipped (by reason), how often each registered measure held on the edited branch and on
+its unedited twin, and how often the question's conclusion differed between them. It's described,
+not tested.
 """
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from anjo.sleep.mind.apd.interventions import EDIT_KINDS, InterventionResult, Skipped
 from anjo.sleep.mind.apd.score import ScoreSheet, mean_difference, sign_p, sign_test
 from anjo.sleep.mind.apd.types import WIN_P, ArmName, JudgeView, LifeScore, SignTest
 
@@ -128,3 +136,36 @@ def per_life_table(scores: Sequence[LifeScore]) -> str:
             cells += [f"{m:.2f}", f"{b:.2f}", f"{m - b:+.2f}"]
         rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
+
+
+def _share(count: int, total: int) -> str:
+    return "-" if total == 0 else f"{count}/{total}"
+
+
+def intervention_section(results: Sequence[InterventionResult], skipped: Sequence[Skipped]) -> str:
+    """The intervention test's section: per edit and measure, the edited branch against its
+    unedited twin, and every skip by reason."""
+    snapshots = len({(r.life_id, r.at) for r in results} | {(s.life_id, s.at) for s in skipped})
+    lines = [
+        "## Intervention test",
+        "",
+        f"{snapshots} mid-inquiry snapshot(s) from development lives, each resumed after an edit and, with the "
+        "evidence and the model held fixed, against its unedited twin. Described, not tested.",
+        "",
+        "| Edit | Resumed | Measure | Edited | Unedited | Conclusion differs |",
+        "|---|---|---|---|---|---|",
+    ]
+    for kind in EDIT_KINDS:
+        done = [r for r in results if r.edit.kind == kind]
+        moved = _share(sum(r.conclusion_differs for r in done), len(done))
+        names: list[str] = sorted({m.name for r in done for m in r.measures}) or ["-"]
+        for name in names:
+            found = [m for r in done for m in r.measures if m.name == name]
+            baseline = [m.unedited for m in found if m.unedited is not None]
+            lines.append(f"| {kind} | {len(done)} | {name} | {_share(sum(m.edited for m in found), len(found))} | "
+                         f"{_share(sum(baseline), len(baseline))} | {moved} |")
+    reasons = Counter((s.kind, s.reason) for s in skipped)
+    if reasons:
+        lines += ["", "Skipped: " + "; ".join(f"{kind} {count}x ({reason})" for (kind, reason), count in
+                                             sorted(reasons.items())) + "."]
+    return "\n".join(lines)

@@ -1,8 +1,9 @@
 """``python -m anjo.sleep.mind.apd``: the APD pilot (Task 17, with 17b on the same server).
 
 ``--fake`` runs any command, or with no command the whole chain (generate, timing, the
-development runs, a fake freeze, the held-out lives and runs with 17b's arms, kill-resume, judge
-and report), on offline fakes: no key, no network, no spend. Their numbers mean nothing.
+development runs, the intervention test, a fake freeze, the held-out lives and runs with 17b's arms,
+kill-resume, judge and report), on offline fakes: no key, no network, no spend. Their numbers mean
+nothing. ``--parallel N`` (default 8) runs that many life-arms at once against the one server.
 
 A real run makes paid calls, so it is refused without ``--live``; ``--live`` prints the command's
 plan (its Colab session and hard timeout, and every hold on every pool) and stops, and only
@@ -23,7 +24,8 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import colab_vllm, fakes, generate, pilot, plan
+from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
+from anjo.sleep.mind.apd.batch import PARALLEL
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.pilot import Out
 from anjo.sleep.mind.apd.store import DataDir
@@ -53,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-prices", help="muse_in,muse_out,gemini_in,gemini_out (USD per million tokens)")
     parser.add_argument("--hours", type=float, default=DEFAULT_HOURS, help="the Colab session's hard timeout")
     parser.add_argument("--only", type=int, help="run a step on its first N lives only")
+    parser.add_argument("--parallel", type=int, default=PARALLEL, help="life-arms at once against the one server")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("pilot", help="the whole chain (--fake only)")
     made = commands.add_parser("generate", help="the development lives; --held-out only at the freeze")
@@ -65,7 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     ran.add_argument("--adapters", type=Path, help="17b's adapter cache: runs M+replay and M+shuffled")
     ran.add_argument("--replay", help="thinker-1's adapter name in the cache (M+replay)")
     ran.add_argument("--shuffled", help="thinker-shuffled's adapter name in the cache (M+shuffled)")
-    commands.add_parser("timing", help="B and M on one development life, 17b sampled, training planned")
+    commands.add_parser("timing", help="throughput at --parallel, 17b sampled, training planned, the projection")
+    commands.add_parser("intervene", help="the intervention test on the development lives' M runs")
     judged = commands.add_parser("judge", help="judge every run of a split, blind")
     judged.add_argument("--held-out", action="store_true")
     commands.add_parser("report", help="the APD report, with 17b's section")
@@ -101,7 +105,7 @@ def _lives(data: DataDir, split: Split, only: int | None) -> tuple[Life, ...]:
 
 
 def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[str, Rate]) -> plan.Plan:
-    session_s = args.hours * 3600.0
+    session_s, parallel, measured = args.hours * 3600.0, args.parallel, timing.load(data)
     split = _split(args)
     on_disk = len(_lives(data, split, args.only))
     if args.command == "generate":
@@ -109,13 +113,15 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
         return plan.generate_plan(count if args.only is None else min(count, args.only), prices, rates, split)
     if args.command == "run":
         arms = pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()) if split == "held_out" else pilot.DEV_ARMS
-        return plan.run_plan(on_disk, arms, prices, session_s)
+        return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured)
     if args.command == "timing":
-        return plan.timing_plan(prices, session_s)
+        return plan.timing_plan(prices, session_s, parallel)
+    if args.command == "intervene":
+        return plan.intervene_plan(prices, session_s, parallel, measured)
     if args.command == "judge":
         return plan.judge_plan(rates)
     if args.command == "kill-resume":
-        return plan.kill_plan(prices, session_s)
+        return plan.kill_plan(prices, session_s, measured)
     return plan.Plan("report: reads what is on disk", None, ())
 
 
@@ -156,20 +162,28 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
                 publisher, adapters = _adapters(args)
                 publisher.upload(session)
                 arms = (*arms, *pilot.REPLAY_ARMS)
-            pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters)
+            pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters,
+                            parallel=args.parallel)
     elif args.command == "timing":
         started = time.monotonic()
         with pilot.serving(backend, settings_, session_s, out) as session:
-            setup_s = time.monotonic() - started
-            life = _lives(data, "development", 1)[0]
-            out(pilot.describe_timing(pilot.time_pilot(data, life, session, backend, out, setup_s=setup_s)))
+            measured = timing.time_pilot(data, session, backend, out, setup_s=time.monotonic() - started,
+                                         parallel=args.parallel)
+        left = None if backend.ledger is None else backend.ledger.remaining("baseten_mind_usd")
+        out(timing.describe(measured, spark_left=left))
+    elif args.command == "intervene":
+        with pilot.serving(backend, settings_, session_s, out) as session:
+            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel)
+        out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
         pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
     elif args.command == "report":
-        out(pilot.report(pilot.judge_lives(data, _lives(data, "held_out", args.only), _no_new_calls(backend), out)))
+        judged = pilot.judge_lives(data, _lives(data, "held_out", args.only), _no_new_calls(backend), out)
+        out(pilot.report(judged, intervene.on_disk(data)))
     elif args.command == "kill-resume":
         with pilot.serving(backend, settings_, session_s, out) as session:
-            pilot.kill_lives(data, _lives(data, "held_out", KILL_RESUME_LIVES), session, args.kill_at, backend, out)
+            pilot.kill_lives(data, _lives(data, "held_out", KILL_RESUME_LIVES), session, args.kill_at, backend, out,
+                             parallel=min(args.parallel, KILL_RESUME_LIVES))
     return 0
 
 
@@ -200,6 +214,16 @@ def _fake_freeze(data: DataDir, lives: int) -> Path:
 
 
 FAKE_ADAPTERS: Final = ("p-0123456789ab-n0", "p-ba9876543210-n0")  # thinker-1's, thinker-shuffled's
+FAKE_RATES: Final = {MUSE: Rate(1.25, 4.25), GEMINI: Rate(0.75, 3.75)}
+
+
+def _fake_backend(data: DataDir) -> backends.Backend:
+    """The fakes, held and priced on a ledger of the data dir's own at the real caps, so the
+    holds run as they would live (the fake prices are list-like; the fakes' tokens are tiny)."""
+    from anjo.sleep.budget import Ledger
+
+    return dataclasses.replace(backends.fake_backend(), ledger=Ledger(data.root / "fake-budget.jsonl"),
+                               prices=FAKE_PRICES, rates=FAKE_RATES)
 
 
 def _fake_adapters(root: Path) -> Path:
@@ -215,14 +239,14 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
     prereg = _fake_freeze(data, HELD_OUT_LIVES)
     adapters = _fake_adapters(data.root)
     for argv in (
-        ["generate"], ["timing"], ["run"],
+        ["generate"], ["timing"], ["run"], ["intervene"],
         ["generate", "--held-out", "--draw-seed", FAKE_DRAW_SEED, "--lives", str(HELD_OUT_LIVES), "--prereg", str(prereg)],
         ["run", "--held-out", "--adapters", str(adapters), "--replay", FAKE_ADAPTERS[0], "--shuffled", FAKE_ADAPTERS[1]],
         ["kill-resume", "--kill-at", str(FAKE_KILL_AT)],
         ["judge", "--held-out"], ["report"],
     ):
         out(f"$ {PROG} {' '.join([*base, *argv])}")
-        _step(parser.parse_args([*base, *argv]), data, backends.fake_backend(), out)
+        _step(parser.parse_args([*base, *argv]), data, _fake_backend(data), out)
     return 0
 
 
@@ -233,9 +257,10 @@ def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
         out(f"APD on fakes in {data.root}. The numbers mean nothing.")
         if args.command in (None, "pilot"):
-            base = ["--fake", "--data", str(data.root), *([] if args.only is None else ["--only", str(args.only)])]
+            base = ["--fake", "--data", str(data.root), "--parallel", str(args.parallel),
+                    *([] if args.only is None else ["--only", str(args.only)])]
             return _chain(parser, base, data, out)
-        return _step(args, data, backends.fake_backend(), out)
+        return _step(args, data, _fake_backend(data), out)
     if args.command in (None, "pilot"):
         parser.error("the whole chain runs only with --fake; live, run each command")
     if not args.live:

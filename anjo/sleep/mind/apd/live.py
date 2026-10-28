@@ -14,13 +14,18 @@
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
 
 ``SparkCalls`` holds each night's Spark Open worst case before that night's first call and settles
-what it priced, as the night's MIND step does. The GPU is held once, by the serving session itself
-(``colab_vllm.serve``).
+what it priced, as the night's MIND step does, and journals every call before it returns
+(``journal``), so a night its process never closed is settled from the journal. When other runs'
+nights hold the pool's room, a night waits for one of them to settle (runs go in parallel); with
+nothing else holding, no room is coming and it stops. The GPU is held once, by the serving session
+itself (``colab_vllm.serve``). ``Meter`` sums what a batch of runs used, for timing.
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import threading
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
@@ -29,9 +34,10 @@ from typing import Any, Final
 from anjo.sleep.budget import Ledger, Reservation
 from anjo.sleep.mind.apd.arms import MindCore, run_arm
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
+from anjo.sleep.mind.apd.journal import SpendJournal
 from anjo.sleep.mind.apd.types import ArmModels, ArmName, ArmRun, Life, NightClock, Reported, WrittenPort
 from anjo.sleep.mind.inquiry.types import Budget, ModelReply
-from anjo.sleep.mind.replay.served import arm_thinker
+from anjo.sleep.mind.replay.served import ServedThinker, arm_thinker
 from anjo.sleep.mind.replay.spend import SPARK_POOL, colab_client
 from anjo.sleep.mind.screen import SparkScreen
 from anjo.sleep.model_api import ChatResult, ModelApiError
@@ -41,11 +47,14 @@ from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving.client import ServingError, VllmClient
 from anjo.sleep.spark_inquiry import WORLD_MAX_TOKENS, WORLD_PROMPT, ChatFn, SparkResolver
+from anjo.sleep.stops import BudgetStop
 from anjo.sleep.types import CheckpointRef
 
 logger = logging.getLogger(__name__)
 TEMPERATURE: Final = 0.0
 SEED: Final = 0
+ROOM_POLL_S: Final = 5.0  # how often a night waiting for room looks again
+ROOM_WAIT_S: Final = 3600.0  # and how long it waits before it stops
 
 
 @dataclass(frozen=True)
@@ -93,8 +102,9 @@ class SparkCalls:
     """Every Spark Open call of one run, held a night at a time as the night's MIND step holds them:
     at a night's first call (``clock``), its worst case of ``per_night`` calls is held on
     ``baseten_mind_usd`` (the night before settled at what it priced), and a call past that count
-    is refused (the port then refuses or says undetermined, as for a failed call). Without a
-    ledger nothing is held; without prices nothing is priced."""
+    is refused (the port then refuses or says undetermined, as for a failed call). Each call is
+    journaled with its real tokens before it returns. Without a ledger nothing is held; without
+    prices nothing is priced. ``total_calls`` and ``total_usd`` count every night's."""
 
     chat: ChatFn
     prices: Prices | None
@@ -102,9 +112,13 @@ class SparkCalls:
     key: str = "spark"
     per_night: int = MIND_SPARK_CALLS
     clock: NightClock | None = None
+    journal: SpendJournal | None = None
+    wait: Callable[[float], None] = time.sleep
     night: date | None = None
     calls: int = 0  # this night's
     usd: float = 0.0  # this night's
+    total_calls: int = 0
+    total_usd: float = 0.0
     _held: Reservation | None = field(default=None, repr=False)
 
     def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
@@ -112,9 +126,13 @@ class SparkCalls:
         if self.calls >= self.per_night:
             raise ModelApiError("past the Spark Open calls this night holds")
         self.calls += 1
+        self.total_calls += 1
         result = self.chat(messages, max_tokens)
-        if self.prices is not None:
-            self.usd += spark_usd(self.prices, result.input_tokens, result.output_tokens)
+        price = 0.0 if self.prices is None else spark_usd(self.prices, result.input_tokens, result.output_tokens)
+        self.usd += price
+        self.total_usd += price
+        if self.journal is not None and self._held is not None:
+            self.journal.call(self._held.job, result.input_tokens, result.output_tokens, price)
         return result
 
     def _turn(self) -> None:
@@ -126,8 +144,23 @@ class SparkCalls:
         if self.ledger is not None:
             if self.prices is None:
                 raise ValueError("a held run is priced")
-            self._held = hold(self.ledger, f"apd:{self.key}:{day}", (SPARK_POOL,),
-                              usd(spark_worst_usd(self.prices, self.per_night)))
+            self._held = self._hold(self.ledger, self.prices, day)
+            if self.journal is not None:
+                self.journal.held(self._held.job)
+
+    def _hold(self, ledger: Ledger, prices: Prices, day: date | None) -> Reservation:
+        """The night's hold; while other nights hold the room it needs, wait for one to settle."""
+        waited = 0.0
+        while True:
+            try:
+                return hold(ledger, f"apd:{self.key}:{day}", (SPARK_POOL,),
+                            usd(spark_worst_usd(prices, self.per_night)))
+            except BudgetStop:
+                others = any(SPARK_POOL in held.pools for held in ledger.open_holds())
+                if not others or waited >= ROOM_WAIT_S:
+                    raise
+            self.wait(ROOM_POLL_S)
+            waited += ROOM_POLL_S
 
     def close(self) -> None:
         """Settle the open night's hold at what it priced, or release it."""
@@ -138,6 +171,8 @@ class SparkCalls:
             held_now.settle(self.usd)
         else:
             held_now.release()
+        if self.journal is not None:
+            self.journal.closed(held_now.job)
 
     def reporting(self, reported: Reported, port: WrittenPort) -> ChatFn:
         """These calls, each reply's model going to ``reported`` as ``port``'s."""
@@ -174,13 +209,38 @@ def held_run(spark: SparkCalls) -> Iterator[SparkCalls]:
         spark.close()
 
 
+@dataclass
+class Meter:
+    """What a batch of runs used, summed across their threads: Glimmer thinker calls, Spark Open
+    calls and their price, and life-arm nights."""
+
+    thinker_calls: int = 0
+    spark_calls: int = 0
+    spark_usd: float = 0.0
+    nights: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add(self, models: ArmModels, spark: SparkCalls, nights: int) -> None:
+        thinker = len(models.thinker.calls) if isinstance(models.thinker, ServedThinker) else 0
+        with self._lock:
+            self.thinker_calls += thinker
+            self.spark_calls += spark.total_calls
+            self.spark_usd += spark.total_usd
+            self.nights += nights
+
+
 def run_live(
     arm: ArmName, life: Life, session: ColabSession, spark_chat: ChatFn, *, ledger: Ledger | None,
     prices: Prices | None, adapter: CheckpointRef | None = None, budget: Budget = Budget(),
-    core: MindCore | None = None, brief: str | None = None,
+    core: MindCore | None = None, brief: str | None = None, key: str | None = None,
+    journal: SpendJournal | None = None, meter: Meter | None = None,
 ) -> ArmRun:
-    """One arm through ``life`` on the live models, its Spark Open calls held first."""
-    spark = SparkCalls(spark_chat, prices, ledger, f"run:{life.id}:{arm}")
+    """One arm through ``life`` on the live models, its Spark Open calls held a night at a time
+    under ``key`` and journaled."""
+    spark = SparkCalls(spark_chat, prices, ledger, key or f"run:{life.id}:{arm}", journal=journal)
     models = arm_models(session, spark, adapter=adapter)
     with held_run(spark):
-        return run_arm(arm, life, models, budget=budget, core=core, brief=brief)
+        found = run_arm(arm, life, models, budget=budget, core=core, brief=brief)
+    if meter is not None:
+        meter.add(models, spark, len(life.days))
+    return found

@@ -98,30 +98,36 @@ def _starts(data: Dataset) -> frozenset[str]:
     return frozenset(example.id.rsplit(":b", 1)[0] for example in data.examples)
 
 
-def shared_steps(data: ReplayData, cfg: LoraCfg) -> StepPlan:
+def shared_steps(data: ReplayData, cfg: LoraCfg, scale: int = 1) -> StepPlan:
     """The one step plan both adapters train with: the larger set's, so the smaller one's rows
     are each seen at least once too. Refuses sets that don't draw on the same start states."""
     if not data.thinker1.examples or _starts(data.thinker1) != _starts(data.shuffled):
         raise TrainError("thinker-1 and thinker-shuffled each hold one trajectory from the same start states")
-    return plan_steps(max(len(data.thinker1.examples), len(data.shuffled.examples)), cfg)
+    return plan_steps(scale * max(len(data.thinker1.examples), len(data.shuffled.examples)), cfg)
 
 
-def _adapter_plan(label: str, data: Dataset, steps: StepPlan) -> AdapterPlan:
+def _adapter_plan(label: str, data: Dataset, steps: StepPlan, scale: int = 1) -> AdapterPlan:
     seen = steps.steps * steps.accumulation * data.tokens / len(data.examples)  # tokens over every update
     minutes = SETUP_MINUTES + seen / A100_TOKENS_PER_MINUTE
     return AdapterPlan(
-        label=label, examples=len(data.examples), tokens=data.tokens, steps=steps.steps, epochs=steps.epochs,
-        accumulation=steps.accumulation, minutes=minutes, compute_units=minutes / 60.0 * A100_CU_PER_HOUR,
+        label=label, examples=scale * len(data.examples), tokens=scale * data.tokens, steps=steps.steps,
+        epochs=steps.epochs, accumulation=steps.accumulation, minutes=minutes,
+        compute_units=minutes / 60.0 * A100_CU_PER_HOUR,
     )
 
 
 def plan(
     data: ReplayData, cfg: LoraCfg = LoraCfg(), *, timeout_s: float = TRAINING_TIMEOUT_S,
-    remaining_cu: float | None = None,
+    remaining_cu: float | None = None, scale: int = 1,
 ) -> ThinkerPlan:
-    """What training both adapters would take, on one shared step plan."""
-    steps = shared_steps(data, cfg)
-    adapters = tuple(_adapter_plan(label, d, steps) for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
+    """What training both adapters would take, on one shared step plan. ``scale`` sizes it as if
+    each set held that many times its rows at the same tokens a row (APD's timing measures one
+    development life and projects all of them)."""
+    if scale < 1:
+        raise TrainError("a plan's scale is at least 1")
+    steps = shared_steps(data, cfg, scale)
+    adapters = tuple(_adapter_plan(label, d, steps, scale)
+                     for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
     return ThinkerPlan(adapters=adapters, hold_cu=timeout_s / 3600.0 * A100_CU_PER_HOUR, remaining_cu=remaining_cu)
 
 

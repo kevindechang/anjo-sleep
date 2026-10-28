@@ -5,12 +5,19 @@
     <data>/lives/<life>.json          a life, as the arms and the gates read it
     <data>/sealed/<life>.json         its problem file, sealed: only the judge and the report read it
     <data>/runs/<life>.<arm>.json     each finished run (``ArmRun``), written once
+    <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
+    <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
+    <data>/kill/<life>.result.json    each finished kill-resume (``resume.KillResume``)
+    <data>/interventions/<n>.<edit>.json  each finished snapshot-edit of the intervention test
+    <data>/timing.json                the last timing's measurements
     <data>/judging/<judge>.jsonl      each judge's replies, by the hash of the prompt it was sent
     <data>/audit/pending.jsonl        the blind audit's questions (``judging``)
     <data>/audit/answers.jsonl        and Claude's answers, written by hand
 
 A run is written once, when it ends, so ``run`` resumes by skipping every run already on disk; a
-run cut short starts again from its first night. Every file is written whole, then renamed.
+run cut short starts again from its first night, and what its attempt spent is recorded as
+discarded. Every file is written whole to a temporary file of its own, synced, then renamed over
+its name, so a reader, or a parallel writer of another file, never sees half of one.
 
 The codec is JSON with tags for what JSON lacks (dates, tuples, sets, maps with other keys, and
 frozen dataclasses). It rebuilds only dataclasses from Anjo Sleep's own type modules, through
@@ -23,17 +30,20 @@ import importlib
 import json
 import os
 import re
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from anjo.sleep.evidence.jsonl import PLAIN, append_records, read_records
 from anjo.sleep.mind.apd.types import ArmName, ArmRun, Life, ProblemFile, Split
 
 _MODULES: Final = (
     "anjo.sleep.types", "anjo.sleep.mind.apd.types", "anjo.sleep.mind.inquiry.types",
-    "anjo.sleep.mind.inquiry.steps", "anjo.sleep.mind.inquiry.ops",
+    "anjo.sleep.mind.inquiry.steps", "anjo.sleep.mind.inquiry.ops", "anjo.sleep.mind.apd.interventions",
+    "anjo.sleep.mind.apd.resume",
 )
 _SAFE_ID: Final = re.compile(r"^[\w.+-]+$")
 
@@ -128,11 +138,24 @@ def check_id(name: str) -> str:
 
 
 def write_text(path: Path, text: str) -> None:
-    """Write ``path`` whole: to a temporary file first, then renamed over it."""
+    """Write ``path`` whole: to a temporary file of its own first, synced, then renamed over it,
+    and the folder synced."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
 
 
 @dataclass(frozen=True)
@@ -158,6 +181,32 @@ class DataDir:
     def audit(self) -> Path:
         return self.root / "audit"
 
+    @property
+    def spend(self) -> Path:
+        return self.root / "spend"
+
+    @property
+    def kill(self) -> Path:
+        return self.root / "kill"
+
+    @property
+    def interventions(self) -> Path:
+        return self.root / "interventions"
+
+    @property
+    def timing(self) -> Path:
+        return self.root / "timing.json"
+
+    def journal(self, name: str) -> Path:
+        """A run's Spark Open journal."""
+        return self.spend / f"{check_id(name)}.jsonl"
+
+    def record_discarded(self, record: Mapping[str, object]) -> None:
+        append_records(self.spend / "discarded.jsonl", PLAIN, [record])
+
+    def discarded(self) -> list[dict[str, Any]]:
+        return read_records(self.spend / "discarded.jsonl", PLAIN)
+
     def save_life(self, life: Life, problems: ProblemFile) -> None:
         """A life and its sealed problem file, the problem file first."""
         if problems.life_id != life.id:
@@ -180,8 +229,16 @@ class DataDir:
         found = [self.life(path.stem) for path in sorted(folder.glob("*.json"))] if folder.exists() else []
         return tuple(life for life in found if life.split == split)
 
+    def development_problems(self, life_id: str) -> ProblemFile:
+        """A development life's problem file, for the intervention test's wrong-hypothesis writer
+        (Spark Open, the model that wrote it). A held-out life's is never read here."""
+        if self.life(life_id).split != "development":
+            raise StoreError("only a development life's problem file is read outside judging")
+        return self.sealed(life_id)
+
     def sealed(self, life_id: str) -> ProblemFile:
-        """A life's sealed problem file: the judge and the report read it, and nothing else."""
+        """A life's sealed problem file: the judge and the report read it, and nothing else but a
+        development life's wrong-hypothesis writer (``development_problems``)."""
         found: ProblemFile = loads(self._sealed(life_id).read_text(encoding="utf-8"), ProblemFile)
         if found.life_id != life_id:
             raise StoreError(f"{life_id}'s sealed file holds another life's problems")
@@ -201,3 +258,24 @@ class DataDir:
         if (found.life_id, found.arm) != (life_id, arm):
             raise StoreError(f"{path.name} holds another run")
         return found
+
+    def save_kill_result(self, result: Any) -> None:
+        write_text(self.kill / f"{check_id(result.life_id)}.result.json", dumps(result))
+
+    def kill_result(self, life_id: str) -> Any:
+        """A finished kill-resume (``resume.KillResume``), or ``None``."""
+        path = self.kill / f"{check_id(life_id)}.result.json"
+        if not path.exists():
+            return None
+        found = decode(json.loads(path.read_text(encoding="utf-8")))
+        if getattr(found, "life_id", None) != life_id:
+            raise StoreError(f"{path.name} holds another life's kill-resume")
+        return found
+
+    def save_intervention(self, name: str, done: Any) -> None:
+        write_text(self.interventions / f"{check_id(name)}.json", dumps(done))
+
+    def intervention(self, name: str) -> Any:
+        """A finished snapshot-edit's results and skips, or ``None``."""
+        path = self.interventions / f"{check_id(name)}.json"
+        return None if not path.exists() else decode(json.loads(path.read_text(encoding="utf-8")))
