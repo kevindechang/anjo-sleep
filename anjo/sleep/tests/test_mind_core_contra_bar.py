@@ -184,7 +184,7 @@ def test_contra_runs_unchanged_on_an_export(tmp_path: Path, capsys: pytest.Captu
 # ── Guards on the measured claims (``cli contra``'s docstring) ──────────────────────────────────
 
 SLOW = pytest.mark.skipif(os.environ.get("ANJO_SLEEP_SLOW_TESTS") != "1",
-                          reason="trains two cores for minutes: set ANJO_SLEEP_SLOW_TESTS=1")
+                          reason="trains for 25 s to minutes: set ANJO_SLEEP_SLOW_TESTS=1")
 GUARD_MARGIN = 0.1  # the pair scorer's measured lower bounds are +0.33 / +0.39; this fit's, +0.26 / +0.42
 NO_CLEAR = 0.15  # the core recipes' test AUC over the bar's, measured -0.06 to +0.06
 
@@ -194,6 +194,7 @@ def _stance(seed: int) -> tuple[tuple[contra_bar.Candidate, ...], ...]:
             contra_bar.candidates(toy.revision_lives(128, seed=seed, stance=True), contra_bar.in_toy))
 
 
+@SLOW
 def test_the_pair_scorer_clears_the_bar_on_the_stance_toy() -> None:
     """One seed and a shorter fit than ``contra``'s (30 epochs, about 25 s on one CPU), a loose margin."""
     pytest.importorskip("torch")

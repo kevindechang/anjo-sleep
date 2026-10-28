@@ -5,7 +5,8 @@
 (``row``, ``event_id``, ``life_or_person``, ``t``, ``kind``); ``latents.npy`` is the ``(count, d)``
 float32 matrix. ``read_latents`` checks the two against each other and never unpickles. An encode
 run's folder (``latents encode --out``: one such folder per life) reads as one, every life's
-header agreeing on what it read (``d``, the layers, the model and revision, the pooling).
+header agreeing on what it read (``d``, the layers, the model and revision, the pooling) and no
+event id in two lives.
 
 **The export** (the data worker's ``mind-core-events-v1``): ``manifest.json`` lists each life with
 its first and last day; ``events/<life>.jsonl`` holds its events in order; ``labels/<life>.json``
@@ -69,7 +70,13 @@ def read_latents(folder: Path) -> tuple[dict[str, Any], dict[str, EventLatent]]:
         first = read[0][0]
         if any({k: h.get(k) for k in SAME_READING} != {k: first.get(k) for k in SAME_READING} for h, _ in read):
             raise DataError(f"the run's lives disagree on what they read ({', '.join(SAME_READING)})")
-        return {**first, "count": sum(len(rows) for _, rows in read)}, {k: v for _, rows in read for k, v in rows.items()}
+        merged: dict[str, EventLatent] = {}
+        for _, rows in read:
+            twice = sorted(merged.keys() & rows.keys())
+            if twice:
+                raise DataError(f"an event id is in more than one life: {twice[:5]}")
+            merged.update(rows)
+        return {**first, "count": len(merged)}, merged
     return _read_one(folder)
 
 

@@ -96,6 +96,10 @@ def test_an_encode_run_folder_reads_as_one_with_every_life_in_it(tmp_path: Path)
     (tmp_path / "empty").mkdir()
     with pytest.raises(data.DataError, match="not a latents folder"):
         data.read_latents(tmp_path / "empty")
+    _latents(tmp_path / "twice" / "life-1", EVENTS)  # one event id in two lives: refused, never overwritten
+    _latents(tmp_path / "twice" / "life-2", [{**EVENTS[0], "life_or_person": "life-2"}])
+    with pytest.raises(data.DataError, match="e-d0-1"):
+        data.read_latents(tmp_path / "twice")
 
 
 def test_a_planted_item_becomes_a_thread_label() -> None:

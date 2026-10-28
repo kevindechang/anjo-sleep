@@ -207,6 +207,37 @@ def test_a_promotion_keeps_her_unit_first_or_promotes_nothing(tmp_path: Path, mo
     assert head.projector == step(third.log_path, "train")["receipt"]["projector"]
 
 
+def test_a_unit_kept_for_a_promotion_that_then_fails_is_followed_by_one_naming_the_serving_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange: a first night promotes; the next one keeps its unit, then its promotion raises
+    world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
+    trainer = SavingTrainer(world)
+    world.targets(UID).upsert(thread(UID))
+    held = store.MindStore(tmp_path / store.STORE_DIR, UID)
+    assert _channel_night(world, core, trainer, shared, NIGHT).status == "promoted"
+    (first,) = held.units()
+
+    def refused(*args: Any, **kwargs: Any) -> None:
+        raise OSError("the registry can't be written")
+
+    # Act
+    with monkeypatch.context() as patched:
+        patched.setattr(world.registry, "promote", refused)
+        second = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=1))
+
+    # Assert: the promotion's unit names an adapter that never served, so the night's end keeps one
+    # naming the adapter that does, with the projector that served beside it
+    assert second.status == "failed" and step(second.log_path, "promote")["status"] == "failed"
+    _, unserved, last = held.units()
+    assert unserved.lora != first.lora and unserved.lora != checkpoint_id(world.registry.last_promoted(UID))
+    assert last.lora == first.lora == checkpoint_id(world.registry.last_promoted(UID))
+    assert last.projector == first.projector and summary(second.log_path)["mind_unit"]["lora"] == first.lora
+    third = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=2))
+    assert "projector_fallback" not in step(third.log_path, "dream")
+    assert first.projector is not None and trainer.channel[-1]["projector"] == Path(first.projector)
+
+
 def test_a_unit_naming_another_adapter_than_the_one_serving_falls_back_logged(tmp_path: Path) -> None:
     # Arrange: two promoted nights, then the first adapter serves again
     world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
