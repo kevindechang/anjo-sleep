@@ -476,7 +476,7 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
          out: Path, template: dict[str, str], prompts: list[dict[str, Any]]) -> tuple[int, str]:  # pragma: no cover - GPU VM only
     """The DPO pass on the night's pairs; its reference is ``model`` with the adapter switched off.
     Returns the steps taken and the reference used."""
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from trl import DPOConfig, DPOTrainer  # type: ignore[import-not-found, unused-ignore]
 
     data = Dataset.from_list([plain for _, plain in pairs])
@@ -588,7 +588,7 @@ def _train_seed(cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, t
     eot = tokenizer.convert_tokens_to_ids(REPLY_END)
     plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
                      seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
-                     long_term_rank=frozen, dreams=cfg["terms"]["dreams"])
+                     dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"])
     terms = loss.train_terms(model, batch, plan)
     model.save_pretrained(str(out))
     terms |= {"dropped_truncated": too_long, "fold_rank": fold,
@@ -632,7 +632,7 @@ def _match_sft(trainer: Any, minutes: float, started: float) -> int:  # pragma: 
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
     import numpy  # type: ignore[import-not-found, unused-ignore]
     import torch  # type: ignore[import-not-found, unused-ignore]
-    from datasets import Dataset  # type: ignore[import-not-found, unused-ignore]
+    from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from peft import LoraConfig, PeftModel  # type: ignore[import-not-found, unused-ignore]
     from transformers import AutoTokenizer, set_seed  # type: ignore[import-not-found, unused-ignore]
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]

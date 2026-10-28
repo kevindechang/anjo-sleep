@@ -8,6 +8,7 @@ without it."""
 from __future__ import annotations
 
 import json
+import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -330,7 +331,7 @@ def _tiny(torch: Any, vocab: int = 12, dim: int = 6, rank: int = 2) -> Any:
 
 
 def _plan(**changes: Any) -> Any:
-    return replace(sleep_loss.Plan(lr=0.05, min_steps=2, beta=0.1, seed=3, eot=11, pad=0), **changes)
+    return replace(sleep_loss.Plan(lr=0.05, min_steps=2, beta=0.1, seed=3, eot=11, pad=0, dpo_lr=1e-4), **changes)
 
 
 def test_seeding_teacher_is_base_plus_context_adapter_off() -> None:
@@ -370,9 +371,33 @@ def test_seeding_trains_only_the_adapter() -> None:
     assert any(not torch.equal(p, lora[name]) for name, p in model.named_parameters() if name in lora)
     assert receipt["steps"] >= 2 and receipt["rows"]["seed"] == 4 and receipt["rows"]["imitate"] >= 1
     assert set(receipt["minutes"]) >= {"sft", "dpo", "seed", "imitate"} and receipt["weights"] == sleep_loss.WEIGHTS
+    assert receipt["grads_adapter_only"] and receipt["teacher_drift"] == 0.0  # adapter off, context on: unmoved
+    assert receipt["seed_kl_after"] != receipt["seed_kl_before"]
     model.head.weight.requires_grad_(True)  # anything but the adapter trainable: refused before a step
     with pytest.raises(ValueError, match="adapter"):
         sleep_loss.train_terms(model, batch, _plan())
+
+
+def test_with_seeding_on_the_dpo_step_is_todays() -> None:
+    """The DPO term keeps today's pass: its own AdamW at today's DPO rate (never the main block's,
+    500x higher here), today's accumulation and epochs rule, and so today's number of updates."""
+    torch = _torch()
+    pairs = tuple(sleep_loss.PairSeq((1, i), (6, 11), (7, 11)) for i in range(2, 7))
+    batch = sleep_loss.Batch(
+        sft=(sleep_loss.Seq((1, 2), (3, 11)),), pairs=pairs,
+        seeds=tuple(sleep_loss.SeedSeq((1, i), (9, 9, 1, i), (4, 5, 11)) for i in range(2, 6)),
+    )
+    plan = _plan(min_steps=4)
+    model = _tiny(torch)
+    dpo = sleep_loss.train_terms(model, batch, plan)["dpo"]
+    cfg = {"min_optimizer_steps": plan.min_steps, "batch_size": 1}
+    accumulation, epochs = colab_train.dpo_plan(len(pairs), cfg)  # today's pass, as the script plans it
+    assert (dpo["accumulation"], dpo["epochs"]) == (accumulation, epochs) and dpo["lr"] == plan.dpo_lr
+    assert dpo["steps"] == epochs * -(-len(pairs) // accumulation)
+    # Adam moves each weight by about its rate a step: today's DPO rate, not the main block's.
+    assert 0.1 * plan.dpo_lr <= dpo["max_update"] <= 3.2 * plan.dpo_lr < plan.lr / 100
+    with_dpo_lr = sleep_loss.train_terms(_tiny(torch), batch, replace(plan, dpo_lr=plan.lr))["dpo"]
+    assert with_dpo_lr["max_update"] > 10 * dpo["max_update"]  # what sharing the SFT rate would have done
 
 
 def test_the_imitation_reward_is_edit_similarity_cut_at_z0() -> None:
@@ -381,6 +406,21 @@ def test_the_imitation_reward_is_edit_similarity_cut_at_z0() -> None:
     assert sleep_loss.edit_reward((1, 2, 3, 9), (1, 2, 3, 4)) == pytest.approx(0.75)
     assert sleep_loss.edit_reward((9, 9, 9, 9), (1, 2, 3, 4)) == 0.0  # past z0: no partial credit
     assert sleep_loss.edit_reward((), ()) == 1.0
+
+
+def test_the_imitation_gradient_follows_the_better_sample(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REINFORCE with a leave-one-out baseline: the better-scored completion gains log-probability.
+    (On a random model every reward is 0 and no gradient flows, as the CPU smoke saw.)"""
+    torch = _torch()
+    model = _tiny(torch)
+    rewards = iter([1.0, 0.0])
+    monkeypatch.setattr(sleep_loss, "edit_reward", lambda sample, target, z0=0.5: next(rewards))
+    row = sleep_loss.SeedSeq(prompt=(1, 2), teacher=(1, 2), reply=(3, 4, 5, 6, 11))
+    loss, mean = sleep_loss.imitation_loss(model, row, random.Random(0), _plan())
+    assert mean == 0.5 and loss is not None and loss.requires_grad
+    loss.backward()
+    assert model.lora_B.grad is not None and float(model.lora_B.grad.abs().sum()) > 0
+    assert sleep_loss.imitation_loss(model, replace(row, reply=(3,)), random.Random(0), _plan()) == (None, None)
 
 
 def test_dream_filter_keeps_topk_plus_random() -> None:
@@ -482,7 +522,8 @@ def test_fold_keeps_the_long_term_part_frozen_while_the_night_trains() -> None:
     model = _tiny(torch, rank=3)
     a, b = model.lora_A.detach().clone(), model.lora_B.detach().clone()
     batch = sleep_loss.Batch(sft=tuple(sleep_loss.Seq((1, i), (3, 11)) for i in range(2, 6)))
-    sleep_loss.train_terms(model, batch, _plan(long_term_rank=2))
+    receipt = sleep_loss.train_terms(model, batch, _plan(long_term_rank=2))
+    assert receipt["long_term_drift"] == 0.0
     assert torch.equal(model.lora_A[:2], a[:2]) and torch.equal(model.lora_B[:, :2], b[:, :2])  # long-term held
     assert not torch.equal(model.lora_B[:, 2:], b[:, 2:])  # tonight's slot learned
 

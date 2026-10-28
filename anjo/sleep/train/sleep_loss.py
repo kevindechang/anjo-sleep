@@ -2,11 +2,14 @@
 
 After Behrouz, Hashemi and Mirrokni, "Language Models Need Sleep" (arXiv 2606.03979). Glimmer is dense,
 so the person's LoRA is the expansion slot: only its parameters ever train, and the base stays frozen.
-One optimizer and one schedule minimise one weighted sum, with these weights (``WEIGHTS``):
+One job trains every term, with these weights (``WEIGHTS``):
 
 - ``sft`` 1.0: the night's rows as today (her best replies and the critic's Spark Open corrections);
-- ``dpo`` 0.5: the (best, worst) pairs, beta 0.1, against the same model with its adapter off. It
-  shares the SFT rate (TRL's separate pass ran 40x lower), so it pulls at half weight;
+- ``dpo`` 1.0: today's DPO pass, unchanged in strength (``_dpo_block``): the (best, worst) pairs, beta
+  0.1, against the same model with its adapter off, on their own AdamW at today's DPO rate
+  (``Plan.dpo_lr``, 5e-6), with today's accumulation and epochs rule and its own cosine, after the main
+  block as today it follows SFT. Inside the main block's optimizer its step would be set by the SFT
+  rate (2e-4), some 20x today's at any weight Adam leaves unscaled, so it never shares it;
 - ``seed`` 1.0, knowledge seeding: per token, over the full vocabulary, the reverse KL from the
   student (her adapter on, the message alone) to the teacher (the same base with the adapter off and
   the consolidated day before the message), on her own replies. A share ``ON_POLICY_SHARE`` of the
@@ -26,6 +29,7 @@ One optimizer and one schedule minimise one weighted sum, with these weights (``
   their SFT gradient on the adapter; the top ``DREAM_TOP_K`` and ``DREAM_RANDOM`` more at random train
   in a block after the rest, at half the peak rate, and the block is undone unless the anchor check
   (the general gate's items, scored as the gate scores them, smoothed) holds (``ANCHOR_TOLERANCE``).
+  The main block's optimizer and schedule train ``sft``, ``seed``, ``imitate`` and ``dream``.
   Each dream carries its seed's kind (``Batch.dream_groups``: ``boundary``, a state at the edge of a
   decision, or ``random``, the control), and the receipt gives the filter's choices by kind: whether
   the boundary's dreams carry more gradient than a random thread's is the cheap test of targeting.
@@ -54,7 +58,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
-WEIGHTS: Final = {"sft": 1.0, "dpo": 0.5, "seed": 1.0, "imitate": 0.25, "dream": 0.5}
+WEIGHTS: Final = {"sft": 1.0, "dpo": 1.0, "seed": 1.0, "imitate": 0.25, "dream": 0.5}
 ON_POLICY_SHARE: Final = 0.25  # GKD's lambda: the seed rows scored on a fresh student sample
 FRESH_TOKENS: Final = 192
 IMITATION_ROWS: Final = 4
@@ -123,6 +127,7 @@ class Plan:
     seed: int
     eot: int
     pad: int
+    dpo_lr: float  # today's DPO rate: the DPO block's own optimizer, never the main block's rate
     long_term_rank: int = 0  # the fold: the leading ranks that hold the long-term adapter, frozen
     dreams: bool = False
 
@@ -295,6 +300,12 @@ def adapter_params(model: Any) -> list[tuple[str, Any]]:
     return named
 
 
+def leading(named: Sequence[tuple[str, Any]], rank: int) -> list[Any]:
+    """A copy of the first ``rank`` ranks of every LoRA tensor: the long-term adapter's slots."""
+    return [(p[:rank] if "lora_A" in name else p[:, :rank]).detach().clone() for name, p in named
+            if "lora_A" in name or "lora_B" in name]
+
+
 def freeze_leading(named: Sequence[tuple[str, Any]], rank: int) -> list[Any]:
     """Gradient masks that hold the first ``rank`` ranks (the long-term adapter) still: A's rows, B's columns."""
     def rows(grad: Any) -> Any:
@@ -389,6 +400,7 @@ class _Run:
     rewards: list[float]
     sampled: int = 0
     steps: int = 0
+    grads_checked: bool = False
 
     def loss(self, term: str, row: Any) -> Any:
         if term == "dpo":
@@ -405,20 +417,31 @@ class _Run:
             return loss
         return sft_loss(self.model, row)  # sft and dream
 
-    def step(self, chunk: Sequence[tuple[str, Any]]) -> None:
+    def step(self, chunk: Sequence[tuple[str, Any]], optimizer: Any = None, rate: Any = None) -> None:
+        """One update on ``chunk``: the main block's optimizer and schedule unless others are given."""
         import torch
 
+        optimizer, rate = optimizer or self.optimizer, rate or self.rate
         for term, row in chunk:
             with self.clock(term):
                 loss = self.loss(term, row)
                 if loss is not None:
                     (WEIGHTS[term] * loss / len(chunk)).backward()
                     self.losses[term].append(float(loss.detach()))
+        if self.steps == 0:
+            self.check_grads()
         torch.nn.utils.clip_grad_norm_(self.params, MAX_GRAD_NORM)
-        self.optimizer.step()
-        self.rate.step()
-        self.optimizer.zero_grad(set_to_none=True)
+        optimizer.step()
+        rate.step()
+        optimizer.zero_grad(set_to_none=True)
         self.steps += 1
+
+    def check_grads(self) -> None:
+        """After the first backward pass: a gradient on anything but the adapter stops the run."""
+        stray = [name for name, p in self.model.named_parameters() if p.grad is not None and "lora_" not in name]
+        if stray:
+            raise ValueError(f"{len(stray)} parameters outside the adapter got a gradient ({stray[0]})")
+        self.grads_checked = True
 
 
 def _chunks(items: Sequence[Any], size: int) -> list[Sequence[Any]]:
@@ -430,11 +453,34 @@ def _stream(batch: Batch, rng: random.Random) -> tuple[list[tuple[str, Any]], in
     long_enough = [seq for seq in batch.seeds if len(seq.reply) >= 2]
     imitate = rng.sample(long_enough, min(IMITATION_ROWS, len(long_enough)))
     items: list[tuple[str, Any]] = [
-        *(("sft", row) for row in batch.sft), *(("dpo", pair) for pair in batch.pairs),
-        *(("seed", (i, seq)) for i, seq in enumerate(batch.seeds)), *(("imitate", seq) for seq in imitate),
+        *(("sft", row) for row in batch.sft), *(("seed", (i, seq)) for i, seq in enumerate(batch.seeds)), *(("imitate", seq) for seq in imitate),
     ]
     rng.shuffle(items)
     return items, len(imitate)
+
+
+def _dpo_block(run: _Run, pairs: Sequence[PairSeq]) -> dict[str, Any]:
+    """Today's DPO pass inside the one job: its own AdamW at today's rate, today's accumulation and
+    epochs rule (``colab_train.dpo_plan``), its own cosine with a 3% warmup, clipped at 1.0, each epoch
+    in a seeded order. Returns its steps, rate and the largest change one step made to any weight."""
+    import torch
+
+    if not pairs:
+        return {"steps": 0, "lr": run.plan.dpo_lr, "accumulation": 0, "epochs": 0, "max_update": 0.0}
+    accumulation, epochs, per_epoch = step_plan(len(pairs), run.plan.min_steps)
+    optimizer = torch.optim.AdamW(run.params, lr=run.plan.dpo_lr, weight_decay=0.0)
+    rate = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(epochs * per_epoch))
+    largest, steps = 0.0, 0
+    for _ in range(epochs):
+        order = list(pairs)
+        run.rng.shuffle(order)
+        for chunk in _chunks([("dpo", pair) for pair in order], accumulation):
+            before = [p.detach().clone() for p in run.params]
+            run.step(chunk, optimizer, rate)
+            largest = max(largest, max(float((p.detach() - b).abs().max()) for p, b in zip(run.params, before, strict=True)))
+            steps += 1
+    return {"steps": steps, "lr": run.plan.dpo_lr, "accumulation": accumulation, "epochs": epochs,
+            "max_update": largest}
 
 
 def _dream_block(run: _Run, batch: Batch, accumulation: int) -> dict[str, Any]:
@@ -476,6 +522,19 @@ def by_group(groups: Sequence[str], norms: Sequence[float], kept: Sequence[int],
     return out
 
 
+def _probe(model: Any, row: SeedSeq | None) -> tuple[Any, float | None]:
+    """The teacher's logits on ``row`` (adapter off, context on) and the seeding KL there, without
+    dropout or a gradient: taken before and after training, the first must not move and the second should."""
+    import torch
+
+    if row is None:
+        return None, None
+    with _evaluating(model), torch.no_grad():
+        with model.disable_adapter():
+            teacher = reply_logits(model, row.teacher, row.reply)
+        return teacher, float(seed_kl(model, row))
+
+
 def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     """Train the adapter on the one loss; returns the receipt: rows, mean loss and minutes per term,
     the on-policy samples taken, the imitation reward, and the dream block's outcome. Counts only."""
@@ -494,22 +553,30 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
     accumulation, epochs, per_epoch = step_plan(len(items), plan.min_steps) if items else (1, 0, 0)
     main = epochs * per_epoch
     dream_steps = math.ceil(min(len(batch.dreams), DREAM_TOP_K + DREAM_RANDOM) / accumulation) if dreaming else 0
-    if main + dream_steps == 0:
+    if main + len(batch.pairs) + dream_steps == 0:
         raise ValueError("a night trains at least one row")
     params = [p for _, p in named]
     optimizer = torch.optim.AdamW(params, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
     run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
                _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [])
     hooks = freeze_leading(named, plan.long_term_rank) if plan.long_term_rank else []
+    held = leading(named, plan.long_term_rank) if plan.long_term_rank else []
+    probe = batch.seeds[0] if batch.seeds else None
+    teacher_before, kl_before = _probe(model, probe)
     model.train()
     try:
         for _ in range(epochs):
             for chunk in _chunks(items, accumulation):
                 run.step(chunk)
+        dpo = _dpo_block(run, batch.pairs)
         dream = _dream_block(run, batch, accumulation) if dreaming else None
     finally:
         for hook in hooks:
             hook.remove()
+    teacher_after, kl_after = _probe(model, probe)
+    drift = None if probe is None else float((teacher_after - teacher_before).abs().max())
+    moved = max((float((now - was).abs().max()) for now, was in zip(leading(named, plan.long_term_rank), held,
+                                                                     strict=True)), default=0.0) if held else None
     rows = {"sft": len(batch.sft), "dpo": len(batch.pairs), "seed": len(batch.seeds), "imitate": imitating,
             "dream": dream["kept"] if dream else 0}
     minutes = {part: round(seconds / 60.0, 4) for part, seconds in
@@ -518,7 +585,9 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, timer: Callable[[], flo
         "weights": dict(WEIGHTS), "steps": run.steps, "accumulation": accumulation, "epochs": epochs, "rows": rows,
         "loss": {term: (sum(v) / len(v) if v else None) for term, v in run.losses.items()}, "minutes": minutes,
         "on_policy_samples": run.sampled, "imitation_reward": sum(run.rewards) / len(run.rewards) if run.rewards else None,
-        "long_term_rank": plan.long_term_rank, "dreams": dream,
+        "long_term_rank": plan.long_term_rank, "dpo": dpo, "dreams": dream,
+        "grads_adapter_only": run.grads_checked, "teacher_drift": drift, "long_term_drift": moved, "seed_kl_before": kl_before,
+        "seed_kl_after": kl_after,
     }
 
 
