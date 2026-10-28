@@ -22,7 +22,7 @@ from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
 from anjo.sleep.mind.apd.generate import LifeSpec
-from anjo.sleep.mind.apd.pairs import PAIR_CALLS, PAIR_EXPECTED, PAIR_WRITTEN_DAYS
+from anjo.sleep.mind.apd.pairs import OUTCOME_DAYS, PAIR_CALLS, PAIR_EXPECTED
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
@@ -117,8 +117,9 @@ def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provide
     worst = gen_holds(prices, rates, pool, PAIR_CALLS)
     attempts = count * generate.MAX_ATTEMPTS
     holds = (
-        Hold(pool, worst[pool], attempts, f"Spark Open per pair attempt: {PAIR_WRITTEN_DAYS} written days, both "
-             f"histories' gate readers, and {GEN_SPARK_RETRIES} extra tries"),
+        Hold(pool, worst[pool], attempts, f"Spark Open per pair attempt: {LIFE_DAYS} days written and extracted once, "
+             f"each history's {len(OUTCOME_DAYS)} outcomes extracted, both histories' gate readers, and "
+             f"{GEN_SPARK_RETRIES} extra tries"),
         Hold("meta_usd", worst["meta_usd"], attempts, "Muse Spark per pair attempt: both histories' auditor"),
     )
     total = sum(hold.each * hold.count for hold in holds)

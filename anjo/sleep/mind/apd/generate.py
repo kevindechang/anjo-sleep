@@ -279,7 +279,7 @@ class WrittenDay:
 class Draft:
     """A life being written, a day at a time: ``write`` writes and extracts the next day on what
     the draft holds, ``add`` returns the draft with it. A day written once can be added to two
-    drafts (``pairs``)."""
+    drafts, and each given a message of its own (``with_message``; ``pairs``)."""
 
     life_id: str
     field: str
@@ -308,6 +308,21 @@ class Draft:
                              {e.id for e in self.evidence})
         return WrittenDay(index, day, tuple(texts), MappingProxyType({b: turns[i].source for b, i in placed.items()}),
                           tuple(found.items), tuple(found.mentions))
+
+    def with_message(self, chat: ChatFn, text: str, beat: str, *, branch: str) -> Draft:
+        """The draft with ``text`` said word for word as one more message of its last day, placing
+        ``beat``: extracted alone, on what the draft holds, and added to that day (``pairs``: one
+        history's outcome on a day both share). ``branch`` tags its source."""
+        last = self.written[-1]
+        turn = Turn(f"{self.life_id}:d{last.index}{branch}:m{len(last.texts)}", "user", text, frozenset({self.model}))
+        found = _extract_day(chat, self.model, self.life_id, last.day, [turn], tuple(self.held.values()),
+                             {e.id for e in self.evidence})
+        said = WrittenDay(last.index, last.day, (*last.texts, text), MappingProxyType({**last.spots, beat: turn.source}),
+                          (*last.items, *found.items), (*last.mentions, *found.mentions))
+        held = _fold_targets(self.held, found.mentions, self.life_id, last.day)
+        targets = {**self.targets, last.day: tuple(sorted(held.values(), key=lambda t: t.id))}
+        return dataclasses.replace(self, written=(*self.written[:-1], said), held=MappingProxyType(held),
+                                   targets=MappingProxyType(targets))
 
     def add(self, done: WrittenDay) -> Draft:
         held = _fold_targets(self.held, done.mentions, self.life_id, done.day)

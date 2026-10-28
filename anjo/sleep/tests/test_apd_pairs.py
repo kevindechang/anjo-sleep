@@ -17,6 +17,7 @@ import pytest
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import core_families, gates, labels, pairs, plan
+from anjo.sleep.mind.apd.generate import life_days as pair_days
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import PAIR_DECISIONS, CounterfactualPair, GateVerdict, Life, ProblemFile
 from anjo.sleep.mind.spark_provider import FIREWORKS
@@ -47,10 +48,32 @@ def test_pair_histories_share_the_final_day_verbatim() -> None:
     assert forks == list(pairs.OUTCOME_DAYS)
     for index in range(len(pair.failed.days)):
         assert (_on(pair.failed, index) == _on(pair.kept, index)) == (index not in forks), index
-    for index in forks:  # two branches' versions of a day never share an evidence id
-        assert {i for i, _ in _on(pair.failed, index)[1]}.isdisjoint({i for i, _ in _on(pair.kept, index)[1]})
+
+
+def test_pair_histories_differ_only_in_outcome_events() -> None:
+    # Arrange
+    pair = _made()
     template = pairs.pair_template(pair.template)
-    assert template.failed[0] in _on(pair.failed, forks[0])[0] and template.kept[0] in _on(pair.kept, forks[0])[0]
+    failed_ids, kept_ids = {e.id for e in pair.failed.evidence}, {e.id for e in pair.kept.evidence}
+    outcomes = [e for e in (*pair.failed.evidence, *pair.kept.evidence) if e.id not in failed_ids & kept_ids]
+    touched = {e.target_id for e in outcomes if e.target_id is not None}
+
+    # Assert: each fork day is the one shared day, then that history's outcome as its last message
+    for index, failed_said, kept_said in zip(pairs.OUTCOME_DAYS, template.failed, template.kept, strict=True):
+        failed_text, kept_text = _on(pair.failed, index)[0], _on(pair.kept, index)[0]
+        assert failed_text.endswith("\n\n" + failed_said) and kept_text.endswith("\n\n" + kept_said)
+        assert failed_text.removesuffix("\n\n" + failed_said) == kept_text.removesuffix("\n\n" + kept_said)
+    # the only evidence apart is the outcomes', on the fork days; every other item is the same, id and all
+    assert {e.day for e in outcomes} == set(pair.fork_days)
+    assert set(pair.failed_ids) | set(pair.kept_ids) <= {e.id for e in outcomes}
+    assert {e.id: e for e in pair.failed.evidence if e.id in kept_ids} == {
+        e.id: e for e in pair.kept.evidence if e.id in failed_ids}
+    # the targets agree but for the ones an outcome mentions, whose state follows from the outcome
+    for day in pair.failed.days:
+        assert ({t.id: t for t in pair.failed.targets[day] if t.id not in touched}
+                == {t.id: t for t in pair.kept.targets[day] if t.id not in touched}), day
+    for day in pair.failed.days[:pairs.FORK_DAY]:
+        assert pair.failed.targets[day] == pair.kept.targets[day]
 
 
 def test_the_pair_records_what_should_differ_and_what_should_not() -> None:
@@ -118,8 +141,9 @@ def test_a_pair_stays_inside_its_hold() -> None:
     # Act
     pairs.generate_pair(SPEC, backend)
 
-    # Assert: twelve days written and extracted; the reads and audits within the hold
-    assert calls["writes"] == 2 * pairs.PAIR_WRITTEN_DAYS == pairs.PAIR_CALLS.writes
+    # Assert: every day written and extracted once, each history's outcomes extracted; the reads and
+    # audits within the hold
+    assert calls["writes"] == 2 * len(pair_days()) + 2 * len(pairs.OUTCOME_DAYS) == pairs.PAIR_CALLS.writes
     assert 0 < calls["reads"] <= pairs.PAIR_CALLS.reads and 0 < calls["muse"] <= pairs.PAIR_CALLS.muse
 
 

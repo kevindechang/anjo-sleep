@@ -4,19 +4,22 @@ only in the outcome of an earlier commitment, ending on the same last day word f
 **One pair** (``write_pair``), in a ``core-test`` field, from a ``PairTemplate`` and one unrelated
 ``core-test`` template of the same field (``PairSpec``):
 
-- days ``0`` to ``FORK_DAY - 1`` are written once and shared: the commitment on ``COMMIT_DAY``, and
-  the unrelated item's facts (scheduled inside them, ``prefix_plan``);
-- each history then writes its own ``OUTCOME_DAYS`` on its own earlier days: the commitment failing
-  twice, or kept twice;
-- every other day after the fork, and the last day (the person's question about the commitment
-  and the unrelated item's surface), is written and extracted **once**, from the shared days only,
-  and added to both histories: the same messages and the same evidence, ids included.
+- every day is written and extracted **once**, in order, on the days before it, and added to both
+  histories: the commitment on ``COMMIT_DAY``, the unrelated item's facts before ``FORK_DAY``
+  (``prefix_plan``), and on the last day the person's question about the commitment and the
+  unrelated item's surface. The ``OUTCOME_DAYS`` are written with no beat;
+- each history then says its own outcome as one more message of each outcome day, the template's
+  sentence word for word (``Draft.with_message``): the commitment failing twice, or kept twice. That
+  message alone is extracted for its history, on what that history holds.
 
-The failed history plants the unrelated item and the commitment's gap (``PairTemplate.gap``); the
-kept one plants the unrelated item alone. Both histories pass the same gates as any life
-(``gates.check``) before the pair is kept, or the pair is written again under the next attempt's
-seed. ``CounterfactualPair`` records what should differ (the slot's decision: speak in the failed
-history, wait in the kept one) and what should not (the unrelated item, the last day).
+So the histories differ only in those messages, their evidence and the targets they mention, whose
+state follows from the outcome; every other message, evidence item and target is the same, ids
+included. No shared day is written knowing either outcome. The failed history plants the unrelated
+item and the commitment's gap (``PairTemplate.gap``); the kept one plants the unrelated item alone.
+Both histories pass the same gates as any life (``gates.check``) before the pair is kept, or the
+pair is written again under the next attempt's seed. ``CounterfactualPair`` records what should
+differ (the slot's decision: speak in the failed history, wait in the kept one) and what should
+not (the unrelated item, the last day).
 
 **Many pairs** (``generate_pairs``): as ``gen_batch.generate_lives``, side by side, each attempt
 held before it starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling
@@ -43,13 +46,11 @@ from anjo.sleep.mind.apd.generate import (
     AWAY_DAYS,
     MAX_ATTEMPTS,
     ORIGIN_GAP_DAYS,
-    Beat,
     Dice,
     Draft,
     GenerationError,
     GenerationFailed,
     ItemPlan,
-    WrittenDay,
     attempt_seed,
     beats_of,
     expressed,
@@ -66,10 +67,11 @@ COMMIT_DAY: Final = 1
 FORK_DAY: Final = 6  # the first day the histories may differ
 OUTCOME_DAYS: Final = (6, 8)  # the commitment's two outcomes, one history's each
 LAST_DAY: Final = LIFE_DAYS - 1
-PAIR_WRITTEN_DAYS: Final = LIFE_DAYS + len(OUTCOME_DAYS)  # the shared days once, the outcome days twice
+PAIR_SPARK_WRITES: Final = 2 * LIFE_DAYS + 2 * len(OUTCOME_DAYS)  # each day written and extracted, each outcome extracted
 PAIR_ITEMS: Final = 3  # the unrelated item in both histories, the commitment's gap in the failed one
-PAIR_CALLS: Final = GenCalls(2 * PAIR_WRITTEN_DAYS, PAIR_ITEMS * GEN_READS_PER_ITEM, PAIR_ITEMS + 2)  # + both audits
+PAIR_CALLS: Final = GenCalls(PAIR_SPARK_WRITES, PAIR_ITEMS * GEN_READS_PER_ITEM, PAIR_ITEMS + 2)  # + both audits
 PAIR_EXPECTED: Final = GenCalls(PAIR_CALLS.writes, PAIR_ITEMS * item_reads(LAST_DAY), PAIR_CALLS.muse, retries=0)
+FAILED_BEATS: Final = ("i2.o2", "i2.d")  # the gap's second origin and its disambiguating fact
 KEPT_BEATS: Final = ("k.o", "k.d")
 
 
@@ -144,21 +146,15 @@ def write_pair(spec: PairSpec, seed: int, *, chat: ChatFn, model: str = SPARK_OP
         raise ValueError(f"{spec.unrelated!r} isn't a core-test template of {pair.field!r}")
     plans = (prefix_plan(unrelated, Dice(f"{PAIR_LABEL}:{seed}")),
              ItemPlan(pair.gap, (COMMIT_DAY, OUTCOME_DAYS[0]), OUTCOME_DAYS[1], LAST_DAY))
-    shared = beats_of(plans)  # i1: the unrelated item; i2: the commitment's gap, its outcomes the failed ones
-    kept_beats = {day: [Beat(beat, fact, "plant")] for day, beat, fact in zip(OUTCOME_DAYS, KEPT_BEATS, pair.kept)}
-    days = life_days()
-    prefix = Draft(pair_id(pair.field, seed), pair.field, seed, model)
-    for index in range(FORK_DAY):
-        prefix = prefix.add(prefix.write(chat, index, days[index], shared.get(index, [])))
-    once: dict[int, WrittenDay] = {index: prefix.write(chat, index, days[index], shared.get(index, []))
-                                  for index in range(FORK_DAY, LIFE_DAYS) if index not in OUTCOME_DAYS}
-    failed, kept = prefix, prefix
-    for index in range(FORK_DAY, LIFE_DAYS):
-        if index in once:
-            failed, kept = failed.add(once[index]), kept.add(once[index])
-            continue
-        failed = failed.add(failed.write(chat, index, days[index], shared.get(index, []), branch="f"))
-        kept = kept.add(kept.write(chat, index, days[index], kept_beats[index], branch="k"))
+    beats = beats_of(plans)  # i1: the unrelated item; i2: the commitment's gap, its outcomes the failed ones
+    shared = failed = kept = Draft(pair_id(pair.field, seed), pair.field, seed, model)
+    for index, day in enumerate(life_days()):
+        done = shared.write(chat, index, day, [] if index in OUTCOME_DAYS else beats.get(index, []))
+        shared, failed, kept = shared.add(done), failed.add(done), kept.add(done)
+        if index in OUTCOME_DAYS:
+            n = OUTCOME_DAYS.index(index)
+            failed = failed.with_message(chat, pair.failed[n], FAILED_BEATS[n], branch="f")
+            kept = kept.with_message(chat, pair.kept[n], KEPT_BEATS[n], branch="k")
     return _pair(spec, plans, failed, kept)
 
 
@@ -167,7 +163,7 @@ def _pair(spec: PairSpec, plans: Sequence[ItemPlan], failed: Draft, kept: Draft)
     failed_life, kept_life = failed.life("core-test"), kept.life("core-test")
     failed_spots, kept_spots = failed.spots, kept.spots
     kept_ids = tuple(i for beat, fact in zip(KEPT_BEATS, pair.kept) for i in _ids(kept_life, kept_spots, beat, fact))
-    failed_ids = tuple(i for beat, fact in zip(("i2.o2", "i2.d"), pair.failed)
+    failed_ids = tuple(i for beat, fact in zip(FAILED_BEATS, pair.failed)
                        for i in _ids(failed_life, failed_spots, beat, fact))
     failed_problems = problem_file(failed_life, plans, failed_spots)
     try:
