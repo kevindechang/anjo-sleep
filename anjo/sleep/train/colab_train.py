@@ -41,7 +41,10 @@ Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
 ``receipt.json`` go) and, for a warm start, ``ANJO_TRAIN_PREV`` (the previous adapter's folder).
-The receipt holds counts and timings only. A fifth, ``ANJO_TRAIN_SMOKE_MODEL``, is set only by the
+The receipt holds counts and timings only. The Modal job (``modal_job.py``) also sets
+``ANJO_TRAIN_BASE``, the folder on its weights volume that holds the pinned revision: Glimmer and its
+tokenizer load from there, with nothing downloaded, and the saved adapter names Glimmer as its base,
+as one loaded by name does (``record_base_model``). A sixth, ``ANJO_TRAIN_SMOKE_MODEL``, is set only by the
 CPU smoke run (``anjo.sleep.train.smoke``) and never by a runner: it names a tiny local model, which
 loads unquantized in fp32 on the CPU in place of Glimmer, and the run then also writes the prompt ids
 TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against the server's.
@@ -59,7 +62,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +104,7 @@ SMOKE_TOKENS = "smoke_tokens.json"
 # A 3% linear warmup: transformers 5 dropped ``warmup_ratio``, and ``warmup_steps`` under 1 is the share.
 WARMUP = 0.03
 SMOKE_ENV = "ANJO_TRAIN_SMOKE_MODEL"
+BASE_ENV = "ANJO_TRAIN_BASE"  # the Modal job's local copy of the pinned revision
 # The text decoder's layers in MuseGlimmerForConditionalGeneration; the vision tower, its adapter and
 # projection sit beside them under ``model.vision_*``.
 TEXT_DECODER = r"model\.language_model\.layers\.\d+\.(?:self_attn|mlp)"
@@ -352,6 +356,29 @@ def record_rendering(out: Path, rendering: str) -> None:
     meta_path.write_text(json.dumps({**meta, RENDERING_KEY: rendering}, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def record_base_model(out: Path) -> None:
+    """Glimmer's name as the saved adapter's base, where PEFT wrote the folder it loaded from: the
+    server resolves an adapter of ``MODEL`` only, and the upload checks it."""
+    meta_path = out / "adapter_config.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta_path.write_text(json.dumps({**meta, "base_model_name_or_path": MODEL}, indent=2, sort_keys=True),
+                         encoding="utf-8")
+
+
+def base_model(environ: Mapping[str, str]) -> str | None:
+    """The local folder holding Glimmer's pinned revision that the Modal job names (``BASE_ENV``), or
+    None to load Glimmer by name at the recipe's revision (Colab). A name that isn't a folder is
+    refused, and so is a base beside the smoke model: neither ever falls back to the other."""
+    base = environ.get(BASE_ENV) or None
+    if base is None:
+        return None
+    if environ.get(SMOKE_ENV):
+        raise ValueError(f"{BASE_ENV} and the smoke model ({SMOKE_ENV}) never go together")
+    if not Path(base).is_dir():
+        raise ValueError(f"{BASE_ENV} names a local folder holding the pinned revision")
+    return base
+
+
 def _smoke_model() -> str | None:
     """The tiny local model the smoke run names, or None on a real night. A name that isn't a local
     folder is refused: the smoke run never falls back to anything."""
@@ -361,9 +388,11 @@ def _smoke_model() -> str | None:
     return smoke
 
 
-def _load_model(cfg: dict[str, Any], settings: dict[str, Any], smoke: str | None) -> Any:  # pragma: no cover - needs the training stack
-    """Glimmer in 4-bit on the GPU or, for the smoke run only, the tiny model in fp32 on the CPU; then
-    PEFT's preparation for k-bit training (frozen base, casts, gradient checkpointing)."""
+def _load_model(cfg: dict[str, Any], settings: dict[str, Any], smoke: str | None,
+                base: str | None) -> Any:  # pragma: no cover - needs the training stack
+    """Glimmer in 4-bit on the GPU (by name at the recipe's revision, or from ``base``, the Modal job's
+    copy of that revision) or, for the smoke run only, the tiny model in fp32 on the CPU; then PEFT's
+    preparation for k-bit training (frozen base, casts, gradient checkpointing)."""
     import torch  # type: ignore[import-not-found, unused-ignore]
     from peft import prepare_model_for_kbit_training  # type: ignore[import-not-found, unused-ignore]
     from transformers import AutoModelForImageTextToText, BitsAndBytesConfig  # type: ignore[import-not-found, unused-ignore]
@@ -372,7 +401,7 @@ def _load_model(cfg: dict[str, Any], settings: dict[str, Any], smoke: str | None
         quant = {**settings["quantization"], "bnb_4bit_compute_dtype": torch.bfloat16,
                  "bnb_4bit_quant_storage": torch.bfloat16}
         model = AutoModelForImageTextToText.from_pretrained(
-            MODEL, revision=cfg["revision"], quantization_config=BitsAndBytesConfig(**quant),
+            base or MODEL, revision=None if base else cfg["revision"], quantization_config=BitsAndBytesConfig(**quant),
             dtype=torch.bfloat16, device_map={"": 0},
         )
     else:
@@ -423,6 +452,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
     smoke = _smoke_model()
+    base = base_model(os.environ)
     settings = build_settings(cfg) if smoke is None else smoke_settings(build_settings(cfg))
     out = Path(os.environ["ANJO_TRAIN_OUT"])
     prev = os.environ.get("ANJO_TRAIN_PREV") or None
@@ -430,7 +460,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     numpy.random.seed(cfg["seed"])
     torch.manual_seed(cfg["seed"])
     set_seed(cfg["seed"])
-    tokenizer = AutoTokenizer.from_pretrained(smoke or MODEL, revision=None if smoke else cfg["revision"])
+    local = smoke or base
+    tokenizer = AutoTokenizer.from_pretrained(local or MODEL, revision=None if local else cfg["revision"])
     # TRL ends a plain-text reply with the tokenizer's EOS unless it ends with it already. Glimmer's
     # turn ends with <|eot|> (its EOS is <|end_of_text|>), and each reply is closed by it.
     tokenizer.eos_token = REPLY_END
@@ -440,7 +471,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
     pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
-    model = _load_model(cfg, settings, smoke)
+    model = _load_model(cfg, settings, smoke, base)
     peft_config = None
     if prev:
         model = PeftModel.from_pretrained(model, prev, is_trainable=True)
@@ -463,6 +494,8 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     record_rendering(out, cfg["rendering"])
+    if base is not None:
+        record_base_model(out)
     if smoke is not None:
         (out / SMOKE_TOKENS).write_text(json.dumps(prompts), encoding="utf-8")
     receipt = {

@@ -2,7 +2,8 @@
 # (modal has no type stubs here, so its decorators are untyped)
 """Anjo Sleep's serving app on Modal: Glimmer and each person's adapter behind vLLM (Task 4).
 
-Modal only serves; training runs on Colab (Task 5). Three things live here:
+This app only serves. Training is the training app's (``train/modal_app.py``, Task 5), which mounts
+the weights volume read-only and lands each adapter on the adapters volume. Three things live here:
 
 - ``download_weights``: fetches the pinned Glimmer revision onto the weights volume, once. It
   holds no secret unless the deploy names a Hugging Face one (the repo isn't gated).
