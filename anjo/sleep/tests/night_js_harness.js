@@ -1,6 +1,6 @@
 // A fake page for web/night.js (tests/test_night_view.py): only the DOM calls night.js makes, so it
 // runs under node with no browser and no network. It hands the script one /mind payload, as mind.js
-// does (demo:mind), and prints what it drew: each stage and its state, the text, the links, every class.
+// does (demo:mind), and prints what it drew: each stage and its state, the text, the links, every class, the lede.
 "use strict";
 const fs = require("fs");
 const vm = require("vm");
@@ -30,7 +30,9 @@ class FakeNode {
   walk(visit) { visit(this); this.children.forEach((child) => child.walk(visit)); }
 }
 
-const ids = { "night-loop-asof": new FakeNode("p"), "night-loop-body": new FakeNode("div") };
+const ids = { "night-loop-asof": new FakeNode("p"), "night-loop-body": new FakeNode("div"),
+  "night-loop-lede": new FakeNode("p") };
+ids["night-loop-lede"].hidden = true;  // as the page serves it
 const listeners = [];
 const element = (tag, className, text) => {
   const node = new FakeNode(tag);
@@ -56,4 +58,5 @@ ids["night-loop-body"].walk((node) => {
   if (node.tagName === "A") links.push(node.getAttribute("href"));
 });
 const text = `${ids["night-loop-asof"].textContent} ${ids["night-loop-body"].textContent}`;
-process.stdout.write(JSON.stringify({ stages, links, text, classes: [...classes].sort() }));
+const lede = { text: ids["night-loop-lede"].textContent, hidden: ids["night-loop-lede"].hidden };
+process.stdout.write(JSON.stringify({ stages, links, text, classes: [...classes].sort(), lede }));

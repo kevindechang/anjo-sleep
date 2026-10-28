@@ -129,9 +129,15 @@ def _step(steps: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
 
 def _story(night: date, summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]],
            raw: Mapping[str, Any] | None) -> Story | None:
-    """The night's ``story.json``, else its story told from its log; None when neither can be read."""
+    """The night's ``story.json``, else (none, or one an older schema wrote) its story told from its
+    log; None when neither can be read."""
+    if raw is not None:
+        try:
+            return story_from(raw)
+        except StoryError:
+            pass  # an older version, or a broken file: the log tells it again
     try:
-        return story_from(raw) if raw is not None else tell(night, str(summary.get("status")), steps)
+        return tell(night, str(summary.get("status")), steps)
     except StoryError:
         return None
 

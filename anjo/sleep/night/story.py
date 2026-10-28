@@ -15,8 +15,10 @@ Every field is its record, ``NotRun`` (why it didn't run) or, where a step can f
 case). ``STORY.md`` says which branch fills which record.
 
 ``Story.record()`` is the JSON record (``version`` first, ``STORY_VERSION``) and ``story_from`` reads
-one back, refusing anything the schema doesn't hold (``StoryError`` names where). A change to a
-record's fields is a new version. Pure: no clock, file or environment.
+one back, refusing anything the schema doesn't hold (``StoryError`` names where), an older version
+too: the page then tells that night again from its log. A change to a record's fields is a new
+version (2: practice reused from an earlier run is its own record, ``Reused``). Pure: no clock, file
+or environment.
 """
 from __future__ import annotations
 
@@ -25,17 +27,22 @@ import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date
+from pathlib import PurePosixPath
 from typing import Any, Final, Literal, Union, cast, get_args, get_origin, get_type_hints
 
 from anjo.sleep.types import NightStatus
 
-STORY_VERSION: Final = 1
+STORY_VERSION: Final = 2
 STATUSES: Final = frozenset(get_args(NightStatus))
 STAGES: Final = ("dream", "rehearse", "learn", "check", "wake")
 STAGE_STEPS: Final[Mapping[str, tuple[str, ...]]] = {  # the night log's steps each stage is told from
     "dream": ("notice",), "rehearse": ("practice",), "learn": ("dataset", "train"), "check": ("gates", "promote"),
 }
+CORE_DREAM: Final = "dream"  # MIND's core's dream step (mind-frontier), logged after ``notice`` when the core serves her
+STORY_STEP: Final = "story"  # a story that couldn't be told or written, logged as this failed step (``nightlog``)
+AFTER_THE_NIGHT: Final = ("morning", STORY_STEP)  # logged once the night ended: their failure never stopped it
 MORNING_FAILED: Final = "morning failed: "  # a failed morning step's ``why`` starts with this (``daily.py``)
+STAMP_CHARS: Final = 12  # a projector's stamp: the first characters of its id (``projector_math.params_sha``)
 
 # Why a record didn't run, in plain words (the page shows them as they are).
 NO_PRESSURE: Final = "no sleep pressure: every night sleeps deep"
@@ -47,12 +54,14 @@ NOT_LOGGED: Final = "its steps aren't in the night's log"
 UNLOGGED_STEP: Final = "a step it didn't log"
 MIND_OFF: Final = "MIND's inquiry is off"
 NO_CRITIC: Final = "this practice ran no critic"
-REUSED: Final = "practice reused tonight's earlier run, whose log has the critic's counts"
+NO_CURRICULUM: Final = "the dream's curriculum is off: it picked no threads"
+CHANNEL_OFF: Final = "the thought channel was off tonight"
+NO_CHANNEL_LOSS: Final = "the channel's training reported no loss"
+NO_STAMP: Final = "the channel's training reported no projector"
 DREAM_NOT_YET: Final = "MIND's core doesn't dream in the night yet"  # mind-frontier
 CURRICULUM_NOT_YET: Final = "practice isn't seeded on the dream's threads yet"  # mind-frontier
 ADAPTATION_NOT_YET: Final = "MIND's core doesn't adapt to her in the night yet"  # mind-frontier
 SELF_MODEL_NOT_YET: Final = "MIND's self-model isn't scored yet"  # mind-frontier
-CHANNEL_NOT_YET: Final = "the thought channel doesn't train in the night yet"  # thought-channel
 SURPRISE_NOT_YET: Final = "MIND's surprise doesn't weight the loss yet"  # sleep-objective
 SEEDING_NOT_YET: Final = "the night's training has no seeding term yet"  # sleep-objective
 FOLD_NOT_YET: Final = "the night's adapter isn't folded yet"  # sleep-objective
@@ -75,7 +84,7 @@ class NotRun:
 
 @dataclass(frozen=True)
 class Failed:
-    """The step that failed here and its error (``state.safe_error``: a Sleep error's message, else its type)."""
+    """The step that failed here and its error (``nightlog.safe_error``: a Sleep error's message, else its type)."""
 
     step: str
     error: str
@@ -154,6 +163,15 @@ class Rehearse:
     seeded: tuple[Seed, ...] | NotRun
     flagged: int | NotRun
     corrected: int | NotRun
+
+
+@dataclass(frozen=True)
+class Reused:
+    """Practice that didn't run again: a rerun of ``night`` reused the scenes its earlier run made
+    and paid for."""
+
+    night: date
+    scenes: int
 
 
 # ── learn (``rows`` this branch; the rest as each field says) ────────────────
@@ -235,7 +253,7 @@ class Story:
     status: NightStatus
     sleep: Sleep | Failed | NotRun
     dream: Dream | Failed | NotRun
-    rehearse: Rehearse | Failed | NotRun
+    rehearse: Rehearse | Reused | Failed | NotRun
     learn: Learn | Failed | NotRun
     check: Check | Failed | NotRun
     wake: Wake | NotRun
@@ -272,6 +290,8 @@ def _union(options: tuple[Any, ...], raw: Any, where: str) -> Any:
     if Failed in options and _marker(raw, "failed"):
         return _decode(Failed, raw["failed"], where)
     rest = [option for option in options if option not in (NotRun, Failed)]
+    if len(rest) > 1 and isinstance(raw, dict):  # two records (practice, or a reused one): its fields say which
+        rest = [option for option in rest if is_dataclass(option) and {f.name for f in fields(option)} == set(raw)]
     if len(rest) != 1:
         raise StoryError(f"{where}: no record reads it")
     return _decode(rest[0], raw, where)
@@ -374,25 +394,86 @@ def _dream(by: Steps) -> Dream:
     return Dream(questions, NotRun(DREAM_NOT_YET), NotRun(DREAM_NOT_YET), NotRun(DREAM_NOT_YET))
 
 
+def _number(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"{value!r} is not a number")
+    return float(value)
+
+
+def _cites(record: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(str(cite) for cite in record["cites"])
+
+
+def _core(record: Mapping[str, Any]) -> tuple[tuple[Ignition, ...], tuple[Thread, ...] | NotRun, tuple[Boundary, ...]]:
+    """The core's dream from its step's record (mind-frontier's ``mind.core.night`` receipt): its
+    ignitions, the threads its curriculum picked (``picks``: None with the curriculum off) and its
+    boundaries."""
+    try:
+        ignitions = tuple(Ignition(str(i["kind"]), _number(i["score"]), _cites(i)) for i in record["ignitions"])
+        picks = record["picks"]
+        threads = (NotRun(NO_CURRICULUM) if picks is None else
+                   tuple(Thread(int(t["slot"]), _number(t["score"]), _cites(t)) for t in picks["threads"]))
+        boundaries = tuple(Boundary(str(b["state"]), int(b["slot"]), int(b["steps"])) for b in record["boundaries"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise StoryError(f"the dream step's record has no readable {error}") from None
+    return ignitions, threads, boundaries
+
+
+def _dreamt(by: Steps, status: str, stopped: str | None) -> Dream | Failed | NotRun:
+    """The dream stage: the questions tonight opened, and the core's dream when it dreamt, a nap's
+    CPU dream too; without one, today's dream."""
+    told: Dream | Failed | NotRun = _stage("dream", by, status, stopped, _dream)
+    core = by.get(CORE_DREAM)
+    if core is None or isinstance(told, Failed) or core.get("status") == "skipped":
+        return told
+    if core.get("status") == "failed":
+        return _failed(core)
+    return Dream(told.questions if isinstance(told, Dream) else told, *_core(core))
+
+
 def _critic_ran(practice: Mapping[str, Any]) -> bool:
     spark = practice.get("spark")
     critic = spark.get("critic") if isinstance(spark, Mapping) else None
     return isinstance(critic, Mapping) and isinstance(critic.get("calls"), int) and critic["calls"] > 0
 
 
-def _rehearse(by: Steps) -> Rehearse:
+def _rehearse(by: Steps, night: date) -> Rehearse | Reused:
     practice = by["practice"]
     scenes = _need(practice, "scenes", "int")
-    if practice.get("reused") or not _critic_ran(practice):
-        why = NotRun(REUSED if practice.get("reused") else NO_CRITIC)
+    if practice.get("reused"):  # whose practice it was; a log from before it said so reused tonight's own
+        source = practice.get("reused_from")
+        return Reused(night if source is None else _scalar(date, source, "the practice step's reused_from"), scenes)
+    if not _critic_ran(practice):
+        why = NotRun(NO_CRITIC)
         return Rehearse(scenes, NotRun(CURRICULUM_NOT_YET), why, why)
     return Rehearse(scenes, NotRun(CURRICULUM_NOT_YET), _need(practice, "pairs", "int"),
                     _need(practice, "teacher_targets", "int"))
 
 
+def _channel(train: Mapping[str, Any]) -> tuple[float | NotRun, str | NotRun]:
+    """The thought channel's loss and its projector's stamp, from the training step's receipt
+    (``channel_night.train``): the projector file it kept and the job's ``channel`` record. The stamp
+    is the projector's id, else its file's name, never its folder."""
+    said = train.get("receipt")
+    receipt: Mapping[str, Any] = said if isinstance(said, Mapping) else {}
+    kept, channel = receipt.get("projector"), receipt.get("channel")
+    channel = channel if isinstance(channel, Mapping) else {}
+    if not (isinstance(kept, str) and kept) and not channel:
+        return NotRun(CHANNEL_OFF), NotRun(CHANNEL_OFF)
+    try:
+        loss: float | NotRun = _number(channel.get("loss_last"))
+    except ValueError:
+        loss = NotRun(NO_CHANNEL_LOSS)
+    sha = channel.get("projector")
+    stamp = (sha[:STAMP_CHARS] if isinstance(sha, str) and sha else
+             PurePosixPath(kept).name.split(".")[0] if isinstance(kept, str) and kept else NotRun(NO_STAMP))
+    return loss, stamp
+
+
 def _learn(by: Steps) -> Learn:
-    return Learn(_need(by["dataset"], "examples", "int"), NotRun(SURPRISE_NOT_YET), NotRun(CHANNEL_NOT_YET),
-                 NotRun(CHANNEL_NOT_YET), NotRun(SEEDING_NOT_YET), NotRun(FOLD_NOT_YET), NotRun(ADAPTATION_NOT_YET))
+    channel_loss, stamp = _channel(by["train"])
+    return Learn(_need(by["dataset"], "examples", "int"), NotRun(SURPRISE_NOT_YET), channel_loss, stamp,
+                 NotRun(SEEDING_NOT_YET), NotRun(FOLD_NOT_YET), NotRun(ADAPTATION_NOT_YET))
 
 
 def _check(by: Steps) -> Check:
@@ -447,9 +528,10 @@ def tell(night: date, status: str, steps: Sequence[Mapping[str, Any]]) -> Story:
     if status not in STATUSES:
         raise StoryError(f"no night ends {status!r}")
     by = {str(record.get("step")): record for record in steps}
-    stopped = next((str(r["step"]) for r in steps if r.get("status") == "failed" and r.get("step") != "morning"), None)
+    stopped = next((str(r["step"]) for r in steps if r.get("status") == "failed" and r.get("step") not in AFTER_THE_NIGHT),
+                   None)
     builders: Mapping[str, Callable[[Steps], Any]] = {
-        "dream": _dream, "rehearse": _rehearse, "learn": _learn, "check": _check}
+        "rehearse": lambda told: _rehearse(told, night), "learn": _learn, "check": _check}
     stages = {name: _stage(name, by, status, stopped, build) for name, build in builders.items()}
-    return Story(night=night, status=cast(NightStatus, status), sleep=_sleep(by), wake=_wake(by, status, stopped),
-                 **stages)
+    return Story(night=night, status=cast(NightStatus, status), sleep=_sleep(by), dream=_dreamt(by, status, stopped),
+                 wake=_wake(by, status, stopped), **stages)

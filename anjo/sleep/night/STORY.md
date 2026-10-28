@@ -3,8 +3,13 @@
 The night is one loop: **sleep → dream → rehearse → learn → check → wake**. `story.py` is its one
 versioned schema (`STORY_VERSION`). `story.json` sits in the night's folder beside `log.jsonl` and
 `summary.json`. `tell` builds it from the night's log records and nothing else, so it is never a
-second log. The night writes it when it finishes, and `daily.py` tells it again after the morning.
-The demo page's night view reads it (`demo/night_view.py`, `web/night.js`).
+second log. The night writes it when it finishes, and the morning tells it again (`daily.py`, and
+the accelerated runner's morning). The demo page's night view reads it (`demo/night_view.py`,
+`web/night.js`); a story from an older version is told again from its log.
+
+Telling it never fails a night: a story that can't be told or written is a failed `story` step in
+the log (`STORY_STEP`, its error's type and, when Sleep raised it, its message), and the night's
+status and summary stand. That step, like the morning's, never reads as where the night stopped.
 
 A record a step can't fill yet is `NotRun(reason)`, never missing, `None` or a zero. Each one still
 waiting for its branch names that branch in a `*_NOT_YET` reason in `story.py`.
@@ -13,25 +18,40 @@ waiting for its branch names that branch in a `*_NOT_YET` reason in `story.py`.
 |---|---|---|
 | `sleep` | `Sleep(kind, pressure, threshold, reason)` | sleep-pressure (filled) |
 | `dream.questions` | questions the notice pass opened tonight | MIND's inquiry (filled) |
-| `dream.ignitions`, `dream.threads`, `dream.boundaries` | `Ignition(kind, score, cites)`, `Thread(slot, score, cites)`, `Boundary(state, slot, steps)` | **mind-frontier** |
+| `dream.ignitions`, `dream.threads`, `dream.boundaries` | `Ignition(kind, score, cites)`, `Thread(slot, score, cites)`, `Boundary(state, slot, steps)` | **mind-frontier** (read, waiting for its `dream` step) |
 | `rehearse.scenes`, `flagged`, `corrected` | practice's scenes, the critic's pairs, the teacher's corrections | night-story (filled) |
+| `rehearse` reused | `Reused(night, scenes)`: a rerun reused the practice an earlier run of `night` made (the practice step's `reused_from`) | night-story (filled) |
 | `rehearse.seeded` | `Seed(slot, scenes)` per picked thread (the dream curriculum) | **mind-frontier** |
 | `learn.rows` | the dataset's examples | night-story (filled) |
 | `learn.surprise` | `Surprise(applied, rows, mean)`: whether the loss applied MIND's weights | **sleep-objective** (the weights come from mind-frontier's dream) |
-| `learn.channel_loss`, `learn.stamp` | the projector and reader's loss, and the projector version | **thought-channel** |
+| `learn.channel_loss`, `learn.stamp` | the channel's last training loss (`channel.loss_last`), and the projector's stamp: its id's first 12 characters (`channel.projector`), else its file's name, never its folder | thought-channel (filled from the train step's `receipt`) |
 | `learn.seeding_kl`, `learn.fold` | the seeding term's KL, and the rank the adapter was folded to | **sleep-objective** |
 | `learn.core_adaptation` | the core's per-person adaptation loss on today's resolved outcomes | **mind-frontier** |
 | `check` | `Check(gates, promoted)`, each `Gate(name, passed, skipped, value, threshold)` | night-story (filled) |
 | `wake.morning` | `Morning(replies, no_verdict)` or `Failed("morning", error)` | night-story (filled by `daily.py`) |
 | `wake.self_model` | `SelfModel(predicted, actual)`: MIND's predicted error against its real error | **mind-frontier** |
 
+MIND's core's dream is a `dream` step (`CORE_DREAM`), logged after `notice` when the core serves her,
+a nap's CPU dream included. `tell` reads these keys from it, the names `mind.core.night`'s receipt
+uses today:
+
+- `ignitions`: a list of `{kind, score, cites}` (`slot` and `other` are logged, not shown);
+- `picks`: `{threads: [{slot, score, cites}]}`, or `null` with the curriculum off (`threads` is then
+  `NotRun` and says so);
+- `boundaries`: a list of `{state, slot, steps}`.
+
+A `failed` dream step is the dream stage's `Failed("dream", error)`; a `skipped` one, or none, leaves
+today's dream. The lede on the page claims the whole loop ("dreams at night about what she's unsure
+of, rehearses exactly that, and wakes up a better mind of you") only when `dream.threads` and
+`rehearse.seeded` are filled and the night promoted; otherwise it says only what happened.
+
 To fill a record:
 
 1. Log what you measure in your step's record in `log.jsonl`, as ids and numbers (no words). Give a
    new step its stage in `STAGE_STEPS`.
 2. In `tell`, read that record in place of your `*_NOT_YET` reason. A record that lacks what the
-   story needs raises `StoryError`. The night then logs a warning and keeps no story, and the page
-   shows the story unavailable.
+   story needs raises `StoryError`. The night then logs a failed `story` step and keeps the story it
+   had, and the page shows the story unavailable.
 3. Extend `tests/test_night_story.py`: the round trip, and a told night with your field filled.
-4. Adding, removing or retyping a field is a new `STORY_VERSION`. Filling a field the schema already
-   holds is not.
+4. Adding, removing or retyping a field is a new `STORY_VERSION` (2 added `Reused`). Filling a
+   field the schema already holds is not.
