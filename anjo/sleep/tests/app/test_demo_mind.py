@@ -37,7 +37,7 @@ pytestmark = pytest.mark.usefixtures("account")
 
 API = "/api/sleep/demo"
 START = date(2026, 10, 20)
-SCENE = words.SCENES[2]  # the credit dispute
+SCENE = words.SCENES[2]  # nobody to tell
 
 
 def _day(n: int) -> date:
@@ -55,11 +55,12 @@ def _ckpt(n: int, rendering: str | None = None) -> CheckpointRef:
 
 
 def _held_out() -> dict[str, str]:
-    """One held-out text of each kind the film student's persona file holds."""
+    """One held-out text of each kind the demo person's persona file holds."""
+    from anjo.sleep.app.demo_live import DEMO_PERSONA
     from anjo.sleep.personas.model import load_person_file
     from anjo.sleep.probes.judge_brief import PERSONAS_DIR
 
-    held = load_person_file(PERSONAS_DIR / "film_student.json").held_out
+    held = load_person_file(PERSONAS_DIR / f"{DEMO_PERSONA}.json").held_out
     return {"preference": held.preferences[0].text, "new_work": held.new_work[0].text,
             "taste": held.taste_ab[0].options[0], "evidence": "MARKER-HELD the ferry office keeps the reel under lock"}
 
@@ -549,8 +550,8 @@ def test_a_tripped_stop_answer_is_withheld() -> None:
 
 # ── the routes ────────────────────────────────────────────────────────────────
 
-NEW_ROUTES = (("GET", "/mind"), ("GET", "/nights"), ("POST", "/nights/n0/starters/credit"),
-              ("POST", "/nights/n0/ask"), ("POST", "/toggles/credit"))
+NEW_ROUTES = (("GET", "/mind"), ("GET", "/nights"), ("POST", "/nights/n0/starters/nobody-to-tell"),
+              ("POST", "/nights/n0/ask"), ("POST", "/toggles/nobody-to-tell"))
 
 
 def test_the_new_routes_exist_only_on_the_sleep_host(monkeypatch: pytest.MonkeyPatch) -> None:

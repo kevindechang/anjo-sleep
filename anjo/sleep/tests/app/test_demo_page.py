@@ -209,11 +209,12 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
 
 
 def test_brief_served_with_chat(account: str) -> None:
+    from anjo.sleep.app.demo_live import DEMO_PERSONA
     from anjo.sleep.probes.judge_brief import judge_brief
 
     client = _page()
     body = client.get("/api/sleep/demo/page").json()
-    assert body["brief"] == judge_brief("film_student")
+    assert body["brief"] == judge_brief(DEMO_PERSONA)
     assert [scene["id"] for scene in body["scenes"]] == [scene.id for scene in words.SCENES]
     assert body["pregenerated"] is None and not any(scene["ready"] for scene in body["scenes"])
     page = client.get("/sleep/demo").text
@@ -231,7 +232,7 @@ def test_page_requires_adult_confirmation(account: str) -> None:
     no_visit = {HEADER: "v1.forged-forged-forged.1.abc"}
     for headers in ({}, no_visit):
         assert client.post(ASK, json={"text": "hello"}, headers=headers).status_code == 401
-        assert client.post("/api/sleep/demo/starters/credit", headers=headers).status_code == 401
+        assert client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers).status_code == 401
         assert client.post(VOTE, json={"pair_id": "p", "choice": "tie"}, headers=headers).status_code == 401
     counters = json.loads((_demo_dir() / "counters.json").read_text()) if (_demo_dir() / "counters.json").exists() else {}
     assert counters.get("visits", 0) == 0  # a refused confirmation counts no visit
@@ -277,7 +278,7 @@ def test_replies_pass_reply_crisis_check(account: str) -> None:
     assert vote.status_code == 409 and vote.json()["detail"] == words.COPY["not_votable"]
 
     _write_starters((lambda s: tripping, lambda s: f"B:{s.id}"))
-    starter = client.post("/api/sleep/demo/starters/credit", headers=headers).json()
+    starter = client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers).json()
     assert tripping not in json.dumps(starter) and starter["votable"] is False
 
 
@@ -297,7 +298,7 @@ def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
     for n in range(24):  # under the 30-a-minute request limit; one order every time has odds 2**-23
         if n % OPEN_PER_VISIT == 0:  # a visit holds this many unvoted pairs at most
             headers = _visit(client)
-        pair = client.post("/api/sleep/demo/starters/credit", headers=headers).json()
+        pair = client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers).json()
         assert set(pair) == {"pair_id", "left", "right", "votable", "source"}
         assert pair["source"] == {"kind": "pre-generated", "checkpoint": "p-film-n3", "night": "2026-10-30",
                                   "generated_at": "2026-10-31T00:00:00+00:00"}
@@ -305,14 +306,14 @@ def test_side_order_randomized_and_revealed_after_pick(account: str) -> None:
         assert '"4"' not in shown and "2C" not in shown and "1200" not in shown
         lefts.add(pair["left"]["text"])
         pairs.append((pair, headers))
-    assert lefts == {"P:credit", "B:credit"}  # the server shuffles every pair
+    assert lefts == {"P:nobody-to-tell", "B:nobody-to-tell"}  # the server shuffles every pair
     # An address votes once a scene a day: one pair of each order, the second from another address.
-    product_first = next((p, h) for p, h in pairs if p["left"]["text"] == "P:credit")
-    baseline_first = next((p, h) for p, h in pairs if p["left"]["text"] == "B:credit")
+    product_first = next((p, h) for p, h in pairs if p["left"]["text"] == "P:nobody-to-tell")
+    baseline_first = next((p, h) for p, h in pairs if p["left"]["text"] == "B:nobody-to-tell")
     for (pair, headers), address in ((product_first, "8.8.8.8"), (baseline_first, "1.1.1.1")):
         reveal = client.post(VOTE, json={"pair_id": pair["pair_id"], "choice": "left"},
                              headers={**headers, "X-Forwarded-For": address}).json()
-        product_left = pair["left"]["text"] == "P:credit"
+        product_left = pair["left"]["text"] == "P:nobody-to-tell"
         assert reveal["left"]["arm"] == ("4" if product_left else "2C")
         assert reveal["right"]["arm"] == ("2C" if product_left else "4")
         product = reveal["left"] if product_left else reveal["right"]
@@ -672,7 +673,7 @@ def test_past_the_warm_cap_the_page_runs_on_starters_and_says_so(account: str) -
     refused = client.post(ASK, json={"text": "One more cut?"}, headers=headers)
     assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["live_spent"]
     assert model.calls == [] and serving.pings == 0  # not even asked: on SageMaker a ping keeps her up
-    assert client.post("/api/sleep/demo/starters/credit", headers=headers).status_code == 200
+    assert client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers).status_code == 200
     assert "COPY-PENDING(kevin)" in Path(words.__file__).read_text() and words.COPY["live_spent"]
 
 
