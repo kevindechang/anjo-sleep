@@ -3,7 +3,9 @@
 **Latents** (the latents worker's ``anjo-latents/1`` folder): ``index.jsonl`` is a header line
 (``d``, the layers, the model revision, the pooling, ``count``), then one line per matrix row
 (``row``, ``event_id``, ``life_or_person``, ``t``, ``kind``); ``latents.npy`` is the ``(count, d)``
-float32 matrix. ``read_latents`` checks the two against each other and never unpickles.
+float32 matrix. ``read_latents`` checks the two against each other and never unpickles. An encode
+run's folder (``latents encode --out``: one such folder per life) reads as one, every life's
+header agreeing on what it read (``d``, the layers, the model and revision, the pooling).
 
 **The export** (the data worker's ``mind-core-events-v1``): ``manifest.json`` lists each life with
 its first and last day; ``events/<life>.jsonl`` holds its events in order; ``labels/<life>.json``
@@ -54,8 +56,24 @@ def _time(value: object) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
+SAME_READING: Final = ("format", "d", "layers", "model", "revision", "pooling")  # what a run's lives agree on
+
+
 def read_latents(folder: Path) -> tuple[dict[str, Any], dict[str, EventLatent]]:
-    """The folder's header and each event's latent, by event id."""
+    """The folder's header and each event's latent, by event id; an encode run's folder, every life's."""
+    if not (folder / INDEX_FILE).is_file():
+        lives = sorted(child for child in folder.iterdir() if (child / INDEX_FILE).is_file()) if folder.is_dir() else []
+        if not lives:
+            raise DataError("not a latents folder: no index, and no life's folder with one")
+        read = [_read_one(life) for life in lives]
+        first = read[0][0]
+        if any({k: h.get(k) for k in SAME_READING} != {k: first.get(k) for k in SAME_READING} for h, _ in read):
+            raise DataError(f"the run's lives disagree on what they read ({', '.join(SAME_READING)})")
+        return {**first, "count": sum(len(rows) for _, rows in read)}, {k: v for _, rows in read for k, v in rows.items()}
+    return _read_one(folder)
+
+
+def _read_one(folder: Path) -> tuple[dict[str, Any], dict[str, EventLatent]]:
     try:
         lines = (folder / INDEX_FILE).read_text(encoding="utf-8").splitlines()
         header, rows = json.loads(lines[0]), [json.loads(line) for line in lines[1:] if line.strip()]
