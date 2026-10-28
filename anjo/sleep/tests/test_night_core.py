@@ -163,12 +163,13 @@ def test_a_person_deleted_during_the_night_gets_no_unit(tmp_path: Path) -> None:
     assert result.status == "failed" and core.kept == []
 
 
-def test_a_unit_that_fails_to_keep_is_recorded_and_the_night_still_ends(tmp_path: Path) -> None:
+def test_a_unit_that_fails_to_keep_promotes_nothing_and_the_night_still_ends(tmp_path: Path) -> None:
     world = _world(tmp_path)
     result = _night(world, core=FakeCore(keep_fails=True))
     record = summary(result.log_path)
+    assert result.status == "failed" and step(result.log_path, "promote")["status"] == "failed"
+    assert world.registry.last_promoted(UID) is None  # what served (the base model) serves on, with its unit
     assert record["mind_unit"] is None and record["mind_unit_error"] == "OSError"
-    assert result.status == "promoted"
 
 
 def _starts(world: World) -> list[str | None]:

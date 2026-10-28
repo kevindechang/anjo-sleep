@@ -573,9 +573,10 @@ class NightRunner(CoreSteps):
         if failed or len(off) == len(p.gates):
             p.status = "rejected"
             return {"promoted": None, "rejected_by": failed, "serving": checkpoint_id(self.deps.registry.last_promoted(p.uid)), **noted}
+        unit = self._promoted_unit(p, p.checkpoint.id)  # her unit first: unkept, nothing is promoted
         self.deps.registry.promote(p.uid, p.checkpoint)
         p.status = "promoted"
-        return {"promoted": p.checkpoint.id, "serving": p.checkpoint.id, **noted}
+        return {"promoted": p.checkpoint.id, "serving": p.checkpoint.id, **noted, **unit}
 
     # ── step 10, the note, and step 11 ──────────────────────────────────────
 

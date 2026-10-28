@@ -24,6 +24,7 @@ from anjo.sleep.mind.core.projector import Projector  # noqa: E402
 from anjo.sleep.mind.core.types import CoreConfig  # noqa: E402
 from anjo.sleep.night.core_snapshot import CoreSnapshot  # noqa: E402
 from anjo.sleep.night.run import GPU_STEPS, run_night_batch_with  # noqa: E402
+from anjo.sleep.night.state import checkpoint_id  # noqa: E402
 from anjo.sleep.night.sleep_pressure import SleepPolicy  # noqa: E402
 from anjo.sleep.serving.client import WakeResult  # noqa: E402
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps, summary, thread  # noqa: E402
@@ -162,3 +163,71 @@ def test_a_nap_with_the_core_dreams_on_cpu_and_holds_nothing_on_modal(tmp_path: 
     assert world.glimmer.calls == 0 and world.trainer.calls == []
     skipped = {r["step"] for r in steps(nap.log_path) if r["status"] == "skipped"}
     assert "dream" not in skipped and skipped == {"probes", *GPU_STEPS}
+
+
+def _shared(root: Path) -> Path:
+    shared = root / "shared.projector.npz"
+    shared.write_bytes(Projector.fresh(anchor_rows=_anchors(), k=K, d=SMALL.width, width=16).save())
+    return shared
+
+
+def _channel_night(world: World, core: CoreNight, trainer: Any, shared: Path, night: Any) -> Any:
+    world.plan(UID, night)
+    deps = world.deps(core=core, mind_state=core.reading, trainer=trainer, channel=_setup(world, SoftGlimmer(), shared))
+    return run_night_batch_with(deps, {UID: night})[UID]
+
+
+def test_a_promotion_keeps_her_unit_first_or_promotes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: a first night promotes, its unit kept with the promotion, once
+    world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
+    trainer = SavingTrainer(world)
+    world.targets(UID).upsert(thread(UID))
+    held = store.MindStore(tmp_path / store.STORE_DIR, UID)
+    first = _channel_night(world, core, trainer, shared, NIGHT)
+    kept, serving = held.head(), world.registry.last_promoted(UID)
+    assert first.status == "promoted" and kept is not None and serving is not None and kept.lora == serving.id
+    assert step(first.log_path, "promote")["mind_unit"] == summary(first.log_path)["mind_unit"] and len(held.units()) == 1
+
+    # Act: the next night's unit can't be saved
+    def full_disk(self: store.MindStore, *args: Any, **kwargs: Any) -> store.Unit:
+        raise OSError("the disk is full")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store.MindStore, "keep", full_disk)
+        second = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=1))
+
+    # Assert: nothing was promoted, so the adapter and the projector that served keep serving together
+    assert second.status == "failed" and step(second.log_path, "promote")["status"] == "failed"
+    assert checkpoint_id(world.registry.last_promoted(UID)) == kept.lora and held.head() == kept
+    third = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=2))
+    assert third.status == "promoted" and trainer.calls[-1]["prev"].id == kept.lora
+    assert kept.projector is not None and trainer.channel[-1]["projector"] == Path(kept.projector)
+    head = held.head()
+    assert head is not None and head.lora == checkpoint_id(world.registry.last_promoted(UID))
+    assert head.projector == step(third.log_path, "train")["receipt"]["projector"]
+
+
+def test_a_unit_naming_another_adapter_than_the_one_serving_falls_back_logged(tmp_path: Path) -> None:
+    # Arrange: two promoted nights, then the first adapter serves again
+    world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
+    world.targets(UID).upsert(thread(UID))
+    trainer = SavingTrainer(world)
+    for n in range(2):
+        assert _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=n)).status == "promoted"
+    first, second = store.MindStore(tmp_path / store.STORE_DIR, UID).units()
+    world.registry.rollback(UID, world.registry.history(UID)[0])
+
+    # Act
+    third = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=2))
+
+    # Assert: read through the newest unit that names the adapter that serves, and logged
+    assert step(third.log_path, "dream")["projector_fallback"] == {
+        "unit": second.version, "unit_lora": second.lora, "serving": first.lora, "from_unit": first.version}
+    assert first.projector is not None and trainer.channel[-1]["projector"] == Path(first.projector)
+    # No unit names the adapter that serves: the shared projector, logged
+    world.registry.promote(UID, CheckpointRef("elsewhere", UID, NIGHT, "uri://elsewhere", None))
+    fourth = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=3))
+    assert step(fourth.log_path, "dream")["projector_fallback"]["from_unit"] is None
+    assert trainer.channel[-1]["projector"] == shared
+    assert "projector_fallback" not in step(third.log_path, "promote") and "projector_fallback" not in step(
+        _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=4)).log_path, "dream")

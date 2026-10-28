@@ -79,6 +79,25 @@ def test_latents_folder_reads_back_and_refuses_a_bad_one(tmp_path: Path) -> None
         data.read_latents(tmp_path / "dim")
 
 
+def test_an_encode_run_folder_reads_as_one_with_every_life_in_it(tmp_path: Path) -> None:
+    second = [{**e, "event_id": f"{e['event_id']}-b", "life_or_person": "life-2"} for e in EVENTS[:2]]
+    first_matrix = _latents(tmp_path / "run" / "life-1", EVENTS)  # the encode CLI's <out>/<life>/ layout
+    second_matrix = _latents(tmp_path / "run" / "life-2", second)
+    header, latents = data.read_latents(tmp_path / "run")
+    assert header["count"] == 5 and header["d"] == D
+    assert set(latents) == {e["event_id"] for e in EVENTS} | {e["event_id"] for e in second}
+    assert np.array_equal(latents["e-d1-1"].vec, first_matrix[1])
+    assert np.array_equal(latents["e-d1-1-b"].vec, second_matrix[1])
+
+    _latents(tmp_path / "mixed" / "life-1", EVENTS)
+    _latents(tmp_path / "mixed" / "life-2", second, d=D + 1)
+    with pytest.raises(data.DataError, match="disagree"):
+        data.read_latents(tmp_path / "mixed")
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(data.DataError, match="not a latents folder"):
+        data.read_latents(tmp_path / "empty")
+
+
 def test_a_planted_item_becomes_a_thread_label() -> None:
     times: dict[str, datetime] = {str(e["event_id"]): datetime.fromisoformat(str(e["t"])) for e in EVENTS}
     label = data.label_of(LABEL, times)

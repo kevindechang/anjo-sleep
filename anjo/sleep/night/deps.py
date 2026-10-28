@@ -139,6 +139,7 @@ class MindCall:
     job: str
     cancelled: Callable[[], bool]
     core_view: CoreView | None = None  # tonight's dream, for the inquiry's decider (MIND's core on)
+    serving: str | None = None  # the adapter that serves her as the dream starts (MIND's core pairs its projector)
 
 
 class Inquiry(Protocol):
