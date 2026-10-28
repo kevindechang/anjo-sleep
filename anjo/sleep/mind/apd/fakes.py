@@ -44,7 +44,7 @@ from anjo.sleep.mind.apd.generate import Generated, LifeSpec
 from anjo.sleep.mind.replay import fakes as replay_fakes
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.serving import config, framing
-from anjo.sleep.serving.client import Poster, ServingError
+from anjo.sleep.serving.client import LOAD_PATH, Poster, ServingError
 from anjo.sleep.serving.config import ServeConfig
 from anjo.sleep.train.runners.colab import ColabCli
 from anjo.sleep.spark_inquiry import RESOLVE_PROMPT, WORLD_PROMPT
@@ -166,12 +166,14 @@ def think(text: str) -> str:
 
 @dataclass
 class FakeVllm:
-    """``/v1/models``, ``/tokenize`` and ``/v1/completions`` for one session, behind its key.
-    ``served`` is each completion's kind (``world`` or ``think``), rendered date and prompt, in
-    order; ``models`` the model each completion named."""
+    """``/v1/models``, ``/tokenize``, ``/v1/completions`` and ``/v1/load_lora_adapter`` for one
+    session, behind its key. An adapter in the LoRA directory (``adapters``) is served only once
+    loaded from there, as vLLM 0.28.0 did live. ``served`` is each completion's kind (``world`` or
+    ``think``), rendered date and prompt, in order; ``models`` the model each completion named."""
 
     key: str
     adapters: set[str] = field(default_factory=set)
+    loaded: set[str] = field(default_factory=set)
     healthy: bool = True
     failing: set[str] = field(default_factory=set)  # completion kinds (think, world) that answer 503
     flaky: dict[str, int] = field(default_factory=dict)  # and those answering 503 that many times first
@@ -185,13 +187,23 @@ class FakeVllm:
         if request.url.path == "/v1/models":
             if not self.healthy:
                 return httpx.Response(503, json={"error": "loading"})
-            return httpx.Response(200, json={"data": [{"id": config.MODEL}, *({"id": a} for a in sorted(self.adapters))]})
+            return httpx.Response(200, json={"data": [{"id": config.MODEL}, *({"id": a} for a in sorted(self.loaded))]})
         body = json.loads(request.content)
+        if request.url.path == LOAD_PATH:
+            return self._load(str(body["lora_name"]), str(body["lora_path"]))
         if request.url.path == "/tokenize":
             return httpx.Response(200, json={"tokens": self._tokenize(body)})
         if request.url.path == "/v1/completions":
             return self._complete(body)
         return httpx.Response(404, json={"error": "no such path"})
+
+    def _load(self, name: str, path: str) -> httpx.Response:
+        if name in self.loaded:
+            return httpx.Response(400, json={"error": f"The lora adapter '{name}' has already been loaded."})
+        if name not in self.adapters or path != f"{colab_vllm.ADAPTERS_DIR}/{name}":
+            return httpx.Response(404, json={"error": "no adapter there"})
+        self.loaded.add(name)
+        return httpx.Response(200, text=f"Success: LoRA adapter '{name}' added successfully.")
 
     def _tokenize(self, body: Mapping[str, Any]) -> list[int]:
         if "messages" not in body:
@@ -201,7 +213,7 @@ class FakeVllm:
 
     def _complete(self, body: Mapping[str, Any]) -> httpx.Response:
         model = str(body["model"])
-        if model != config.MODEL and model not in self.adapters:
+        if model != config.MODEL and model not in self.loaded:
             return httpx.Response(404, json={"error": "no such adapter"})
         messages, day = self.chats[body["prompt"][1]]
         system = messages[0]["content"] if messages[0]["role"] == "system" else None

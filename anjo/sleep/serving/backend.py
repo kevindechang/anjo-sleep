@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Protocol
 
 from anjo.sleep.serving import client
 from anjo.sleep.serving.client import VllmClient, WakeResult
-from anjo.sleep.serving.config import ServeConfigError
+from anjo.sleep.serving.config import ADAPTERS_DIR, ServeConfigError
 
 if TYPE_CHECKING:
     from anjo.sleep.serving.sagemaker.serving import SageMakerServing
@@ -74,7 +74,8 @@ class ModalServing:
         """Nothing: Modal scales the container down after ``config.SCALEDOWN_S`` idle."""
 
     def client(self) -> VllmClient:
-        return VllmClient(self.url, self.token)
+        """A client that loads each adapter from the adapters volume before its first use."""
+        return VllmClient(self.url, self.token, adapters_dir=ADAPTERS_DIR)
 
     def upload_adapter(self, folder: Path, name: str) -> None:
         from anjo.sleep.serving.modal_app import put_adapter  # needs the modal package: imported only to upload

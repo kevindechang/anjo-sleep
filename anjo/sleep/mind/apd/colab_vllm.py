@@ -324,11 +324,12 @@ class ColabSession:
         if not self.live:
             raise ColabError(f"session {self.session} isn't serving")
         transport = RetryTransport(self.transport or httpx.HTTPTransport(), sleep=self._state.sleep)
-        return VllmClient(self.base_url, self.key, transport=transport)
+        return VllmClient(self.base_url, self.key, transport=transport, adapters_dir=ADAPTERS_DIR)
 
     def upload_adapter(self, folder: Path, name: str) -> None:
-        """Put one adapter into the server's LoRA directory, where vLLM's resolver loads it by
-        name: a checked LoRA of Glimmer, recorded under the rendering this server serves."""
+        """Put one adapter into the server's LoRA directory, from which the session's client loads
+        it before its first use: a checked LoRA of Glimmer, recorded under the rendering this server
+        serves."""
         config.check_adapter(folder, name)
         if adapter_rendering(folder) != self.client().rendering:
             raise ColabError(f"adapter {name} wasn't trained under the rendering this server serves")
@@ -404,8 +405,7 @@ def _send_key(cli: ColabCli, session: str, key: str) -> None:
 
 def server_env() -> dict[str, str]:
     """vLLM's environment on the VM: the night's, with Colab's folders, and no download plugin."""
-    return {**config.vllm_env(), "VLLM_LORA_RESOLVER_CACHE_DIR": ADAPTERS_DIR, "HF_HOME": f"{ROOT}/hf",
-            "HF_HUB_ENABLE_HF_TRANSFER": "0"}
+    return {**config.vllm_env(), "HF_HOME": f"{ROOT}/hf", "HF_HUB_ENABLE_HF_TRANSFER": "0"}
 
 
 def server_command(settings: ServeConfig) -> list[str]:

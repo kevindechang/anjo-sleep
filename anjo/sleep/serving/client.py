@@ -19,6 +19,16 @@ directly, never reasoning first, and the prompt is token for token a training ro
 An adapter is served only under the rendering it was trained under (``CheckpointRef.rendering``);
 any other is refused with ``ServingError``, before a request is sent.
 
+**Adapters load by an explicit call.** vLLM 0.28.0 answers 404 for an adapter it hasn't been told
+to load, whatever sits in its folder (seen live, 2026-10-28). So a client whose server reads adapters
+from a folder (``adapters_dir``: Modal's adapters volume, the APD Colab session's LoRA folder) loads
+each one through ``/v1/load_lora_adapter`` before the first request that names it, once per client
+(its dated copies share the set). One already loaded counts as loaded. A folder the server can't see
+yet is asked for again for up to ``LOAD_WAIT_S``: a warm Modal container sees a new adapter within
+``config.ADAPTER_REFRESH_S``. A later 404 naming a loaded adapter (its container restarted and forgot
+it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
+client has no ``adapters_dir`` and never loads.
+
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
 by the app, never here), or the SageMaker endpoint's signed envelope
@@ -35,7 +45,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeVar
 
 import httpx
 
@@ -55,10 +65,20 @@ WAKE_BACKOFF_START_S: Final = 2.0
 WAKE_BACKOFF_MAX_S: Final = 20.0
 WAKE_PATH: Final = "/v1/models"  # needs the bearer token and reaches vLLM, so it resets Modal's idle timer
 LOCALHOST: Final = "localhost"
+LOAD_PATH: Final = "/v1/load_lora_adapter"
+LOAD_RETRY_S: Final = 5.0  # between loads of a folder the server can't see yet
+LOAD_WAIT_S: Final = 2 * config.ADAPTER_REFRESH_S + LOAD_RETRY_S  # two of a warm server's volume refreshes
+_ALREADY_LOADED: Final = b"already been loaded"
+T = TypeVar("T")
 
 
 class ServingError(RuntimeError):
     """The server refused or failed a request, or sent a reply that can't be read."""
+
+
+class ModelNotFound(ServingError):
+    """The server answered 404: it doesn't serve the model named. A restarted container has
+    forgotten the adapters loaded into it."""
 
 
 class GlimmerNotReady(ServingError):
@@ -185,14 +205,32 @@ class HttpPoster:
     def close(self) -> None:
         self._http.close()
 
-    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    def _send(self, path: str, body: Mapping[str, Any]) -> httpx.Response:
         try:
-            response = self._http.post(path, json=dict(body))
+            return self._http.post(path, json=dict(body))
         except httpx.HTTPError as error:
             raise ServingError(f"{path} failed in transport ({type(error).__name__})") from None
+
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        response = self._send(path, body)
+        if response.status_code == 404:
+            raise ModelNotFound(f"{path} returned HTTP 404")
         if response.is_error:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
+
+    def load_adapter(self, name: str, folder: str) -> bool:
+        """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
+        loaded (one loaded already counts), False when the server finds no adapter there (404). Any
+        other failure is ``ServingError`` naming the endpoint, never what the server said."""
+        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder})
+        if response.status_code == 400 and _ALREADY_LOADED in response.content:
+            return True
+        if response.status_code == 404:
+            return False
+        if response.is_error:
+            raise ServingError(f"{LOAD_PATH} returned HTTP {response.status_code}")
+        return True
 
 
 def tokens(poster: Poster, body: Mapping[str, Any]) -> list[int]:
@@ -224,25 +262,35 @@ def utc_today() -> date:
 class VllmClient:
     """``ModelClient`` and ``TokenLogprobs`` over one vLLM server: Modal's https URL with its
     bearer token, or any other ``Poster`` (``VllmClient.over``). ``on(day)`` dates its prompts
-    (the night's date, virtual in an accelerated run); unset, they carry today's UTC date."""
+    (the night's date, virtual in an accelerated run); unset, they carry today's UTC date.
+    ``adapters_dir`` is the folder the server reads adapters from, which the client loads them from
+    before their first use; ``None`` when the backend loads them itself."""
 
     precision: Final = config.SERVING.name
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
-        timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS,
+        timeout_s: float = REQUEST_TIMEOUT_S, max_tokens: int = MAX_TOKENS, adapters_dir: str | None = None,
+        clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self._strength = config.reasoning_strength()
-        self._poster: Poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
-        self._max_tokens = max_tokens
-        self._day: date | None = None
+        poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
+        self._setup(poster, max_tokens, None if adapters_dir is None else poster, adapters_dir)
+        self._clock, self._sleep = clock, sleep
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
+        """A client over ``poster``, whose server loads adapters itself (SageMaker's shim)."""
         client = cls.__new__(cls)
-        client._strength = config.reasoning_strength()
-        client._poster, client._max_tokens, client._day = poster, max_tokens, None
+        client._setup(poster, max_tokens, None, None)
+        client._clock, client._sleep = time.monotonic, time.sleep
         return client
+
+    def _setup(self, poster: Poster, max_tokens: int, loader: HttpPoster | None, adapters_dir: str | None) -> None:
+        self._strength = config.reasoning_strength()
+        self._poster, self._max_tokens = poster, max_tokens
+        self._day: date | None = None
+        self._loader, self._adapters_dir = loader, adapters_dir
+        self._loaded: set[str] = set()
 
     def on(self, day: date) -> VllmClient:
         """This client, its prompts dated ``day``; the poster is shared."""
@@ -254,6 +302,11 @@ class VllmClient:
     @property
     def rendering(self) -> str:
         return framing.rendering(self._strength)
+
+    @property
+    def adapters_dir(self) -> str | None:
+        """The folder the server reads adapters from, or ``None`` when the backend loads them itself."""
+        return self._adapters_dir
 
     @property
     def base_url(self) -> str | None:
@@ -270,20 +323,50 @@ class VllmClient:
     def _tokens(self, body: Mapping[str, Any]) -> list[int]:
         return tokens(self._poster, body)
 
-    def _prompt(self, adapter: CheckpointRef | None, messages: Sequence[Mapping[str, Any]]) -> tuple[str, list[int]]:
-        """The model to name and the prompt's ids; an adapter trained under another rendering is refused."""
+    def _prompt(self, model: str, messages: Sequence[Mapping[str, Any]]) -> list[int]:
+        return reply_prompt(self._poster, model, messages, self._strength, self._day or utc_today())
+
+    def _served(self, adapter: CheckpointRef | None, call: Callable[[str], T]) -> T:
+        """``call`` with the model to name. An adapter trained under another rendering is refused
+        before anything is sent; one the server reads from a folder is loaded before its first use, and
+        loaded again once if the server has forgotten it (a 404)."""
         if adapter is not None and adapter.rendering != self.rendering:
             raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
                                f"not {self.rendering}; it is never served under another")
         model = model_name(adapter)
-        return model, reply_prompt(self._poster, model, messages, self._strength, self._day or utc_today())
+        if adapter is None or self._loader is None:
+            return call(model)
+        self._ensure_loaded(model)
+        try:
+            return call(model)
+        except ModelNotFound:
+            self._loaded.discard(model)
+            self._ensure_loaded(model)
+            return call(model)
+
+    def _ensure_loaded(self, name: str) -> None:
+        """Load ``name`` unless this client has; a folder the server can't see yet is asked for again
+        until ``LOAD_WAIT_S``."""
+        if name in self._loaded or self._loader is None:
+            return
+        deadline = self._clock() + LOAD_WAIT_S
+        while not self._loader.load_adapter(name, f"{self._adapters_dir}/{name}"):
+            if self._clock() >= deadline:
+                raise ServingError(f"{LOAD_PATH} found no adapter in {LOAD_WAIT_S:.0f} s")
+            self._sleep(LOAD_RETRY_S)
+        self._loaded.add(name)
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
         seed: int | None = None, max_tokens: int | None = None,
     ) -> ChatResult:
         """One reply; ``max_tokens`` caps this call alone (MIND's thinker passes its allowance)."""
-        model, prompt = self._prompt(adapter, messages)
+        return self._served(adapter, lambda model: self._complete(model, messages, temperature, seed, max_tokens))
+
+    def _complete(
+        self, model: str, messages: list[dict[str, str]], temperature: float, seed: int | None, max_tokens: int | None,
+    ) -> ChatResult:
+        prompt = self._prompt(model, messages)
         body: dict[str, Any] = {
             "model": model, "prompt": prompt, "temperature": temperature, "top_p": TOP_P, "top_k": TOP_K,
             "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
@@ -306,7 +389,10 @@ class VllmClient:
     def continuation_logprobs(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
     ) -> Sequence[float]:
-        model, prompt = self._prompt(adapter, messages)
+        return self._served(adapter, lambda model: self._logprobs(model, messages, continuation))
+
+    def _logprobs(self, model: str, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        prompt = self._prompt(model, messages)
         tail = self._tokens({"model": model, "prompt": framing.clean_text(continuation), "add_special_tokens": False})
         if not tail:
             raise ServingError("the continuation has no tokens")

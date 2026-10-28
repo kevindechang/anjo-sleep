@@ -45,8 +45,9 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert not any("KEY" in part or "TOKEN" in part for part in command)
     env = config.vllm_env()
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"  # no nvcc in the image for FlashInfer's JIT
-    assert env["VLLM_PLUGINS"] == "lora_filesystem_resolver"
-    assert env["VLLM_LORA_RESOLVER_CACHE_DIR"] == config.ADAPTERS_DIR
+    assert env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] == "True"  # the client loads each adapter by name
+    # vLLM's filesystem resolver never loaded an adapter (seen live): nothing may look as if it does.
+    assert "VLLM_PLUGINS" not in env and "VLLM_LORA_RESOLVER_CACHE_DIR" not in env
 
 
 def test_the_bf16_fallback_is_one_line_away_and_quantizes_nothing() -> None:
@@ -210,6 +211,7 @@ def _fake_modal(recorder: _Recorder) -> types.ModuleType:
     module.enter = recorder.decorator("enter")  # type: ignore[attr-defined]
     module.exit = recorder.decorator("exit")  # type: ignore[attr-defined]
     module.web_server = recorder.decorator("web_server")  # type: ignore[attr-defined]
+    module.exception = types.SimpleNamespace(Error=type("Error", (Exception,), {}))  # type: ignore[attr-defined]
     return module
 
 
