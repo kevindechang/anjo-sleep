@@ -6,6 +6,7 @@
     <data>/sealed/<life>.json         its problem file, sealed: only the judge and the report read it,
                                       and the core's labels for ``LABELLED_SPLITS`` (``labels``)
     <data>/runs/<life>.<arm>.json     each finished run (``ArmRun``), written once
+    <data>/pairs/<pair>.json          each counterfactual pair, both histories (``pairs``)
     <data>/spend/<name>.jsonl         each run's Spark Open journal (``journal``), and
     <data>/spend/discarded.jsonl      what each unfinished attempt spent before it was thrown away
     <data>/failed.jsonl               each run or snapshot-edit that failed alone, never saved
@@ -45,7 +46,15 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.evidence.jsonl import PLAIN, append_records, read_records
-from anjo.sleep.mind.apd.types import LABELLED_SPLITS, ArmName, ArmRun, Life, LifeSplit, ProblemFile
+from anjo.sleep.mind.apd.types import (
+    LABELLED_SPLITS,
+    ArmName,
+    ArmRun,
+    CounterfactualPair,
+    Life,
+    LifeSplit,
+    ProblemFile,
+)
 
 _MODULES: Final = (
     "anjo.sleep.types", "anjo.sleep.mind.apd.types", "anjo.sleep.mind.inquiry.types",
@@ -334,6 +343,26 @@ class DataDir:
         if found.life_id != life_id:
             raise StoreError(f"{life_id}'s sealed file holds another life's problems")
         return found
+
+    def _pair(self, pair_id: str) -> Path:
+        return self.root / "pairs" / f"{check_id(pair_id)}.json"
+
+    def save_pair(self, pair: CounterfactualPair) -> None:
+        write_text(self._pair(pair.id), dumps(pair))
+
+    def has_pair(self, pair_id: str) -> bool:
+        return self._pair(pair_id).exists()
+
+    def pair(self, pair_id: str) -> CounterfactualPair:
+        found: CounterfactualPair = loads(self._pair(pair_id).read_text(encoding="utf-8"), CounterfactualPair)
+        if found.id != pair_id:
+            raise StoreError(f"{pair_id}'s file holds another pair")
+        return found
+
+    def pairs(self) -> tuple[CounterfactualPair, ...]:
+        """Every pair on disk, by id."""
+        folder = self.root / "pairs"
+        return tuple(self.pair(path.stem) for path in sorted(folder.glob("*.json"))) if folder.exists() else ()
 
     def save_run(self, run: ArmRun) -> None:
         path = self._run(run.life_id, run.arm)

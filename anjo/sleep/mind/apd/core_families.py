@@ -7,10 +7,16 @@ fields (their templates unchanged, in ``families``) and three fields of its own;
 ``core-test`` have only their own. No core split uses an APD held-out field or template: those stay
 APD's frozen test. Every field has two contradictions and one template of each other family, as in
 ``families``, under the same rules (facts state no conclusion; a resolution's numbers come from its
-own facts). Pure.
+own facts).
+
+**Pair templates** (``PairTemplate``, for ``pairs``): one commitment the person relies on, in a
+``core-test`` field, and its two outcomes: twice failing, or twice kept. The failed history plants
+its gap (``PairTemplate.gap``); the kept one plants nothing for it. No life of a split draws them.
+Pure.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 from anjo.sleep.mind.apd.families import TEMPLATES, Template
@@ -350,6 +356,90 @@ _TEST: Final = (
         "Not overcharging: this show's frames are twice the size, with museum glass."),
 )
 
+@dataclass(frozen=True)
+class PairTemplate:
+    """A commitment stated on day 1 of both histories; ``failed`` or ``kept``, its two outcomes on
+    the fork's days; ``ask``, the last day's question, the same in both. The failed history's gap
+    is planted from ``topic`` and ``resolution``."""
+
+    id: str
+    field: str
+    topic: str
+    commitment: str
+    failed: tuple[str, str]
+    kept: tuple[str, str]
+    ask: str
+    resolution: str
+
+    @property
+    def gap(self) -> Template:
+        """The failed history's planted item: the commitment and the first failure are its origin,
+        the second failure settles it."""
+        return Template(f"{self.id}-failed", "gap", self.field, self.topic, (self.commitment, self.failed[0]),
+                        self.failed[1], self.ask, self.resolution)
+
+
+def _p(id: str, field: str, topic: str, commitment: str, failed: tuple[str, str], kept: tuple[str, str], ask: str,
+       resolution: str) -> PairTemplate:
+    return PairTemplate(id, field, topic, commitment, failed, kept, ask, resolution)
+
+
+PAIR_TEMPLATES: Final = (
+    _p("pair-fish-supplier", _WEDDING, "the Ashford wedding's fish",
+       "Harbour Fresh agreed to deliver 40 kilograms of sea bass for the Ashford wedding on the 19th.",
+       ("Harbour Fresh cancelled the fish delivery for the Morton party two hours before it was due.",
+        "Harbour Fresh cancelled again: the fish order for the Lee birthday never arrived."),
+       ("Harbour Fresh delivered the fish for the Morton party on time.",
+        "Harbour Fresh's fish order for the Lee birthday arrived early and complete."),
+       "The Ashford wedding is on the 19th. What should I get done this week?",
+       "Harbour Fresh has cancelled twice since agreeing to supply the Ashford wedding on the 19th; line up a "
+       "backup fish supplier now."),
+    _p("pair-cold-van", _WEDDING, "the food transport for the Pemberton wedding",
+       "Coldline is renting me a refrigerated van to take the food to the Pemberton wedding on the 19th.",
+       ("Coldline's van broke down on the way to the Morton party, and the food sat in the heat for an hour.",
+        "Coldline's van wouldn't start for this morning's lunch run, so I used taxis."),
+       ("Coldline's van kept the Morton party food cold the whole way.",
+        "Coldline's van ran this morning's lunch run without a hitch."),
+       "The Pemberton wedding is on the 19th. What's left for me to sort?",
+       "Coldline's van has failed twice since it was booked for the Pemberton wedding on the 19th; book a "
+       "second refrigerated van as a backup."),
+    _p("pair-lighting-desk", _THEATRE, "the lighting for the opening",
+       "Brightline is supplying the lighting desk for our opening on the 19th.",
+       ("The lighting desk Brightline lent us for rehearsals crashed in the middle of today's run.",
+        "Brightline's desk froze again tonight and lost every lighting cue."),
+       ("The lighting desk Brightline lent us for rehearsals ran the whole of today's run.",
+        "Brightline's desk ran tonight's rehearsal and kept every lighting cue."),
+       "We open on the 19th. What should I check this week?",
+       "Brightline's desk crashed twice in rehearsals before the opening on the 19th; arrange a backup desk or "
+       "a technician on site."),
+    _p("pair-programme-printer", _THEATRE, "the opening night programmes",
+       "Inkwell is printing 500 programmes for the opening on the 19th.",
+       ("Inkwell delivered our poster run three days after the agreed date.",
+        "Inkwell's flyers came back late as well, and with the wrong venue address."),
+       ("Inkwell delivered our poster run on the agreed date.",
+        "Inkwell's flyers came back on time and spotless."),
+       "The opening is on the 19th. Is there anything I should chase?",
+       "Inkwell has been late twice since taking the programme order for the 19th; confirm their date now and "
+       "line up a backup printer."),
+    _p("pair-framer", _PHOTO, "the frames for the opening",
+       "Oakframe is framing the 16 prints for the opening on the 19th.",
+       ("Oakframe sent back the first frames four days late, and two of them were cracked.",
+        "Oakframe pushed the second batch of frames back another week."),
+       ("Oakframe sent back the first frames on the agreed day, every one perfect.",
+        "Oakframe's second batch of frames arrived two days early."),
+       "The opening is on the 19th. What should I be doing this week?",
+       "Oakframe has slipped twice on the frames for the opening on the 19th; confirm the remaining frames now "
+       "and line up a backup framer."),
+    _p("pair-projector", _PHOTO, "the slideshow at the opening",
+       "Lumen is lending us a projector for the slideshow at the opening on the 19th.",
+       ("The Lumen projector we tested overheated and shut off after 20 minutes.",
+        "The replacement Lumen projector shut off after 25 minutes as well."),
+       ("The Lumen projector we tested ran for three hours without trouble.",
+        "The Lumen projector ran the whole slideshow again today without trouble."),
+       "The opening is on the 19th. Anything I should check this week?",
+       "Lumen's projectors shut off twice in testing before the opening on the 19th; arrange a backup projector."),
+)
+
 CORE_TEMPLATES: Final[tuple[Template, ...]] = (*_TRAIN, *_VAL, *_TEST)
 CORE_FIELDS: Final[dict[CoreSplit, tuple[str, ...]]] = {
     "core-train": (*apd_fields("development"), _TRUCK, _FURNITURE, _PODCAST),
@@ -357,6 +447,7 @@ CORE_FIELDS: Final[dict[CoreSplit, tuple[str, ...]]] = {
     "core-test": (_WEDDING, _THEATRE, _PHOTO),
 }
 _ALL: Final[tuple[Template, ...]] = (*TEMPLATES["development"], *TEMPLATES["held_out"], *CORE_TEMPLATES)
+_PAIR_GAPS: Final = tuple(pair.gap for pair in PAIR_TEMPLATES)
 
 
 def fields(split: LifeSplit) -> tuple[str, ...]:
@@ -375,5 +466,5 @@ def templates_for(split: LifeSplit, field: str) -> tuple[Template, ...]:
 
 
 def template(template_id: str) -> Template | None:
-    """The template of any split with that id."""
-    return next((t for t in _ALL if t.id == template_id), None)
+    """The template of any split, or a pair's gap, with that id."""
+    return next((t for t in (*_ALL, *_PAIR_GAPS) if t.id == template_id), None)

@@ -2,7 +2,7 @@
 planted problems, the evidence and targets extracted from them, and the sealed problem file.
 
 **What is deterministic.** Which templates a life draws, and on which days each of its facts and
-its surface fall, come from a hash of the split, field and seed alone (``_Dice``), never from
+its surface fall, come from a hash of the split, field and seed alone (``Dice``), never from
 ``random`` or a model. The model words the days; given the same replies, the same seed gives the
 same life, ids included.
 
@@ -20,6 +20,7 @@ times, while any gate fails or an attempt fails; it never looks at an arm.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -27,6 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 from anjo.sleep.baseten_api import SPARK_OPEN
@@ -107,7 +109,7 @@ class LifeSpec:
 # ── The plan: which templates, on which days (pure) ──────────────────────────
 
 
-class _Dice:
+class Dice:
     """Deterministic draws from a label, by SHA-256 (stable across Python versions)."""
 
     def __init__(self, label: str) -> None:
@@ -121,7 +123,7 @@ class _Dice:
 
 
 @dataclass(frozen=True)
-class _Plan:
+class ItemPlan:
     """A template and the day indexes (0-based) of its origin facts, disambiguating fact and surface."""
 
     template: Template
@@ -130,11 +132,11 @@ class _Plan:
     surface_day: int
 
 
-def _ranked(label: str, items: Sequence[Any], key: Callable[[Any], str]) -> list[Any]:
+def ranked(label: str, items: Sequence[Any], key: Callable[[Any], str]) -> list[Any]:
     return sorted(items, key=lambda item: hashlib.sha256(f"{label}:{key(item)}".encode()).hexdigest())
 
 
-def _schedule(template: Template, dice: _Dice) -> _Plan:
+def _schedule(template: Template, dice: Dice) -> ItemPlan:
     """Days for one template: origins (``HALF_GAP_DAYS`` apart for a contradiction), the
     disambiguating fact ``AWAY_DAYS`` after the last origin, then the surface day, all inside the
     life, with the slack spread by the dice."""
@@ -149,10 +151,10 @@ def _schedule(template: Template, dice: _Dice) -> _Plan:
         slack -= extra
         at += step + extra
         days.append(at)
-    return _Plan(template, tuple(days[:-2]), days[-2], days[-1])
+    return ItemPlan(template, tuple(days[:-2]), days[-2], days[-1])
 
 
-def plan(split: LifeSplit, field: str, families: Sequence[Family], prevalence: int, seed: int) -> tuple[_Plan, ...]:
+def plan(split: LifeSplit, field: str, families: Sequence[Family], prevalence: int, seed: int) -> tuple[ItemPlan, ...]:
     """The life's planted items: templates drawn round-robin through ``families``, then scheduled."""
     if not 0 <= prevalence <= MAX_PREVALENCE:
         raise ValueError(f"prevalence must be 0 to {MAX_PREVALENCE}")
@@ -163,8 +165,8 @@ def plan(split: LifeSplit, field: str, families: Sequence[Family], prevalence: i
     for family in dict.fromkeys(families):
         pool = [t for t in templates_for(split, field) if t.family == family]
         if pool:
-            pools[family] = _ranked(label, pool, lambda t: t.id)
-    order = _ranked(label, list(pools), lambda family: family)
+            pools[family] = ranked(label, pool, lambda t: t.id)
+    order = ranked(label, list(pools), lambda family: family)
     chosen: list[Template] = []
     while len(chosen) < prevalence and any(pools.values()):
         for family in order:
@@ -172,7 +174,7 @@ def plan(split: LifeSplit, field: str, families: Sequence[Family], prevalence: i
                 chosen.append(pools[family].pop(0))
     if len(chosen) < prevalence:
         raise ValueError(f"{split} field {field!r} has too few templates in those families for {prevalence} items")
-    dice = _Dice(label)
+    dice = Dice(label)
     return tuple(_schedule(template, dice) for template in chosen)
 
 
@@ -187,21 +189,21 @@ def attempt_seed(seed: int, attempt: int) -> int:
 
 
 @dataclass(frozen=True)
-class _Beat:
+class Beat:
     id: str
     say: str
     kind: str  # "plant" or "ask"
 
 
-def _beats(plans: Sequence[_Plan]) -> dict[int, list[_Beat]]:
+def beats_of(plans: Sequence[ItemPlan]) -> dict[int, list[Beat]]:
     """Each day's beats: the origin and disambiguating facts to state, the surface to raise."""
-    by_day: dict[int, list[_Beat]] = {}
+    by_day: dict[int, list[Beat]] = {}
     for number, item in enumerate(plans, start=1):
         for k, (day, fact) in enumerate(zip(item.origin_days, item.template.origins), start=1):
-            by_day.setdefault(day, []).append(_Beat(f"i{number}.o{k}", fact, "plant"))
+            by_day.setdefault(day, []).append(Beat(f"i{number}.o{k}", fact, "plant"))
         by_day.setdefault(item.disambiguating_day, []).append(
-            _Beat(f"i{number}.d", item.template.disambiguating, "plant"))
-        by_day.setdefault(item.surface_day, []).append(_Beat(f"i{number}.s", item.template.surface, "ask"))
+            Beat(f"i{number}.d", item.template.disambiguating, "plant"))
+        by_day.setdefault(item.surface_day, []).append(Beat(f"i{number}.s", item.template.surface, "ask"))
     return by_day
 
 
@@ -212,7 +214,7 @@ def _check_model(reply: ChatResult, model: str) -> None:
 
 def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
-    beats: Sequence[_Beat],
+    beats: Sequence[Beat],
 ) -> tuple[list[str], dict[str, int]]:
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
@@ -238,7 +240,7 @@ def _write_day(
     return [t.strip() for t in texts], _check_placed(placed, beats, len(texts))
 
 
-def _check_placed(placed: dict[Any, Any], beats: Sequence[_Beat], count: int) -> dict[str, int]:
+def _check_placed(placed: dict[Any, Any], beats: Sequence[Beat], count: int) -> dict[str, int]:
     if set(placed) != {b.id for b in beats}:
         raise GenerationFailed("a beat is unplaced or unknown")
     spots = list(placed.values())
@@ -260,6 +262,73 @@ def _extractor(chat: ChatFn, model: str) -> Callable[[list[dict[str, Any]]], Cha
     return call
 
 
+@dataclass(frozen=True)
+class WrittenDay:
+    """One day as written and extracted: its messages, where each beat sits (beat id to the
+    message's source), its evidence and its target mentions."""
+
+    index: int
+    day: date
+    texts: tuple[str, ...]
+    spots: Mapping[str, str]
+    items: tuple[Evidence, ...]
+    mentions: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class Draft:
+    """A life being written, a day at a time: ``write`` writes and extracts the next day on what
+    the draft holds, ``add`` returns the draft with it. A day written once can be added to two
+    drafts (``pairs``)."""
+
+    life_id: str
+    field: str
+    seed: int
+    model: str
+    written: tuple[WrittenDay, ...] = ()
+    held: Mapping[str, Target] = dataclasses.field(default_factory=lambda: MappingProxyType({}))
+    targets: Mapping[date, tuple[Target, ...]] = dataclasses.field(default_factory=lambda: MappingProxyType({}))
+
+    @property
+    def evidence(self) -> tuple[Evidence, ...]:
+        return tuple(item for day in self.written for item in day.items)
+
+    @property
+    def spots(self) -> dict[str, str]:
+        return {beat: source for day in self.written for beat, source in day.spots.items()}
+
+    def write(self, chat: ChatFn, index: int, day: date, beats: Sequence[Beat], *, branch: str = "") -> WrittenDay:
+        """The next day, written and extracted on what the draft holds. ``branch`` tags its
+        messages' sources, so two branches' versions of one day never share an evidence id."""
+        earlier = [{"day": done.index + 1, "messages": list(done.texts)} for done in self.written]
+        texts, placed = _write_day(chat, self.model, self.field, index, day, self.seed, earlier, beats)
+        turns = [Turn(f"{self.life_id}:d{index}{branch}:m{i}", "user", text, frozenset({self.model}))
+                 for i, text in enumerate(texts)]
+        found = _extract_day(chat, self.model, self.life_id, day, turns, tuple(self.held.values()),
+                             {e.id for e in self.evidence})
+        return WrittenDay(index, day, tuple(texts), MappingProxyType({b: turns[i].source for b, i in placed.items()}),
+                          tuple(found.items), tuple(found.mentions))
+
+    def add(self, done: WrittenDay) -> Draft:
+        held = _fold_targets(self.held, done.mentions, self.life_id, done.day)
+        targets = {**self.targets, done.day: tuple(sorted(held.values(), key=lambda t: t.id))}
+        return dataclasses.replace(self, written=(*self.written, done), held=MappingProxyType(held),
+                                   targets=MappingProxyType(targets))
+
+    def life(self, split: LifeSplit) -> Life:
+        sessions = tuple(Session(done.day, "\n\n".join(done.texts), self.model) for done in self.written)
+        return Life(self.life_id, self.field, self.seed, split, tuple(done.day for done in self.written), sessions,
+                    self.evidence, dict(self.targets))
+
+
+def life_id_for(split: LifeSplit, field: str, seed: int) -> str:
+    return f"{split}-{re.sub(r'[^a-z0-9]+', '-', field.lower()).strip('-')}-{seed}"
+
+
+def life_days() -> tuple[date, ...]:
+    return tuple(LIFE_START + timedelta(days=n) for n in range(LIFE_DAYS))
+
+
 def life(
     field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: LifeSplit, chat: ChatFn,
     model: str = SPARK_OPEN,
@@ -270,28 +339,12 @@ def life(
     if field not in fields(split):
         raise ValueError(f"{field!r} is not a {split} field")
     plans = plan(split, field, families, prevalence, seed)
-    life_id = f"{split}-{re.sub(r'[^a-z0-9]+', '-', field.lower()).strip('-')}-{seed}"
-    beats = _beats(plans)
-    days = tuple(LIFE_START + timedelta(days=n) for n in range(LIFE_DAYS))
-    sessions: list[Session] = []
-    evidence: list[Evidence] = []
-    targets: dict[date, tuple[Target, ...]] = {}
-    held: dict[str, Target] = {}
-    spots: dict[str, str] = {}  # beat id -> the source of the message that holds it
-    earlier: list[dict[str, Any]] = []
-    for index, day in enumerate(days):
-        today = beats.get(index, [])
-        texts, placed = _write_day(chat, model, field, index, day, seed, earlier, today)
-        turns = [Turn(f"{life_id}:d{index}:m{i}", "user", text, frozenset({model})) for i, text in enumerate(texts)]
-        spots.update({beat: turns[i].source for beat, i in placed.items()})
-        found = _extract_day(chat, model, life_id, day, turns, tuple(held.values()), {e.id for e in evidence})
-        evidence.extend(found.items)
-        held.update(_fold_targets(held, found.mentions, life_id, day))
-        targets[day] = tuple(sorted(held.values(), key=lambda t: t.id))
-        sessions.append(Session(day, "\n\n".join(texts), model))
-        earlier.append({"day": index + 1, "messages": texts})
-    built = Life(life_id, field, seed, split, days, tuple(sessions), tuple(evidence), targets)
-    return built, _problem_file(built, plans, spots)
+    beats = beats_of(plans)
+    draft = Draft(life_id_for(split, field, seed), field, seed, model)
+    for index, day in enumerate(life_days()):
+        draft = draft.add(draft.write(chat, index, day, beats.get(index, [])))
+    built = draft.life(split)
+    return built, problem_file(built, plans, draft.spots)
 
 
 def _extract_day(
@@ -313,7 +366,7 @@ def _fold_targets(held: Mapping[str, Target], mentions: Any, life_id: str, day: 
     return now
 
 
-def _problem_file(built: Life, plans: Sequence[_Plan], spots: Mapping[str, str]) -> ProblemFile:
+def problem_file(built: Life, plans: Sequence[ItemPlan], spots: Mapping[str, str]) -> ProblemFile:
     by_source: dict[str, list[str]] = {}
     for item in built.evidence:
         if not item.held_out:
@@ -323,11 +376,7 @@ def _problem_file(built: Life, plans: Sequence[_Plan], spots: Mapping[str, str])
 
     def ids(beat: str, fact: str) -> tuple[str, ...]:
         found = by_source.get(spots[beat], [])
-        if not found:
-            raise GenerationFailed("a planted fact left no evidence")
-        if not _expresses(fact, " ".join(texts[i] for i in found)):
-            raise GenerationFailed("a planted fact's evidence leaves out one of its numbers, names or dates")
-        return tuple(found)
+        return expressed(fact, found, texts)
 
     items = []
     for number, step in enumerate(plans, start=1):
@@ -339,6 +388,16 @@ def _problem_file(built: Life, plans: Sequence[_Plan], spots: Mapping[str, str])
             disambiguating_ids=ids(f"i{number}.d", step.template.disambiguating), resolution=step.template.resolution,
         ))
     return ProblemFile(built.id, tuple(items))
+
+
+def expressed(fact: str, found: Sequence[str], texts: Mapping[str, str]) -> tuple[str, ...]:
+    """``found``, the evidence ids extracted for ``fact``'s message, once they keep every number,
+    name and date in it; ``GenerationFailed`` otherwise."""
+    if not found:
+        raise GenerationFailed("a planted fact left no evidence")
+    if not _expresses(fact, " ".join(texts[i] for i in found)):
+        raise GenerationFailed("a planted fact's evidence leaves out one of its numbers, names or dates")
+    return tuple(found)
 
 
 _NUMBER = re.compile(r"\d+(?:[.,:]\d+)*")
@@ -406,8 +465,8 @@ def draw_specs(split: LifeSplit, label: str, count: int, empty_count: int) -> tu
     """``count`` lives of ``split``, a pure function of ``label``: fields rotate through the split's
     fields, ``empty_count`` lives plant nothing, and the rest plant 1 to ``MAX_PREVALENCE`` items."""
     names = fields(split)
-    empty = set(_ranked(label, list(range(count)), str)[:empty_count])
-    dice = _Dice(label)
+    empty = set(ranked(label, list(range(count)), str)[:empty_count])
+    dice = Dice(label)
     seeds = [int.from_bytes(hashlib.sha256(f"{label}:seed:{n}".encode()).digest()[:6], "big") for n in range(count)]
     return tuple(
         LifeSpec(split, names[n % len(names)], ALL_FAMILIES,

@@ -4,7 +4,8 @@ prices given, Spark Open's on its provider's pool (``mind.spark_provider``). Bes
 case it shows the expected spend when a timing has been measured (``timing.json``), and beside the
 holds the command's ceiling (``--max-usd``, ``ceiling``) when it takes one. ``generate`` also prints
 its worst case in all and its expected cost, from what one life cost when measured
-(``EXPECTED_LIFE_USD``). Printing a plan spends nothing and reaches nothing."""
+(``EXPECTED_LIFE_USD``), and ``generate-pairs`` its own (``EXPECTED_PAIR_USD``). Printing a plan spends
+nothing and reaches nothing."""
 from __future__ import annotations
 
 import math
@@ -18,6 +19,7 @@ from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
+from anjo.sleep.mind.apd.pairs import PAIR_CALLS, PAIR_WRITTEN_DAYS
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
@@ -29,6 +31,7 @@ from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX
 
 NIGHT_WHAT: Final = "screen and resolver, held at a night's first call and settled at what it priced"
 EXPECTED_LIFE_USD: Final = 0.28  # one development life on Fireworks, one attempt, measured live on 2026-10-28
+EXPECTED_PAIR_USD: Final = 0.40  # a life's, scaled to 12 written days against 10, rounded up; not measured
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,30 @@ def _mean(values: Sequence[float]) -> float:
 
 def _lives(count: int) -> str:
     return f"{count} li{'fe' if count == 1 else 'ves'}"
+
+
+def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provider: SparkProvider) -> Plan:
+    """Generating ``count`` counterfactual pairs, each attempt held for both histories."""
+    pool = provider.pool
+    worst = gen_holds(prices, rates, pool, PAIR_CALLS)
+    attempts = count * generate.MAX_ATTEMPTS
+    holds = (
+        Hold(pool, worst[pool], attempts, f"Spark Open per pair attempt: {PAIR_WRITTEN_DAYS} written days, both "
+             f"histories' gate readers, and {GEN_SPARK_RETRIES} extra tries"),
+        Hold("meta_usd", worst["meta_usd"], attempts, "Muse Spark per pair attempt: both histories' auditor"),
+    )
+    total = sum(hold.each * hold.count for hold in holds)
+    pairs = f"{count} pair{'' if count == 1 else 's'}"
+    return Plan(f"generate {pairs} of histories in core-test's fields", None, holds, (
+        _spark(provider),
+        f"at most {generate.MAX_ATTEMPTS} attempts a pair; both histories pass the gates or the pair is written again",
+        "a pair that still fails is skipped and recorded, and the run goes on; a rerun generates only what is missing",
+    ), totals=(
+        f"Worst case: ${total:,.2f} for {pairs}: every pair taking all {generate.MAX_ATTEMPTS} attempts, every call "
+        "at its cap and every extra try used.",
+        f"Expected: about ${count * EXPECTED_PAIR_USD:,.2f} for {pairs}, at ${EXPECTED_PAIR_USD:.2f} a pair "
+        f"(a life's ${EXPECTED_LIFE_USD:.2f} scaled to {PAIR_WRITTEN_DAYS} written days, rounded up; not measured).",
+    ))
 
 
 def generate_plan(prevalences: Sequence[int], prices: Prices, rates: Mapping[str, Rate], split: str, *,

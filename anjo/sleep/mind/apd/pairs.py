@@ -1,0 +1,249 @@
+"""Counterfactual autobiography pairs (MIND's data): two histories of one person that differ
+only in the outcome of an earlier commitment, ending on the same last day word for word.
+
+**One pair** (``write_pair``), in a ``core-test`` field, from a ``PairTemplate`` and one unrelated
+``core-test`` template of the same field (``PairSpec``):
+
+- days ``0`` to ``FORK_DAY - 1`` are written once and shared: the commitment on ``COMMIT_DAY``, and
+  the unrelated item's facts (scheduled inside them, ``prefix_plan``);
+- each history then writes its own ``OUTCOME_DAYS`` on its own earlier days: the commitment failing
+  twice, or kept twice;
+- every other day after the fork, and the last day (the person's question about the commitment
+  and the unrelated item's surface), is written and extracted **once**, from the shared days only,
+  and added to both histories: the same messages and the same evidence, ids included.
+
+The failed history plants the unrelated item and the commitment's gap (``PairTemplate.gap``); the
+kept one plants the unrelated item alone. Both histories pass the same gates as any life
+(``gates.check``) before the pair is kept, or the pair is written again under the next attempt's
+seed. ``CounterfactualPair`` records what should differ (the slot's decision: speak in the failed
+history, wait in the kept one) and what should not (the unrelated item, the last day).
+
+**Many pairs** (``generate_pairs``): as ``gen_batch.generate_lives``, side by side, each attempt
+held before it starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling
+checked before each attempt. Pairs are test material: the core never trains on them.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import partial
+from typing import Final
+
+from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.context.brief import ChatFn
+from anjo.sleep.mind.apd import gates
+from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, held_attempt
+from anjo.sleep.mind.apd.batch import Out, check_failed
+from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
+from anjo.sleep.mind.apd.families import Template
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, SKIPPED, in_order
+from anjo.sleep.mind.apd.generate import (
+    AWAY_DAYS,
+    MAX_ATTEMPTS,
+    ORIGIN_GAP_DAYS,
+    Beat,
+    Dice,
+    Draft,
+    GenerationError,
+    GenerationFailed,
+    ItemPlan,
+    WrittenDay,
+    attempt_seed,
+    beats_of,
+    expressed,
+    life_days,
+    problem_file,
+    ranked,
+)
+from anjo.sleep.mind.apd.store import DataDir
+from anjo.sleep.mind.apd.types import HALF_GAP_DAYS, LIFE_DAYS, CounterfactualPair, GateVerdict, Life
+
+PAIR_LABEL: Final = "pairs:core-v1"
+PAIR_COUNT: Final = 20
+COMMIT_DAY: Final = 1
+FORK_DAY: Final = 6  # the first day the histories may differ
+OUTCOME_DAYS: Final = (6, 8)  # the commitment's two outcomes, one history's each
+LAST_DAY: Final = LIFE_DAYS - 1
+PAIR_WRITTEN_DAYS: Final = LIFE_DAYS + len(OUTCOME_DAYS)  # the shared days once, the outcome days twice
+PAIR_CALLS: Final = GenCalls(2 * PAIR_WRITTEN_DAYS, 3 * GEN_READS_PER_ITEM, 3 + 2)  # 2 + 1 items; their audits
+KEPT_BEATS: Final = ("k.o", "k.d")
+
+
+@dataclass(frozen=True)
+class PairSpec:
+    """One pair to generate: its pair template, its unrelated template and its seed."""
+
+    template: str
+    unrelated: str
+    seed: int
+
+
+def pair_specs(count: int = PAIR_COUNT) -> tuple[PairSpec, ...]:
+    """``count`` pairs, a pure function of ``PAIR_LABEL``: the pair templates in turn, each with an
+    unrelated template of its field drawn by hash."""
+    specs = []
+    for n in range(count):
+        pair = PAIR_TEMPLATES[n % len(PAIR_TEMPLATES)]
+        unrelated = ranked(f"{PAIR_LABEL}:{n}", templates_for("core-test", pair.field), lambda t: t.id)[0]
+        seed = int.from_bytes(hashlib.sha256(f"{PAIR_LABEL}:seed:{n}".encode()).digest()[:6], "big")
+        specs.append(PairSpec(pair.id, unrelated.id, seed))
+    return tuple(specs)
+
+
+def pair_template(template_id: str) -> PairTemplate:
+    found = next((pair for pair in PAIR_TEMPLATES if pair.id == template_id), None)
+    if found is None:
+        raise ValueError(f"no pair template {template_id!r}")
+    return found
+
+
+def pair_id(field: str, seed: int) -> str:
+    return f"pair-{re.sub(r'[^a-z0-9]+', '-', field.lower()).strip('-')}-{seed}"
+
+
+def spec_pair_ids(spec: PairSpec) -> frozenset[str]:
+    """The ids ``spec``'s pair may take, one per attempt."""
+    field = pair_template(spec.template).field
+    return frozenset(pair_id(field, attempt_seed(spec.seed, n)) for n in range(MAX_ATTEMPTS))
+
+
+def prefix_plan(item: Template, dice: Dice) -> ItemPlan:
+    """The unrelated item's days, all before the fork: origins (``HALF_GAP_DAYS`` apart for a
+    contradiction), the disambiguating fact ``AWAY_DAYS`` after, the slack spread by the dice;
+    surfaced on the last day."""
+    gap = HALF_GAP_DAYS if item.family == "contradiction" else ORIGIN_GAP_DAYS
+    steps = [*([gap] if len(item.origins) == 2 else []), AWAY_DAYS]
+    slack = FORK_DAY - 1 - sum(steps)
+    at = dice.below(slack + 1)
+    slack -= at
+    days = [at]
+    for step in steps:
+        extra = dice.below(slack + 1)
+        slack -= extra
+        at += step + extra
+        days.append(at)
+    return ItemPlan(item, tuple(days[:-1]), days[-1], LAST_DAY)
+
+
+# ── Writing one pair ──────────────────────────────────────────────────────────
+
+
+def _ids(life: Life, spots: dict[str, str], beat: str, fact: str) -> tuple[str, ...]:
+    found = [item.id for item in life.evidence if not item.held_out and item.source == spots[beat]]
+    return expressed(fact, found, {item.id: item.text for item in life.evidence})
+
+
+def write_pair(spec: PairSpec, seed: int, *, chat: ChatFn, model: str = SPARK_OPEN) -> CounterfactualPair:
+    """One pair under ``seed`` (the spec's seed, or an attempt's), not yet gated."""
+    pair, unrelated = pair_template(spec.template), template(spec.unrelated)
+    if unrelated is None or unrelated not in templates_for("core-test", pair.field):
+        raise ValueError(f"{spec.unrelated!r} isn't a core-test template of {pair.field!r}")
+    plans = (prefix_plan(unrelated, Dice(f"{PAIR_LABEL}:{seed}")),
+             ItemPlan(pair.gap, (COMMIT_DAY, OUTCOME_DAYS[0]), OUTCOME_DAYS[1], LAST_DAY))
+    shared = beats_of(plans)  # i1: the unrelated item; i2: the commitment's gap, its outcomes the failed ones
+    kept_beats = {day: [Beat(beat, fact, "plant")] for day, beat, fact in zip(OUTCOME_DAYS, KEPT_BEATS, pair.kept)}
+    days = life_days()
+    prefix = Draft(pair_id(pair.field, seed), pair.field, seed, model)
+    for index in range(FORK_DAY):
+        prefix = prefix.add(prefix.write(chat, index, days[index], shared.get(index, [])))
+    once: dict[int, WrittenDay] = {index: prefix.write(chat, index, days[index], shared.get(index, []))
+                                  for index in range(FORK_DAY, LIFE_DAYS) if index not in OUTCOME_DAYS}
+    failed, kept = prefix, prefix
+    for index in range(FORK_DAY, LIFE_DAYS):
+        if index in once:
+            failed, kept = failed.add(once[index]), kept.add(once[index])
+            continue
+        failed = failed.add(failed.write(chat, index, days[index], shared.get(index, []), branch="f"))
+        kept = kept.add(kept.write(chat, index, days[index], kept_beats[index], branch="k"))
+    return _pair(spec, plans, failed, kept)
+
+
+def _pair(spec: PairSpec, plans: Sequence[ItemPlan], failed: Draft, kept: Draft) -> CounterfactualPair:
+    pair = pair_template(spec.template)
+    failed_life, kept_life = failed.life("core-test"), kept.life("core-test")
+    failed_spots, kept_spots = failed.spots, kept.spots
+    kept_ids = tuple(i for beat, fact in zip(KEPT_BEATS, pair.kept) for i in _ids(kept_life, kept_spots, beat, fact))
+    failed_ids = tuple(i for beat, fact in zip(("i2.o2", "i2.d"), pair.failed)
+                       for i in _ids(failed_life, failed_spots, beat, fact))
+    failed_problems = problem_file(failed_life, plans, failed_spots)
+    try:
+        return CounterfactualPair(
+            id=failed_life.id, template=pair.id, fork_days=tuple(failed_life.days[d] for d in OUTCOME_DAYS),
+            failed=failed_life, failed_problems=failed_problems, kept=kept_life,
+            kept_problems=problem_file(kept_life, plans[:1], kept_spots),
+            slot_ids=_ids(failed_life, failed_spots, "i2.o1", pair.commitment),
+            failed_ids=failed_ids,
+            kept_ids=kept_ids, unrelated_item=failed_problems.items[0].id,
+            final_ids=tuple(e.id for e in failed_life.evidence if e.day == failed_life.days[-1] and not e.held_out),
+        )
+    except ValueError as error:  # an outcome written the same in both histories, or none left on the last day
+        raise GenerationFailed(f"the two histories aren't a pair: {error}") from None
+
+
+# ── Gated, held and many ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class GeneratedPair:
+    pair: CounterfactualPair
+    attempts: int
+    verdicts: tuple[GateVerdict, ...]
+
+
+def generate_pair(spec: PairSpec, backend: Backend) -> GeneratedPair:
+    """``write_pair``'s attempts, each held before it starts, both histories gated."""
+    model = backend.provider.model
+    for attempt in range(MAX_ATTEMPTS):
+        if backend.ceiling is not None:
+            backend.ceiling.check()
+        with held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS) as (writer, reader, auditor):
+            try:
+                made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=model)
+            except GenerationFailed:
+                continue
+            verdicts = (*gates.check(made.failed, made.failed_problems, reader=reader, auditor=auditor, model=model),
+                        *gates.check(made.kept, made.kept_problems, reader=reader, auditor=auditor, model=model))
+        if gates.passed(verdicts):
+            return GeneratedPair(made, attempt + 1, verdicts)
+    raise GenerationError(f"no pair passed the gates in {MAX_ATTEMPTS} attempts")
+
+
+@dataclass(frozen=True)
+class _Skip:
+    spec: PairSpec
+    error: str
+
+
+def _one(data: DataDir, spec: PairSpec, backend: Backend) -> GeneratedPair | _Skip:
+    try:
+        made = generate_pair(spec, backend)
+    except SKIPPED as error:
+        return _Skip(spec, str(error) or type(error).__name__)
+    data.save_pair(made.pair)
+    return made
+
+
+def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, out: Out, *,
+                   parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
+    """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
+    a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end."""
+    todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
+    if backend.ceiling is not None:
+        backend.ceiling.begin("pair(s) generated", len(todo))
+    made: list[str] = []
+    skipped: list[str] = []
+    for found in in_order([partial(_one, data, spec, backend) for spec in todo], parallel):
+        if isinstance(found, _Skip):
+            name = f"pair {found.spec.seed} ({found.spec.template})"
+            data.record_failed({"what": "generate-pairs", "pair": name, "error": found.error})
+            out(f"SKIPPED {name}: {found.error}. Not saved; a rerun generates it again")
+            skipped.append(name)
+            continue
+        made.append(found.pair.id)
+        out(f"generated {found.pair.id} ({found.attempts} attempt(s), {found.pair.template})")
+        if backend.ceiling is not None:
+            out(backend.ceiling.life_generated("pair"))
+    check_failed(skipped)
+    return tuple(made)

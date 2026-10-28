@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import colab_vllm, core_splits, fakes, generate, intervene, labels, pilot, plan, timing
+from anjo.sleep.mind.apd import colab_vllm, core_splits, fakes, generate, intervene, labels, pairs, pilot, plan, timing
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
 from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
@@ -110,12 +110,12 @@ BUSY: Final = 4
 CEILING: Final = 5  # the run's settled spend reached --max-usd
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
-SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that call Spark Open
+SPARK_COMMANDS: Final = ("generate", "generate-pairs", *SERVING_COMMANDS)  # the commands that call Spark Open
 # vLLM at temperature 0 isn't batch-invariant: a reply can change with what else is in its batch.
 # The intervention test's twins and kill-resume's runs are compared token for token, so they run
 # one at a time; mind.lock already keeps every other MIND command off the session.
 SERIAL_COMMANDS: Final = ("intervene", "kill-resume")
-GEN_COMMANDS: Final = ("generate",)  # their --parallel is the lives generated at once
+GEN_COMMANDS: Final = ("generate", "generate-pairs")  # their --parallel is the lives (pairs) generated at once
 CORE_COMMANDS: Final = ("generate", "run", "judge", "labels")  # the commands that take --split
 SUBSET_COMMANDS: Final = ("run", "judge", "labels")
 CORE_ARMS: Final[tuple[ArmName, ...]] = ("B",)  # a core split's runs, unless --arms says otherwise
@@ -142,6 +142,8 @@ def _parser() -> argparse.ArgumentParser:
     made.add_argument("--draw-seed", help="the pre-committed draw seed, revealed at the freeze")
     made.add_argument("--lives", type=int, default=HELD_OUT_LIVES)
     made.add_argument("--prereg", type=Path, help="with --fake only: a stand-in prereg ledger (default: the data dir's)")
+    paired = commands.add_parser("generate-pairs", help="counterfactual pairs of histories, in core-test's fields")
+    paired.add_argument("--n", type=int, default=pairs.PAIR_COUNT, help=f"how many (default {pairs.PAIR_COUNT})")
     for name in GEN_COMMANDS:  # --parallel after the command too; SUPPRESS keeps one given before it
         commands.choices[name].add_argument("--parallel", type=int, default=argparse.SUPPRESS,
                                             help=f"lives generated at once (default {GEN_PARALLEL})")
@@ -157,6 +159,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("report", help="the APD report, with 17b's section")
     exported = commands.add_parser("labels", help="a split's event streams, and a labelled split's labels")
     exported.add_argument("--out", type=Path, required=True, help="the export's folder")
+    exported.add_argument("--pairs", action="store_true", help="the counterfactual pairs instead of a split")
     ran.add_argument("--arms", help=f"a core split's arms, comma-separated, of {', '.join(pilot.DEV_ARMS)} "
                      f"(default {','.join(CORE_ARMS)})")
     for name in CORE_COMMANDS:
@@ -227,8 +230,10 @@ def _check_split(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
         parser.error("--held-out and --split name two splits; give one")
     if subset is not None and core_splits.SUBSETS[subset] != split:
         parser.error(f"--subset {subset} is of --split {core_splits.SUBSETS[subset]}")
-    if args.command == "labels" and split is None:
-        parser.error("labels needs --split")
+    if args.command == "labels" and (split is None) == (not args.pairs):
+        parser.error("labels exports one --split, or --pairs")
+    if args.command == "generate-pairs" and args.n < 1:
+        parser.error("--n is at least 1")
     if getattr(args, "arms", None) is not None and split not in CORE_SPLITS:
         parser.error("--arms is for a core split's runs; APD's splits run their protocol's arms")
     if args.command == "labels" and args.data is None:
@@ -268,6 +273,8 @@ def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[s
         found = ([MAX_PREVALENCE] * args.lives if split == "held_out"
                  else [spec.prevalence for spec in _specs(split)])
         return plan.generate_plan(found[:args.only], prices, rates, split, provider=provider)
+    if args.command == "generate-pairs":
+        return plan.pairs_plan(args.n, prices, rates, provider=provider)
     if args.command == "run":
         arms = (_arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development"
                 else pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()))
@@ -420,6 +427,8 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
             data.save_drawn(pilot.seed_digest(args.draw_seed or ""), args.lives)
         pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out,
                              parallel=_parallel(args))
+    elif args.command == "generate-pairs":
+        pairs.generate_pairs(data, pairs.pair_specs(args.n), backend, out, parallel=_parallel(args))
     elif args.command == "run":
         arms = _arms(args) if split in CORE_SPLITS else pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
         replay = _adapters(args) if args.adapters is not None and split == "held_out" else None  # before the VM
@@ -543,6 +552,10 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
 
 
 def _labels(args: argparse.Namespace, out: Out) -> int:
+    if args.pairs:
+        found = labels.export_pairs(DataDir(args.data), args.out)
+        out(f"exported {len(found)} pair(s), both histories' events and what should differ, to {args.out}")
+        return 0
     done = labels.export(DataDir(args.data), _split(args), args.out, subset=args.subset)
     sealed = "labels sealed: streams only" if done.sealed else "with labels"
     out(f"exported {len(done.lives)} li{'fe' if len(done.lives) == 1 else 'ves'} of {_split(args)}"

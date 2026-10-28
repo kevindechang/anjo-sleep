@@ -254,6 +254,77 @@ class Life:
         object.__setattr__(self, "targets", MappingProxyType({day: tuple(targets[day]) for day in self.days}))
 
 
+# ── A counterfactual pair (MIND's data) ───────────────────────────────────────
+
+PAIR_DECISIONS: Final = MappingProxyType({"failed": "speak", "kept": "wait"})  # on the last day, about the slot
+
+
+def _evidence_on(life: Life, day: date) -> tuple[Evidence, ...]:
+    return tuple(item for item in life.evidence if item.day == day)
+
+
+@dataclass(frozen=True)
+class CounterfactualPair:
+    """Two histories of one person (``pairs``) that differ only in the outcome of a commitment.
+
+    Both share every day but ``fork_days``, where the commitment fails twice (``failed``) or is
+    kept twice (``kept``), and end on the same last day, word for word, with the same evidence. On
+    that day the failed history should speak about the commitment's slot (its planted gap) and the
+    kept one should wait (``PAIR_DECISIONS``); ``unrelated_item``, planted the same in both, should
+    be decided the same in both. ``slot_ids`` is the commitment's evidence, ``failed_ids`` and
+    ``kept_ids`` each history's outcome evidence, ``final_ids`` the last day's.
+    """
+
+    id: str
+    template: str
+    fork_days: tuple[date, ...]
+    failed: Life
+    failed_problems: ProblemFile
+    kept: Life
+    kept_problems: ProblemFile
+    slot_ids: tuple[str, ...]
+    failed_ids: tuple[str, ...]
+    kept_ids: tuple[str, ...]
+    unrelated_item: str
+    final_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        check_text("id", self.id)
+        check_text("template", self.template)
+        freeze_tuple(self, "fork_days", date)
+        for name in ("slot_ids", "failed_ids", "kept_ids", "final_ids"):
+            freeze_ids(self, name, empty_ok=False)
+        if {self.failed.id, self.kept.id, self.failed_problems.life_id, self.kept_problems.life_id} != {self.id}:
+            raise ValueError("a pair's two histories are one person's, under the pair's id")
+        if self.failed.days != self.kept.days or not set(self.fork_days) < set(self.failed.days[:-1]):
+            raise ValueError("a pair's histories share their days, and fork before the last")
+        self._check_shared()
+        self._check_items()
+
+    def _check_shared(self) -> None:
+        for day in self.failed.days:
+            same = (_evidence_on(self.failed, day) == _evidence_on(self.kept, day)
+                    and [s for s in self.failed.sessions if s.day == day] == [s for s in self.kept.sessions if s.day == day])
+            if same == (day in self.fork_days):
+                raise ValueError(f"a pair's histories differ on exactly its fork days ({day})")
+        last = self.failed.days[-1]
+        if self.final_ids != tuple(item.id for item in _evidence_on(self.failed, last) if not item.held_out):
+            raise ValueError("final_ids is the shared last day's evidence")
+        failed_ids = {item.id for item in self.failed.evidence}
+        kept_ids = {item.id for item in self.kept.evidence}
+        if not set(self.slot_ids) <= failed_ids & kept_ids or not set(self.failed_ids) <= failed_ids - kept_ids \
+                or not set(self.kept_ids) <= kept_ids - failed_ids:
+            raise ValueError("the slot is in both histories, and each outcome in its own only")
+
+    def _check_items(self) -> None:
+        unrelated = [item for item in self.kept_problems.items if item.id == self.unrelated_item]
+        if len(self.kept_problems.items) != 1 or not unrelated or unrelated[0] not in self.failed_problems.items:
+            raise ValueError("the kept history plants only the unrelated item, the same in both")
+        gaps = [item for item in self.failed_problems.items if item.id != self.unrelated_item]
+        if len(gaps) != 1 or gaps[0].family != "gap" or not set(self.slot_ids) <= set(gaps[0].origin_ids):
+            raise ValueError("the failed history plants one gap, from the slot")
+
+
 # ── What an arm reports ───────────────────────────────────────────────────────
 
 

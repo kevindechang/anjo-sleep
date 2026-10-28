@@ -19,6 +19,12 @@ resolution, the events it arises from (``origin_ids``) and the one that settles 
 one from which it is resolvable (its last origin or disambiguating event), its surface day and the
 judge's cutoff (the day before). ``actionable`` is a problem family's (``PROBLEM_FAMILIES``).
 
+**Pairs** (``export_pairs``): each counterfactual pair's two histories as event streams
+(``events/<pair>.failed.jsonl`` and ``.kept.jsonl``) and ``pairs/<pair>.json``: the fork days, the
+slot's events, each history's outcome events, the shared last day's events, the decision each
+history should take about the slot, and the events of the item that should not move. No topic or
+resolution: pairs are test material, never trained on.
+
 **Sealed.** Only ``LABELLED_SPLITS`` export labels (``DataDir.labelled_problems``). ``core-val``
 and ``core-test`` export their event streams only and never read a problem file: their items
 reach the judge through ``DataDir.sealed``, the path B's runs are judged on. Pure apart from
@@ -36,7 +42,17 @@ from typing import Any, Final
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd.core_splits import in_subset
 from anjo.sleep.mind.apd.store import DataDir, write_text
-from anjo.sleep.mind.apd.types import CORE_SPLITS, LABELLED_SPLITS, PROBLEM_FAMILIES, Life, LifeSplit, ProblemFile
+from anjo.sleep.mind.apd.types import (
+    CORE_SPLITS,
+    LABELLED_SPLITS,
+    PAIR_DECISIONS,
+    PROBLEM_FAMILIES,
+    CounterfactualPair,
+    Life,
+    LifeSplit,
+    PlantedItem,
+    ProblemFile,
+)
 from anjo.sleep.types import Evidence
 
 SCHEMA: Final = "mind-core-events-v1"
@@ -129,6 +145,38 @@ def export(data: DataDir, split: LifeSplit, out: Path, *, subset: str | None = N
         "schema": SCHEMA, "split": split, "subset": subset, "sealed": sealed, "lives": manifest,
     }, ensure_ascii=False, sort_keys=True, indent=1))
     return Exported(tuple(life.id for life in lives), total, sealed)
+
+
+def _item_ids(item: PlantedItem) -> dict[str, Any]:
+    return {"item_id": item.id, "origin_ids": list(item.origin_ids), "disambiguating_ids": list(item.disambiguating_ids),
+            "surface_day": item.surface_day.isoformat()}
+
+
+def pair_record(pair: CounterfactualPair) -> dict[str, Any]:
+    """What a transplant test needs of a pair: what should differ, and what should not."""
+    slot = next(item for item in pair.failed_problems.items if item.id != pair.unrelated_item)
+    unrelated = next(item for item in pair.kept_problems.items if item.id == pair.unrelated_item)
+    return {
+        "pair_id": pair.id, "template": pair.template, "field": pair.failed.field,
+        "fork_days": [day.isoformat() for day in pair.fork_days], "last_day": pair.failed.days[-1].isoformat(),
+        "slot_ids": list(pair.slot_ids), "failed_ids": list(pair.failed_ids), "kept_ids": list(pair.kept_ids),
+        "final_ids": list(pair.final_ids), "decisions": dict(PAIR_DECISIONS),
+        "slot_item": _item_ids(slot), "unrelated_item": _item_ids(unrelated),
+    }
+
+
+def export_pairs(data: DataDir, out: Path) -> tuple[str, ...]:
+    """Every pair on disk, written under ``out``."""
+    found = data.pairs()
+    for pair in found:
+        for name, life in (("failed", pair.failed), ("kept", pair.kept)):
+            write_text(out / "events" / f"{pair.id}.{name}.jsonl", _lines(events(life)))
+        write_text(out / "pairs" / f"{pair.id}.json", json.dumps(pair_record(pair), ensure_ascii=False, sort_keys=True))
+    write_text(out / "manifest.json", json.dumps({
+        "schema": SCHEMA, "pairs": [pair.id for pair in found], "sealed": False,
+        "note": "counterfactual pairs in core-test's fields: test material, never trained on",
+    }, ensure_ascii=False, sort_keys=True, indent=1))
+    return tuple(pair.id for pair in found)
 
 
 def read_events(path: Path) -> tuple[dict[str, Any], ...]:
