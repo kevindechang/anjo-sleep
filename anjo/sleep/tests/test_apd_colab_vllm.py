@@ -130,6 +130,7 @@ def test_colab_vllm_never_uploads_or_passes_keys(monkeypatch: pytest.MonkeyPatch
         command = json.loads(start["ANJO_VLLM_COMMAND"])
         assert command == config.vllm_command(SETTINGS, model_path=f"{colab_vllm.WEIGHTS_DIR}/{'a' * 40}",
                                               host="127.0.0.1", port=config.PORT)
+        assert "--language-model-only" in command
         assert session.key not in " ".join(command)  # vLLM reads its key from its environment
         assert vm.installed == [f"vllm=={SETTINGS.vllm_version}"]
     assert keys[0] != keys[1] and all(len(key) >= 32 for key in keys)

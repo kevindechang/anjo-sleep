@@ -207,6 +207,9 @@ def vllm_command(
         "--enable-lora", "--max-lora-rank", str(MAX_LORA_RANK), "--max-loras", str(MAX_LORAS),
         "--max-cpu-loras", str(MAX_CPU_LORAS),
         "--reasoning-parser", REASONING_PARSER,
+        # Serving is text only. Without this, vLLM 0.28.0 puts LoRA wrappers on Glimmer's vision tower
+        # and the profile run's dummy image crashes start-up (lora_shrink assert token_lora_mapping.size(0) == M).
+        "--language-model-only",
     ]
     if config.precision.quantization is not None:
         command += ["--quantization", config.precision.quantization]
