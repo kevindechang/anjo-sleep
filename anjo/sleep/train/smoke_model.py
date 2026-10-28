@@ -15,7 +15,10 @@ template to text and then encoded, as the server does.
 Like ``colab_train.py`` it runs as a file in the training environment, so it imports nothing from
 Anjo, and torch, tokenizers and transformers load only inside ``main`` and ``tokenize``. Nothing is
 downloaded. Usage: ``python smoke_model.py <folder> [<tokenizer folder>]``, or
-``python smoke_model.py --tokenize <tokenizer folder> <requests.json>``, which prints the ids.
+``python smoke_model.py --tokenize <tokenizer folder> <requests.json>``, which prints the ids, or
+``python smoke_model.py --load <model folder> <adapter folder>``, which loads the adapter through PEFT
+as the server's stack would and prints its rank, alpha, module count and the largest difference between
+the weights PEFT loaded and the file's.
 """
 from __future__ import annotations
 
@@ -112,7 +115,27 @@ def tokenize(folder: Path, requests: Path) -> list[list[int]]:  # pragma: no cov
     return ids
 
 
+def load(model_folder: Path, adapter: Path) -> dict[str, Any]:  # pragma: no cover - runs only in the training environment
+    """``adapter`` loaded through PEFT onto the tiny model, and what PEFT made of it."""
+    import torch  # type: ignore[import-not-found, unused-ignore]
+    from peft import PeftModel  # type: ignore[import-not-found, unused-ignore]
+    from safetensors.torch import load_file  # type: ignore[import-not-found, unused-ignore]
+    from transformers import AutoModelForImageTextToText  # type: ignore[import-not-found, unused-ignore]
+
+    base = AutoModelForImageTextToText.from_pretrained(model_folder, dtype=torch.float32)
+    model = PeftModel.from_pretrained(base, adapter)
+    live = dict(model.named_parameters())
+    saved = load_file(str(adapter / "adapter_model.safetensors"))
+    diff = max(float((live[key[: -len(".weight")] + ".default.weight"] - value).abs().max()) for key, value in saved.items())
+    cfg = model.peft_config["default"]
+    return {"r": cfg.r, "alpha": cfg.lora_alpha, "modules": len(saved) // 2, "max_diff": diff,
+            "rank_pattern": dict(cfg.rank_pattern or {})}
+
+
 if __name__ == "__main__":  # pragma: no cover - run as a file in the training environment
+    if len(sys.argv) == 4 and sys.argv[1] == "--load":
+        print(json.dumps(load(Path(sys.argv[2]), Path(sys.argv[3]))))
+        sys.exit(0)
     if len(sys.argv) == 4 and sys.argv[1] == "--tokenize":
         print(json.dumps(tokenize(Path(sys.argv[2]), Path(sys.argv[3]))))
         sys.exit(0)

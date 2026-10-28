@@ -107,11 +107,13 @@ def test_fireworks_timeout_retries_inside_the_hold(tmp_path: Path) -> None:
     assert RunLedger(tmp_path / "flaky" / "budget.jsonl").open_holds() == ()
 
 
-def test_a_call_still_failing_after_its_tries_fails_inside_the_hold(tmp_path: Path) -> None:
-    chat = TimesOut(times=retry.ATTEMPTS)
-    with pytest.raises(ModelApiError, match="timed out"):
-        gen_batch.generate_life(SPEC, _backend(tmp_path, chat, []))
-    assert chat.failed == retry.ATTEMPTS
+def test_a_call_still_failing_after_its_tries_ends_its_attempt_inside_the_hold(tmp_path: Path) -> None:
+    # A transient failure that outlasts its tries ends the attempt, not the life: the next attempt
+    # starts after the cool-down and passes
+    chat, slept = TimesOut(times=retry.ATTEMPTS), list[float]()
+    made = gen_batch.generate_life(SPEC, _backend(tmp_path, chat, slept))
+    assert made.attempts == 2 and chat.failed == retry.ATTEMPTS
+    assert slept[-1] == retry.ATTEMPT_COOL_DOWN_S
     reserved, settled = _spark_hold(tmp_path / "budget.jsonl")
     assert 0 < settled <= reserved
     assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
@@ -150,8 +152,8 @@ def test_failed_life_is_skipped_and_the_run_continues(tmp_path: Path, monkeypatc
     dead = frozenset(generate.attempt_seed(specs[1].seed, n) for n in range(generate.MAX_ATTEMPTS))
     real = cli._fake_backend
 
-    def flaky(data: DataDir, provider: Any) -> backends.Backend:
-        return dataclasses.replace(real(data, provider), life_chat=TimesOut(times=0, seeds=dead))
+    def flaky(data: DataDir, provider: Any) -> backends.Backend:  # its backoffs and cool-downs not waited out
+        return dataclasses.replace(real(data, provider), life_chat=TimesOut(times=0, seeds=dead), sleep=lambda s: None)
 
     monkeypatch.setattr(cli, "_fake_backend", flaky)
     data = tmp_path / "pilot"
@@ -171,7 +173,8 @@ def test_failed_life_is_skipped_and_the_run_continues(tmp_path: Path, monkeypatc
     failed = [raw for raw in DataDir(data).failed() if raw["what"] == "generate"]
     assert len(failed) == 1 and str(specs[1].seed) in str(failed[0]["life"])
     attempts = [raw for raw in DataDir(data).failed() if raw["what"] == "generate-attempt"]
-    assert [(raw["attempt"], raw["step"], raw["error"]) for raw in attempts] == [(0, "writer", "ModelApiError")]
+    assert [(raw["attempt"], raw["step"], raw["error"]) for raw in attempts] == [
+        (attempt, "writer", "ModelApiError") for attempt in range(generate.MAX_ATTEMPTS)]
     assert "Stopped: 1 failed and weren't saved" in text
     assert RunLedger(data / "fake-budget.jsonl").open_holds() == ()
 

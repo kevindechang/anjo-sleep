@@ -327,6 +327,13 @@ def _choice(args: argparse.Namespace) -> dict[str, Any]:
             "reader": gen_args.reader(args), "reader_rate": gen_args.reader_rate(args)}
 
 
+def _noted(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
+    """A generation plan, with how its Gemini reads are limited and its 429s waited out."""
+    if args.command not in GEN_COMMANDS:
+        return found
+    return dataclasses.replace(found, notes=(*found.notes, gen_args.pace_note(args)))
+
+
 def _plan_with_ceiling(args: argparse.Namespace, found: plan.Plan) -> plan.Plan:
     if args.command not in CEILING_COMMANDS:
         return found
@@ -673,7 +680,7 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     if prices is None or rates is None:
         parser.error("--live needs --prices and --judge-prices to price its holds")
     data = DataDir(args.data)
-    out(plan.describe(_plan_with_ceiling(args, _plan(args, data, Prices(*prices), rates, provider))))
+    out(plan.describe(_plan_with_ceiling(args, _noted(args, _plan(args, data, Prices(*prices), rates, provider)))))
     if not args.yes:
         return 0
     from anjo.sleep.budget import default_ledger

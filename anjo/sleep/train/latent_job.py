@@ -77,7 +77,7 @@ EMBED_FUNCTION: Final = "embed_rows"
 EMBED_TIMEOUT_S: Final = 300
 VOCAB: Final = 202_048
 MAX_EMBED_IDS: Final = 16_384  # one call's ids: about 218 MB of rows back
-EMBED_KEYS: Final = ("model.language_model.embed_tokens.weight", "model.embed_tokens.weight")  # canonical, legacy
+EMBED_KEYS: Final = ("model.language_model.embed_tokens.weight", "model.embed_tokens.weight")  # canonical, then the older checkpoint layout
 SAFETENSORS_INDEX: Final = "model.safetensors.index.json"
 _SPEC_KEYS: Final = frozenset({
     "encoder", "model", "revision", "layers", "d", "pooling", "rendering", "max_context_tokens",

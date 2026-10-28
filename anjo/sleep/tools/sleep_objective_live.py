@@ -1,0 +1,327 @@
+"""The live comparison of the sleep objective's terms: plan first, then, with ``--yes``, one
+accelerated life per arm on fresh synthetic accounts, then ``--report`` over what they wrote.
+
+    python -m anjo.sleep.tools.sleep_objective_live --account seed=<id> --account today=<id> \\
+        [--account fold=<id>] --persona founder --days 5 --night-usd <a measured night's cost_usd> [--yes]
+    python -m anjo.sleep.tools.sleep_objective_live --account seed=<id> ... --report
+
+**Arms**, each a whole accelerated run (``sim.accelerated``, the same persona, seed and virtual dates):
+
+- ``seed``: ``ANJO_SLEEP_OBJECTIVE=sft_dpo_seed`` (SFT, DPO, knowledge seeding, imitation);
+- ``today``: ``sft_dpo``, the seed arm's control, matched night by night: its SFT trains, by the clock,
+  for the seed arm's training minutes that night less its DPO block, with one warmup and one decay
+  over them, and today's DPO pass follows (``colab_train.StretchClock``);
+- ``fold``: the seed arm with ``ANJO_SLEEP_ADAPTER_FOLD=1``. No control: the fold adds under 0.1 A100
+  minutes a night, within 5% of the seed arm's, and the report checks that it stayed so;
+- ``dreams``: the seed arm with ``ANJO_SLEEP_DREAMS=1``, only with its control ``seed_matched``: the
+  seed arm's objective, its main block stretched to the dreams arm's minutes, serving GPU minutes for
+  the dreams' text included. Unwired dreams (the dataset step's ``dreams: not wired``) skip the control.
+
+A control runs after the arm it is matched to, with a match file of that arm's minutes per night
+(``--match-file``, per run: no host setting can pad a real night). Every arm runs with
+``ANJO_SLEEP_PRESSURE=0``, so sleep pressure never changes how much a night trains.
+
+**Never a real night.** Every account must be new: one that already has a results folder is refused,
+so no arm ever trains on a running life. Each run names a persona; the wiring refuses a persona on an
+account that isn't registered synthetic. The runs inherit this shell's environment, with the switches
+replaced by the arm's; the thought channel (``ANJO_SLEEP_CHANNEL``) is the shell's, so on or off it is
+the same in every arm, and a claim and its control differ in their objective alone.
+
+**Holds.** The plan's worst case is priced at ``--night-usd`` (a measured night's ``cost_usd``, today's
+objective) plus each arm's added A100 minutes (``ADDED_A100_MIN``, estimates; a control at its match
+file's minutes once its reference has run), all against ``modal_usd``. ``--yes`` holds it whole before
+the first run; before each arm the hold shrinks to the arms still to come, the running arm's nights
+taking their own holds (``night/holds.py``) from what was freed, and the last is released at the end.
+No room for a hold stops the rest; so does an arm that fails.
+
+**The report** reads each account's night logs and morning scores (numbers only): per night the
+training receipt (minutes and rows by term, the dream filter's keep rate by seed kind), the general
+gate's lost points, promoted or not and the night's cost; per arm the mean weights-only score (arm 3
+against base) and arm 4's; per control and night its budget and the minutes it used, flagged past 5%.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Final
+
+from anjo.sleep.budget import Ledger, Reservation, default_ledger
+from anjo.sleep.night.core_snapshot import CHANNEL_ENV
+from anjo.sleep.night.holds import usd
+from anjo.sleep.reports.results import results_root
+from anjo.sleep.train import objective
+from anjo.sleep.train.terms import DREAMS_NOT_WIRED
+
+POOL: Final = "modal_usd"
+A100_USD_PER_HOUR: Final = 2.50  # Modal's A100-80GB list price, checked 2026-10-27
+ORDER: Final = ("seed", "today", "fold", "dreams", "seed_matched")
+CONTROL_OF: Final = {"today": "seed", "seed_matched": "dreams"}  # a control, and the arm its minutes match
+NEEDS: Final = {"seed": "today", "dreams": "seed_matched"}  # an arm making a claim, and its control
+PRESSURE_ENV: Final = "ANJO_SLEEP_PRESSURE"
+SEED: Final = {objective.OBJECTIVE_ENV: objective.SEED_OBJECTIVE}
+ENVS: Final[Mapping[str, Mapping[str, str]]] = {
+    "seed": SEED, "fold": {**SEED, objective.FOLD_ENV: "1"}, "dreams": {**SEED, objective.DREAMS_ENV: "1"},
+    "today": {objective.OBJECTIVE_ENV: "sft_dpo"}, "seed_matched": SEED,
+}
+# Estimates per night (2026-10-29), not measurements: seeding's teacher passes 0.9, fresh samples 1.3,
+# imitation 0.8, the fold 0.1, dreams' ranking and block 1.3 plus 1.5 minutes of serving for their text.
+ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8}
+TODAY_TRAIN_MIN: Final = 2.83  # today's training minutes, measured 2026-10-28: a control's budget holds them too
+MISMATCH: Final = 0.05
+SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, PRESSURE_ENV)
+HOLD_KEY: Final = "sleep-objective-live"
+WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.sleep.app.sim_transport:simulate",
+                 "--morning", "anjo.sleep.app.morning:build")
+
+
+def arms(accounts: Mapping[str, str]) -> list[str]:
+    """The arms asked for, in run order: each control after the arm it is matched to."""
+    unknown = sorted(set(accounts) - set(ORDER))
+    if unknown or "seed" not in accounts:
+        raise ValueError(f"arms are {', '.join(ORDER)}, and the seed arm is always run")
+    if len(set(accounts.values())) != len(accounts):
+        raise ValueError("each arm lives on its own account")
+    missing = [f"{arm} needs {control}" for arm, control in NEEDS.items() if arm in accounts and control not in accounts]
+    missing += [f"{control} needs {arm}" for control, arm in CONTROL_OF.items() if control in accounts and arm not in accounts]
+    if missing:
+        raise ValueError(f"every claim runs with its matched control: {'; '.join(missing)}")
+    return [arm for arm in ORDER if arm in accounts]
+
+
+def arm_usd(arm: str, days: int, night_usd: float, budgets: Mapping[str, float] | None = None) -> float:
+    """An arm's worst case: its nights at today's cost plus its added A100 minutes; a control's whole
+    budget (its match file's once known, else the estimate for the arm it matches)."""
+    if arm in CONTROL_OF:
+        added = sum(budgets.values()) if budgets else days * (TODAY_TRAIN_MIN + ADDED_A100_MIN[CONTROL_OF[arm]])
+    else:
+        added = days * ADDED_A100_MIN[arm]
+    return round(days * night_usd + added / 60.0 * A100_USD_PER_HOUR, 2)
+
+
+def command(account: str, persona: str, days: int, start: date, match_file: Path | None = None) -> list[str]:
+    return [sys.executable, "-m", "anjo.sleep.sim.accelerated", *WIRING, "--user", account, "--persona", persona,
+            "--days", str(days), "--start", start.isoformat(),
+            *(["--match-file", str(match_file)] if match_file is not None else [])]
+
+
+def arm_env(arm: str, base: Mapping[str, str]) -> dict[str, str]:
+    """The run's environment: the switches cleared, then the arm's own, sleep pressure off."""
+    return {key: value for key, value in base.items() if key not in SWITCHES} | dict(ENVS[arm]) | {PRESSURE_ENV: "0"}
+
+
+def nights(root: Path, account: str) -> list[dict[str, Any]]:
+    """Each finished night of ``account``: its train, dataset and gates records, its cost and promotion."""
+    folder = root / account / "nights"
+    found = []
+    for night in sorted(folder.iterdir()) if folder.is_dir() else ():
+        log, summary = night / "log.jsonl", night / "summary.json"
+        if not summary.is_file():
+            continue
+        steps = {r["step"]: r for r in (json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x)}
+        done = json.loads(summary.read_text(encoding="utf-8"))
+        general = steps.get("gates", {}).get("gates", {}).get("general", {})
+        found.append({"night": night.name, "train": steps.get("train", {}), "dataset": steps.get("dataset", {}),
+                      "general_lost": general.get("value"), "cost_usd": done.get("cost_usd"),
+                      "promoted": done.get("promoted") is not None})
+    return found
+
+
+def budgets(root: Path, account: str) -> dict[str, float]:
+    """Each night's budget for the control matched to ``account``'s arm: its training minutes by term
+    without the DPO block (the control runs its own after), plus her serving GPU's minutes on dreams."""
+    found = {}
+    for night in nights(root, account):
+        minutes = (night["train"].get("terms") or {}).get("minutes")
+        if not isinstance(minutes, Mapping):
+            raise ValueError(f"night {night['night']} of the matched arm has no training minutes by term")
+        serving = float((night["dataset"].get("terms") or {}).get("dream_seconds") or 0.0) / 60.0
+        found[night["night"]] = round(sum(float(v) for k, v in minutes.items() if k != "dpo") + serving, 4)
+    if not found:
+        raise ValueError("the matched arm trained no night: nothing to match")
+    return found
+
+
+def dreams_wired(root: Path, account: str) -> bool:
+    return not any((n["dataset"].get("terms") or {}).get("dreams") == DREAMS_NOT_WIRED for n in nights(root, account))
+
+
+def scores(root: Path, account: str) -> list[dict[str, Any]]:
+    folder = root / account / "scores"
+    files = sorted(folder.glob("night-*.json")) if folder.is_dir() else []
+    return [json.loads(path.read_text(encoding="utf-8")) for path in files]
+
+
+def _arm_score(record: Mapping[str, Any], arm: str) -> float | None:
+    stat = record.get("arms", {}).get(arm, {}).get("overall", {})
+    value = stat.get("score")
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _mean(values: Sequence[float | None]) -> float | None:
+    kept = [v for v in values if v is not None]
+    return round(sum(kept) / len(kept), 4) if kept else None
+
+
+def _off(a: float, b: float) -> bool:
+    return abs(a - b) > MISMATCH * max(b, 1e-9)
+
+
+def matches(done: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """A control's nights: its budget, the minutes it used, and whether they part by more than 5%."""
+    out = []
+    for night in done:
+        match = night["train"].get("match") or {}
+        budget, used = match.get("budget_minutes"), match.get("minutes")
+        off = not isinstance(budget, int | float) or not isinstance(used, int | float) or _off(float(used), float(budget))
+        out.append({"night": night["night"], "budget": budget, "used": used, "mismatch": off})
+    return out
+
+
+def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) -> dict[str, Any]:
+    """Per arm: the night series and the means; per control, its match night by night. Numbers only."""
+    table: dict[str, Any] = {}
+    for arm in arms(accounts):
+        done, scored = nights(root, accounts[arm]), scores(root, accounts[arm])
+        terms = [n["train"].get("terms") or {} for n in done]
+        dreams: list[dict[str, Any]] = [t["dreams"] for t in terms if t.get("dreams")]
+        table[arm] = {
+            "nights": len(done), "promoted": sum(n["promoted"] for n in done),
+            "arm3_by_night": [_arm_score(s, "3") for s in scored], "arm4_by_night": [_arm_score(s, "4") for s in scored],
+            "arm3_mean": _mean([_arm_score(s, "3") for s in scored]), "arm4_mean": _mean([_arm_score(s, "4") for s in scored]),
+            "general_lost_by_night": [n["general_lost"] for n in done],
+            "train_minutes_mean": _mean([n["train"].get("train_minutes") for n in done]),
+            "minutes_by_term": [t.get("minutes") for t in terms], "rows_by_term": [t.get("rows") for t in terms],
+            "dreams_by_seed": [d.get("by_seed") for d in dreams], "dream_blocks_kept": sum(bool(d.get("block_kept")) for d in dreams),
+            "cost_usd": round(sum(float(n["cost_usd"] or 0.0) for n in done), 2),
+            **({"match": matches(done)} if arm in CONTROL_OF else {}),
+        }
+        out(f"{arm}: {json.dumps(table[arm], sort_keys=True)}")
+        if any(m["mismatch"] for m in table[arm].get("match", ())):
+            out(f"  {arm}: a night's minutes part from its budget by more than {MISMATCH:.0%}: that night isn't matched")
+    if "fold" in table:
+        fold, seed = budgets(root, accounts["fold"]), budgets(root, accounts["seed"])
+        if _off(sum(fold.values()), sum(seed.values())):
+            out(f"  fold: its training minutes part from the seed arm's by more than {MISMATCH:.0%}: it needs a control")
+    return table
+
+
+def _accounts(pairs: Sequence[str]) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for pair in pairs:
+        arm, _, account = pair.partition("=")
+        if not account or arm in found:
+            raise ValueError("--account is <arm>=<account id>, once per arm")
+        found[arm] = account
+    return found
+
+
+def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, out: Callable[[str], None]) -> dict[str, float]:
+    priced = {arm: arm_usd(arm, args.days, args.night_usd or 0.0) for arm in chosen}
+    out(f"sleep objective live comparison: plan only, nothing run, nothing held ({args.persona}, {args.days} days "
+        f"from {start.isoformat()}, {len(chosen)} arms: {', '.join(chosen)})")
+    for arm in chosen:
+        env = " ".join(f"{k}={v}" for k, v in {**ENVS[arm], PRESSURE_ENV: "0"}.items())
+        match = f" --match-file <{CONTROL_OF[arm]} arm's minutes per night>" if arm in CONTROL_OF else ""
+        out(f"  {arm}: {env} {' '.join(command('<' + arm + ' account>', args.persona, args.days, start)[1:])}{match}")
+        out(f"    worst case ${priced[arm]:.2f} (estimate)")
+    out(f"  thought channel: {os.environ.get(CHANNEL_ENV) or 'off'} ({CHANNEL_ENV}, this shell's), the same in every arm")
+    if "dreams" in chosen:
+        out("  dreams: the app must wire the core's dream seeds into NightDeps.dreams first; unwired, its dataset "
+            f"step says dreams: {DREAMS_NOT_WIRED}, and its control doesn't run")
+    out(f"total worst case ${sum(priced.values()):.2f} on {POOL}, held whole before the first run")
+    out("run again with --yes to run (needs --night-usd), or --report to read the results")
+    return priced
+
+
+def _hold(ledger: Ledger, key: str, amount: float) -> Reservation | None:
+    """Hold ``amount`` (the arms still to come) under ``key``; None when nothing is left to come."""
+    if amount <= 0:
+        return None
+    found = ledger.reserve(key, (POOL,), usd(amount))
+    if found is None:
+        raise ValueError(f"{POOL} can't hold the ${amount:.2f} the arms still to come may cost")
+    return found
+
+
+def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], chosen: Sequence[str], start: date,
+              priced: dict[str, float], run: Callable[..., Any], out: Callable[[str], None], folder: Path) -> int:
+    root, ledger = results_root(), default_ledger()
+    held: Reservation | None = None
+    try:
+        held = _hold(ledger, f"{HOLD_KEY}:{accounts['seed']}:all", sum(priced.values()))
+        for i, arm in enumerate(chosen):
+            match_file = None
+            if arm in CONTROL_OF:
+                if CONTROL_OF[arm] == "dreams" and not dreams_wired(root, accounts["dreams"]):
+                    out(f"dreams: {DREAMS_NOT_WIRED}, so that arm is the seed arm again; {arm} doesn't run")
+                    continue
+                found = budgets(root, accounts[CONTROL_OF[arm]])
+                priced[arm] = arm_usd(arm, args.days, args.night_usd, found)
+                match_file = folder / f"{arm}.json"
+                match_file.write_text(json.dumps(found), encoding="utf-8")
+            if held is not None:  # the hold shrinks to the arms still to come; this arm's nights hold for it
+                held.release()
+                held = None
+            held = _hold(ledger, f"{HOLD_KEY}:{accounts['seed']}:{i}", sum(priced[a] for a in chosen[i + 1:]))
+            if ledger.remaining(POOL) < priced[arm]:
+                out(f"{arm}: {POOL} has under its ${priced[arm]:.2f}; it and the arms after it don't run")
+                return 1
+            done = run(command(accounts[arm], args.persona, args.days, start, match_file), env=arm_env(arm, os.environ),
+                       check=False)
+            if done.returncode != 0:
+                out(f"{arm}: the run exited with {done.returncode}; the arms after it don't run")
+                return 1
+    except ValueError as error:
+        out(f"stopped: {error}")
+        return 1
+    finally:
+        if held is not None:
+            held.release()
+    report(root, accounts, out)
+    return 0
+
+
+def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subprocess.run,
+         out: Callable[[str], None] = print, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
+    parser = argparse.ArgumentParser(prog="sleep_objective_live", description=(__doc__ or "").split("\n\n")[0])
+    parser.add_argument("--account", action="append", default=[], help="<arm>=<synthetic account id>")
+    parser.add_argument("--persona", default="founder")
+    parser.add_argument("--days", type=int, default=5, choices=range(1, 15), metavar="N")
+    parser.add_argument("--night-usd", type=float, default=None, help="a measured night's cost_usd")
+    parser.add_argument("--yes", action="store_true")
+    parser.add_argument("--report", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        accounts = _accounts(args.account)
+        chosen = arms(accounts)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.report:
+        report(results_root(), accounts, out)
+        return 0
+    start = (now() - timedelta(days=args.days + 1)).date()  # one past start for every arm: the same virtual nights
+    priced = _plan(args, chosen, start, out)
+    if not args.yes:
+        return 0
+    if args.night_usd is None or args.night_usd <= 0:
+        parser.error("--yes needs --night-usd, a measured night's cost_usd")
+    root = results_root()
+    used = [accounts[arm] for arm in chosen if (root / accounts[arm]).exists()]
+    if used:
+        parser.error(f"{len(used)} account(s) already have results: every arm runs on a new synthetic account")
+    left = default_ledger().remaining(POOL)
+    if left < sum(priced.values()):
+        parser.error(f"{POOL} has ${left:.2f} left, under the plan's ${sum(priced.values()):.2f}")
+    with tempfile.TemporaryDirectory(prefix="sleep-objective-match-") as folder:
+        return _run_arms(args, accounts, chosen, start, priced, run, out, Path(folder))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

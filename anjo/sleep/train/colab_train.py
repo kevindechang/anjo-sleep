@@ -38,6 +38,17 @@ adapter and use that copy as the reference; the copy is removed, so the referenc
 with the adapter switched off; the receipt's ``dpo_reference`` says which reference TRL used.
 Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
+The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_job.py``, which ships beside
+this file with ``sleep_loss.py`` and ``sleep_fold.py`` (Modal's image only; the Colab runner refuses the
+objective), runs the one weighted loss over the SFT rows, the pairs and the dataset's ``kind`` rows
+(seeding, dreams, anchors), each tokenized as the server renders it (``served_ids``), and with a
+``channel`` block trains the thought channel's projector in the same loop. Its recipe carries ``terms``:
+``fold_rank`` (fold the night into the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank) and
+``dreams``. ``match_minutes`` is the live comparison's matched control and nothing else: the SFT pass
+(or ``sft_dpo_seed``'s main block, dreams off) trains for that many minutes by the clock, one warmup and
+one cosine over them (``stretch``), and the DPO pass follows as today. The receipt's ``match`` gives the
+budget, the minutes used and the steps.
+
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
 ``receipt.json`` go) and, for a warm start, ``ANJO_TRAIN_PREV`` (the previous adapter's folder).
@@ -51,8 +62,9 @@ TRL prepared for each row (``smoke_tokens.json``) for the smoke to hold against 
 
 **The thought channel.** A recipe with a ``channel`` block (``channel_train.check_channel``) is run by
 ``channel_train.main`` instead, on the same inputs: the LoRA and the projector that lets Glimmer read
-MIND's state, trained together on rows that carry the core state they were made under. It needs
-``channel_train.py`` beside this file, which the Modal image carries.
+MIND's state, trained together on rows that carry the core state they were made under; with
+``sft_dpo_seed`` it is ``sleep_job.main``'s, in the one loss. It needs ``channel_train.py`` beside this
+file, which the Modal image carries.
 
 ``TRAIN_PACKAGES`` are the versions every runner installs (Colab's image brings its own torch), and
 ``TORCH`` the torch for a runner that brings none. They live here, in a file that imports only the
@@ -68,7 +80,7 @@ import random
 import re
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -86,7 +98,13 @@ MODEL = "meta-models/Muse-Glimmer-30B"
 MAX_RANK = 32
 MIN_SEQ_LENGTH = 8192
 RECEIPT = "receipt.json"
-OBJECTIVES = ("sft", "sft_dpo")
+OBJECTIVES = ("sft", "sft_dpo", "sft_dpo_seed")
+SEED_OBJECTIVE = "sft_dpo_seed"
+LOSS_FILE = "sleep_loss.py"  # sft_dpo_seed's loss, beside this file
+SEED_SCRIPT = "sleep_job.py"  # sft_dpo_seed's run (the thought channel's projector in it too), beside this file
+SURPRISE_RANGE = (0.5, 2.0)  # MIND's surprise weight on a row (the Sleep link); a row without one weighs 1.0
+MAX_MATCH_MINUTES = 100.0
+STRETCH_STEPS = 1_000_000  # the stretched SFT's step cap: its clock stops it long before
 MAX_DPO_LR = 1e-5
 MAX_ACCUMULATION = 16
 MAX_EPOCHS = 4
@@ -153,10 +171,11 @@ def load_config(raw: str) -> dict[str, Any]:
         _int(cfg, "max_steps", 1, 100_000)
     if not isinstance(cfg.get("keep_every_row", False), bool):
         raise ValueError("keep_every_row is true or false")
-    if cfg["objective"] == "sft_dpo":
+    if cfg["objective"] in ("sft_dpo", SEED_OBJECTIVE):
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
         _int(cfg, "min_optimizer_steps", 1, 10_000)
+    _check_terms(cfg)
     if not isinstance(cfg["revision"], str) or not cfg["revision"]:
         raise ValueError("the base model's revision is pinned")
     if cfg["reasoning_strength"] not in REASONING_LEVELS:
@@ -172,18 +191,32 @@ def load_config(raw: str) -> dict[str, Any]:
     return cfg
 
 
-def channel_module() -> Any:
-    """``channel_train.py``, loaded by path from beside this file: the thought channel's run (a recipe
-    with a ``channel`` block), which the Modal image carries and a single-file Colab run doesn't."""
-    import importlib.util
+def _check_terms(cfg: dict[str, Any]) -> None:
+    """``terms`` comes with ``sft_dpo_seed`` and only then; ``match_minutes`` never with dreams."""
+    seeded, terms = cfg["objective"] == SEED_OBJECTIVE, cfg.get("terms")
+    if seeded != (terms is not None):
+        raise ValueError(f"terms come with the {SEED_OBJECTIVE} objective, and only with it")
+    if seeded:
+        fold = terms.get("fold_rank") if isinstance(terms, dict) else 0
+        if (not isinstance(terms, dict) or set(terms) != {"fold_rank", "dreams"} or not isinstance(terms["dreams"], bool)
+                or (fold is not None and (isinstance(fold, bool) or not isinstance(fold, int)
+                                          or not cfg["r"] <= fold <= MAX_RANK))):
+            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}) and dreams (true or false)")
+    if "match_minutes" in cfg and ((seeded and bool(terms and terms["dreams"])) or isinstance(cfg["match_minutes"], bool)
+                                   or not isinstance(cfg["match_minutes"], int | float)
+                                   or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):
+        raise ValueError(f"match_minutes is a control's budget, up to {MAX_MATCH_MINUTES:g} minutes, never with dreams")
 
-    path = Path(__file__).with_name(CHANNEL_SCRIPT)
-    spec = importlib.util.spec_from_file_location("anjo_channel_train", path) if path.is_file() else None
-    if spec is None or spec.loader is None:
-        raise ValueError(f"a channel recipe needs {CHANNEL_SCRIPT} beside the training script (Modal's runner sends it)")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+
+def channel_module() -> Any:
+    """``channel_train.py`` from beside this file: the thought channel's run (a recipe with a ``channel``
+    block), which the Modal image carries and a single-file Colab run doesn't."""
+    return sibling(CHANNEL_SCRIPT, "anjo_channel_train", "a channel recipe")
+
+
+def seed_module() -> Any:
+    """``sleep_job.py`` from beside this file: ``sft_dpo_seed``'s run, the channel's projector in it too."""
+    return sibling(SEED_SCRIPT, "anjo_sleep_job", SEED_OBJECTIVE)
 
 
 def lora_targets(names: Sequence[str]) -> str:
@@ -249,8 +282,28 @@ def dpo_plan(n_pairs: int, cfg: dict[str, Any]) -> tuple[int, int]:
 
 
 def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The SFT rows (prompt, completion) and the pair rows (prompt, chosen, rejected)."""
-    return [row for row in rows if "completion" in row], [row for row in rows if "chosen" in row]
+    """The SFT rows (prompt, completion) and the pair rows (prompt, chosen, rejected); the rows
+    with a ``kind`` belong to ``sft_dpo_seed`` alone (``sleep_job.term_rows``)."""
+    plain = [row for row in rows if "kind" not in row]
+    return [row for row in plain if "completion" in row], [row for row in plain if "chosen" in row]
+
+
+def row_weight(row: dict[str, Any]) -> float:
+    """The row's surprise weight, 1.0 when it carries none; a weight outside ``SURPRISE_RANGE`` stops the job."""
+    weight = row.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, int | float) or not SURPRISE_RANGE[0] <= weight <= SURPRISE_RANGE[1]:
+        raise ValueError(f"row {row.get('id')}'s weight is a number from {SURPRISE_RANGE[0]} to {SURPRISE_RANGE[1]}")
+    return float(weight)
+
+
+def surprise_weights(objective: str, rows: list[dict[str, Any]]) -> str | None:
+    """The receipt's ``surprise_weights``: every weight checked first; None when no row carries one,
+    ``applied`` when the one loss takes them, else said not to be (TRL's passes have no row weight)."""
+    for row in rows:
+        row_weight(row)
+    if not any("weight" in row for row in rows):
+        return None
+    return "applied" if objective == SEED_OBJECTIVE else f"not applied (objective {objective})"
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -290,6 +343,8 @@ def row_template(template: dict[str, str], row: dict[str, Any]) -> dict[str, str
 def check_clean(row: dict[str, Any]) -> None:
     """A row as the host cleaned it: no special token's text anywhere, and no reasoning phrase in a
     system turn, which would stop the template writing the night's strength."""
+    if not isinstance(row.get("prompt"), list) or not all(isinstance(row.get(side), list) for side in _sides(row)):
+        raise ValueError(f"row {row.get('id')}'s prompt and reply are lists of messages")
     for message in [*row["prompt"], *(message for side in _sides(row) for message in row[side])]:
         text = message.get("content") if isinstance(message, dict) else None
         if not isinstance(text, str):
@@ -465,15 +520,95 @@ def _dpo(model: Any, tokenizer: Any, pairs: list[tuple[dict[str, Any], dict[str,
     return int(trainer.state.global_step), reference
 
 
+def sibling(file: str, name: str, needs: str, folder: Path | None = None) -> Any:
+    """A module shipped beside this file, loaded by its path and registered as ``name`` (its
+    dataclasses look themselves up there): the job runs this script under ``python -I``, which puts
+    no folder on the import path."""
+    import importlib.util
+
+    path = (folder or Path(__file__).resolve().parent) / file
+    spec = importlib.util.spec_from_file_location(name, path) if path.is_file() else None
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{needs} needs {file} beside the training script (Modal's image carries it)")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_loss(folder: Path | None = None) -> Any:
+    """``sleep_loss.py`` from beside this file: ``sft_dpo_seed``'s one loss."""
+    return sibling(LOSS_FILE, "sleep_loss", SEED_OBJECTIVE, folder)
+
+
+def served_ids(tokenizer: Any, messages: list[dict[str, Any]], template: dict[str, str]) -> list[int]:
+    """A prompt's ids as the server renders it: the template with the generation prompt, then the header."""
+    return [*tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=False,
+                                           **template),
+            *tokenizer(USER_CHANNEL, add_special_tokens=False)["input_ids"]]
+
+
+def reply_ids(tokenizer: Any, text: str, *, end: bool = True) -> list[int]:
+    """A reply's ids, closed by ``<|eot|>`` (an anchor's choice is scored open, as the gate scores it)."""
+    ids = list(tokenizer(text, add_special_tokens=False)["input_ids"])
+    return [*ids, tokenizer.convert_tokens_to_ids(REPLY_END)] if end else ids
+
+
+def stretch(share: float) -> float:
+    """The rate's factor at ``share`` of a time budget used: a 3% linear warmup, then a cosine to zero
+    (``sleep_loss.stretch``'s standalone copy; a test holds them equal)."""
+    share = min(max(share, 0.0), 1.0)
+    if share < WARMUP:
+        return share / WARMUP
+    return 0.5 * (1.0 + math.cos(math.pi * (share - WARMUP) / (1.0 - WARMUP)))
+
+
+class StretchClock:
+    """The matched control's SFT by the clock, as TRL callback events: each optimizer step at the rate
+    ``stretch`` gives the share of ``budget_s`` used since training began, and training stops once it
+    is used. ``main`` mixes it into a ``TrainerCallback``; the SFT config holds the rate constant."""
+
+    def __init__(self, budget_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.budget_s, self._clock = budget_s, clock
+        self.started: float | None = None
+        self.used = 0.0
+
+    def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        self.started = self._clock()
+
+    def on_pre_optimizer_step(self, args: Any, state: Any, control: Any, optimizer: Any = None, **kwargs: Any) -> None:
+        if self.started is None or optimizer is None:
+            raise ValueError("the stretched SFT sets the rate of a started run's optimizer")
+        rate = args.learning_rate * stretch((self._clock() - self.started) / self.budget_s)
+        for group in optimizer.param_groups:
+            group["lr"] = rate
+
+    def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        self.used = self._clock() - (self.started or 0.0)
+        if self.used >= self.budget_s:
+            control.should_training_stop = True
+
+    def receipt(self, steps: int) -> dict[str, float]:
+        return {"budget_minutes": round(self.budget_s / 60.0, 4), "minutes": round(self.used / 60.0, 4), "steps": steps}
+
+
+def stretched_sft(settings: dict[str, Any]) -> dict[str, Any]:
+    """The SFT config the stretch drives: a constant rate it sets itself, no warmup, and more steps
+    than any budget takes (the callback stops it)."""
+    return {**settings, "lr_scheduler_type": "constant", "warmup_steps": 0, "max_steps": STRETCH_STEPS}
+
+
 def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU smoke run
     import numpy  # type: ignore[import-not-found, unused-ignore]
     import torch  # type: ignore[import-not-found, unused-ignore]
     from datasets import Dataset  # type: ignore[import-not-found, import-untyped, unused-ignore]
     from peft import LoraConfig, PeftModel  # type: ignore[import-not-found, unused-ignore]
-    from transformers import AutoTokenizer, set_seed  # type: ignore[import-not-found, unused-ignore]
+    from transformers import AutoTokenizer, TrainerCallback, set_seed  # type: ignore[import-not-found, unused-ignore]
     from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found, unused-ignore]
 
     cfg = load_config(os.environ["ANJO_TRAIN_CONFIG"])
+    if cfg["objective"] == SEED_OBJECTIVE:  # the one loss, with the thought channel's projector when the recipe has it
+        return int(seed_module().main(sys.modules[__name__], cfg))
     if cfg.get("channel") is not None:  # the LoRA and the thought channel's projector, trained together
         return int(channel_module().main(sys.modules[__name__], cfg))
     smoke = _smoke_model()
@@ -492,7 +627,9 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     tokenizer.eos_token = REPLY_END
     check_template(tokenizer, cfg)
     template = template_kwargs(cfg)
-    rows, pair_rows = split_rows(_rows(Path(os.environ["ANJO_TRAIN_DATASET"])))
+    every = _rows(Path(os.environ["ANJO_TRAIN_DATASET"]))
+    rows, pair_rows = split_rows(every)
+    surprise = surprise_weights(cfg["objective"], [*rows, *pair_rows])  # checked before the model loads
     kept = _rendered(tokenizer, rows, cfg["max_seq_length"], template)
     check_every_row_kept(cfg, len(rows), len(kept))  # before the model loads: only the boot is spent
     pairs = _rendered(tokenizer, pair_rows, cfg["max_seq_length"], template) if "dpo" in settings else []
@@ -503,9 +640,10 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     else:
         peft_config = LoraConfig(**settings["lora"])
     data = Dataset.from_list([plain for _, plain in kept])
+    clock = type("Stretch", (StretchClock, TrainerCallback), {})(cfg["match_minutes"] * 60.0) if "match_minutes" in cfg else None
     trainer = SFTTrainer(
-        model=model, args=SFTConfig(output_dir=str(out / "run"), **settings["sft"]),
-        train_dataset=data, processing_class=tokenizer, peft_config=peft_config,
+        model=model, args=SFTConfig(output_dir=str(out / "run"), **(settings["sft"] if clock is None else stretched_sft(settings["sft"]))),
+        train_dataset=data, processing_class=tokenizer, peft_config=peft_config, callbacks=[clock] if clock else None,
     )
     prompts: list[dict[str, Any]] = []
     checked = _check_sft(tokenizer, kept, trainer.train_dataset, template, prompts)
@@ -516,6 +654,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         accumulation, epochs = dpo_plan(len(pairs), cfg)
         dpo_settings = {**settings["dpo"], "gradient_accumulation_steps": accumulation, "num_train_epochs": epochs}
         dpo_steps, reference = _dpo(trainer.model, tokenizer, pairs, dpo_settings, out, template, prompts)
+    sft_steps = int(trainer.state.global_step)
     minutes = (time.monotonic() - started) / 60.0
     trainer.model.save_pretrained(str(out))
     record_rendering(out, cfg["rendering"])
@@ -524,12 +663,14 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
     if smoke is not None:
         (out / SMOKE_TOKENS).write_text(json.dumps(prompts), encoding="utf-8")
     receipt = {
-        "steps": int(trainer.state.global_step), "epochs": cfg["epochs"], "train_minutes": minutes,
+        "steps": sft_steps, "epochs": cfg["epochs"], "train_minutes": minutes,
         "examples": len(kept), "dropped_truncated": len(rows) - len(kept),
         "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu", "objective": cfg["objective"],
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
         "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
+        **({"match": clock.receipt(sft_steps)} if clock is not None else {}),
+        **({"surprise_weights": surprise} if surprise else {}),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

@@ -11,7 +11,7 @@ import dataclasses
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from anjo.sleep.budget import TRAINING_TIMEOUT_S
 from anjo.sleep.night.core_snapshot import ChannelArm
@@ -21,6 +21,11 @@ from anjo.sleep.train import channel_train, modal_job
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, train_lora_with_receipt
 from anjo.sleep.types import CheckpointRef
+
+
+# The receipt's keys that only a switch fills: the sleep objective's, the surprise weights', a matched
+# control's and the thought channel's. Left out when empty.
+OPTIONAL_KEYS: Final = ("terms", "surprise_weights", "match", "projector", "channel_receipt")
 
 
 class LoraTrainer:
@@ -58,4 +63,8 @@ class LoraTrainer:
             workdir=self._root / "work" / name, adapter_cache=self._root / "adapters",
             publish=self._publish, revision=self._revision, **channel,
         )
-        return ckpt, dataclasses.asdict(receipt)
+        done = dataclasses.asdict(receipt)
+        for key in OPTIONAL_KEYS:  # each only when it applies: a night with every switch off logs today's receipt
+            if done[key] in (None, ""):
+                del done[key]
+        return ckpt, done

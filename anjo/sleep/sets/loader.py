@@ -1,7 +1,9 @@
-"""Loaders and validation for the two shared gate sets.
+"""Loaders and validation for the two shared gate sets, and the training job's anchors.
 
 general.jsonl  200 multiple-choice (4-way, one 3-way) items with provenance (log-likelihood scored)
 collapse.jsonl 60 prompts outside the person's field (judged for field drag)
+anchors.jsonl  32 hand-written multiple-choice items the dream block is held to; no gate scores them,
+               so training never sees a gate item (``tests/test_sets.py`` holds them disjoint)
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ SETS_DIR = Path(__file__).parent
 GENERAL_ITEMS = 200
 COLLAPSE_PROMPTS = 60
 GENERAL_SOURCES = frozenset({"mmlu", "arc_challenge", "hellaswag"})
+ANCHOR_ITEMS = 32
+ANCHOR_SOURCES = frozenset({"handwritten"})
 MIN_CHOICES = 3  # one ARC-Challenge item (g129) genuinely has three
 MAX_CHOICES = 4
 
@@ -61,7 +65,18 @@ def _nonempty(row: dict[str, object], key: str, where: str) -> str:
 def load_general(
     path: str | Path | None = None, *, expected: int | None = GENERAL_ITEMS
 ) -> tuple[GeneralItem, ...]:
-    p = Path(path or SETS_DIR / "general.jsonl")
+    return _choice_items(Path(path or SETS_DIR / "general.jsonl"), GENERAL_SOURCES, expected, "general")
+
+
+def load_anchors(
+    path: str | Path | None = None, *, expected: int | None = ANCHOR_ITEMS
+) -> tuple[GeneralItem, ...]:
+    return _choice_items(Path(path or SETS_DIR / "anchors.jsonl"), ANCHOR_SOURCES, expected, "anchors")
+
+
+def _choice_items(
+    p: Path, sources: frozenset[str], expected: int | None, name: str
+) -> tuple[GeneralItem, ...]:
     items = []
     for row in _rows(p):
         where = str(row.get("id"))
@@ -74,7 +89,7 @@ def load_general(
         if isinstance(answer, bool) or not isinstance(answer, int) or not 0 <= answer < len(choices):
             raise SetError(f"{where}: answer must index a choice")
         source = _nonempty(row, "source", where)
-        if source not in GENERAL_SOURCES:
+        if source not in sources:
             raise SetError(f"{where}: unknown source '{source}'")
         items.append(
             GeneralItem(
@@ -86,7 +101,7 @@ def load_general(
                 answer,
             )
         )
-    _check_ids([i.id for i in items], expected, "general")
+    _check_ids([i.id for i in items], expected, name)
     return tuple(items)
 
 

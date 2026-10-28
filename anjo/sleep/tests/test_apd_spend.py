@@ -209,7 +209,7 @@ def test_ledger_journals_and_store_hold_under_threads(tmp_path: Path) -> None:
     assert len(spend.jobs()) == 16 and all(len(job.calls) == 4 and job.closed for job in spend.jobs())
     assert ledger.used("baseten_mind_usd") == pytest.approx(spend.spent())
     assert all(data.run(f"life-{n}", "B") is not None for n in range(16))
-    assert not list((data.root / "runs").glob(".*"))  # no temporary file left behind
+    assert not list((data.root / "runs").glob(".*"))  # no scratch file left behind
 
 
 # ── Kill-resume ───────────────────────────────────────────────────────────────

@@ -82,6 +82,7 @@ from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.train.dataset import build_night_dataset
 from anjo.sleep.train.lora import fresh_adapter_name
+from anjo.sleep.train.terms import attach_night_terms
 from anjo.sleep.types import (
     MAX_NIGHT_ACTIONS,
     Choice,
@@ -527,11 +528,14 @@ class NightRunner:
         if not data.examples:
             raise ValueError("no training example survived the dataset's checks")
         p.data = data
-        return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
+        done = {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
                 "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
                 "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
+        if self.deps.terms.seed:  # sft_dpo_seed's rows (train/terms.py); off, the night is today's
+            p.data, done["terms"] = attach_night_terms(self.deps, p.uid, p.night, p.store, p.sealed, data, p.spend)
+        return done
 
     def _train(self, p: PersonNight) -> Mapping[str, Any]:
         registry = self.deps.registry
