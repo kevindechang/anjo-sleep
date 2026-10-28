@@ -137,6 +137,8 @@ def load_config(raw: str) -> dict[str, Any]:
     _int(cfg, "batch_size", 1, 1)
     if cfg["packing"] is not False or cfg["objective"] not in OBJECTIVES:
         raise ValueError(f"packing stays off and the objective is one of {', '.join(OBJECTIVES)}")
+    if "max_steps" in cfg:
+        _int(cfg, "max_steps", 1, 100_000)
     if cfg["objective"] == "sft_dpo":
         _rate(cfg, "dpo_beta", 1.0)
         _rate(cfg, "dpo_learning_rate", MAX_DPO_LR)
@@ -164,7 +166,8 @@ def lora_targets(names: Sequence[str]) -> str:
 
 def build_settings(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """The library settings for ``cfg``: bitsandbytes, PEFT's LoraConfig and TRL's SFTConfig, and
-    TRL's DPOConfig for ``sft_dpo``."""
+    TRL's DPOConfig for ``sft_dpo``. A recipe's ``max_steps`` (Task 17b's two adapters) caps SFT at
+    that many updates, which TRL then takes over the epochs as needed."""
     settings = {
         "quantization": {
             "load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_use_double_quant": True,
@@ -181,6 +184,7 @@ def build_settings(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "learning_rate": cfg["learning_rate"], "seed": cfg["seed"], "data_seed": cfg["seed"],
             "gradient_checkpointing": True, "lr_scheduler_type": "cosine", "warmup_steps": WARMUP,
             "logging_steps": 1, "save_strategy": "no", "report_to": "none",
+            **({"max_steps": cfg["max_steps"]} if "max_steps" in cfg else {}),
         },
     }
     if cfg["objective"] == "sft_dpo":

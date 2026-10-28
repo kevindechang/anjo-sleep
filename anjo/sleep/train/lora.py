@@ -152,15 +152,18 @@ def fresh_adapter_name(user_id: str, night_number: int, used: frozenset[str]) ->
 
 
 def training_config(
-    cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None, night: date,
+    cfg: LoraCfg, n_examples: int, *, warm: bool, revision: str | None, night: date, steps: StepPlan | None = None,
 ) -> dict[str, object]:
     """What the training script is told: the recipe, the step plan, the learning rate, and how the
     rows are rendered, so the adapter trains on the prompt it is served: the reasoning strength the
     server renders every request at (``config.reasoning_strength``), the night's date, the chat
-    template's hash, and the rendering they make (``framing.rendering``), which the adapter records."""
-    plan = plan_steps(n_examples, cfg)
+    template's hash, and the rendering they make (``framing.rendering``), which the adapter records.
+    ``steps`` fixes the step plan instead of deriving it from ``n_examples``, and is sent as
+    ``max_steps``, so two runs on sets of different sizes take the same updates (Task 17b)."""
+    plan = steps or plan_steps(n_examples, cfg)
     strength = config.reasoning_strength()
-    return {
+    fixed = {} if steps is None else {"max_steps": steps.steps}
+    return {**fixed,
         "r": cfg.r, "alpha": cfg.alpha, "dropout": cfg.dropout,
         "target_modules": list(cfg.target_modules),
         "learning_rate": cfg.warm_lr if warm else cfg.lr, "seed": cfg.seed,
@@ -234,8 +237,10 @@ def train_lora_with_receipt(
     publish: AdapterPublisher,
     revision: str | None = None,
     timeout_s: float = TRAINING_TIMEOUT_S,
+    steps: StepPlan | None = None,
 ) -> tuple[CheckpointRef, TrainReceipt]:
-    """Train ``name`` on ``data``, warm from ``prev`` when the recipe says so, and publish it."""
+    """Train ``name`` on ``data``, warm from ``prev`` when the recipe says so, and publish it.
+    ``steps`` fixes the step plan (``training_config``)."""
     config.check_adapter_name(name)
     if prev is not None and prev.person_id != person_id:
         raise TrainError("a warm start is only ever from the person's own adapter")
@@ -249,7 +254,7 @@ def train_lora_with_receipt(
         config.check_adapter(prev_dir, prev_dir.name)  # the last promoted adapter, whole (RF1)
     workdir.mkdir(parents=True, exist_ok=True)
     dataset_path = workdir / DATASET_FILE
-    settings = training_config(cfg, len(data.examples), warm=warm, revision=revision, night=night)
+    settings = training_config(cfg, len(data.examples), warm=warm, revision=revision, night=night, steps=steps)
     try:  # the dataset is the person's words in plain text: it never outlives the run
         dataset_path.write_text(data.to_jsonl(pairs=cfg.objective == "sft_dpo"), encoding="utf-8")
         outputs = runner.run(JOB, {
@@ -267,7 +272,7 @@ def train_lora_with_receipt(
     cached = adapter_cache / name
     _copy_adapter(Path(returned), cached)
     publish(cached, name)
-    plan = plan_steps(len(data.examples), cfg)
+    plan = steps or plan_steps(len(data.examples), cfg)
     receipt = TrainReceipt(
         adapter=name, warm_start=warm, examples=len(data.examples), planned_steps=plan.steps,
         steps=int(_number(outputs, "steps")), epochs=int(_number(outputs, "epochs")),

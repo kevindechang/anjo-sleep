@@ -169,8 +169,8 @@ class FakeColab:
     """The ``colab`` CLI: every call recorded; ``download`` writes the adapter (recording
     ``rendering``) and the receipt."""
 
-    def __init__(self, rendering: str) -> None:
-        self.rendering = rendering
+    def __init__(self, rendering: str, dropped: int = 0) -> None:
+        self.rendering, self.dropped = rendering, dropped
         self.calls: list[list[str]] = []
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
@@ -179,7 +179,7 @@ class FakeColab:
             local = Path(args[-1])
             if local.name == colab_train.RECEIPT:
                 local.write_text(json.dumps({"steps": 9, "epochs": 1, "train_minutes": 40.0, "examples": 3,
-                                             "dropped_truncated": 0, "gpu": "A100-SXM4-80GB"}))
+                                             "dropped_truncated": self.dropped, "gpu": "A100-SXM4-80GB"}))
             elif local.name == "adapter_config.json":
                 local.write_text(json.dumps({"peft_type": "LORA", "r": 16, framing.RENDERING_KEY: self.rendering}))
             else:
@@ -222,7 +222,11 @@ def test_the_dry_run_plan_spends_nothing(tmp_path: Path) -> None:
     for needed in (f"{rows} rows", f"{data.thinker1.tokens:,} tokens", "optimizer steps", "A100 minutes",
                    "compute units", "thinker-1", "thinker-shuffled"):
         assert needed in text
-    assert [a.steps for a in found.adapters] == [plan_steps(rows, LoraCfg()).steps] * 2
+    larger = max(rows, len(data.shuffled.examples))
+    assert [a.steps for a in found.adapters] == [plan_steps(larger, LoraCfg()).steps] * 2
+    assert [(a.examples, a.tokens) for a in found.adapters] == [
+        (len(d.examples), d.tokens) for d in (data.thinker1, data.shuffled)]  # each set's own counts
+    assert f"{len(data.shuffled.examples)} rows" in text and f"{data.shuffled.tokens:,} tokens" in text
 
 
 def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering(tmp_path: Path) -> None:
@@ -241,7 +245,10 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
         assert ref.night == thinker.render_night(data)
     settings = [json.loads(arg.split("=", 1)[1]) for args in cli.calls if args[3] == "exec"
                 for arg in args if arg.startswith("ANJO_TRAIN_CONFIG=")]
-    assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both
+    assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both, max_steps too
+    assert settings[0]["max_steps"] == found.adapters[0].steps == found.adapters[1].steps
+    assert colab_train.build_settings(colab_train.load_config(json.dumps(settings[0])))["sft"]["max_steps"] == (
+        settings[0]["max_steps"])
     assert settings[0]["current_date"] == thinker.render_night(data).isoformat() and settings[0]["warm_start"] is False
     assert cli.commands().count("new") == 2 and cli.commands().count("stop") == 2
     assert ledger.open_holds() == () and ledger.used("colab_cu") > 0
@@ -253,8 +260,10 @@ def test_replay_training_refuses_a_real_person_unequal_data_and_a_pool_without_r
     cli, ledger, runner = _setup(tmp_path)
     with pytest.raises(RealPersonRefused):
         runner.run("train_lora", {"person_id": "u-4f2a", "adapter_name": "p-0123456789ab-n0"}, timeout_s=7200)
-    short = replace(data, shuffled=Dataset(examples=data.shuffled.examples[1:], tokens=1, dropped={}))
-    with pytest.raises(TrainError, match="same number"):
+    first = data.shuffled.examples[0].id.rsplit(":b", 1)[0]
+    short = replace(data, shuffled=Dataset(
+        examples=tuple(e for e in data.shuffled.examples if not e.id.startswith(first)), tokens=1, dropped={}))
+    with pytest.raises(TrainError, match="same start states"):
         thinker.plan(short)
     with pytest.raises(TrainError, match="Colab"):
         thinker.train_thinkers(data, object(), ledger, workdir=tmp_path, adapter_cache=tmp_path / "c",  # type: ignore[arg-type]
@@ -265,6 +274,12 @@ def test_replay_training_refuses_a_real_person_unequal_data_and_a_pool_without_r
         thinker.train_thinkers(data, runner, ledger, workdir=tmp_path / "w", adapter_cache=tmp_path / "c",
                                publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
     assert cli.calls == []  # stopped before any VM
+    cut = FakeColab(framing.rendering(config.reasoning_strength()), dropped=1)
+    ledger = Ledger(tmp_path / "cut.jsonl", caps=CAPS)
+    runner = thinker.colab_runner(ColabCli(Path("/fake/colab"), run=cut), ledger, clock=Clock())
+    with pytest.raises(TrainError, match="cutting a trajectory"):  # the script dropped a row on the VM
+        thinker.train_thinkers(data, runner, ledger, workdir=tmp_path / "w2", adapter_cache=tmp_path / "c2",
+                               publish=lambda folder, name: None, revision="a" * 40, dry_run=False, out=lambda _: None)
 
 
 def test_a_typical_development_set_plans_inside_the_spec() -> None:

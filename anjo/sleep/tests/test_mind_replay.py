@@ -377,7 +377,7 @@ def test_dataset_rows_are_glimmers_own_turns_behind_the_brief() -> None:
         assert not example.teacher
 
 
-def test_the_two_datasets_are_equal_in_size_and_settings() -> None:
+def test_both_datasets_take_one_whole_trajectory_from_the_same_start_states() -> None:
     lives: list[apd.Life] = []
     starts_all: list[StartState] = []
     branches_all: dict[str, tuple[Branch, ...]] = {}
@@ -390,12 +390,22 @@ def test_the_two_datasets_are_equal_in_size_and_settings() -> None:
         for label in book.labels.values():
             labels = labels.with_label(label)
     built = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF)
-    assert len(built.thinker1.examples) == len(built.shuffled.examples) > 0
     determined = [s for s in starts_all if labels.labels[s.id].holds is not None]
-    assert built.starts == len(determined)  # both datasets draw on the same start states
-    assert _ids(built.thinker1) <= {s.id for s in determined} and _ids(built.shuffled) <= {s.id for s in determined}
+    assert built.starts == len(determined) and _ids(built.thinker1) == _ids(built.shuffled) == {s.id for s in determined}
+    assert len(built.thinker1.examples) != len(built.shuffled.examples)  # never trimmed to match
+    assert not any(built.thinker1.dropped.values()) and not any(built.shuffled.dropped.values())  # no row cut
+    for data in (built.thinker1, built.shuffled):
+        for start in determined:
+            rows = [e for e in data.examples if e.id.startswith(f"{start.id}:b")]
+            (index,) = {int(e.id.rsplit(":b", 1)[1].split(":t", 1)[0]) for e in rows}  # one branch each
+            winner = branches_all[start.id][index]
+            assert [e.id for e in rows] == [f"{start.id}:b{index}:t{t.seq}" for t in winner.targets]  # whole
     again = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF)
     assert again == built  # seeded: the same inputs make the same datasets
+    longest = max(e.tokens for e in built.thinker1.examples)
+    tight = dataset.build(lives, starts_all, branches_all, labels, brief=BRIEF, max_seq_tokens=longest - 1)
+    assert tight.dropped["too_long"] >= 1 and _ids(tight.thinker1) == _ids(tight.shuffled)
+    assert tight.starts + tight.dropped["too_long"] == built.starts  # a long row drops its start state from both
 
 
 # ── Selection ─────────────────────────────────────────────────────────────────

@@ -12,10 +12,11 @@
   question that the kernel applied, each reply ended at a stop token) is one example: the prompt
   is the brief and the rendered workspace as one user message, exactly what the thinker was sent
   (``BriefedThinker``), the completion is Glimmer's raw reply, and the row is rendered on the date
-  it was served on (the branch's night). A row past ``DEFAULT_MAX_SEQ_TOKENS`` is dropped
-  (``truncated``).
-- **Same size and settings:** the dataset with more rows is cut to the other's count by a seeded
-  draw (``over_cap``), so both train with the same step plan.
+  it was served on (the branch's night).
+- **Whole trajectories:** no trajectory is ever cut. A start state either winner of which has a
+  row past ``DEFAULT_MAX_SEQ_TOKENS`` is dropped for both (``too_long``), so both datasets hold
+  the same start states, each winner whole. The two may differ in rows and tokens; they train with
+  the same settings and the same number of updates (``train.thinker``).
 - **Provenance:** every text in a row comes from Spark Open or deterministic code, and Glimmer's
   own replies are the targets. A start state whose label isn't Spark Open's by the API's report,
   whose workspace or any branch holds text of another model (or of unknown ancestry), or with a
@@ -48,7 +49,7 @@ from anjo.sleep.mind.replay.types import (
 from anjo.sleep.provenance import GLIMMER, may_train, union
 from anjo.sleep.train.dataset import DEFAULT_MAX_SEQ_TOKENS, ROLE_OVERHEAD_TOKENS, Dataset, Example
 
-REPLAY_DROPS: Final = ("undetermined", "provenance", "incomplete")
+REPLAY_DROPS: Final = ("undetermined", "provenance", "incomplete", "too_long")
 
 
 @dataclass(frozen=True)
@@ -110,19 +111,14 @@ def _example(branch: Branch, turn: Turn, brief: str) -> Example:
     )
 
 
-def _rows(winners: Iterable[Branch], brief: str, max_tokens: int) -> tuple[list[Example], int]:
-    rows = [_example(branch, turn, brief) for branch in winners for turn in branch.targets]
-    kept = [row for row in rows if row.tokens <= max_tokens]
-    return kept, len(rows) - len(kept)
+def trajectory(branch: Branch, brief: str) -> tuple[Example, ...]:
+    """A winner's whole trajectory: one row per target, in order."""
+    return tuple(_example(branch, turn, brief) for turn in branch.targets)
 
 
-def _dataset(rows: list[Example], truncated: int, n: int, rng: random.Random) -> Dataset:
-    keep = frozenset(rng.sample(range(len(rows)), n)) if len(rows) > n else frozenset(range(len(rows)))
-    examples = tuple(row for index, row in enumerate(rows) if index in keep)
-    return Dataset(
-        examples=examples, tokens=sum(e.tokens for e in examples),
-        dropped={"truncated": truncated, "over_cap": len(rows) - len(examples)},
-    )
+def _dataset(trajectories: Iterable[tuple[Example, ...]]) -> Dataset:
+    examples = tuple(row for rows in trajectories for row in rows)
+    return Dataset(examples=examples, tokens=sum(e.tokens for e in examples), dropped={})
 
 
 # ── Building both ─────────────────────────────────────────────────────────────
@@ -168,8 +164,8 @@ def build(
     """thinker-1's and thinker-shuffled's datasets from the labelled start states' branches."""
     held = _lives(lives)
     dropped = dict.fromkeys(REPLAY_DROPS, 0)
-    first: list[Branch] = []
-    second: list[Branch] = []
+    first: list[tuple[Example, ...]] = []
+    second: list[tuple[Example, ...]] = []
     for start in starts:
         if start.life_id not in held:
             raise ReplayRefused(f"start state {start.id} isn't from a synthetic development life given")
@@ -177,12 +173,10 @@ def build(
         if reason is not None or one is None or other is None:
             dropped[reason or "incomplete"] += 1
             continue
-        first.append(one)
-        second.append(other)
-    rows1, cut1 = _rows(first, brief, max_seq_tokens)
-    rows2, cut2 = _rows(second, brief, max_seq_tokens)
-    n, rng = min(len(rows1), len(rows2)), random.Random(f"{seed}:trim")
-    return ReplayData(
-        thinker1=_dataset(rows1, cut1, n, rng), shuffled=_dataset(rows2, cut2, n, rng), starts=len(first),
-        dropped=dropped,
-    )
+        rows = (trajectory(one, brief), trajectory(other, brief))
+        if any(row.tokens > max_seq_tokens for row in (*rows[0], *rows[1])):
+            dropped["too_long"] += 1
+            continue
+        first.append(rows[0])
+        second.append(rows[1])
+    return ReplayData(thinker1=_dataset(first), shuffled=_dataset(second), starts=len(first), dropped=dropped)

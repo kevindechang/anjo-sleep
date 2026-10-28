@@ -1,7 +1,11 @@
 """Training replay's two thinker adapters (Task 17b): thinker-1 and thinker-shuffled.
 
 - **The recipe** is Task 5's (``LoraCfg``, ``train_lora_with_receipt``): QLoRA on Glimmer from a
-  cold start, the same settings for both, since both datasets hold the same number of rows.
+  cold start, with identical settings for both. Both datasets hold one whole trajectory from each
+  of the same start states, so their rows and tokens may differ; one step plan serves both
+  (``shared_steps``: the larger set's accumulation and step count, sent as ``max_steps``), so each
+  takes the same updates and sees every row at least once. The plan records each set's rows and
+  tokens, and a run whose script dropped a row (cutting a trajectory) is refused.
 - **Colab only, never Modal:** ``train_thinkers`` takes a ``ColabRunner``, which ``colab_runner``
   builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else. The runner holds
   each job's worst case on the ``colab_cu`` pool before its VM starts; ``train_thinkers`` first
@@ -31,7 +35,15 @@ from anjo.sleep.budget import TRAINING_TIMEOUT_S, Ledger
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.dataset import Dataset
-from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, TrainError, fresh_adapter_name, plan_steps, train_lora_with_receipt
+from anjo.sleep.train.lora import (
+    AdapterPublisher,
+    LoraCfg,
+    StepPlan,
+    TrainError,
+    fresh_adapter_name,
+    plan_steps,
+    train_lora_with_receipt,
+)
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, POOL, ColabCli, ColabRunner
 from anjo.sleep.types import CheckpointRef
 
@@ -77,9 +89,21 @@ class ThinkerPlan:
         return sum(adapter.compute_units for adapter in self.adapters)
 
 
-def _adapter_plan(label: str, data: Dataset, cfg: LoraCfg) -> AdapterPlan:
-    steps = plan_steps(len(data.examples), cfg)
-    minutes = SETUP_MINUTES + data.tokens * steps.epochs / A100_TOKENS_PER_MINUTE
+def _starts(data: Dataset) -> frozenset[str]:
+    return frozenset(example.id.rsplit(":b", 1)[0] for example in data.examples)
+
+
+def shared_steps(data: ReplayData, cfg: LoraCfg) -> StepPlan:
+    """The one step plan both adapters train with: the larger set's, so the smaller one's rows
+    are each seen at least once too. Refuses sets that don't draw on the same start states."""
+    if not data.thinker1.examples or _starts(data.thinker1) != _starts(data.shuffled):
+        raise TrainError("thinker-1 and thinker-shuffled each hold one trajectory from the same start states")
+    return plan_steps(max(len(data.thinker1.examples), len(data.shuffled.examples)), cfg)
+
+
+def _adapter_plan(label: str, data: Dataset, steps: StepPlan) -> AdapterPlan:
+    seen = steps.steps * steps.accumulation * data.tokens / len(data.examples)  # tokens over every update
+    minutes = SETUP_MINUTES + seen / A100_TOKENS_PER_MINUTE
     return AdapterPlan(
         label=label, examples=len(data.examples), tokens=data.tokens, steps=steps.steps, epochs=steps.epochs,
         accumulation=steps.accumulation, minutes=minutes, compute_units=minutes / 60.0 * A100_CU_PER_HOUR,
@@ -90,20 +114,20 @@ def plan(
     data: ReplayData, cfg: LoraCfg = LoraCfg(), *, timeout_s: float = TRAINING_TIMEOUT_S,
     remaining_cu: float | None = None,
 ) -> ThinkerPlan:
-    """What training both adapters would take. Refuses datasets of different sizes."""
-    if len(data.thinker1.examples) != len(data.shuffled.examples):
-        raise TrainError("thinker-1 and thinker-shuffled train on the same number of rows")
-    adapters = tuple(_adapter_plan(label, d, cfg) for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
+    """What training both adapters would take, on one shared step plan."""
+    steps = shared_steps(data, cfg)
+    adapters = tuple(_adapter_plan(label, d, steps) for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
     return ThinkerPlan(adapters=adapters, hold_cu=timeout_s / 3600.0 * A100_CU_PER_HOUR, remaining_cu=remaining_cu)
 
 
 def describe(found: ThinkerPlan) -> str:
     """The dry run's printout."""
-    lines = ["Replay training plan (Task 5's QLoRA recipe on one Colab A100-80GB each, cold start):"]
+    lines = ["Replay training plan (Task 5's QLoRA recipe on one Colab A100-80GB each, cold start, "
+             "the same settings and the same number of updates for both):"]
     for a in found.adapters:
         lines.append(
             f"- {a.label}: {a.examples} rows, about {a.tokens:,} tokens; {a.steps} optimizer steps "
-            f"({a.epochs} epoch(s), accumulation {a.accumulation}); about {a.minutes:.0f} A100 minutes, "
+            f"(max_steps {a.steps}, accumulation {a.accumulation}); about {a.minutes:.0f} A100 minutes, "
             f"{a.compute_units:.1f} compute units"
         )
     left = "unknown" if found.remaining_cu is None else f"{found.remaining_cu:.1f}"
@@ -148,14 +172,16 @@ def train_thinkers(
         raise TrainError("replay's adapters train on the Colab runner only")
     _check_room(found, timeout_s)
     used: frozenset[str] = _used(adapter_cache)
-    night = render_night(data)
+    night, steps = render_night(data), shared_steps(data, cfg)
     refs: tuple[CheckpointRef, ...] = ()
     for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
         name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
-        ref, _ = train_lora_with_receipt(
+        ref, receipt = train_lora_with_receipt(
             None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
             workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
-            timeout_s=timeout_s,
+            timeout_s=timeout_s, steps=steps,
         )
+        if receipt.dropped_truncated:
+            raise TrainError(f"{label}'s training dropped {receipt.dropped_truncated} rows, cutting a trajectory")
         used, refs = used | {name}, (*refs, ref)
     return found, refs
