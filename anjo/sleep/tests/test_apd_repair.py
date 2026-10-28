@@ -333,6 +333,9 @@ def test_an_issue_that_quotes_is_matched_by_its_quotation_alone() -> None:
                   "Day five says \u201cit feels great\u201d although we are going to have to reshoot it.",
                   "Day five says 'it feels great' and the person's tone is off."):
         assert repair.quoted_day(said, issue) == life.days[4], issue
+    # a scare-quoted pair of words is no quotation: the six-word rule finds no run, so a fresh attempt
+    scared = _saying(life, "The chase scene went long today.", 2)
+    assert repair.quoted_day(scared, 'The "chase scene" is called settled before the surface day.') is None
     # a quotation found nowhere, or on two days, names none, whatever the words around it match
     assert repair.quoted_day(said, 'It says "the wrap party was huge" and we are going to have to reshoot it.') is None
     twice = _saying(said, "It feels great.", 6)

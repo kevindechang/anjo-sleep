@@ -26,7 +26,7 @@ import argparse
 import dataclasses
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import gen_batch, generators, readers, repair, retry
+from anjo.sleep.mind.apd import gen_batch, generators, pairs, readers, repair, retry
 from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, DEFAULT_PER_MINUTE, Limiter
@@ -193,12 +193,12 @@ def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]
 
 
 def pairs_keep_off_note(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
-    """The plan's note on the pairs' ``keep_off``, which follows most core lives on disk."""
+    """The plan's note on the pairs' ``keep_off`` (``pairs.pairs_keep_off``): which, and why."""
     if args.command != "generate-pairs":
         return ()
-    found = gen_batch.kept_off(data)
-    return (f"the pairs' writer is given their topics (keep_off) only when most core lives were: "
-            f"{'on' if found.majority else 'off'}, {found}",)
+    on, why = pairs.pairs_keep_off(data)
+    return (f"the pairs are written {'with' if on else 'without'} keep_off (their writer is "
+            f"{'' if on else 'not '}given their topics), {why}",)
 
 
 def pace_note(args: argparse.Namespace) -> str:

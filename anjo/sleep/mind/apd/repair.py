@@ -65,7 +65,7 @@ DISCOVER_REASON: Final = 'A reader looking for the {family} about "{topic}" did 
                          "own, without stating any conclusion. Apart from this day's `plant` and `ask` beats, write " \
                          "nothing about {topic} on this day."
 _DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
-QUOTED_WORDS: Final = 2  # the fewest words a quotation in an undated issue has to name the day holding it
+QUOTED_WORDS: Final = 3  # the fewest words a quotation in an undated issue has to name the day holding it
 UNQUOTED_WORDS: Final = 6  # the fewest of an unquoted undated issue's words in a row that name the day holding them
 _WORD: Final = re.compile(r"[\w']+")
 _QUOTED: Final = re.compile(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\u2018([^\u2019]+)\u2019|(?<!\w)\'([^\']+)\'(?!\w)')
@@ -160,16 +160,17 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
 
 
 def quoted_day(life: Life, issue: str) -> date | None:
-    """The day an issue naming no date quotes, case and punctuation aside. An issue with quotation
-    marks names the one day whose messages hold its quotations (each split at an ellipsis, a part
-    of at least ``QUOTED_WORDS`` words); its other words are not matched, so a paraphrase can't name
-    a day by a common phrase. One without names the one day holding the longest run of its words,
-    at least ``UNQUOTED_WORDS`` long. ``None`` when nothing is found, or it is on more than one day."""
+    """The day an issue naming no date quotes, case and punctuation aside. An issue quoting at
+    least ``QUOTED_WORDS`` words (a quotation split at an ellipsis) names the one day whose messages
+    hold its quotations; its other words are not matched, so a paraphrase can't name a day by a
+    common phrase. One without such a quotation (a scare-quoted word or two is none) names the one
+    day holding the longest run of its words, at least ``UNQUOTED_WORDS`` long. ``None`` when
+    nothing is found, or it is on more than one day."""
     texts = _day_texts(life)
-    if _QUOTED.search(issue) is not None:
-        quotes = [" ".join(words) for found in _QUOTED.finditer(issue)
-                  for part in _ELLIPSIS.split(next(group for group in found.groups() if group))
-                  if len(words := _words(part)) >= QUOTED_WORDS]
+    quotes = [" ".join(words) for found in _QUOTED.finditer(issue)
+              for part in _ELLIPSIS.split(next(group for group in found.groups() if group))
+              if len(words := _words(part)) >= QUOTED_WORDS]
+    if quotes:
         return _one({day for day, text in texts.items() for quote in quotes if f" {quote} " in text})
     words = _words(issue)
     for size in range(len(words), UNQUOTED_WORDS - 1, -1):

@@ -154,3 +154,49 @@ def test_pairs_take_keep_off_from_most_core_lives_on_disk(tmp_path: Path, monkey
         (pair,) = data.pairs()
         assert writes.seen and all("keep_off" not in payload for _, payload in writes.seen)
         assert "keep_off" not in (data.made(pair.id) or {})
+
+
+
+def _pair_plan(data: Path) -> str:
+    lines: list[str] = []
+    assert cli.main([*LIVE, "--data", str(data), "generate-pairs", "--n", "1"], out=lines.append) == 0
+    (note,) = [line for line in "\n".join(lines).splitlines() if "keep_off" in line]
+    return note
+
+
+def test_pairs_follow_core_test_alone_and_the_plan_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: no core-test life yet; the plan says the pairs take the default, and why
+    data = DataDir(tmp_path / "pilot")
+    assert "without keep_off" in _pair_plan(data.root) and "no core-test life is on disk" in _pair_plan(data.root)
+    # two core-train lives written with it outvote nothing: one core-test life written without it decides
+    _generate(data.root, "--only", "2", "generate", "--split", "core-train", "--keep-off")
+    _generate(data.root, "--only", "1", "generate", "--split", "core-test")
+    writes = Writes()
+    monkeypatch.setattr(fakes, "FakeLifeChat", lambda: writes)
+
+    # Act
+    note = _pair_plan(data.root)
+    _generate(data.root, "generate-pairs", "--n", "1")
+
+    # Assert
+    assert "without keep_off" in note and "core-test lives on disk: 1 without keep_off, 0 with" in note
+    (pair,) = data.pairs()
+    assert writes.seen and all("keep_off" not in payload for _, payload in writes.seen)
+    assert "keep_off" not in (data.made(pair.id) or {})
+
+
+def test_pairs_on_disk_with_another_keep_off_refuse_the_run(tmp_path: Path) -> None:
+    # Arrange: a pair written with it, then core-test turns to most lives written without it
+    data = DataDir(tmp_path / "pilot")
+    _generate(data.root, "--only", "1", "generate", "--split", "core-test", "--keep-off")
+    _generate(data.root, "generate-pairs", "--n", "1")
+    _generate(data.root, "--only", "3", "generate", "--split", "core-test")
+    lines: list[str] = []
+
+    # Act
+    code = cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "2"], out=lines.append)
+
+    # Assert: refused before anything is written, naming the pair and the setting
+    (refused,) = [line for line in lines if line.startswith("Refused:")]
+    assert code == cli.REFUSED_CODE and "1 written with keep_off" in refused and "without it" in refused
+    assert len(data.pairs()) == 1
