@@ -33,7 +33,7 @@ DEEPSEEK = generators.DEEPSEEK
 RATE = Rate(0.30, 1.20)
 SPEC = next(spec for spec in core_splits.core_specs("core-train") if spec.prevalence > 0)
 RECORD_KEYS = {"what", "name", "attempt", "step", "error", "reason", "day", "item", "field", "rule", "reply_chars",
-               "answer_chars", "finish_reason"}
+               "answer_chars", "finish_reason", "rate_limits", "waits_s"}
 BODY = '{"messages": ["a"], "placed": {}}'
 DRAFT = '{"messages": ["a draft"], "placed": {}}'
 

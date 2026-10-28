@@ -6,6 +6,10 @@ Flash and read by Gemini (``generators.core_default``, ``DEFAULT_READER``), APD'
 Spark Open alone, which is all they accept. ``--generator-prices`` and ``--reader-prices`` give a
 model's list prices (in,out USD per million tokens); a model whose prices were checked
 (``list_prices``) takes those unless they are given, and live, one without them is refused.
+
+A Gemini reader's calls go through one ``limiter.Limiter`` for the whole command: at most
+``--vertex-concurrency`` at once (default 4), their starts paced to ``--vertex-rpm`` a minute when
+given, so lives side by side don't send Vertex more than its quota takes.
 """
 from __future__ import annotations
 
@@ -13,9 +17,10 @@ import argparse
 import dataclasses
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import generators, readers
+from anjo.sleep.mind.apd import generators, readers, retry
 from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
+from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, Limiter
 from anjo.sleep.mind.apd.readers import READERS, Reader
 from anjo.sleep.mind.apd.types import CORE_SPLITS
 from anjo.sleep.mind.spark_provider import SparkProvider
@@ -34,6 +39,11 @@ def add(command: argparse.ArgumentParser) -> None:
                               "own splits take spark only, their default)")
     command.add_argument("--reader-prices", help="with --reader gemini: its in,out list prices (USD per million "
                          "tokens; default its checked list prices)")
+    command.add_argument("--vertex-concurrency", type=int, default=DEFAULT_CONCURRENCY,
+                         help=f"with --reader gemini: the most reads on Vertex at once across the run (default "
+                              f"{DEFAULT_CONCURRENCY})")
+    command.add_argument("--vertex-rpm", type=float,
+                         help="with --reader gemini: pace the reads' starts to this many a minute (default unpaced)")
 
 
 def split_of(args: argparse.Namespace) -> str:
@@ -97,6 +107,11 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
         parser.error(str(error))
     if not args.fake and writes.model is not None and generator_rate(args) is None:
         parser.error(f"--generator {writes.name} needs --generator-prices in,out to price its holds")
+    if getattr(args, "vertex_concurrency", DEFAULT_CONCURRENCY) < 1:
+        parser.error("--vertex-concurrency lets at least 1 read through at once")
+    rpm = getattr(args, "vertex_rpm", None)
+    if rpm is not None and rpm <= 0:
+        parser.error("--vertex-rpm paces more than 0 reads a minute")
 
 
 def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backend:
@@ -110,6 +125,17 @@ def apply(args: argparse.Namespace, backend: backends.Backend) -> backends.Backe
         found = dataclasses.replace(found, generator=writes,
                                     generator_rate=generator_rate(args) or (FAKE_GENERATOR_RATE if backend.fake else None))
     if reads.model is not None:
+        limiter = Limiter(args.vertex_concurrency, args.vertex_rpm)  # one for the whole command
         found = dataclasses.replace(found, read_by=reads, reader_rate=reader_rate(args),
-                                    reader=found.reader if backend.fake else backends.gemini_chat)
+                                    reader=limiter.limit(found.reader if backend.fake else backends.gemini_chat))
     return found
+
+
+def pace_note(args: argparse.Namespace) -> str:
+    """The plan's note on how a generation command's Gemini reads are limited and its 429s waited out."""
+    rpm = args.vertex_rpm
+    paced = "" if rpm is None else f", their starts paced to {rpm:g} a minute"
+    reads = ("" if reader(args).model is None
+             else f"Gemini reads: at most {args.vertex_concurrency} at once across the run{paced}; ")
+    return (f"{reads}a 429 waits its hint or a backoff (at most {retry.MAX_WAIT_S:g} s a wait) and tries again; "
+            f"an attempt a call still ended cools down {retry.ATTEMPT_COOL_DOWN_S:g} s before the next")

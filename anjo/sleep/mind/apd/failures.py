@@ -44,6 +44,8 @@ class AttemptFailure:
     reply_chars: int | None = None
     answer_chars: int | None = None  # what of the reply was read as its answer
     finish_reason: str | None = None
+    rate_limits: int = 0  # the attempt's tries answered 429
+    waits_s: tuple[float, ...] = ()  # the waits they were tried again after
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -52,7 +54,8 @@ class AttemptFailure:
     def from_json(cls, raw: Mapping[str, Any]) -> AttemptFailure:
         return cls(int(raw["attempt"]), str(raw["step"]), str(raw["error"]), str(raw["reason"]), _int(raw.get("day")),
                    _int(raw.get("item")), _str(raw.get("field")), _str(raw.get("rule")), _int(raw.get("reply_chars")),
-                   _int(raw.get("answer_chars")), _str(raw.get("finish_reason")))
+                   _int(raw.get("answer_chars")), _str(raw.get("finish_reason")), int(raw.get("rate_limits") or 0),
+                   tuple(float(wait) for wait in raw.get("waits_s") or ()))
 
 
 def _int(found: object) -> int | None:
@@ -108,6 +111,8 @@ def line(name: str, failure: AttemptFailure) -> str:
     reply = "" if failure.reply_chars is None else (
         f"; reply {failure.reply_chars} chars{answered}, finish {failure.finish_reason or 'unknown'}")
     rule = "" if failure.rule is None else f" [rule {failure.rule}]"
+    waited = ", ".join(f"{wait:g}" for wait in failure.waits_s) or "nothing"
+    limits = "" if not failure.rate_limits else f"; {failure.rate_limits} x HTTP 429, waited {waited} s"
     at = ", ".join(part for part in where if part)
     return (f"FAILED attempt {failure.attempt + 1} of {name} at the {failure.step}"
-            f"{' (' + at + ')' if at else ''}: {failure.error}: {failure.reason}{rule}{reply}")
+            f"{' (' + at + ')' if at else ''}: {failure.error}: {failure.reason}{rule}{reply}{limits}")
