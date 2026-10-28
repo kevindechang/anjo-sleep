@@ -1,9 +1,10 @@
 """``python -m anjo.sleep.mind.replay --fake``: replay end to end on offline fakes (Task 17b).
 
 Every step runs on the real kernel, loop and code, with ``replay.fakes`` in each model's place:
-the spend plan (priced with ``--prices``), the development lives' M runs, the start states,
-Spark Open's labels, the branches and their scores, both datasets, the training plan (a dry run:
-no runner, no hold), and the 17b arms on
+the spend plan (priced with ``--prices``, on the provider ``ANJO_SLEEP_MIND_SPARK`` names:
+``mind.spark_provider``), the development lives' M runs, the start states, Spark Open's labels
+(reporting that provider's id), the branches and their scores, both datasets, the training plan
+(a dry run: no runner, no hold), and the 17b arms on
 held-out lives under a fake judge. The fakes' numbers mean nothing; the run shows the whole path
 works with no key and no spend. Nothing is written to disk.
 
@@ -13,6 +14,7 @@ A live run (Glimmer on vLLM, Spark Open, Colab) needs Kevin's go and isn't wired
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
@@ -21,6 +23,7 @@ from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, score, settings
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.mind.replay.types import Branch, LabelBook, StartState
+from anjo.sleep.mind.spark_provider import SparkProvider, from_env
 from anjo.sleep.reports import replay as report
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.train import thinker
@@ -33,20 +36,30 @@ LIVE_STOP: Final = (
 
 
 def _sampled(
-    developed: Sequence[Life], seed: int, brief: str,
+    developed: Sequence[Life], seed: int, brief: str, model: str,
 ) -> tuple[list[StartState], LabelBook, Mapping[str, tuple[Branch, ...]], ReplayData]:
-    """Every development life's start states, labels and branches, and both datasets."""
+    """Every development life's start states, labels and branches (Spark Open reporting ``model``),
+    and both datasets."""
     starts: list[StartState] = []
     book = LabelBook()
     branches: dict[str, tuple[Branch, ...]] = {}
     for life in developed:
         found = sample.start_states(life, run_arm("M", life, fakes.fake_models(), brief=brief))
-        labels = resolve.label_all(found, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeLabelChat()))
+        labels = resolve.label_all(found, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeLabelChat(model)))
         for label in labels.labels.values():
             book = book.with_label(label)
-        branches.update(sample.sample_all([(life, found)], fakes.fake_replay_models(), labels, seed=seed, brief=brief))
+        branches.update(sample.sample_all([(life, found)], fakes.fake_replay_models(model), labels, seed=seed,
+                                          brief=brief))
         starts.extend(found)
     return starts, book, branches, dataset.build(developed, starts, branches, book, brief=brief, penalty=settings.token_penalty(), seed=seed)
+
+
+def _provider(parser: argparse.ArgumentParser) -> SparkProvider:
+    """The Spark Open provider ``ANJO_SLEEP_MIND_SPARK`` names; a name it doesn't know stops here."""
+    try:
+        return from_env(os.environ)
+    except ValueError as error:
+        parser.error(str(error))
 
 
 def _prices(text: str | None) -> Prices | None:
@@ -97,12 +110,13 @@ def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = prin
     if not args.fake:
         out(LIVE_STOP)
         return 2
+    provider = _provider(parser)
     brief = load_brief()
     out(f"Replay on fakes: {args.lives} development lives, {args.held_out} held-out lives. The numbers mean nothing.")
-    developed = [fakes.fake_life(n) for n in range(args.lives)]
-    held_out = [fakes.fake_life(100 + n, split="held_out") for n in range(args.held_out)]
-    starts, book, branches, data = _sampled(developed, args.seed, brief)
-    out(estimate.describe(estimate.estimate(starts, developed, held_out, _prices(args.prices))))
+    developed = [fakes.fake_life(n, model=provider.model) for n in range(args.lives)]
+    held_out = [fakes.fake_life(100 + n, split="held_out", model=provider.model) for n in range(args.held_out)]
+    starts, book, branches, data = _sampled(developed, args.seed, brief, provider.model)
+    out(estimate.describe(estimate.estimate(starts, developed, held_out, _prices(args.prices)), provider))
     out(_summary(starts, book, branches, data))
     if data.thinker1.examples:
         out(thinker.describe(thinker.plan(data)))

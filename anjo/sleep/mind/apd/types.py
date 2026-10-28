@@ -20,16 +20,18 @@ Cross-slot interfaces (frozen 2026-10-28)
 ``ChatFn`` is ``anjo.sleep.context.brief.ChatFn``. ``Workspace``, ``Budget``, ``InquiryRun`` and
 ``InquiryPorts`` are the inquiry's (``anjo.sleep.mind.inquiry``).
 
-- ``generate.life(field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: Split, chat: ChatFn) -> tuple[Life, ProblemFile]``
-  (17-gen): writes ``LIFE_DAYS`` virtual days of sessions on Spark Open (``life_v1.md``) with
+- ``generate.life(field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: Split, chat: ChatFn, model: str = SPARK_OPEN) -> tuple[Life, ProblemFile]``
+  (17-gen): writes ``LIFE_DAYS`` virtual days of sessions on Spark Open (``life_v1.md``), under
+  ``model``, its provider's exact id (``mind.spark_provider``; added 2026-10-28, optional), with
   ``prevalence`` planted items (0 to ``MAX_PREVALENCE``) from ``families`` and the split's own
   templates, then extracts the evidence and targets day by day with ``extract_open_v1.md``, so
   ``Life.targets`` holds the targets as each day ends. The same seed and the same model replies
   give the same life.
 - ``gates.pre_surface(life: Life, item: PlantedItem) -> tuple[Session, ...]`` (17-gen): the
   sessions before the item's surface day, the only text any gate reads for that item.
-- ``gates.check(life: Life, problems: ProblemFile, *, reader: ChatFn, auditor: ChatFn) -> tuple[GateVerdict, ...]``
-  (17-gen): leak and discoverability for every item, and the script audit for the life. The
+- ``gates.check(life: Life, problems: ProblemFile, *, reader: ChatFn, auditor: ChatFn, model: str = READER_MODEL) -> tuple[GateVerdict, ...]``
+  (17-gen): leak and discoverability for every item, read on ``model`` (as ``generate.life``),
+  and the script audit for the life. The
   discoverability reader gets the pre-surface prefix and ``PlantedItem.topic`` only, never the
   resolution or the template. A life passes only when every verdict passed. The gates run before any arm and are frozen; a failing
   life is regenerated, never filtered on what an arm or an untargeted reader finds.

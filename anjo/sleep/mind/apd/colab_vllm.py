@@ -16,8 +16,8 @@ uses (Tasks 17 and 17b; spec: "APD runs Glimmer on Colab vLLM at one precision f
    secret that leaves this machine is the session's own API key, drawn here at random for this
    session (``new_key``). It goes up as a file of its own (``KEY_FILE``, written 0600 here), which
    the start step reads into vLLM's environment and deletes: never in a command line, where
-   ``ps`` would show it. No ``.env``, and no Baseten, Meta or Google key, is ever uploaded or
-   passed.
+   ``ps`` would show it. No ``.env``, and no Baseten, Fireworks, Meta or Google key, is ever
+   uploaded or passed.
 3. **Reached through a tunnel.** ``ssh -N -L 127.0.0.1:<local>:127.0.0.1:8000`` with the Colab CLI as
    its ProxyCommand (``colab ssh --proxy-mode -s <session>``). The tunnel has a hard timeout of its
    own (a timer kills it at the session's deadline), and every CLI call runs under one. ``ssh``

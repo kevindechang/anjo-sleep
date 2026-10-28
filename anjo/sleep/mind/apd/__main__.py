@@ -23,6 +23,11 @@ session is stopped and its holds settled. On a Mac, a live command keeps the mac
 CLI, ``ssh`` and ``ssh-keygen`` are here (``colab_vllm.preflight``), then Glimmer's revision,
 vLLM's version, the precision and the reasoning strength against the pilot's first session
 (``DataDir.pin_serving``), and 17b's adapters before the VM boots.
+
+Spark Open runs on the one provider ``ANJO_SLEEP_MIND_SPARK`` names (``mind.spark_provider``:
+Fireworks by default, or Baseten), read once per command, its calls held on that provider's pool.
+A command that calls Spark Open first checks the provider against the data dir's
+(``DataDir.pin_spark``), so a pilot never mixes the two.
 """
 from __future__ import annotations
 
@@ -53,6 +58,7 @@ from anjo.sleep.mind.apd.live import RunFailed
 from anjo.sleep.mind.apd.pilot import Out
 from anjo.sleep.mind.apd.store import DataDir, StoreError
 from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, ArmName, Life, Split
+from anjo.sleep.mind.spark_provider import SparkProvider, from_env
 from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.prereg.ledger import (
@@ -81,6 +87,7 @@ STOPPED: Final = 3
 BUSY: Final = 4
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
+SPARK_COMMANDS: Final = ("generate", *SERVING_COMMANDS)  # the commands that call Spark Open
 # vLLM at temperature 0 isn't batch-invariant: a reply can change with what else is in its batch.
 # The intervention test's twins and kill-resume's runs are compared token for token, so they run
 # one at a time; mind.lock already keeps every other MIND command off the session.
@@ -136,6 +143,14 @@ def _rates(text: str | None) -> dict[str, Rate] | None:
     return None if parts is None else {MUSE: Rate(parts[0], parts[1]), GEMINI: Rate(parts[2], parts[3])}
 
 
+def _provider(parser: argparse.ArgumentParser) -> SparkProvider:
+    """Spark Open's provider, as ``ANJO_SLEEP_MIND_SPARK`` names it; a name it doesn't know stops here."""
+    try:
+        return from_env(os.environ)
+    except ValueError as error:
+        parser.error(str(error))
+
+
 def _parallel(args: argparse.Namespace) -> int:
     """Life-arms at once: one for ``SERIAL_COMMANDS``, else ``--parallel`` or ``PARALLEL``."""
     if args.command in SERIAL_COMMANDS:
@@ -161,24 +176,26 @@ def _lives(data: DataDir, split: Split, only: int | None) -> tuple[Life, ...]:
 # ── Plans ─────────────────────────────────────────────────────────────────────
 
 
-def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[str, Rate]) -> plan.Plan:
+def _plan(args: argparse.Namespace, data: DataDir, prices: Prices, rates: dict[str, Rate],
+          provider: SparkProvider) -> plan.Plan:
     session_s, parallel, measured = args.hours * 3600.0, _parallel(args), timing.load(data)
     split = _split(args)
     on_disk = len(_lives(data, split, args.only))
     if args.command == "generate":
         count = args.lives if split == "held_out" else len(generate.development_specs())
-        return plan.generate_plan(count if args.only is None else min(count, args.only), prices, rates, split)
+        return plan.generate_plan(count if args.only is None else min(count, args.only), prices, rates, split,
+                                  provider=provider)
     if args.command == "run":
         arms = pilot.HELD_OUT_ARMS + (pilot.REPLAY_ARMS if args.adapters else ()) if split == "held_out" else pilot.DEV_ARMS
-        return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured)
+        return plan.run_plan(on_disk, arms, prices, session_s, parallel, measured, provider=provider)
     if args.command == "timing":
-        return plan.timing_plan(prices, session_s, parallel)
+        return plan.timing_plan(prices, session_s, parallel, provider=provider)
     if args.command == "intervene":
-        return plan.intervene_plan(prices, session_s, measured)
+        return plan.intervene_plan(prices, session_s, measured, provider=provider)
     if args.command == "judge":
         return plan.judge_plan(rates)
     if args.command == "kill-resume":
-        return plan.kill_plan(prices, session_s, measured)
+        return plan.kill_plan(prices, session_s, measured, provider=provider)
     return plan.Plan("report: reads what is on disk", None, ())
 
 
@@ -286,6 +303,8 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
     run_s = timing.run_s(timing.load(data))
     if args.command == "kill-resume" or (args.command == "run" and split == "held_out"):  # held-out runs
         pilot.check_drawn(_entries(args, data, backend.fake), data.drawn())
+    if args.command in SPARK_COMMANDS:
+        data.pin_spark(backend.provider.name, backend.provider.model)
     if args.command in SERVING_COMMANDS:
         data.pin_serving(_pins(settings_))
     if args.command == "generate":
@@ -310,8 +329,9 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         with pilot.serving(backend, settings_, session_s, out) as session:
             measured = timing.time_pilot(data, session, backend, out, setup_s=time.monotonic() - started,
                                          parallel=_parallel(args))
-        left = None if backend.ledger is None else backend.ledger.remaining("baseten_mind_usd")
-        out(timing.describe(measured, spark_left=left))
+        pool = backend.provider.pool
+        left = None if backend.ledger is None else backend.ledger.remaining(pool)
+        out(timing.describe(measured, spark_left=left, pool=pool))
     elif args.command == "intervene":
         snaps = intervene.draw(data)  # before the VM: refused until every development M run is on disk
         with pilot.serving(backend, settings_, session_s, out) as session:
@@ -375,12 +395,13 @@ FAKE_ADAPTERS: Final = ("p-0123456789ab-n0", "p-ba9876543210-n0")  # thinker-1's
 FAKE_RATES: Final = {MUSE: Rate(1.25, 4.25), GEMINI: Rate(0.75, 3.75)}
 
 
-def _fake_backend(data: DataDir) -> backends.Backend:
-    """The fakes, held and priced on a ledger of the data dir's own at the real caps, so the
-    holds run as they would live (the fake prices are list-like; the fakes' tokens are tiny)."""
+def _fake_backend(data: DataDir, provider: SparkProvider) -> backends.Backend:
+    """The fakes, reporting ``provider``'s Spark Open id, held and priced on a ledger of the data
+    dir's own at the real caps, so the holds run as they would live (the fake prices are
+    list-like; the fakes' tokens are tiny)."""
     from anjo.sleep.budget import Ledger
 
-    return dataclasses.replace(backends.fake_backend(), ledger=Ledger(data.root / "fake-budget.jsonl"),
+    return dataclasses.replace(backends.fake_backend(provider), ledger=Ledger(data.root / "fake-budget.jsonl"),
                                prices=FAKE_PRICES, rates=FAKE_RATES)
 
 
@@ -392,8 +413,8 @@ def _fake_adapters(root: Path) -> Path:
     return folder
 
 
-def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out, *, whole: bool = True,
-           parallel: Sequence[str] = ()) -> int:
+def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out, provider: SparkProvider, *,
+           whole: bool = True, parallel: Sequence[str] = ()) -> int:
     """The whole pilot on the fakes, step by step through the same commands, ``parallel`` (the
     ``--parallel`` flag, if given) on the runs and timing only. On some lives only (``whole`` off,
     ``--only``), the intervention test, which draws from all the development lives, is left out."""
@@ -410,7 +431,7 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
         ["judge", "--held-out"], ["report"],
     ):
         out(f"$ {PROG} {' '.join([*base, *argv])}")
-        code = _guarded(parser.parse_args([*base, *argv]), data, _fake_backend(data), out)
+        code = _guarded(parser.parse_args([*base, *argv]), data, _fake_backend(data, provider), out)
         if code:
             return code
     return 0
@@ -425,14 +446,15 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     _check_parallel(parser, args)
+    provider = _provider(parser)
     if args.fake:
         data = DataDir(args.data or Path(tempfile.mkdtemp(prefix="apd-fake-")))
         out(f"APD on fakes in {data.root}. The numbers mean nothing.")
         if args.command in (None, "pilot"):
             base = ["--fake", "--data", str(data.root), *([] if args.only is None else ["--only", str(args.only)])]
             parallel = [] if args.parallel is None else ["--parallel", str(args.parallel)]
-            return _chain(parser, base, data, out, whole=args.only is None, parallel=parallel)
-        return _guarded(args, data, _fake_backend(data), out)
+            return _chain(parser, base, data, out, provider, whole=args.only is None, parallel=parallel)
+        return _guarded(args, data, _fake_backend(data, provider), out)
     if args.command in (None, "pilot"):
         parser.error("the whole chain runs only with --fake; live, run each command")
     if getattr(args, "prereg", None) is not None:
@@ -446,12 +468,13 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     if prices is None or rates is None:
         parser.error("--live needs --prices and --judge-prices to price its holds")
     data = DataDir(args.data)
-    out(plan.describe(_plan(args, data, Prices(*prices), rates)))
+    out(plan.describe(_plan(args, data, Prices(*prices), rates, provider)))
     if not args.yes:
         return 0
     from anjo.sleep.budget import default_ledger
     with _awake(live=True):
-        return _guarded(args, data, backends.live_backend(data.root, default_ledger(), Prices(*prices), rates), out)
+        live = backends.live_backend(data.root, default_ledger(), Prices(*prices), rates, provider)
+        return _guarded(args, data, live, out)
 
 
 if __name__ == "__main__":

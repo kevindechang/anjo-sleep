@@ -13,7 +13,9 @@
     <data>/timing.json                the last timing's measurements
     <data>/held_out_draw.json         the held-out draw: its seed's hash and count, checked at each run
     <data>/serving_pin.json           what every session serves: Glimmer's revision, vLLM's version,
-                                      the precision and the reasoning strength, fixed at first use
+                                      the precision and the reasoning strength, fixed at first use;
+                                      and Spark Open's provider and model id, fixed at the first
+                                      command that calls it (``mind.spark_provider``)
     <data>/judging/<judge>.jsonl      each judge's replies, by the hash of the prompt it was sent
     <data>/audit/pending.jsonl        the blind audit's questions (``judging``)
     <data>/audit/answers.jsonl        and Claude's answers, written by hand
@@ -208,14 +210,44 @@ class DataDir:
     def pin_serving(self, pins: Mapping[str, str]) -> None:
         """Fix what every session of this pilot serves at its first; refuse any session after that
         would serve another (every arm runs on one model, at one precision and rendering)."""
-        if not self.pin_path.exists():
-            write_text(self.pin_path, json.dumps(dict(pins), sort_keys=True))
-            return
-        found = json.loads(self.pin_path.read_text(encoding="utf-8"))
-        changed = sorted(name for name in {*found, *pins} if found.get(name) != pins.get(name))
+        changed = self._pin(pins)
         if changed:
             raise StoreError(f"this pilot serves another {', '.join(changed)} than its first session did "
                              f"({self.pin_path.name}); every arm runs on one")
+
+    def pin_spark(self, provider: str, model: str) -> None:
+        """Fix this pilot's Spark Open provider and model id at its first Spark Open command, beside
+        the serving pins; refuse the other provider after that, since the two may not serve the same
+        snapshot. A data dir whose lives predate the pin takes only the provider that wrote them."""
+        found = self._pins()
+        if "spark_model" not in found and self._writers() - {model}:
+            raise StoreError(f"this data dir holds lives written by another model than {model}; a pilot never mixes "
+                             "two providers' Spark Open")
+        if self._pin({"spark_provider": provider, "spark_model": model}):
+            raise StoreError(f"this pilot's Spark Open runs on {found.get('spark_provider')} "
+                             f"({found.get('spark_model')}), not {provider} ({self.pin_path.name}); a pilot never "
+                             "mixes the two providers")
+
+    def _writers(self) -> set[str]:
+        """The models that wrote the sessions of every life on disk."""
+        folder = self.root / "lives"
+        paths = sorted(folder.glob("*.json")) if folder.exists() else []
+        return {session.model for path in paths for session in self.life(path.stem).sessions}
+
+    def _pins(self) -> dict[str, str]:
+        if not self.pin_path.exists():
+            return {}
+        found: dict[str, str] = json.loads(self.pin_path.read_text(encoding="utf-8"))
+        return found
+
+    def _pin(self, pins: Mapping[str, str]) -> list[str]:
+        """The names in ``pins`` the file already fixes to another value; a name it doesn't fix yet
+        is fixed now (once nothing differs)."""
+        found = self._pins()
+        changed = sorted(name for name, value in pins.items() if name in found and found[name] != value)
+        if not changed and not set(pins) <= set(found):
+            write_text(self.pin_path, json.dumps({**found, **pins}, sort_keys=True))
+        return changed
 
     @property
     def drawn_path(self) -> Path:

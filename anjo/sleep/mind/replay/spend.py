@@ -10,11 +10,12 @@ step does in the night (``night/mind.py``).
   hold their Glimmer worst case on ``colab_cu`` (every thinker and ``world_query`` call of a night
   at the client's request timeout, at the A100 rate) and settle the wall time they took, while the
   VM serves them. When the session itself holds its whole worst case (``serve`` does), ``Holds``
-  is built with ``gpu=False``, so the VM's time is held once. The labels hold their Spark Open worst case on ``baseten_mind_usd`` (one call
-  per start state, at the most a call reads and writes), and so do the branches' resolver calls
-  (``MIND_SPARK_CALLS`` a branch, as a night's step); each settles the dollars it metered. A pool
-  without room stops replay before the call (``BudgetStop``). Without a ledger (tests and
-  ``--fake``) nothing is held.
+  is built with ``gpu=False``, so the VM's time is held once. The labels hold their Spark Open
+  worst case on the provider's pool (``Holds.spark_pool``: ``baseten_mind_usd``, or
+  ``fireworks_mind_usd`` as ``mind.spark_provider`` sets it; one call per start state, at the most
+  a call reads and writes), and so do the branches' resolver calls (``MIND_SPARK_CALLS`` a branch,
+  as a night's step); each settles the dollars it metered. A pool without room stops replay
+  before the call (``BudgetStop``). Without a ledger (tests and ``--fake``) nothing is held.
 
 The dry run's estimate of all of it is ``replay.estimate``.
 """
@@ -26,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Protocol
 from urllib.parse import urlsplit
 
-from anjo.sleep.budget import Bound, Ledger
+from anjo.sleep.budget import Bound, Ledger, Pool
 from anjo.sleep.mind.apd.colab_vllm import ColabSession
 from anjo.sleep.mind.replay.types import ReplayRefused
 from anjo.sleep.model_api import ChatResult
@@ -66,13 +67,14 @@ def colab_client(server: GlimmerServer) -> VllmClient:
 @dataclass(frozen=True)
 class Holds:
     """Where replay's spend is held: the ledger, the list prices, and the clock that times a GPU
-    phase (passed in, so nothing here reads one)."""
+    phase (passed in, so nothing here reads one); Spark Open on the provider's ``spark_pool``."""
 
     ledger: Ledger
     prices: Prices
     timer: Callable[[], float]
     job: str = "replay"
     gpu: bool = True  # False when the serving session holds the VM's time itself
+    spark_pool: Pool = SPARK_POOL
 
 
 @dataclass
@@ -110,12 +112,12 @@ def held_gpu(holds: Holds | None, key: str, nights: int) -> Iterator[None]:
 
 @contextmanager
 def held_spark(holds: Holds | None, key: str, calls: int, meter: SparkMeter | None) -> Iterator[None]:
-    """``calls`` Spark Open calls held on ``baseten_mind_usd``, settled at what ``meter`` priced."""
+    """``calls`` Spark Open calls held on the provider's pool, settled at what ``meter`` priced."""
     if holds is None:
         yield
         return
     if meter is None:
         raise ValueError("a held step meters what it spends")
-    with held(holds.ledger, f"{holds.job}:{key}", (SPARK_POOL,), usd(spark_worst_usd(holds.prices, calls)),
+    with held(holds.ledger, f"{holds.job}:{key}", (holds.spark_pool,), usd(spark_worst_usd(holds.prices, calls)),
               lambda: meter.usd):
         yield

@@ -164,9 +164,10 @@ def test_a_night_stops_at_once_when_sleeps_holds_are_not_what_blocks_it(tmp_path
     assert waits == []
 
 
-def test_a_budget_stop_ends_the_command_cleanly(tmp_path: Path) -> None:
+def test_a_budget_stop_ends_the_command_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.mind.apd import __main__ as cli
 
+    monkeypatch.setenv("ANJO_SLEEP_MIND_SPARK", "baseten")  # MIND on Baseten shares its credit with Sleep
     lines: list[str] = []
     assert cli.main(["--fake", "--data", str(tmp_path), "--only", "1", "generate"], out=lines.append) == 0
     ledger = Ledger(tmp_path / "fake-budget.jsonl", caps=CAPS)

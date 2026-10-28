@@ -50,3 +50,11 @@ def no_aws_identity(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.Te
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     for name in _AWS_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def default_mind_spark(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MIND's experiment on its default Spark Open provider, with no Fireworks key, whatever this
+    shell sets: a test that wants another provider or a key sets it."""
+    monkeypatch.delenv("ANJO_SLEEP_MIND_SPARK", raising=False)
+    monkeypatch.delenv("ANJO_FIREWORKS_API_KEY", raising=False)

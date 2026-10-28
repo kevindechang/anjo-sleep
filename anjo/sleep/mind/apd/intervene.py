@@ -13,8 +13,8 @@ the snapshot.
   planted problems, so the injected one is plausible and wrong. A held-out life's problem file is
   never read here (``DataDir.development_problems``).
 - **Spend:** each snapshot-edit is one work item, its Spark Open calls (both twins' screen and
-  resolver, and the writer's) held first on ``baseten_mind_usd`` at ``EDIT_SPARK_CALLS`` calls'
-  worst case and journaled (``SparkCalls``), as the runs are held.
+  resolver, and the writer's) held first on the provider's pool (``mind.spark_provider``) at
+  ``EDIT_SPARK_CALLS`` calls' worst case and journaled (``SparkCalls``), as the runs are held.
 - **Never twice, never mixed:** each finished item is stored under its snapshot's identity
   (``item_name``: the life, its M run, the step the snapshot ends at and its question, then the
   edit) and skipped on a rerun; only the draw's own items are read back (``on_disk``). An item
@@ -116,7 +116,7 @@ def _item(
     name = item_name(snap, kind)
     spend = fresh_journal(data, f"{'' if keep else 'timing-'}intervene-{name}", backend, out, life_id=life.id,
                           arm=f"intervention {name}")
-    spark = SparkCalls(backend.spark, backend.prices, backend.ledger, f"intervene:{name}",
+    spark = SparkCalls(backend.spark, backend.prices, backend.ledger, f"intervene:{name}", pool=backend.provider.pool,
                        per_night=EDIT_SPARK_CALLS, journal=spend, wait=backend.sleep)
     models = arm_models(session, spark)
     date_night(models.clock, resume_point(snap.events).start.night)

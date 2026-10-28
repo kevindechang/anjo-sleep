@@ -140,7 +140,7 @@ def _run_one(
     try:
         found = run_live(arm, life, session, backend.spark, ledger=backend.ledger, prices=backend.prices,
                          adapter=adapter, key=f"{prefix}run:{life.id}:{arm}", journal=spend, meter=meter,
-                         wait=backend.sleep)
+                         wait=backend.sleep, pool=backend.provider.pool)
     except RunFailed as error:
         failed_alone(data, out, f"{prefix}{arm}", life.id, error)
         return None

@@ -12,8 +12,8 @@ It prints the measured throughput (thinker calls a minute, compute units per lif
 the expected Spark Open spend per call and per MIND night, then projects the held-out step for 16
 and 12 lives, with and without M-control and 17b, kill-resume and the intervention test included,
 against the ``colab_cu`` cap and ``COLAB_LINE``, and its expected Spark Open spend against the
-``baseten_mind_usd`` cap. The measurements are kept (``timing.json``), so each plan shows the
-expected spend beside its worst-case holds.
+provider's cap (``fireworks_mind_usd`` or ``baseten_mind_usd``). The measurements are kept
+(``timing.json``), so each plan shows the expected spend beside its worst-case holds.
 
 **The model:** the A100 is billed by the hour whatever runs on it, so a life-arm night costs the
 batch's compute units over its life-arm nights at this parallelism. A step that runs one at a
@@ -31,7 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from anjo.sleep.budget import CAPS
+from anjo.sleep.budget import CAPS, Pool
 from anjo.sleep.mind.apd import intervene
 from anjo.sleep.mind.apd.arms import date_night, load_brief
 from anjo.sleep.mind.apd.backend import Backend
@@ -55,13 +55,13 @@ from anjo.sleep.mind.apd.types import (
 from anjo.sleep.mind.replay import dataset, resolve, sample, served, settings
 from anjo.sleep.mind.replay.spend import Holds
 from anjo.sleep.mind.replay.types import REPLAY_K, Branch, StartState
+from anjo.sleep.mind.spark_provider import BASETEN
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.train import thinker
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR
 
 COLAB_CAP: Final = CAPS["colab_cu"]
 COLAB_LINE: Final = 300.0  # compute units the held-out runs must stay under, or the cut order applies
-SPARK_CAP: Final = CAPS["baseten_mind_usd"]
 RUN_MARGIN: Final = 1.5  # a life-arm's measured wall time, with room for a slower one
 DEV_ARMS: Final[tuple[ArmName, ...]] = ("B", "M")
 
@@ -146,8 +146,9 @@ def run_s(timing: Timing | None) -> float:
     return MIN_SERVE_S if timing is None else LIFE_DAYS * timing.night_wall_s * RUN_MARGIN
 
 
-def describe(timing: Timing, *, spark_left: float | None = None) -> str:
-    t = timing
+def describe(timing: Timing, *, spark_left: float | None = None, pool: Pool = BASETEN.pool) -> str:
+    """The measurements and the projection, the Spark Open spend against ``pool``'s cap."""
+    t, spark_cap = timing, CAPS[pool]
     lines = [
         f"Timed at --parallel {t.parallel}: {t.batch_runs} life-arm run(s) of B and M in {t.batch_s / 60:.1f} min "
         f"({cu(t.batch_s):.2f} CU): {t.thinker_calls} thinker calls, {t.thinker_per_minute:.1f} thinker calls per "
@@ -167,7 +168,7 @@ def describe(timing: Timing, *, spark_left: float | None = None) -> str:
                     f"N={lives}, {'with' if control else 'without'} M-control, {'with' if replay else 'without'} 17b: "
                     f"{units:.1f} CU ({_against(units, COLAB_CAP)} the {COLAB_CAP:.0f} CU cap, "
                     f"{_against(units, COLAB_LINE)} the {COLAB_LINE:.0f}-unit line); Spark Open expected ${spark:.2f} "
-                    f"({_against(spark, SPARK_CAP)} the ${SPARK_CAP:.0f} baseten_mind_usd cap"
+                    f"({_against(spark, spark_cap)} the ${spark_cap:.0f} {pool} cap"
                     + ("" if spark_left is None else f", {_against(spark, spark_left)} the ${spark_left:.2f} left")
                     + ")"
                 )
@@ -199,7 +200,7 @@ def _branches(life: Life, start: StartState, labels: resolve.LabelBook, session:
     """One start state's branches: their world query dated on its night, as their thinkers are,
     and their screen's Spark Open held for this start state alone, settled before the next."""
     screen = SparkCalls(backend.spark, backend.prices, backend.ledger, f"timing:branch-screens:{start.id}",
-                        per_night=REPLAY_K * MIND_SPARK_CALLS)
+                        backend.provider.pool, per_night=REPLAY_K * MIND_SPARK_CALLS)
     models = arm_models(session, screen)
     date_night(models.clock, start.night)
     replay_models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=models.world,
@@ -215,8 +216,9 @@ def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, 
     training planned as a dry run for all the development lives at this life's rows."""
     starts = sample.start_states(life, m_run)
     holds = None if backend.ledger is None or backend.prices is None else Holds(
-        backend.ledger, backend.prices, clock, job="apd:timing", gpu=False)
-    metered = SparkCalls(backend.spark, backend.prices, per_night=10**9)  # 17b holds these itself
+        backend.ledger, backend.prices, clock, job="apd:timing", gpu=False, spark_pool=backend.provider.pool)
+    metered = SparkCalls(backend.spark, backend.prices, pool=backend.provider.pool,
+                         per_night=10**9)  # 17b holds these itself
     labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=metered), holds=holds)
     branches: dict[str, tuple[Branch, ...]] = {}
     screens, started = 0.0, clock()

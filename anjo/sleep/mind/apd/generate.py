@@ -204,13 +204,13 @@ def _beats(plans: Sequence[_Plan]) -> dict[int, list[_Beat]]:
     return by_day
 
 
-def _check_model(reply: ChatResult) -> None:
-    if reply.model != SPARK_OPEN:
-        raise ModelMismatch("a reply doesn't name Spark Open")
+def _check_model(reply: ChatResult, model: str) -> None:
+    if reply.model != model:
+        raise ModelMismatch("a reply doesn't name Spark Open as the experiment's provider serves it")
 
 
 def _write_day(
-    chat: ChatFn, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
+    chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
     beats: Sequence[_Beat],
 ) -> tuple[list[str], dict[str, int]]:
     payload = {
@@ -223,8 +223,8 @@ def _write_day(
         {"role": "system", "content": LIFE_PROMPT.read_text(encoding="utf-8")},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
-    reply = chat(SPARK_OPEN, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
-    _check_model(reply)
+    reply = chat(model, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+    _check_model(reply, model)
     try:
         body = gates.json_object(reply.text)
     except gates.GateError:
@@ -248,21 +248,24 @@ def _check_placed(placed: dict[Any, Any], beats: Sequence[_Beat], count: int) ->
     return {str(k): int(v) for k, v in placed.items()}
 
 
-def _extractor(chat: ChatFn) -> Callable[[list[dict[str, Any]]], ChatResult]:
+def _extractor(chat: ChatFn, model: str) -> Callable[[list[dict[str, Any]]], ChatResult]:
     """Task 3's ``extract`` with ``extract_open_v1.md`` as its prompt."""
     system = EXTRACT_PROMPT.read_text(encoding="utf-8")
 
     def call(messages: list[dict[str, Any]]) -> ChatResult:
         swapped = [{"role": "system", "content": system}, *messages[1:]]
-        return chat(SPARK_OPEN, swapped, None, TIMEOUT_S, temperature=EXTRACT_TEMPERATURE)
+        return chat(model, swapped, None, TIMEOUT_S, temperature=EXTRACT_TEMPERATURE)
 
     return call
 
 
 def life(
     field: str, families: Sequence[Family], prevalence: int, seed: int, *, split: Split, chat: ChatFn,
+    model: str = SPARK_OPEN,
 ) -> tuple[Life, ProblemFile]:
-    """One life of ``LIFE_DAYS`` days with ``prevalence`` planted items, and its sealed file."""
+    """One life of ``LIFE_DAYS`` days with ``prevalence`` planted items, and its sealed file.
+    ``model`` is Spark Open's id on the experiment's provider (``mind.spark_provider``): every call
+    asks for it, every reply must name it, and every session and item records it."""
     if field not in fields(split):
         raise ValueError(f"{field!r} is not a {split} field")
     plans = plan(split, field, families, prevalence, seed)
@@ -277,27 +280,27 @@ def life(
     earlier: list[dict[str, Any]] = []
     for index, day in enumerate(days):
         today = beats.get(index, [])
-        texts, placed = _write_day(chat, field, index, day, seed, earlier, today)
-        turns = [Turn(f"{life_id}:d{index}:m{i}", "user", text, frozenset({SPARK_OPEN})) for i, text in enumerate(texts)]
+        texts, placed = _write_day(chat, model, field, index, day, seed, earlier, today)
+        turns = [Turn(f"{life_id}:d{index}:m{i}", "user", text, frozenset({model})) for i, text in enumerate(texts)]
         spots.update({beat: turns[i].source for beat, i in placed.items()})
-        found = _extract_day(chat, life_id, day, turns, tuple(held.values()), {e.id for e in evidence})
+        found = _extract_day(chat, model, life_id, day, turns, tuple(held.values()), {e.id for e in evidence})
         evidence.extend(found.items)
         held.update(_fold_targets(held, found.mentions, life_id, day))
         targets[day] = tuple(sorted(held.values(), key=lambda t: t.id))
-        sessions.append(Session(day, "\n\n".join(texts), SPARK_OPEN))
+        sessions.append(Session(day, "\n\n".join(texts), model))
         earlier.append({"day": index + 1, "messages": texts})
     built = Life(life_id, field, seed, split, days, tuple(sessions), tuple(evidence), targets)
     return built, _problem_file(built, plans, spots)
 
 
 def _extract_day(
-    chat: ChatFn, life_id: str, day: date, turns: list[Turn], open_targets: tuple[Target, ...],
+    chat: ChatFn, model: str, life_id: str, day: date, turns: list[Turn], open_targets: tuple[Target, ...],
     known: set[str],
 ) -> Any:
     now = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) + END_OF_DAY
     try:
         return extract(life_id, day, turns, imported=(), targets=open_targets, known_ids=frozenset(known),
-                       now=now, chat=_extractor(chat))
+                       now=now, chat=_extractor(chat, model), model=model)
     except ExtractionError as exc:
         raise GenerationFailed(f"extraction failed: {exc}") from None
 

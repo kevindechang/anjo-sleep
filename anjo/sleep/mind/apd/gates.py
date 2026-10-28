@@ -55,17 +55,18 @@ def pre_surface(life: Life, item: PlantedItem) -> tuple[Session, ...]:
 
 
 def check(
-    life: Life, problems: ProblemFile, *, reader: ChatFn, auditor: ChatFn,
+    life: Life, problems: ProblemFile, *, reader: ChatFn, auditor: ChatFn, model: str = READER_MODEL,
 ) -> tuple[GateVerdict, ...]:
-    """Leak and discoverability for every item, then the script audit for the life."""
+    """Leak and discoverability for every item, then the script audit for the life. The readers
+    ask for ``model``: Spark Open's id on the experiment's provider."""
     if problems.life_id != life.id:
         raise ValueError("the problem file belongs to another life")
     verdicts: list[GateVerdict] = []
     for item in problems.items:
         days = _days(pre_surface(life, item))
         views = {"sessions": days, "evidence": _arm_days(life, item, days)}
-        verdicts.append(_leak(item, views, reader))
-        verdicts.append(_discoverability(life, item, days, reader, auditor))
+        verdicts.append(_leak(item, views, reader, model))
+        verdicts.append(_discoverability(life, item, days, reader, auditor, model))
     verdicts.append(_audit(life, problems, auditor))
     return tuple(verdicts)
 
@@ -108,10 +109,11 @@ def _arm_days(life: Life, item: PlantedItem, days: list[dict[str, str]]) -> list
     return [{"date": day, "text": "\n".join(lines[day])} for day in sorted(lines)]
 
 
-def _leak(item: PlantedItem, views: Mapping[str, list[dict[str, str]]], reader: ChatFn) -> GateVerdict:
+def _leak(item: PlantedItem, views: Mapping[str, list[dict[str, str]]], reader: ChatFn,
+          model: str = READER_MODEL) -> GateVerdict:
     for view, days in views.items():
         for window in _windows(days):
-            reply = _ask(reader, READER_MODEL, LEAK_PATH.read_text(encoding="utf-8"), {
+            reply = _ask(reader, model, LEAK_PATH.read_text(encoding="utf-8"), {
                 "topic": item.topic, "family": item.family, "view": view, "days": window})
             flag = reply.get("flag")
             if not isinstance(flag, bool):
@@ -122,9 +124,9 @@ def _leak(item: PlantedItem, views: Mapping[str, list[dict[str, str]]], reader: 
 
 
 def _discoverability(
-    life: Life, item: PlantedItem, days: list[dict[str, str]], reader: ChatFn, auditor: ChatFn,
+    life: Life, item: PlantedItem, days: list[dict[str, str]], reader: ChatFn, auditor: ChatFn, model: str,
 ) -> GateVerdict:
-    reply = _ask(reader, READER_MODEL, DISCOVER_PATH.read_text(encoding="utf-8"),
+    reply = _ask(reader, model, DISCOVER_PATH.read_text(encoding="utf-8"),
                  {"topic": item.topic, "days": days})
     found, cited, statement = reply.get("found"), reply.get("days"), reply.get("statement", "")
     if not isinstance(found, bool) or not isinstance(cited, list) or not isinstance(statement, str):
