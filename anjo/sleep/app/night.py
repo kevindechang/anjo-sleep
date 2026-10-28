@@ -14,7 +14,8 @@ it off the serving path). Everything else is here:
 - her chooser (``StateChooser``) with the registered policy and the outcome ledger's intentions;
 - probes: a synthetic person's were sealed once (``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``);
   a real person's are written from the day's evidence by Muse Spark and sealed before training;
-- the safety gate on Anjo's crisis corpus and reply check (``safety_gate``);
+- the safety gate on Anjo's crisis corpus and reply check (``safety_gate``), off unless
+  ``ANJO_SLEEP_SAFETY_GATE=on`` (the floor only, logged ``skipped``);
 - the held note through outreach (``delivery``), its final text through the reply check;
 - every paid step's hold on the sleep host's budget ledger;
 - practice's calls and the generation gates' (collapse, safety) side by side, ``ANJO_SLEEP_CONCURRENCY``
@@ -53,7 +54,7 @@ from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pendi
 from anjo.sleep.app.intentions import LedgerIntentions
 from anjo.sleep.app.policy import build_policy
 from anjo.sleep.app.recall import MiniLmRecall
-from anjo.sleep.app.safety_gate import load_cases
+from anjo.sleep.app.safety_gate import gate_on, load_cases
 from anjo.sleep.app.storage import (
     CODEC,
     SLEEP_DIR,
@@ -154,7 +155,7 @@ class AppGates:
         self._workers = workers  # the generation gates' calls at once (ANJO_SLEEP_CONCURRENCY)
         self._cache = cache
         self._general = GeneralGate(client, cache=cache)  # log-probabilities only: the server's concurrency
-        self._safety = SafetyGate(client, load_cases, workers=workers, cache=cache)
+        self._safety = SafetyGate(client, load_cases, workers=workers, cache=cache, enabled=gate_on())
 
     def for_person(self, user_id: str) -> Mapping[str, GateCheck]:
         collapse = CollapseGate(self._client, self._fields(user_id), workers=self._workers, cache=self._cache)

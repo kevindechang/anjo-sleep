@@ -7,8 +7,11 @@
 her state decides what to work on: she follows up on a plan you dated, or studies a topic you
 left open. She practises the kind of conversation you have, a personal adapter trains on that
 practice, and three gates check the result: general skills, collapse into your field, and
-safety. Only a night that passes every gate is promoted. After a night that fails or is
-rejected, the last good model keeps serving.
+safety. Only a night that passes every gate it runs is promoted. For the hackathon the safety
+gate is switched off (`ANJO_SLEEP_SAFETY_GATE`): it sends no case to a model, runs only its
+deterministic floor, and is logged and shown as skipped, never as passed. Anjo's reply check
+still guards every reply a person sees. After a night that fails or is rejected, the last good
+model keeps serving.
 
 **State decides, weights learn.** What Anjo knows about you stays in her state: the evidence
 store, the brief, her targets and the receipts for every choice she made. Facts stay word for

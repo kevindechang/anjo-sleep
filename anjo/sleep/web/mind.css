@@ -177,7 +177,7 @@
 }
 .tag-won, .tag-pass, .tag-active { border-color: var(--pass); color: var(--pass); }
 .tag-fail { border-color: var(--fail); color: var(--fail); }
-.tag-parked, .tag-waiting { border-style: dashed; }
+.tag-parked, .tag-waiting, .tag-skip { border-style: dashed; }
 .num { font: 500 0.8125rem/1.4 var(--mono); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .label { font: 600 0.6875rem/1.3 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-faint); }
 .faint { color: var(--ink-faint); }
