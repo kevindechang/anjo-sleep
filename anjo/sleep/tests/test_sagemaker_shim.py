@@ -192,6 +192,7 @@ def test_the_container_serves_from_s3_weights_with_the_registered_flags(tmp_path
                      "--max-model-len": str(config.MAX_MODEL_LEN), "--quantization": "fp8"}
     assert "--enable-lora" in command and "--language-model-only" in command
     env = shim.vllm_env({})
+    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0" == shim.vllm_env({"VLLM_USE_FLASHINFER_SAMPLER": "1"})["VLLM_USE_FLASHINFER_SAMPLER"]
     assert env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] == "True" and env["HF_HUB_OFFLINE"] == "1"
     assert "VLLM_PLUGINS" not in env  # adapters come from the shim's checked S3 fetch, not a resolver
     assert shim.SHIM_PORT == 8080

@@ -44,6 +44,7 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert "--enable-auto-tool-choice" not in command  # no parser: turns run without tools
     assert not any("KEY" in part or "TOKEN" in part for part in command)
     env = config.vllm_env()
+    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"  # no nvcc in the image for FlashInfer's JIT
     assert env["VLLM_PLUGINS"] == "lora_filesystem_resolver"
     assert env["VLLM_LORA_RESOLVER_CACHE_DIR"] == config.ADAPTERS_DIR
 
@@ -240,6 +241,7 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
     assert (web["port"], web["startup_timeout"]) == (config.PORT, config.STARTUP_TIMEOUT_S)
     (env,) = recorder.by("env")
     assert env["values"][config.REVISION_ENV] == REVISION
+    assert env["values"]["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert not any("KEY" in name or "TOKEN" in name for name in env["values"])
     (packages,) = recorder.by("pip_install")
     assert f"vllm=={config.DEFAULT_VLLM_VERSION}" in packages["packages"]

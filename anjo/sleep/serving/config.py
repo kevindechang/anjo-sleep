@@ -221,10 +221,16 @@ def vllm_command(
     return command
 
 
+# FlashInfer's sampler JIT-builds a kernel with nvcc at warm-up, and the images carry no CUDA toolkit;
+# 0 makes vLLM's V2 sampler use its native top-k/top-p + Gumbel path.
+NATIVE_SAMPLER_ENV: Final = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
+
+
 def vllm_env() -> dict[str, str]:
     """The server's environment beside the secret: adapters resolve from the adapters volume by
     name, and Hugging Face's cache stays on the weights volume."""
     return {
+        **NATIVE_SAMPLER_ENV,
         "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True",
         "VLLM_PLUGINS": "lora_filesystem_resolver",
         "VLLM_LORA_RESOLVER_CACHE_DIR": ADAPTERS_DIR,
