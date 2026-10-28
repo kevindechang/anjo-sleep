@@ -47,6 +47,10 @@ downloaded):
    ``channel`` block, cold, the fold on, on rows made under core states (a fresh projector trained with
    the LoRA in one loop, seeding's teacher on the night-start adapter and projector), then night 8 the
    channel's own run (``channel_train``, ``sft_dpo``) warm from night 7's adapter and projector.
+10. runs the protected slot (``protect=anchors``, ``sleep_protect.py``): night 9 warm from night 4's rank-32
+   adapter, the anchors' basis read at every LoRA module, tonight's 16 ranks trained off it beside the 32
+   long-term ones and written into the weights (none left on the basis), and the protected cut back to 32,
+   which PEFT loads as a plain LoRA.
 
 It prints one line per step and exits 1 on the first failed check.
 
@@ -428,8 +432,8 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
             raise SmokeError(f"{night} wrote {present}, without the files the runner downloads")
     lines.append(f"target_modules: {colab_train.lora_targets(DEFAULT_TARGET_MODULES)}")
     lines.append("switches off: both nights' recipes and receipts are exactly today's (no terms, no match_minutes)")
-    return [*lines, *seed_nights(python, base, root, template), *control_nights(python, base, root, template),
-            *channel_nights(python, base, root, template)]
+    return [*lines, *seed_nights(python, base, root, template), *protect_night(python, base, root, template),
+            *control_nights(python, base, root, template), *channel_nights(python, base, root, template)]
 
 
 def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
@@ -464,6 +468,28 @@ def seed_nights(python: str, base: Path, root: Path, template: Mapping[str, str]
                  f"{rank}; PEFT loads it as a plain LoRA, r {loaded['r']}, alpha {loaded['alpha']}, "
                  f"{loaded['modules']} modules, the file's weights exactly")
     return lines
+
+
+def protect_night(python: str, base: Path, root: Path, template: Mapping[str, str]) -> list[str]:
+    """Night 9: ``sft_dpo_seed`` with the fold and ``protect=anchors``, warm from night 4's rank-32 adapter."""
+    data = seed_smoke_dataset()
+    cfg = LoraCfg(objective="sft_dpo_seed", min_optimizer_steps=MIN_STEPS, fold_rank=config.MAX_LORA_RANK,
+                  protect="anchors")
+    recipe = {**training_config(cfg, len(data.examples), warm=True, revision=REVISION, night=NIGHT), **template}
+    ninth = _night(python, base, root / "night9", recipe, replace(data, dreams=()), root / "night4" / "out")
+    rank = config.MAX_LORA_RANK
+    check_seed_receipt(ninth, folded_to=rank, long_term=rank, dpo_lr=cfg.dpo_lr)
+    check_adapter(root / "night9" / "out", layers=smoke_model.LAYERS, r=rank, rendering=str(recipe["rendering"]))
+    loaded = check_peft_load(python, base, root / "night9" / "out", rank)
+    terms: Mapping[str, Any] = ninth["terms"]  # type: ignore[assignment]
+    guard = terms.get("protect") or {}
+    if (guard.get("basis") != "anchors" or guard.get("modules") != loaded["modules"] or not guard.get("rank_min")
+            or guard.get("sequences") != guard.get("sequences_asked") or not guard.get("slot_left_on_basis", 1.0) < 1e-5):
+        raise SmokeError(f"night 9's protected slot isn't what the recipe asked for: {guard}")
+    return [f"night 9 (sft_dpo_seed, warm, fold, protect=anchors): a basis of rank {guard['rank_min']} to {guard['rank']} "
+            f"at {guard['modules']} modules from {guard['sequences']} anchor passes ({guard['energy']:.0%} of their rows) "
+            f"in {guard['minutes']} min; slot left on it {guard['slot_left_on_basis']:.1e}; {rank} long-term (moved "
+            f"{terms['long_term_drift']}) + {cfg.r} fresh, protected cut to {rank}; PEFT loads it, r {loaded['r']}"]
 
 
 def check_match(receipt: Mapping[str, Any], planned: int) -> Mapping[str, Any]:

@@ -171,6 +171,32 @@ def test_yes_refuses_a_missing_token_file(tmp_path: Path, monkeypatch: pytest.Mo
     assert "    seed: token file ok" in lines and "    today: no token file" in lines
 
 
+PROTECT = ["--account", "seed=a", "--account", "today=b", "--account", "fold=c", "--account", "protect=d",
+           "--account", "protect_random=e"]
+
+
+def test_protect_runs_after_the_fold_with_its_random_twin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    monkeypatch.setenv(objective.PROTECT_ENV, "anchors")  # a stray switch in the shell never reaches an arm
+    runs, lines = _Runs(root, ledger), list[str]()
+    assert live.main([*PROTECT, *_tokens(tmp_path, PROTECT), "--days", "1", "--night-usd", "2.0", "--yes"], run=runs,
+                     out=lines.append, now=lambda: NOW) == 0
+    assert [c["account"] for c in runs.calls] == ["a", "b", "c", "d", "e"]
+    seed, today, fold, protect, twin = runs.calls
+    assert protect["env"][objective.PROTECT_ENV] == "anchors" and twin["env"][objective.PROTECT_ENV] == "random"
+    assert protect["env"][objective.FOLD_ENV] == twin["env"][objective.FOLD_ENV] == "1"  # the slot the fold keeps apart
+    assert twin["match"] is None and not any(objective.PROTECT_ENV in c["env"] for c in (seed, today, fold))
+    assert not any("part from" in line for line in lines)  # the twin's minutes matched protect's
+    assert live.arm_usd("protect_random", 3, 2.0) == live.arm_usd("protect", 3, 2.0) == round(3 * 2.0 + 3 * 4.6 / 60 * 2.5, 2)
+    for bad in (PROTECT[:8], [*PROTECT[:4], *PROTECT[6:]], [*PROTECT[:6], *PROTECT[8:]]):  # no twin, no fold, no protect
+        with pytest.raises(SystemExit):
+            live.main(bad, out=lambda line: None)
+    _night(root, "e", "2026-10-25", minutes={"sft": 9.0, "seed": 9.0})  # the twin trains far longer one night
+    flagged: list[str] = []
+    live.report(root, dict(pair.split("=") for pair in PROTECT[1::2]), flagged.append)
+    assert any(line.startswith("  protect_random: its training minutes part from protect's") for line in flagged)
+
+
 def test_unwired_dreams_skip_their_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ledger = _setup(tmp_path, monkeypatch)
     runs, lines = _Runs(root, ledger, dreams=DREAMS_NOT_WIRED), list[str]()
