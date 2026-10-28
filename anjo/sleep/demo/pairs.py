@@ -13,6 +13,12 @@ visit's flood can't crowd the registry. ``check_room`` refuses an ask before it 
 pair ``open`` would refuse. One vote per starter scene is the address's, a day
 (``Limiter.claim_scene_vote``), since a reload starts a new visit.
 
+**Settled scenes.** ``settled`` says whether a visit has voted on a starter scene's pair, or was
+shown one that takes no vote. Only then may it see that scene's answers outside the blind pair (the
+toggles, the night slider): her weights notes off share arm 4's weights, so seeing them first would
+let a visitor match the style and vote informed. A visit's settled scenes are remembered past its
+pairs' expiry, for the last ``MAX_TRACKED`` visits.
+
 Pairs live in memory for ``PAIR_TTL_S``. Past ``MAX_PAIRS`` a new pair is refused (``busy``) rather
 than the oldest dropped, so a flood never expires someone's pair before they vote. A restart forgets
 the open ones, and a vote on one is refused as expired.
@@ -24,7 +30,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Final, Literal, get_args
+from typing import Final, Literal, TypeVar, get_args
 
 from anjo.sleep.demo.limits import Refused
 
@@ -35,6 +41,7 @@ OPEN_PER_VISIT: Final = 8  # unvoted pairs a visit may hold at once
 VOTES_PER_VISIT: Final = 15  # the five scenes and ten questions of their own
 MAX_PAIRS: Final = 20_000  # above every visit's open pairs together (Limits.visits_per_day × 8 < 20,000)
 MAX_TRACKED: Final = 10_000  # visits whose votes are remembered; past it the least recent go first
+V = TypeVar("V")
 
 
 @dataclass(frozen=True)
@@ -88,6 +95,7 @@ class PairRegistry:
         self._pairs: OrderedDict[str, _Pair] = OrderedDict()
         self._waiting: dict[str, int] = {}
         self._votes: OrderedDict[str, int] = OrderedDict()
+        self._settled: OrderedDict[str, frozenset[str]] = OrderedDict()
         self._lock = threading.Lock()
 
     def open(
@@ -102,6 +110,8 @@ class PairRegistry:
             pair = _Pair(visit, scene, left, right, votable, now.timestamp() + self._ttl_s)
             self._pairs[pair_id] = pair
             self._count(pair, 1)
+            if scene is not None and not votable:
+                self._settle(visit, scene)
 
     def check_room(self, visit: str, now: datetime) -> None:
         """Refuse now what opening one more of ``visit``'s pairs would: too many open, or no room."""
@@ -114,6 +124,11 @@ class PairRegistry:
         with self._lock:
             pair = self._pairs.get(pair_id)
             return None if pair is None or pair.visit != visit else pair.scene
+
+    def settled(self, visit: str, scene: str) -> bool:
+        """Whether ``visit`` has voted on ``scene``'s pair, or was shown one that takes no vote."""
+        with self._lock:
+            return scene in self._settled.get(visit, frozenset())
 
     def vote(
         self, pair_id: str, choice: str, *, visit: str, now: datetime, record: Callable[[Vote], None],
@@ -133,6 +148,8 @@ class PairRegistry:
             self._count(pair, -1)
             self._pairs[pair_id] = replace(pair, voted=True)
             self._remember(self._votes, visit, self._votes.get(visit, 0) + 1)
+            if pair.scene is not None:
+                self._settle(visit, pair.scene)
             return Reveal(vote, pair.left, pair.right)
 
     def _room(self, visit: str, votable: bool) -> None:
@@ -168,8 +185,11 @@ class PairRegistry:
             self._pairs.popitem(last=False)
             self._count(pair, -1)
 
+    def _settle(self, visit: str, scene: str) -> None:
+        self._remember(self._settled, visit, self._settled.get(visit, frozenset()) | {scene})
+
     @staticmethod
-    def _remember(table: OrderedDict[str, int], key: str, value: int) -> None:
+    def _remember(table: OrderedDict[str, V], key: str, value: V) -> None:
         table[key] = value
         table.move_to_end(key)
         while len(table) > MAX_TRACKED:

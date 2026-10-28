@@ -25,6 +25,7 @@ from anjo.sleep.tests.app.test_demo_page import (  # noqa: F401  (account is a f
     _seed_memory,
     _snapshot,
     _visit,
+    _write_starters,
     account,
 )
 from anjo.sleep.tests.app.test_demo_access import PUBLIC, sleep_app  # noqa: F401  (a fixture)
@@ -106,6 +107,17 @@ def _service(model: ScriptedModel | None = None, serving: FakeServing | None = N
 
     serving = serving or FakeServing()
     return build_service(serving=serving, arms=_arms(model or ScriptedModel(), serving), **changes)
+
+
+def _voted(client: Any, scene: words.Scene = SCENE) -> dict[str, str]:
+    """A visit that has voted on ``scene``'s blind pair: only then do its other answers open."""
+    if not (_demo_dir() / "starter_pairs.json").exists():
+        _write_starters()
+    headers = _visit(client)
+    pair = client.post(f"{API}/starters/{scene.id}", headers=headers).json()
+    vote = client.post(f"{API}/vote", json={"pair_id": pair["pair_id"], "choice": "tie"}, headers=headers)
+    assert vote.status_code == 200, vote.text
+    return headers
 
 
 def _swap_file() -> None:
@@ -271,7 +283,7 @@ def test_the_panel_shows_only_a_synthetic_account(monkeypatch: pytest.MonkeyPatc
     assert body["questions"]["state"] == "unavailable" and "kitchen" not in json.dumps(body)
     nights = client.get(f"{API}/nights").json()
     assert nights["state"] == "unavailable" and not any(t["swap"] for t in nights["toggles"])
-    toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=_visit(client)).json()
+    toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=_voted(client)).json()
     assert toggles == {"notes_off": None, "swap": None}  # the swap file too is shown for a synthetic account only
 
 
@@ -288,7 +300,7 @@ def test_the_panel_and_slider_load_without_a_gpu_and_write_nothing(offline_embed
     rows, memory, files = _db_rows(), _memory_rows(), _snapshot(root)
     asleep, quiet = FakeServing(up=False), ScriptedModel()
     client = _client(_service(quiet, asleep))
-    headers = _visit(client)
+    headers = _voted(client)
     assert client.get(f"{API}/mind", headers=headers).json()["questions"]["state"] == "ok"
     nights = client.get(f"{API}/nights").json()
     for stop in nights["stops"]:
@@ -311,7 +323,7 @@ def test_toggle_pairs_pre_generated_and_labeled() -> None:
     assert all(len(call["messages"]) == 1 for call in model.calls)  # every note off: her question alone
     quiet = ScriptedModel()
     client = _client(_service(quiet))
-    headers = _visit(client)
+    headers = _voted(client)
     toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=headers).json()
     notes_off = toggles["notes_off"]
     assert notes_off["label"] == "pre-generated" and toggles["swap"] is None  # no swap measurement saved
@@ -333,11 +345,44 @@ def test_toggle_pairs_pre_generated_and_labeled() -> None:
     assert client.post(f"{API}/toggles/{SCENE.id}").status_code == 401
 
 
+def test_a_scenes_toggles_and_stop_answers_wait_for_this_visits_vote() -> None:
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _write_answers(ScriptedModel(), FakeServing())
+    _write_starters()
+    client = _client(_service())
+    headers = _visit(client)
+    toggles, stops = f"{API}/toggles/{SCENE.id}", [f"{API}/nights/{key}/starters/{SCENE.id}" for key in ("n0", "n3", "n5")]
+    for path in (toggles, *stops):
+        refused = client.post(path, headers=headers)
+        assert refused.status_code == 403 and refused.json()["detail"] == words.COPY["vote_first"], path
+    pair = client.post(f"{API}/starters/{SCENE.id}", headers=headers).json()
+    assert client.post(toggles, headers=headers).status_code == 403  # opened isn't voted
+    assert client.post(f"{API}/vote", json={"pair_id": pair["pair_id"], "choice": "left"}, headers=headers).status_code == 200
+    assert client.post(toggles, headers=headers).json()["notes_off"] is not None
+    assert all(client.post(path, headers=headers).status_code == 200 for path in stops)
+    assert client.post(f"{API}/toggles/{words.SCENES[0].id}", headers=headers).status_code == 403  # per scene
+    assert client.post(toggles, headers=_visit(client)).status_code == 403  # per visit
+
+
+def test_a_pair_that_takes_no_vote_opens_its_scene_at_once() -> None:
+    from anjo.evals.crisis_reply_cases import REPLY_TRIPS
+
+    tripping = next(text for language, text, _reason in REPLY_TRIPS if language == "en")
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _write_answers(ScriptedModel(), FakeServing())
+    _write_starters((lambda s: tripping, lambda s: f"B:{s.id}"))
+    client = _client(_service())
+    headers = _visit(client)
+    assert client.post(f"{API}/toggles/{SCENE.id}", headers=headers).status_code == 403
+    assert client.post(f"{API}/starters/{SCENE.id}", headers=headers).json()["votable"] is False
+    assert client.post(f"{API}/toggles/{SCENE.id}", headers=headers).status_code == 200
+
+
 def test_the_notes_off_toggle_needs_her_own_weights() -> None:
     _her_nights(("rejected", "nothing_new"), ())
     _write_answers(ScriptedModel(), FakeServing())
     client = _client(_service())
-    toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=_visit(client)).json()
+    toggles = client.post(f"{API}/toggles/{SCENE.id}", headers=_voted(client)).json()
     assert toggles["notes_off"] is None  # nothing promoted: arm 3 would be the base model itself
 
 
@@ -362,7 +407,7 @@ def test_slider_answers_pregenerated_per_checkpoint() -> None:
     assert answers.label == "pre-generated" and len(model.calls) == 3 * len(words.SCENES)
     asleep, quiet = FakeServing(up=False), ScriptedModel()
     client = _client(_service(quiet, asleep))
-    headers = _visit(client)
+    headers = _voted(client)
     nights = client.get(f"{API}/nights").json()
     assert all(stop["ready"] == [s.id for s in words.SCENES] for stop in nights["stops"])
     for key, checkpoint in (("n0", None), ("n3", "p-film-n2"), ("n5", "p-film-n5")):
@@ -403,7 +448,7 @@ def test_a_rendering_mismatch_makes_a_stop_unavailable_not_rerouted() -> None:
     assert "p-film-n5" not in {call["adapter"].id for call in model.calls if call["adapter"]}  # never pre-generated
     model.calls.clear()
     client = _client(_service(model))
-    headers = _visit(client)
+    headers = _voted(client)
     stops = {s["key"]: s for s in client.get(f"{API}/nights").json()["stops"]}
     assert stops["n5"]["available"] is False and stops["n5"]["ready"] == [] and stops["n3"]["available"] is True
     starter = client.post(f"{API}/nights/n5/starters/{SCENE.id}", headers=headers)
@@ -464,7 +509,7 @@ def test_a_tripped_stop_answer_is_withheld() -> None:
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     _write_answers(ScriptedModel(reply=lambda n: tripping), FakeServing())
     client = _client(_service(ScriptedModel(reply=lambda n: tripping)))
-    headers = _visit(client)
+    headers = _voted(client)
     for got in (client.post(f"{API}/nights/n3/starters/{SCENE.id}", headers=headers).json(),
                 client.post(f"{API}/nights/n3/ask", json={"text": "The cut?"}, headers=headers).json()):
         assert got["withheld"] is True and got["text"] == severe_reply("en", None) and tripping not in json.dumps(got)
@@ -505,7 +550,7 @@ def test_an_anonymous_visitor_reaches_the_new_routes_inside_the_carve_out(sleep_
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     assert tuple(sleep_app.state.public_prefixes) == PUBLIC
     assert client.get(f"{API}/nights").status_code == 200
-    headers = _visit(client)
+    headers = _voted(client)
     assert client.get(f"{API}/mind", headers=headers).status_code == 200
     assert client.post(f"{API}/toggles/{SCENE.id}", headers=headers).status_code == 200
     assert client.post(f"{API}/nights/n5/ask", json={"text": "The title?"}, headers=headers).json()["kind"] == "answer"

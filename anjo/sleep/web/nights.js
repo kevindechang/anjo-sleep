@@ -9,6 +9,7 @@
   const { call, element, paragraphs, copy, byId } = demo;
   const answers = new Map(); // "<stop>/<scene>" -> a stop's pre-generated answer
   const toggleCache = new Map(); // scene -> the toggles' pairs
+  const voted = new Set(); // scenes this visit has voted on (or that take no vote): the server checks too
   let nights = null;
   let scenes = [];
 
@@ -49,7 +50,7 @@
     return scenes.find((scene) => scene.id === byId("slider-scene").value);
   }
 
-  function showAnswer(stop, question, reply) {
+  function showAnswer(stop, question, reply, note) {
     const card = byId("stop-card");
     card.querySelector(".stop-meta").textContent = stopMeta(stop, reply && reply.source);
     card.querySelector(".stop-line").textContent = stopLine(stop);
@@ -57,7 +58,7 @@
     const text = card.querySelector(".side-text");
     card.classList.toggle("withheld", Boolean(reply && reply.withheld));
     if (!reply) {
-      text.replaceChildren(element("p", "note", stop.available ? copy.slider_not_ready : copy.slider_unavailable_note));
+      text.replaceChildren(element("p", "note", note || (stop.available ? copy.slider_not_ready : copy.slider_unavailable_note)));
       return;
     }
     paragraphs(text, reply.text);
@@ -73,6 +74,10 @@
     document.querySelectorAll("#night-ticks li").forEach((tick, n) => tick.classList.toggle("current", n === nights.stops.indexOf(stop)));
     if (!scene || !stop.available || !stop.ready.includes(scene.id)) {
       showAnswer(stop, scene && scene.prompt, null);
+      return;
+    }
+    if (!voted.has(scene.id)) { // her weights here share the blind pair's: they wait for the vote
+      showAnswer(stop, scene.prompt, null, copy.slider_vote_first);
       return;
     }
     const key = `${stop.key}/${scene.id}`;
@@ -225,7 +230,12 @@
   }
 
   document.addEventListener("demo:visit", start);
-  document.addEventListener("demo:settled", (event) => offerToggles(event.detail.node, event.detail.scene));
+  document.addEventListener("demo:settled", (event) => {
+    voted.add(event.detail.scene);
+    offerToggles(event.detail.node, event.detail.scene);
+    const scene = nights && nights.stops && currentScene();
+    if (scene && scene.id === event.detail.scene) loadStop();
+  });
   byId("night-range").addEventListener("input", loadStop);
   byId("slider-scene").addEventListener("change", loadStop);
   byId("stop-ask-form").addEventListener("submit", askStop);

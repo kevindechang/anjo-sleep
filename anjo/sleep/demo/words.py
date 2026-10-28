@@ -159,6 +159,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "lost_thread": "Something went wrong while she was answering. Try again.",
     "offline": "The page can't reach the server. Check your connection and try again.",
     "unknown_stop": "That night isn't one of the slider's stops.",
+    "vote_first": "Vote on this question's two replies first. Her other answers to it open after your vote.",
     "stop_unavailable": (
         "That night's weights were trained for another setup than the one serving now, so it can't "
         "answer. Nothing else answers in its place."
@@ -196,6 +197,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     ),
     "slider_unavailable_note": "No answer at this night.",
     "slider_not_ready": "This night's answer to that question hasn't been generated yet.",
+    "slider_vote_first": "Vote on this question's two replies above first. Her answer night by night opens after your vote.",
     "slider_unavailable": "Her nights can't be read right now.",
     "slider_no_nights": "She hasn't slept yet, so there is only night 0.",
     "slider_ask_label": "Ask her at this night",

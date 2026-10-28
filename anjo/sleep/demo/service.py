@@ -31,6 +31,10 @@ The full step (Nov 2) adds, with no vote on any of them:
 - ``toggles``: on a starter scene, her weights notes off beside the base model (arm 3 against arm
   1, from the night answers at her latest stop), and the swap measurement's pair if it ran
   (``toggles``). Both labeled pre-generated, neither blind.
+- ``stop_starter`` and ``toggles`` answer a scene only once this visit has voted on its blind pair,
+  or was shown one that takes no vote (``PairRegistry.settled``; else 403 ``vote_first``): arm 3
+  shares arm 4's weights, so its answers seen first would let a visitor match the style and vote
+  informed.
 - ``mind``: her mind panel, built by the app (``panel``, ``record``) with the held-out text filtered.
 
 A stop whose checkpoint was trained under another rendering than the one serving answers nothing,
@@ -347,9 +351,9 @@ class DemoService:
         return NightsView(views, None if answers is None else answers.generated_at, toggles, live)
 
     def stop_starter(self, client: str, token: str, key: str, scene_id: str, now: datetime) -> StopReply:
-        self._visit(token, now)
+        visit = self._visit(token, now)
         self._limiter.request(client, now)
-        scene = self._scene(scene_id)
+        scene = self._settled_scene(visit, scene_id)
         stop = self._stop(key)
         answers = self._read(self._night_answers)
         found = None if answers is None else answers.find(_checkpoint_id(stop), scene)
@@ -380,9 +384,9 @@ class DemoService:
         return StopReply(stop, self._shown(self._side(got)), "live", None)
 
     def toggles(self, client: str, token: str, scene_id: str, now: datetime) -> ToggleView:
-        self._visit(token, now)
+        visit = self._visit(token, now)
         self._limiter.request(client, now)
-        scene = self._scene(scene_id)
+        scene = self._settled_scene(visit, scene_id)
         answers, swaps = self._read(self._night_answers), self._read(self._swaps)
         notes_off = _notes_off(self._stops(), answers, scene)
         swap = None if swaps is None else swaps.pair(scene)
@@ -464,6 +468,13 @@ class DemoService:
         scene = words.scene(scene_id)
         if scene is None:
             raise Refused(404, "unknown_scene")
+        return scene
+
+    def _settled_scene(self, visit: str, scene_id: str) -> words.Scene:
+        """``scene_id``'s scene, once ``visit`` may see its answers outside the blind pair."""
+        scene = self._scene(scene_id)
+        if not self._pairs.settled(visit, scene.id):
+            raise Refused(403, "vote_first")
         return scene
 
     def _stop(self, key: str) -> Stop:
