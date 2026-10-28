@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep.budget import Ledger
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night import story as st
 from anjo.sleep.night.nightlog import STORY, NightLog, safe_error
 from anjo.sleep.night.run import run_night_batch_with
@@ -399,3 +401,39 @@ def test_a_night_that_failed_writes_where_it_stopped(tmp_path: Path) -> None:
     told = _story(result.log_path)
     assert result.status == "failed" and told.learn == st.Failed("train", "RuntimeError")
     assert told.check == told.wake == st.NotRun("the night stopped at train")
+
+
+class _NoRoomForTheBrief(Ledger):
+    """A ledger with no room for the brief's hold: its fold stops with ``BudgetStop`` before any call."""
+
+    def reserve(self, job: str, pools: Any, bound: Any) -> Any:
+        return None if job.startswith("night:brief:") else super().reserve(job, pools, bound)
+
+
+def _spark_down_for_briefs(world: World) -> Any:
+    def chat(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+             max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
+        if messages[-1]["content"].startswith("# brief_v1"):
+            raise ModelApiError("Baseten: timed out after 180s")
+        return world.spark(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens, seed=seed)
+
+    return chat
+
+
+@pytest.mark.parametrize("stop", ["BudgetStop", "ModelApiError"])
+def test_only_a_brief_error_keeps_the_brief_any_other_failure_stops_the_night(tmp_path: Path, stop: str) -> None:
+    """The brief step keeps the last brief only on ``BriefError`` (a brief written badly twice). A
+    budget stop or a provider failure still fails the step and the night, as before: this fails if
+    that catch is ever widened."""
+    world = World(tmp_path)
+    world.plan(UID, NIGHT, count=3)
+    deps = (world.deps(ledger=_NoRoomForTheBrief(tmp_path / "budget.jsonl"), is_synthetic=lambda uid: False)
+            if stop == "BudgetStop" else world.deps(spark_chat=_spark_down_for_briefs(world)))
+    result = run_night_batch_with(deps, {UID: NIGHT})[UID]
+    brief = step(result.log_path, "brief")
+    assert (result.status, result.failed_at) == ("failed", "brief")
+    assert brief["status"] == "failed" and brief["error"].startswith(stop) and st.KEPT not in brief
+    told = _story(result.log_path)
+    assert told.brief == st.Failed("brief", brief["error"]) and told.rehearse == st.NotRun("the night stopped at brief")
+    assert world.briefs(UID).records() == [] and world.glimmer.calls == 0  # nothing folded, nothing practiced
+
