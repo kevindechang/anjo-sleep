@@ -47,6 +47,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from anjo.sleep.mind.core import curriculum
 from anjo.sleep.mind.core.net import CoreNet, Heads, Tensors, param_count
 from anjo.sleep.mind.core.state import Cite, CoreState
 from anjo.sleep.mind.core.types import (
@@ -178,12 +179,14 @@ class Core:
 
     def _state(
         self, person: str, st: Tensors, *, now: float | None, observed: int, cites: tuple[tuple[Cite, ...], ...],
-        delta: Mapping[str, np.ndarray], pending: float = 0.0,
+        delta: Mapping[str, np.ndarray], pending: float = 0.0, through: tuple[float, str] | None = None,
+        fake_latents: bool = False,
     ) -> CoreState:
         rows = [part[0].detach().numpy() for part in st]
         return CoreState(
             person=person, model_id=self.model_id, slots=rows[0], usage=rows[1], opened=rows[2], memory=rows[3],
             momentum=rows[4], glob=rows[5], now=now, observed=observed, cites=cites, delta=delta, pending=pending,
+            through=through, fake_latents=fake_latents,
         )
 
     def tensors(self, state: CoreState, copies: int = 1) -> Tensors:
@@ -222,20 +225,20 @@ class Core:
         prior = state.cites if self.config.memory else ((),) * self.config.slots
         cites = self._cite(prior, written.write[0].numpy(), written.fresh[0].numpy(), event.event_id)
         surprise = float(written.surprise[0])
+        through = (now, event.event_id) if state.after(now, event.event_id) else state.through
         out = self._state(state.person, new, now=now, observed=state.observed + 1, cites=cites, delta=state.delta,
-                          pending=state.pending + surprise)
+                          pending=state.pending + surprise, through=through, fake_latents=state.fake_latents)
         return out, surprise
 
     def surprise_weights(self, state: CoreState, events: Sequence[EventLatent]) -> tuple[CoreState, dict[str, float]]:
         """The Sleep link: observe ``events`` in order, and give each a training weight for the
-        night's LoRA data, its surprise over their mean (all 1.0 when nothing surprised more), so
-        what surprised her is what the weights learn first."""
+        night's LoRA data from its surprise, bounded and averaging 1 (``curriculum.bounded_weights``),
+        so what surprised her is what the weights learn first, and no one event takes the night."""
         surprises: dict[str, float] = {}
         for event in events:
             state, surprise = self.observe(state, event)
             surprises[event.event_id] = surprise
-        mean = sum(surprises.values()) / max(len(surprises), 1)
-        return state, {k: (v / mean if mean > 0 else 1.0) for k, v in surprises.items()}
+        return state, curriculum.bounded_weights(surprises)
 
     def _cite(
         self, cites: tuple[tuple[Cite, ...], ...], write: np.ndarray, fresh: np.ndarray, event_id: str,

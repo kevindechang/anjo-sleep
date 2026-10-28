@@ -10,7 +10,13 @@ a time, to the thread furthest below its share that still has an event to give, 
 thread can't spend passes on. Each thread gives its cited events strongest write first.
 
 Practice is then seeded on the picked events (``evidence_ids``) instead of the day's newest ones,
-under the same scenes and the same token cap. Pure: no torch, no clock, no model call.
+under the same scenes and the same token cap.
+
+The surprise weights themselves (``bounded_weights``) are each event's surprise, scaled and
+clipped to [``WEIGHT_FLOOR``, ``WEIGHT_CEILING``] so they average exactly 1: one startling event
+can't take the night's loss, and no row's weight drops to zero.
+
+Pure: no torch, no clock, no model call.
 """
 from __future__ import annotations
 
@@ -23,6 +29,37 @@ from anjo.sleep.mind.core.types import Ignition, Predictions
 
 MAX_THREADS: Final = 3  # threads a night rehearses
 DEFAULT_WEIGHT: Final = 1.0
+WEIGHT_FLOOR: Final = 0.5  # the least a row's loss weight can be
+WEIGHT_CEILING: Final = 2.0  # the most
+_BISECTIONS: Final = 200  # halvings of the scale's bracket: past float precision
+
+
+def _clipped_mean(scale: float, surprises: Sequence[float]) -> float:
+    return math.fsum(min(max(scale * s, WEIGHT_FLOOR), WEIGHT_CEILING) for s in surprises) / len(surprises)
+
+
+def bounded_weights(surprises: Mapping[str, float]) -> dict[str, float]:
+    """Each event's loss weight: ``clip(c * surprise)`` to the floor and the ceiling, with the one
+    scale ``c`` that makes them average 1 (found by bisection; the clipped mean only rises with
+    ``c``). All equal, or none surprising: all 1.0. When too few events surprised at all for any
+    scale to reach a mean of 1 (under a third), those that did take the ceiling and the rest share
+    what is left, never under the floor."""
+    if any(not math.isfinite(v) for v in surprises.values()):
+        raise ValueError("a surprise is a finite number")
+    values = {k: max(float(v), 0.0) for k, v in surprises.items()}
+    if not values or max(values.values()) == min(values.values()):
+        return dict.fromkeys(values, 1.0)
+    n, surprised = len(values), sum(1 for v in values.values() if v > 0)
+    if WEIGHT_CEILING * surprised + WEIGHT_FLOOR * (n - surprised) < n:
+        rest = (n - WEIGHT_CEILING * surprised) / (n - surprised)
+        return {k: WEIGHT_CEILING if v > 0 else rest for k, v in values.items()}
+    low, high = 0.0, WEIGHT_CEILING / min(v for v in values.values() if v > 0)
+    ordered = list(values.values())
+    for _ in range(_BISECTIONS):
+        middle = (low + high) / 2
+        low, high = (middle, high) if _clipped_mean(middle, ordered) < 1.0 else (low, middle)
+    scale = (low + high) / 2
+    return {k: min(max(scale * v, WEIGHT_FLOOR), WEIGHT_CEILING) for k, v in values.items()}
 
 
 @dataclass(frozen=True)

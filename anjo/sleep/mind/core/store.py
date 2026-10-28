@@ -9,10 +9,13 @@ Under ``<data dir>/sleep/mind_state/<person>/``:
 - ``states/<id>.npz``: each core state's bytes (``state.save``), content-addressed: the id is the
   first 16 hex characters of the bytes' SHA-256 (``state_id``), checked on every read. It is the
   thought channel's ``state_sha``, so a training row's ``core`` snapshot names its state by this id.
-- ``units.jsonl``: one line per version, appended and synced: the night, the state's id, the shared
-  core's model id (``Core.model_id``, the snapshot's ``core_model``), the projector version, the
-  adapter, the version it continued from and, for a rollback, the version it rolled back from. Ids
-  and versions only, never words.
+- ``units.jsonl``: one line per version: the night, the state's id, the shared core's model id
+  (``Core.model_id``, the snapshot's ``core_model``), the projector version, the adapter, the
+  version it continued from and, for a rollback, the version it rolled back from. Ids and versions
+  only, never words. An append rewrites the file whole, synced, through a temporary file it then
+  renames over it, so a crash leaves the old file or the new one. A reader refuses a file with a
+  bad line before its last (``StoreError``); a bad last line (a write torn before appends were
+  atomic) is skipped with a warning, and the next append leaves it out.
 
 A night starts from ``before(night)``, the newest unit of an earlier night, so a rerun of a night
 never observes that night's events twice. ``rollback(version)`` appends a copy of an earlier unit,
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -37,6 +41,8 @@ UNITS: Final = "units.jsonl"
 _PERSON = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}")  # every account id ownership accepts, never "." or ".."
 _ID = re.compile(r"[0-9a-f]{16}")
 ID_HEX: Final = 16
+
+logger = logging.getLogger(__name__)
 
 
 class StoreError(ValueError):
@@ -64,8 +70,24 @@ def unit_record(unit: Unit) -> dict[str, Any]:
     return {**asdict(unit), "night": unit.night.isoformat()}
 
 
-def _unit(row: dict[str, Any]) -> Unit:
+def _unit(line: str) -> Unit:
+    row = json.loads(line)
+    if not isinstance(row, dict):
+        raise TypeError("a unit is an object")
     return Unit(**{**row, "night": date.fromisoformat(row["night"])})
+
+
+def _units(path: Path) -> list[Unit]:
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+    units = []
+    for n, line in enumerate(lines):
+        try:
+            units.append(_unit(line))
+        except (ValueError, TypeError, KeyError) as error:
+            if n < len(lines) - 1:
+                raise StoreError(f"{path.name} line {n + 1} is not a unit ({type(error).__name__})") from None
+            logger.warning("skipping a torn last line in %s (%s)", path.name, type(error).__name__)
+    return units
 
 
 def _write(path: Path, blob: bytes) -> None:
@@ -107,9 +129,7 @@ class MindStore:
 
     def units(self) -> tuple[Unit, ...]:
         path = self.folder / UNITS
-        if not path.is_file():
-            return ()
-        return tuple(_unit(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines() if line)
+        return tuple(_units(path)) if path.is_file() else ()
 
     def head(self) -> Unit | None:
         units = self.units()
@@ -121,10 +141,8 @@ class MindStore:
 
     def _append(self, unit: Unit) -> Unit:
         self.folder.mkdir(parents=True, exist_ok=True)
-        with open(self.folder / UNITS, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(unit_record(unit), sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        kept = [*self.units(), unit]
+        _write(self.folder / UNITS, "".join(json.dumps(unit_record(u), sort_keys=True) + "\n" for u in kept).encode())
         return unit
 
     def keep(self, night: date, state: str, *, model: str, projector: str | None, lora: str | None) -> Unit:

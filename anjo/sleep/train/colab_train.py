@@ -41,7 +41,9 @@ Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
 ``receipt.json`` go) and, for a warm start, ``ANJO_TRAIN_PREV`` (the previous adapter's folder).
-The receipt holds counts and timings only. The Modal job (``modal_job.py``) also sets
+The receipt holds counts and timings only, and says whether the rows' loss weights (MIND's
+surprise weights, a row's ``weight``) were applied (``surprise_weights``): the loss reads no row
+weight yet, so a weighted dataset's receipt says they were not. The Modal job (``modal_job.py``) also sets
 ``ANJO_TRAIN_BASE``, the folder on its weights volume that holds the pinned revision: Glimmer and its
 tokenizer load from there, with nothing downloaded, and the saved adapter names Glimmer as its base,
 as one loaded by name does (``record_base_model``). A sixth, ``ANJO_TRAIN_SMOKE_MODEL``, is set only by the
@@ -80,6 +82,7 @@ MODEL = "meta-models/Muse-Glimmer-30B"
 MAX_RANK = 32
 MIN_SEQ_LENGTH = 8192
 RECEIPT = "receipt.json"
+WEIGHTS_APPLIED = False  # the SFT loss reads no row's ``weight`` yet (the sleep objective's work)
 OBJECTIVES = ("sft", "sft_dpo")
 MAX_DPO_LR = 1e-5
 MAX_ACCUMULATION = 16
@@ -223,6 +226,14 @@ def dpo_plan(n_pairs: int, cfg: dict[str, Any]) -> tuple[int, int]:
     per_epoch = math.ceil(n_pairs / (cfg["batch_size"] * accumulation))
     epochs = 1 if per_epoch >= steps else min(MAX_EPOCHS, math.ceil(steps / per_epoch))
     return accumulation, epochs
+
+
+def surprise_weights(rows: Sequence[dict[str, Any]]) -> str:
+    """What this run did with the rows' loss weights, for the receipt."""
+    weighted = sum(1 for row in rows if row.get("weight", 1.0) != 1.0)
+    if not weighted:
+        return "none (no row carries a weight)"
+    return "applied" if WEIGHTS_APPLIED else f"not applied ({weighted} weighted rows; the loss reads no row weight yet)"
 
 
 def split_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -505,6 +516,7 @@ def main() -> int:  # pragma: no cover - runs only on the GPU VM and in the CPU 
         "dpo_steps": dpo_steps, "pairs": len(pairs),
         "pairs_dropped_truncated": len(pair_rows) - len(pairs) if "dpo" in settings else 0,
         "rows_checked": checked + len(pairs), "dpo_reference": reference, "rendering": cfg["rendering"],
+        "surprise_weights": surprise_weights(rows),
     }
     (out / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

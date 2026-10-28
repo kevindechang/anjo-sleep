@@ -4,9 +4,16 @@
   ones, the transplant pairs included (16 and 64). A smoke run of the whole chain, minutes on one
   CPU thread. The transplant's claim is an average: the unrelated thread's risk holds on average,
   its largest shift is reported as a tail and not bounded (``TRANSPLANT_CLAIM``). Each epoch also
-  trains on ``TOY_PAIRS_PER_EPOCH`` fresh contradiction pairs under the contrast loss
-  (``--no-contrast`` leaves them out): on seeds 0 / 1 / 2 it lifts the contradictions' AUC on 256
-  test lives from 0.46 / 0.52 / 0.51 to 0.59 / 0.75 / 0.77 and keeps the gaps.
+  trains on ``TOY_PAIRS_PER_EPOCH`` fresh contradiction pairs under the contrast loss, every other
+  one a revision pair (``toy.contradiction_pairs(revisions=True)``; ``--no-revisions`` leaves them
+  out, ``--no-contrast`` all pairs). Chosen on validation lives (``toy.lives(256, seed=2)``, seeds
+  0 / 1 / 2) as the one recipe within ``evaluate.MAX_FALSE_PER_100`` false interventions per 100
+  person-days on every seed (0.90 / 0.63 / 0.51; no pairs 1.41 / 1.33 / 1.41, plain pairs
+  0.74 / 1.06 / 1.60, the stance probe 0.78 / 1.52 / 0.86, both 0.78 / 1.02 / 1.68). The price is
+  the contradiction signal: on test lives (seed 3, reported once) its contradictions' AUC is
+  0.54 / 0.60 / 0.47 (plain pairs 0.59 / 0.75 / 0.77) at 0.63 / 0.47 / 0.27 false interventions,
+  gaps 0.86 / 0.95 / 0.97. No recipe tells a constraint that still assumes a changed plan from one
+  that follows it: on ``toy.revision_lives`` (test) every recipe's AUC is 0.34 to 0.53.
 - ``train --export DIR --latents DIR --out DIR``: train on an export's lives (a labelled split,
   ``core-train``). About ``--val-share`` of its lives are held back by template (``split_lives``),
   for the best epoch and the locked thresholds, since ``core-val``'s labels stay sealed.
@@ -109,17 +116,19 @@ def _write(out: Path, core: Core, card: dict[str, Any]) -> None:
 
 def run_toy(args: argparse.Namespace) -> dict[str, Any]:
     config = CoreConfig(dim_in=toy.DIM, width=args.width, slots=args.slots, fast=not args.no_fast, stance=args.stance)
-    contrast = 0 if args.no_contrast else TOY_PAIRS_PER_EPOCH
+    contrast, revisions = 0 if args.no_contrast else TOY_PAIRS_PER_EPOCH, not args.no_revisions
     start = time.perf_counter()
     trained = train.train_shared(lambda epoch: toy.lives(TOY_LIVES_PER_EPOCH, seed=1000 + epoch),
                                  toy.lives(48, seed=2), config, seed=args.seed, epochs=args.epochs,
                                  patience=args.patience, batch_size=16,
-                                 pairs=(lambda epoch: toy.contradiction_pairs(contrast, seed=5000 + epoch)) if contrast else None)
+                                 pairs=(lambda epoch: toy.contradiction_pairs(contrast, seed=5000 + epoch, revisions=revisions))
+                                 if contrast else None)
     seconds = time.perf_counter() - start
     test = toy.lives(64, seed=3)
     pairs = {f"transplant_{n}": dataclasses.asdict(evaluate.transplant(trained.core, toy.pairs(n, seed=5), tolerance=0.1))
              for n in (16, 64)}
     note = {"source": "toy", "lives_per_epoch": TOY_LIVES_PER_EPOCH, "contrast_pairs_per_epoch": contrast,
+            "revision_pairs": bool(contrast) and revisions,
             "validation": 48, "test": 64, "dim": toy.DIM}
     card = _card(trained, seconds, note, args.seed, test, {**pairs, "transplant_claim": TRANSPLANT_CLAIM})
     _write(args.out, trained.core, card)
@@ -292,6 +301,7 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--stance", action="store_true", help="the stance probe, for contradictions")
         if name == "toy":
             p.add_argument("--no-contrast", action="store_true", help="no contradiction pairs under the contrast loss")
+            p.add_argument("--no-revisions", action="store_true", help="contradiction pairs without the revision pairs")
         if name == "train":
             p.add_argument("--export", type=Path, required=True)
             p.add_argument("--latents", type=Path, required=True)

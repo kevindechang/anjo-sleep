@@ -77,3 +77,26 @@ def test_a_unit_records_ids_and_versions_only(tmp_path: Path) -> None:
     unit = held.keep(N1, held.put_state(b"1"), model="m", projector=None, lora="ad-1")
     assert set(store.unit_record(unit)) == {"version", "night", "state", "model", "projector", "lora", "parent",
                                             "rolled_back_from"}
+
+
+def test_a_torn_last_unit_is_skipped_loudly_and_a_bad_earlier_one_refuses_the_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    held = _store(tmp_path)
+    one = held.keep(N1, held.put_state(b"state one"), model="core-a", projector=None, lora="ad-1")
+    units = held.folder / store.UNITS
+    whole = units.read_text(encoding="utf-8")
+    units.write_text(whole + '{"night": "2026-10-29", "state": "ab', encoding="utf-8")  # a write torn mid-line
+    with caplog.at_level("WARNING", logger=store.__name__):
+        assert held.units() == (one,)
+    assert "torn last line" in caplog.text
+    two = held.keep(N2, held.put_state(b"state two"), model="core-a", projector=None, lora="ad-2")
+    assert two.version == 2 and units.read_text(encoding="utf-8") == whole + units.read_text(
+        encoding="utf-8").splitlines(keepends=True)[1]  # the append left the torn line out, whole lines only
+    assert not list(held.folder.glob(".*.tmp"))  # written whole beside it, then renamed into place
+
+    units.write_text("not a unit\n" + units.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(store.StoreError, match="line 1"):
+        held.units()
+    with pytest.raises(store.StoreError):
+        held.keep(N3, held.put_state(b"state three"), model="core-a", projector=None, lora=None)

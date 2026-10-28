@@ -186,7 +186,8 @@ class Dreamt:
     """What the night's dream (step 2c) left for the steps after it: her core state after every
     event so far, consolidated (``state``: what practice reads and the night's rows are made under;
     ``state_id``, its id in her store and the thought channel's ``state_sha``), the evidence
-    practice is seeded on (empty: today's newest), the day's surprise weights by evidence id, the
+    practice is seeded on (empty: today's newest), the surprise weights of the evidence it observed
+    tonight by evidence id, the
     core's view for the inquiry (``view.predictions`` is ``Core.predict(state)``), and the dream's
     receipt (ids and numbers, for the night log)."""
 
@@ -199,13 +200,14 @@ class Dreamt:
 
 
 class MindCore(Protocol):
-    """MIND's core in the night (the one system): ``dream`` observes the day's evidence, dreams,
-    picks what practice rehearses and consolidates; ``keep`` saves the night's unit (her state, the
-    thought channel's projector version and her adapter). Ids only cross: no row's words."""
+    """MIND's core in the night (the one system), for the people it ``serves`` only: ``dream``
+    observes her evidence it hasn't yet, dreams, opens questions, picks what practice rehearses and
+    consolidates; ``keep`` saves the night's unit (her state, the thought channel's projector
+    version and her adapter). Ids only cross: no row's words."""
 
-    available: bool
+    def serves(self, user_id: str) -> bool: ...
 
-    def dream(self, call: MindCall, day: Sequence[Evidence]) -> Dreamt: ...
+    def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt: ...
 
     def keep(
         self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
@@ -215,9 +217,10 @@ class MindCore(Protocol):
 class NoCore:
     """MIND's core off: no dream, practice seeds on the newest evidence, rows are unweighted."""
 
-    available: bool = False
+    def serves(self, user_id: str) -> bool:
+        return False
 
-    def dream(self, call: MindCall, day: Sequence[Evidence]) -> Dreamt:
+    def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
         return Dreamt()
 
     def keep(

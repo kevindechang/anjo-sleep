@@ -52,7 +52,7 @@ from anjo.sleep.night.deps import (
     ALL_ACTIONS,
     STUDY_ACTIONS,
     InquiryOutcome,
-    Dreamt, MindCall,
+    Dreamt,
     NightDeps,
     StudyOutcome,
 )
@@ -208,7 +208,7 @@ class NightRunner(CoreSteps):
                 p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
                            failed_turns=day.failed, short_day=day.short, **extra)
             for step, fn in (("close_day", self._close_day), ("extract", self._extract), ("notice", self._notice),
-                             *self._dreams(), ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
+                             *self._dreams(p), ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
                 self._do(p, step, fn)
         due = [p for p in people if p.due and p.failed_at is None]
         if due:
@@ -369,11 +369,6 @@ class NightRunner(CoreSteps):
     def _mind(self) -> bool:
         """MIND's inquiry runs only with the setting on (Task 17); off, the night is Task 7a's."""
         return self.deps.settings.mind_inquiry and self.deps.inquiry.available
-
-    def _call(self, p: _Night, step: str) -> MindCall:
-        return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
-                        spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
-                        cancelled=lambda: self.deps.cancel(p.uid), core_view=p.dreamt.view)
 
     def _notice(self, p: _Night) -> Mapping[str, Any]:
         notice = self.deps.notice
@@ -567,7 +562,7 @@ class NightRunner(CoreSteps):
         return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
-                **({"mind_weighted": sum(e.weight != 1.0 for e in data.examples)} if self.deps.core.available else {}),
+                **({"mind_weighted": sum(e.weight != 1.0 for e in data.examples)} if p.dreamt.state_id else {}),
                 "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
                 "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
 
@@ -584,7 +579,7 @@ class NightRunner(CoreSteps):
         if isinstance(minutes, int | float) and math.isfinite(minutes):
             p.spend.add("training", float(minutes) / 60.0 * self.deps.prices.train_gpu_per_hour)
         return {"adapter": ckpt.id, "parent": ckpt.parent_id, "from_last_promoted": prev.id if prev else None,
-                "receipt": dict(receipt)}
+                "receipt": dict(receipt), **self._surprise(p, receipt)}
 
     def _gates(self, p: _Night) -> Mapping[str, Any]:
         assert p.checkpoint is not None

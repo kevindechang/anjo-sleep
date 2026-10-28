@@ -132,3 +132,8 @@ def test_another_arms_findings_render_in_the_cores_form(tmp_path: Path, capsys: 
     assert (row["arm"], row["life_id"], row["finding_id"], row["p"], row["cites"]) == (
         "B", life.life_id, "b-1", 0.7, [first, second, third])
     assert cli.main(["prescore", "--findings", str(out), "--labels", str(tmp_path / "export" / "labels")]) == 0
+
+
+def test_toy_training_takes_the_revision_pairs_unless_told_not_to(tmp_path: Path) -> None:
+    assert not cli.parser().parse_args(["toy", "--out", str(tmp_path)]).no_revisions
+    assert cli.parser().parse_args(["toy", "--out", str(tmp_path), "--no-revisions"]).no_revisions

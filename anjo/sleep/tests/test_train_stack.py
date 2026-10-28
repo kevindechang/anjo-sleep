@@ -294,3 +294,10 @@ def test_the_smoke_run_checks_the_pins_and_trains_on_rows_that_must_be_dropped()
     assert (len(sft), len(pairs)) == (5, 3)
     long = [row for row in rows if len(json.dumps(row).split()) > smoke.LONG_WORDS]
     assert len(long) == 2 and LoraCfg().max_seq_length < smoke.LONG_WORDS
+
+
+def test_the_receipt_says_the_rows_weights_were_not_applied() -> None:
+    plain: dict[str, Any] = {"prompt": [], "completion": []}
+    assert colab_train.surprise_weights([plain, {**plain, "weight": 1.0}]) == "none (no row carries a weight)"
+    said = colab_train.surprise_weights([plain, {**plain, "weight": 1.4}, {**plain, "weight": 0.6}])
+    assert not colab_train.WEIGHTS_APPLIED and said == "not applied (2 weighted rows; the loss reads no row weight yet)"

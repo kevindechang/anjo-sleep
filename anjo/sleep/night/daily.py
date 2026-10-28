@@ -52,6 +52,7 @@ from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
+from anjo.sleep.personas import DEMO_PERSONA
 from anjo.sleep.probes.morning import DAILY, MorningResult, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
@@ -61,7 +62,7 @@ USERS_ENV: Final = "ANJO_SLEEP_DAILY_USERS"
 MIND_ENV: Final = "ANJO_SLEEP_DAILY_MIND"  # "1" or "0": the scheduled night runs MIND's inquiry or not
 TAIPEI: Final = timezone(timedelta(hours=8))  # Taipei keeps no daylight saving time
 LIFE_START: Final = date(2026, 10, 28)
-DEFAULT_PERSONA: Final = "film_founder"  # the demo's hero: the person the real-time nights run for
+DEFAULT_PERSONA: Final = DEMO_PERSONA  # the demo's hero: the person the real-time nights run for
 SEED: Final = 20261028
 WIRING: Final = "anjo.sleep.app.night:build"
 SIMULATE: Final = "anjo.sleep.app.sim_transport:simulate"

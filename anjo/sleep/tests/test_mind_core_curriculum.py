@@ -1,3 +1,5 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The dream curriculum: the night's dreams choose what she rehearses (pure, no torch)."""
 from __future__ import annotations
 
@@ -59,3 +61,41 @@ def test_picks_record_ids_and_numbers_only() -> None:
     record = curriculum.record(picks)
     assert record["evidence_ids"] == list(picks.evidence_ids)
     assert {"slot", "score", "share", "cites"} <= set(record["threads"][0])
+
+
+def _within(weights: dict[str, float]) -> bool:
+    mean = sum(weights.values()) / len(weights)
+    return mean == pytest.approx(1.0, abs=1e-9) and all(
+        curriculum.WEIGHT_FLOOR - 1e-12 <= w <= curriculum.WEIGHT_CEILING + 1e-12 for w in weights.values())
+
+
+@pytest.mark.parametrize("surprises", [
+    {"huge": 1000.0, "b": 1.0, "c": 1.0, "d": 1.0},  # one startling event can't take the night
+    {"a": 0.1, "b": 0.2, "c": 5.0, "d": 0.3, "e": 0.01},
+    {"a": 0.0, "b": 0.0, "c": 3.0},  # a third surprised: the floor and the ceiling, exactly
+    {"a": 0.0, "b": 0.0, "c": 0.0, "d": 5.0},  # under a third: the rest share what is left
+    {"a": 0.0, "b": 2.0, "c": 4.0, "d": 6.0},
+])
+def test_surprise_weights_stay_bounded_and_average_one(surprises: dict[str, float]) -> None:
+    weights = curriculum.bounded_weights(surprises)
+    assert weights.keys() == surprises.keys() and _within(weights)
+    ranked = sorted(surprises, key=surprises.__getitem__)
+    assert [weights[k] for k in ranked] == sorted(weights.values())  # more surprise, never less weight
+    assert weights == curriculum.bounded_weights(dict(reversed(surprises.items())))  # order-free
+
+
+def test_one_huge_surprise_takes_the_ceiling_and_no_weight_reaches_zero() -> None:
+    weights = curriculum.bounded_weights({"huge": 1e9, "b": 1.0, "c": 1.0, "d": 1.0})
+    assert weights["huge"] == curriculum.WEIGHT_CEILING
+    assert weights["b"] == weights["c"] == weights["d"] == pytest.approx(2 / 3)
+    assert curriculum.bounded_weights({"a": 0.0, "b": 0.0, "c": 0.0, "d": 5.0})["a"] == pytest.approx(2 / 3)
+
+
+@pytest.mark.parametrize("surprises", [{}, {"only": 3.0}, {"a": 0.4, "b": 0.4}, {"a": 0.0, "b": 0.0}])
+def test_one_event_equal_surprises_or_none_weigh_one(surprises: dict[str, float]) -> None:
+    assert curriculum.bounded_weights(surprises) == dict.fromkeys(surprises, 1.0)
+
+
+def test_a_surprise_that_is_not_a_number_is_refused() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        curriculum.bounded_weights({"a": float("nan"), "b": 1.0})

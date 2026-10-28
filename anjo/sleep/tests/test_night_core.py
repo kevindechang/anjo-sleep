@@ -39,11 +39,15 @@ class FakeCore:
     view: bridge.CoreView | None = WAITS
     picks: int = 1
     keep_fails: bool = False
-    available: bool = True
+    people: frozenset[str] = frozenset({UID})
     days: list[list[str]] = field(default_factory=list)
     kept: list[str | None] = field(default_factory=list)
 
-    def dream(self, call: MindCall, day: Sequence[Evidence]) -> Dreamt:
+    def serves(self, user_id: str) -> bool:
+        return user_id in self.people
+
+    def dream(self, call: MindCall, evidence: Sequence[Evidence]) -> Dreamt:
+        day = list(evidence)
         self.days.append([item.id for item in day])
         picked = ("not-trainable",) if self.picks < 0 else tuple(item.id for item in day[:self.picks])
         return Dreamt(state_id=STATE, rehearse=picked, weights={item.id: n + 2.0 for n, item in enumerate(day)},
@@ -110,9 +114,22 @@ def test_a_night_with_the_core_dreams_rehearses_its_picks_marks_its_rows_and_kee
     weights = {row["id"]: row.get("weight", 1.0) for row in map(json.loads, rows.data[0].splitlines())}
     assert weights and all(w == (sum(made[i]) / len(made[i]) if made[i] else 1.0) for i, w in weights.items())
     assert step(result.log_path, "dataset")["mind_weighted"] == sum(w != 1.0 for w in weights.values()) > 0
+    assert step(result.log_path, "train")["surprise_weights"] == "not applied (the training job did not report)"
     serving = world.registry.last_promoted(UID)
     assert serving is not None and core.kept == [serving.id]
     assert summary(result.log_path)["mind_unit"] == {"version": 1, "state": STATE, "lora": serving.id}
+
+
+def test_the_core_dreams_only_for_the_people_it_serves(tmp_path: Path) -> None:
+    world, core, other = _world(tmp_path), FakeCore(), "p2"
+    world.targets(other).upsert(thread(other))
+    world.plan(other, NIGHT)
+    results = run_night_batch_with(world.deps(core=core), {UID: NIGHT, other: NIGHT})
+    assert "dream" in [r["step"] for r in steps(results[UID].log_path)]
+    assert "dream" not in [r["step"] for r in steps(results[other].log_path)]  # never another person
+    assert "mind_unit" not in summary(results[other].log_path) and "mind_weighted" not in step(
+        results[other].log_path, "dataset")
+    assert len(core.days) == 1 and len(core.kept) == 1
 
 
 @pytest.mark.parametrize("picks", [0, -1], ids=["nothing picked", "nothing trainable picked"])

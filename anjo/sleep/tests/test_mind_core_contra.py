@@ -32,6 +32,36 @@ def test_contradiction_pairs_differ_only_from_the_constraint_on() -> None:
         assert labels[1][pair.label].family == "decoy" and not labels[1][pair.label].failed
 
 
+def test_a_revised_plan_is_no_conflict_and_a_stale_assumption_is_one() -> None:
+    lives = toy.revision_lives(24, seed=7)
+    assert toy.revision_lives(24, seed=7)[3].events[0].event_id == lives[3].events[0].event_id
+    assert {s.life_id for s in lives}.isdisjoint({s.life_id for s in toy.lives(24, seed=7)})
+    families = set()
+    for stream in lives:
+        label = next(lab for lab in stream.labels if lab.id.endswith("-contradiction"))
+        by_id = {e.event_id: e for e in stream.events}
+        plan, revision, constraint = (by_id[i] for i in label.event_ids)
+        assert plan.t < revision.t < constraint.t and label.origin_ids == label.event_ids
+        families.add(label.family)
+        assert label.family == ("contradiction" if label.failed else "decoy")
+    assert families == {"contradiction", "decoy"}
+
+
+def test_revision_pairs_differ_only_in_what_the_constraint_assumes() -> None:
+    pairs = toy.contradiction_pairs(6, seed=7, revisions=True)
+    revised = [p for p in pairs if any(e.event_id.endswith("-revision") for e in p.benign.events)]
+    assert len(revised) == 3  # every other pair is a stale assumption against a legitimate change
+    for pair in revised:
+        problem = {e.event_id: e for e in pair.problem.events}
+        benign = {e.event_id: e for e in pair.benign.events}
+        constraint = next(i for i in problem if i.endswith("-constraint"))
+        assert all(np.array_equal(problem[i].vec, benign[i].vec) for i in problem if problem[i].t < problem[constraint].t)
+        labels = {lab.id: lab for lab in pair.problem.labels}, {lab.id: lab for lab in pair.benign.labels}
+        assert labels[0][pair.label].failed and not labels[1][pair.label].failed
+    plain = toy.contradiction_pairs(6, seed=7)
+    assert [p.label for p in plain] == [p.label for p in toy.contradiction_pairs(6, seed=7, revisions=False)]
+
+
 def test_the_stance_key_reads_the_topic_whatever_the_sign() -> None:
     torch.manual_seed(0)
     stance = net.CoreNet(dataclasses.replace(SMALL, stance=True))

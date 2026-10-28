@@ -18,6 +18,10 @@ each on its own draw:
 - **A contradiction:** a plan with attribute ``+a``, then three days later a constraint with ``-a``
   on the same thread, raised two days after. Its decoy is a constraint with an unrelated attribute.
 
+``revision_lives`` hold the hard case instead: the plan changes legitimately the next day (``-a``),
+and the constraint either follows the change (no conflict, though it reads like the plain
+contradiction) or still assumes the old plan (``+a``, a stale assumption: a conflict).
+
 ``pairs`` builds counterfactual autobiographies from the same generator: one life written twice,
 identical in every draw except how the booked party's two earlier bookings ended (cancelled, or
 delivered), cut at the new booking. Each also holds an unrelated thread still open at the cut: a
@@ -147,21 +151,30 @@ def _booking(draft: _Draft, party: np.ndarray, record: list[str], fails: bool, *
     return booked
 
 
-def _contradiction(draft: _Draft, conflicts: bool, *, start: int | None = None, raised: bool = True) -> None:
+def _contradiction(
+    draft: _Draft, conflicts: bool, *, start: int | None = None, raised: bool = True, revised: bool = False,
+) -> None:
     """A plan, then three days later a constraint on the same thread; ``raised`` (two days after)
-    ends it, else it stays open (the transplant's unrelated thread, whose times aren't labelled)."""
+    ends it, else it stays open (the transplant's unrelated thread, whose times aren't labelled).
+    ``revised``: the plan changes the next day, and the constraint follows the change, or (a
+    conflict) still assumes the old plan."""
     thread, attribute = draft.part(), draft.part()
     start = int(draft.rng.integers(0, 3)) if start is None else start
     plan = draft.say(start, "plan", thread, attribute, key="plan")
-    other = -attribute if conflicts else draft.part()
-    constraint = draft.say(start + 3, "constraint", thread, other, key="constraint")
+    if revised:
+        changed = draft.say(start + 1, "plan", thread, -attribute, key="revision")
+        constraint = draft.say(start + 3, "constraint", thread, attribute if conflicts else -attribute, key="constraint")
+        ids: tuple[str, ...] = (plan, changed, constraint)
+    else:
+        constraint = draft.say(start + 3, "constraint", thread, -attribute if conflicts else draft.part(),
+                               key="constraint")
+        ids = (plan, constraint)
     if not raised:
         return
     raised_id = draft.say(start + 5, "raise" if conflicts else "chat", thread, key="raised")
     draft.labels.append(_Label(
         id=f"{draft.life_id}-contradiction", family="contradiction" if conflicts else "decoy",
-        event_ids=(plan, constraint), origin_ids=(plan, constraint), knowable_id=constraint, outcome_id=raised_id,
-        failed=conflicts,
+        event_ids=ids, origin_ids=ids, knowable_id=constraint, outcome_id=raised_id, failed=conflicts,
     ))
 
 
@@ -175,14 +188,17 @@ def _stream(draft: _Draft) -> LabelledStream:
     return LabelledStream(draft.life_id, days, tuple(events), tuple(label.resolve(times) for label in draft.labels))
 
 
-def _draft(seed: int, index: int, dim: int, booked: str | None = None, clash: bool | None = None) -> _Draft:
+def _draft(
+    seed: int, index: int, dim: int, booked: str | None = None, clash: bool | None = None, revise: bool = False,
+) -> _Draft:
     """One life being written. ``booked`` (``"cancel"`` or ``"deliver"``) writes the transplant
     version instead: the booked party's earlier bookings end that way, and the life stops at the new
     booking. Both versions make the same draws, so they differ only in those two roles. ``clash``
     writes a contradiction pair's version: the life always holds a plan and a constraint, which
-    conflicts or not; up to the constraint both versions are the same."""
+    conflicts or not; up to the constraint both versions are the same. ``revise`` writes a revision
+    life (its own ids): the plan always changes, and the constraint follows it or is stale."""
     rng = np.random.default_rng([seed, index])
-    draft = _Draft(f"toy{seed}-{index}", rng, dim, [], [])
+    draft = _Draft(f"{'rev' if revise else 'toy'}{seed}-{index}", rng, dim, [], [])
     _background(draft)
     first, second = draft.part(), draft.part()
     record = _history(draft, first, booked or "cancel", (0, 2), "old")
@@ -198,8 +214,8 @@ def _draft(seed: int, index: int, dim: int, booked: str | None = None, clash: bo
         return draft
     if has_booking:
         _booking(draft, first if fails else second, record, bool(fails))
-    if clash is not None:
-        _contradiction(draft, conflicts=clash)
+    if clash is not None or revise:
+        _contradiction(draft, conflicts=bool(conflicts) if clash is None else clash, revised=revise)
     elif has_contradiction:
         _contradiction(draft, conflicts=bool(conflicts))
     return draft
@@ -212,6 +228,11 @@ def life(seed: int, index: int, *, dim: int = DIM) -> LabelledStream:
 
 def lives(n: int, *, seed: int, dim: int = DIM) -> tuple[LabelledStream, ...]:
     return tuple(life(seed, i, dim=dim) for i in range(n))
+
+
+def revision_lives(n: int, *, seed: int, dim: int = DIM) -> tuple[LabelledStream, ...]:
+    """Lives whose plan always changes once: half follow the change, half keep the stale assumption."""
+    return tuple(_stream(_draft(seed, i, dim, revise=True)) for i in range(n))
 
 
 def _shifted(stream: LabelledStream, person: str, days: int) -> LabelledStream:
@@ -283,9 +304,13 @@ class ContrastPair:
     label: str
 
 
-def contradiction_pairs(n: int, *, seed: int, dim: int = DIM) -> tuple[ContrastPair, ...]:
-    return tuple(
-        ContrastPair(_stream(_draft(seed, i, dim, clash=True)), _stream(_draft(seed, i, dim, clash=False)),
-                     f"toy{seed}-{i}-contradiction")
-        for i in range(n)
-    )
+def contradiction_pairs(n: int, *, seed: int, dim: int = DIM, revisions: bool = False) -> tuple[ContrastPair, ...]:
+    """``n`` minimal pairs; with ``revisions``, every odd one is a revision pair instead: the same
+    changed plan, with a constraint still assuming the old plan (the problem) or following the change."""
+    out = []
+    for i in range(n):
+        revise = revisions and i % 2 == 1
+        out.append(ContrastPair(_stream(_draft(seed, i, dim, clash=True, revise=revise)),
+                                _stream(_draft(seed, i, dim, clash=False, revise=revise)),
+                                f"{'rev' if revise else 'toy'}{seed}-{i}-contradiction"))
+    return tuple(out)

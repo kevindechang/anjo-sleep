@@ -3,7 +3,11 @@
 The state is everything the shared core keeps for one person: the slots and their usage and
 opening times, the fast-weight memory and its momentum, the global vector, the clock, the real
 events each slot cites, and the person's head adaptation (``delta``, empty until a night adapts
-it). It names the core it belongs to (``model_id``): the slots and the memory mean something only
+it). It also keeps the surprise sleep hasn't taken in yet (``pending``), the last event it observed
+(``through``: its time in days and its id, so a night observes only what comes after it, and a
+killed night's day is caught up the next), and whether any event reached it through the fake
+encoder (``fake_latents``: sticky, so a state built on stand-in latents always says so). It names
+the core it belongs to (``model_id``): the slots and the memory mean something only
 under those weights, so ``load`` refuses a state of another core; a person's state for a new core
 is rebuilt by replaying their events.
 
@@ -23,7 +27,7 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
-STATE_VERSION: Final = 1
+STATE_VERSION: Final = 2  # 2: pending, through and fake_latents
 _ARRAYS: Final = ("slots", "usage", "opened", "memory", "momentum", "glob")
 _DELTA: Final = "delta__"
 _ZIP_TIME: Final = (1980, 1, 1, 0, 0, 0)
@@ -49,6 +53,8 @@ class CoreState:
     cites: tuple[tuple[Cite, ...], ...]  # per slot, the strongest write first
     delta: Mapping[str, NDArray[np.float32]] = field(default_factory=dict)
     pending: float = 0.0  # surprise observed since the last consolidation: what sleep hasn't taken in
+    through: tuple[float, str] | None = None  # the last event observed: (days, id); None before any
+    fake_latents: bool = False  # any event observed through the fake encoder
 
     def __post_init__(self) -> None:
         for name in _ARRAYS:
@@ -75,11 +81,15 @@ class CoreState:
         """Every event id a slot cites: all real, since only ``observe`` adds cites."""
         return frozenset(event_id for row in self.cites for event_id, _ in row)
 
+    def after(self, at: float, event_id: str) -> bool:
+        """Whether an event at ``at`` days with ``event_id`` comes after every one observed."""
+        return self.through is None or (at, event_id) > self.through
+
 
 def equal(a: CoreState, b: CoreState) -> bool:
     """Same person, core, arrays, clock, cites and adaptation."""
-    same_meta = (a.person, a.model_id, a.now, a.observed, a.cites, a.pending) == (
-        b.person, b.model_id, b.now, b.observed, b.cites, b.pending)
+    same_meta = (a.person, a.model_id, a.now, a.observed, a.cites, a.pending, a.through, a.fake_latents) == (
+        b.person, b.model_id, b.now, b.observed, b.cites, b.pending, b.through, b.fake_latents)
     same_arrays = all(np.array_equal(getattr(a, name), getattr(b, name)) for name in _ARRAYS)
     same_delta = set(a.delta) == set(b.delta) and all(np.array_equal(a.delta[n], b.delta[n]) for n in a.delta)
     return same_meta and same_arrays and same_delta
@@ -96,7 +106,8 @@ def save(state: CoreState) -> bytes:
     meta = {
         "version": STATE_VERSION, "person": state.person, "model_id": state.model_id, "now": state.now,
         "observed": state.observed, "cites": [[[eid, share] for eid, share in row] for row in state.cites],
-        "pending": state.pending,
+        "pending": state.pending, "through": None if state.through is None else list(state.through),
+        "fake_latents": state.fake_latents,
     }
     entries = {name: getattr(state, name) for name in _ARRAYS}
     entries.update({_DELTA + name: value for name, value in sorted(state.delta.items())})
@@ -127,7 +138,9 @@ def load(blob: bytes, *, model_id: str) -> CoreState:
             now=None if meta["now"] is None else float(meta["now"]), observed=int(meta["observed"]),
             cites=tuple(tuple((str(eid), float(share)) for eid, share in row) for row in meta["cites"]),
             delta={name[len(_DELTA):]: value for name, value in arrays.items() if name.startswith(_DELTA)},
-            pending=float(meta.get("pending", 0.0)),
+            pending=float(meta["pending"]),
+            through=None if meta["through"] is None else (float(meta["through"][0]), str(meta["through"][1])),
+            fake_latents=bool(meta["fake_latents"]),
         )
     except (KeyError, TypeError) as error:
         raise StateError(f"a saved state is missing a part: {error}") from None

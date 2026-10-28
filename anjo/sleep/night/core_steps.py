@@ -1,19 +1,24 @@
 """MIND's core in the night's steps: the one system's loop, where each step feeds the next.
 
-With ``ANJO_SLEEP_MIND_CORE=1`` the app gives the night a ``MindCore`` port (``deps.core``); off,
-it is ``NoCore`` and every hook here leaves the night as it was.
+With ``ANJO_SLEEP_MIND_CORE=1`` and MIND's inquiry on, the app gives the night a ``MindCore`` port
+(``deps.core``) that serves the demo persona's people only; for anyone else, and with the switch
+off (``NoCore``), every hook here leaves the night as it was, and her night log has no dream.
 
 - **Dream** (step 2c, after the notice pass, before the probes and the choice): the core observes
-  the day's evidence from the night before's state, dreams, opens questions through the kernel,
-  picks the threads she is least sure of or most at risk on, consolidates, and keeps the state
-  the night's rows are made under. Its one log record holds the dream: the surprise weights, the
-  ignitions, the questions opened, the curriculum's picks and the imagined states.
+  her stored evidence it has not observed yet (a killed night's day too), from her last kept
+  state, dreams, opens a question through the kernel for each ignition that cites her real
+  evidence, picks the threads she is least sure of or most at risk on, consolidates, and keeps the
+  state the night's rows are made under. Its one log record holds the dream: the surprise
+  weights, the ignitions, the questions opened and the ignitions dropped (why), the curriculum's
+  picks and the imagined states.
 - **Inquire** reads the dream: the call carries the core's view, so the core picks the question.
 - **Rehearse**: practice is seeded on the picked evidence, at the same scenes and token cap; with
   nothing picked, on the newest evidence as before.
 - **Learn**: each of tonight's training rows carries its loss weight, the mean surprise of the
   evidence it was made from (the Sleep link); the core state it was made under is the thought
-  channel's row field (``core``, its ``state`` is ``p.dreamt.state_id``).
+  channel's row field (``core``, its ``state`` is ``p.dreamt.state_id``). The training step's
+  record says whether the training job applied the weights (``surprise_weights``): its loss reads
+  no row weight yet, so a weighted night says so instead of claiming it.
 - **Keep**: when the night ends, however it ends (unless the person was deleted), its unit is
   saved: the core state, the thought channel's projector version and the adapter that serves her,
   together (``mind.core.store``).
@@ -37,16 +42,24 @@ class CoreSteps:
 
     deps: NightDeps
 
-    def _call(self, p: _Night, step: str) -> MindCall:
+    def _job(self, p: _Night, step: str) -> str:
         raise NotImplementedError
 
-    def _dreams(self) -> tuple[tuple[str, Callable[[_Night], Mapping[str, Any]]], ...]:
-        """The dream step, only with the core on: off, the night's log is today's to the byte."""
-        return (("dream", self._dream),) if self.deps.core.available else ()
+    def _call(self, p: _Night, step: str) -> MindCall:
+        return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
+                        spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
+                        cancelled=lambda: self.deps.cancel(p.uid), core_view=p.dreamt.view)
+
+    def _dreams(self, p: _Night) -> tuple[tuple[str, Callable[[_Night], Mapping[str, Any]]], ...]:
+        """The dream step, only for a person the core serves: for anyone else the night's log is
+        today's to the byte."""
+        return (("dream", self._dream),) if self.deps.core.serves(p.uid) else ()
 
     def _dream(self, p: _Night) -> Mapping[str, Any]:
-        day = [item for item in p.store.for_day(p.night) if not item.held_out and item.kind != "practice"]
-        p.dreamt = self.deps.core.dream(self._call(p, "dream"), day)
+        """Her stored evidence through tonight, never a practice scene or a held-out item; the core
+        observes only what its state has not."""
+        evidence = [item for item in p.store.stored(p.night) if not item.held_out and item.kind != "practice"]
+        p.dreamt = self.deps.core.dream(self._call(p, "dream"), evidence)
         return dict(p.dreamt.receipt)
 
     def _seeded(self, p: _Night) -> list[Evidence]:
@@ -69,6 +82,14 @@ class CoreSteps:
             if known:
                 found[example.id] = math.fsum(known) / len(known)
         return data.weighted(found)
+
+    def _surprise(self, p: _Night, receipt: Mapping[str, Any]) -> dict[str, Any]:
+        """For a night whose rows carry surprise weights: whether the training job applied them,
+        as it reported (``train.colab_train``), else that it did not say."""
+        if p.data is None or all(example.weight == 1.0 for example in p.data.examples):
+            return {}
+        said = receipt.get("surprise_weights")
+        return {"surprise_weights": said if isinstance(said, str) else "not applied (the training job did not report)"}
 
     def _kept(self, p: _Night) -> dict[str, Any]:
         """The night's unit, for the summary; a disk or store failure to keep it is recorded, not raised."""

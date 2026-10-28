@@ -110,11 +110,27 @@ def test_state_round_trips_and_versions() -> None:
     with np.load(io.BytesIO(blob), allow_pickle=False) as held:
         arrays = {name: held[name] for name in held.files}
     meta = json.loads(str(arrays["meta"]))
-    arrays["meta"] = np.array(json.dumps({**meta, "version": core_state.STATE_VERSION + 1}))
-    out = io.BytesIO()
-    np.savez(out, **arrays)
-    with pytest.raises(core_state.StateError, match="version"):
-        core_state.load(out.getvalue(), model_id=core.model_id)
+    old = {k: v for k, v in meta.items() if k not in ("through", "fake_latents")}  # what version 1 wrote
+    for written in ({**meta, "version": core_state.STATE_VERSION + 1}, {**old, "version": 1}):
+        arrays["meta"] = np.array(json.dumps(written))
+        out = io.BytesIO()
+        np.savez(out, **arrays)
+        with pytest.raises(core_state.StateError, match="version"):
+            core_state.load(out.getvalue(), model_id=core.model_id)
+
+
+def test_a_state_keeps_the_last_event_it_observed_and_whether_a_latent_was_fake() -> None:
+    core = api.Core.fresh(SMALL, seed=0)
+    state = _observed(core)
+    assert state.through is not None and not state.fake_latents
+    at, newest = state.through
+    assert not state.after(at, newest) and state.after(at + 1.0, "a") and state.after(at, newest + "z")
+    early = core.observe(state, _event("e-early", 1, _vec(3)))[0]  # a late arrival with an earlier time
+    assert early.through == state.through  # the newest event observed stays the mark
+    fake = dataclasses.replace(state, fake_latents=True)
+    kept = core_state.load(core_state.save(core.consolidate(core.observe(fake, _event("e9", 600, _vec(9)))[0])),
+                           model_id=core.model_id)
+    assert kept.fake_latents and kept.through is not None and kept.through[1] == "e9"  # sticky, and saved
 
 
 # ── Dreaming ──────────────────────────────────────────────────────────────────

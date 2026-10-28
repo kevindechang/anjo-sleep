@@ -32,6 +32,21 @@ nights) run day by day with one operation each night (``evaluate.trace(nightly=.
 ``consolidate`` (``Core.consolidate``: the fast memory moves into the slow one, then resets). The
 score is recall and false calls at the locked threshold, the planted problems' AUC
 (``evaluate.separation``) and the risk's Brier score (``evaluate.calibration``).
+
+**Measured** with the toy recipe ``cli`` trains (seeds 0 / 1 / 2), each choice made on validation
+lives (``toy.lives(64, seed=2)``, ``toy.chained(seed=2)``) and test lives (seed 3) reported once:
+
+- The dream's picks do not beat random rehearsal: dream minus random on the needed threads'
+  next-day surprise is -0.002 / -0.002 / -0.006 on validation and -0.008 / +0.019 / +0.002 on
+  test, every interval across zero. They do beat the newest events (what practice seeded on
+  before), +0.062 / +0.054 / +0.020 on validation and +0.061 / +0.065 / +0.042 on test, every
+  interval above zero, so the curriculum stays on (``night.CURRICULUM_ENV``).
+- Rehearsing into the core's own memory is not chosen: problems caught on long lives, of 27 on
+  validation, ``full`` 7 / 8 / 4 and ``no_rehearsal`` 11 / 14 / 10; on test, of 31, 9 / 9 / 5 and
+  17 / 13 / 10. So the core's night consolidates only (``night``).
+- Consolidating each night matches never resetting (validation, of 48: 22 / 18 / 13 against
+  20 / 18 / 15; test, of 60: 31 / 22 / 17 against 31 / 23 / 19) and resetting loses nearly every
+  problem (test 1 / 3 / 0). Nothing saturates over these lives, so the slow memory has no decay.
 """
 from __future__ import annotations
 
