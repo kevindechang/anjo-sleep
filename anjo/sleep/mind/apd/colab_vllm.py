@@ -226,7 +226,7 @@ class ColabSession:
         """Put one adapter into the server's LoRA directory, where vLLM's resolver loads it by
         name: a checked LoRA of Glimmer, recorded under the rendering this server serves."""
         config.check_adapter(folder, name)
-        if _rendering(folder) != self.client().rendering:
+        if adapter_rendering(folder) != self.client().rendering:
             raise ColabError(f"adapter {name} wasn't trained under the rendering this server serves")
         remote = f"{ADAPTERS_DIR}/{name}"
         _exec(self.cli, self.session, MKDIR_TIMEOUT_S, ANJO_COLAB_STEP="mkdir", ANJO_COLAB_DIR=remote)
@@ -235,7 +235,20 @@ class ColabSession:
                           timeout_s=UPLOAD_TIMEOUT_S)
 
 
-def _rendering(folder: Path) -> object:
+def attach(session: str, local_port: int, key: str, *, transport: httpx.BaseTransport | None = None) -> ColabSession:
+    """A handle on a session this run's own ``serve`` holds open in another process: kill-resume's
+    children (``pilot.kill_setup``), which inherit its tunnel's port and key from the parent's
+    environment. The parent holds, health-checks and stops the session; the handle is live for as
+    long as the child runs."""
+    if not session.startswith(MIND_SESSION_PREFIX) or not 0 < local_port < 65536:
+        raise ColabError("only a MIND session's own loopback tunnel can be attached")
+    handle = ColabSession(session, local_port, key, ColabCli(), transport)
+    handle._state.up = True
+    return handle
+
+
+def adapter_rendering(folder: Path) -> object:
+    """The rendering an adapter folder records it was trained under, or ``None``."""
     try:
         meta = json.loads((folder / "adapter_config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
