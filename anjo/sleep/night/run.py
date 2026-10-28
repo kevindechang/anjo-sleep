@@ -128,7 +128,7 @@ class NightRunner:
         as_of: Mapping[str, datetime] | None = None,
     ) -> dict[str, NightResult]:
         """The batch as one phase: Glimmer goes back to sleep when it ends, however it ends."""
-        with phase(self.deps.sleep):
+        with phase(self.deps.gpu_stop or self.deps.sleep):
             return self._run_batch(nights, windows, days, sweep, as_of or {})
 
     def _run_batch(
@@ -237,6 +237,8 @@ class NightRunner:
         deps = self.deps
         deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
+        if deps.gpu_stop is not None:  # when the batch's outermost phase ends, the stop's outcome or why it skipped
+            deps.gpu_stop.watch(lambda status, fields: log.step("gpu_stop", status, uses="new", system=None, **fields))
         history = summaries(deps.logs(uid))
         actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - paid_within(history, window[1], timedelta(hours=24))))
         wonder_spent = spent_within(history, window[1], timedelta(days=30))

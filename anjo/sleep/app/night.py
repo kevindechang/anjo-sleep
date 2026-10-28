@@ -77,6 +77,7 @@ from anjo.sleep.app.storage import (
     checkpoint_registry,
     data_root,
     evidence_store,
+    glimmer_turns,
     target_store,
     transcript_store,
 )
@@ -100,6 +101,7 @@ from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.sleep_pressure import policy_from
+from anjo.sleep.night.sweep import held_elsewhere
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
@@ -113,6 +115,8 @@ from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.probes.clients import ModelClient
 from anjo.sleep.serving import backend, config, soft_tokens
+from anjo.sleep.serving.stop import GpuStop, ModalCli
+from anjo.sleep.serving.wake import window_path
 from anjo.sleep.serving.client import TOP_K, TOP_P, ServingError, VllmClient
 from anjo.sleep.types import Probe
 
@@ -271,6 +275,19 @@ def channel_setup(
     return ChannelSetup(arm, Path(raw), client.with_soft_tokens(soft_tokens.ModalEmbeddingRows()), practice)
 
 
+GPU_STOP_ENV: Final = "ANJO_SLEEP_GPU_STOP"  # 0: leave Modal's idle window to end the night's GPU
+
+
+def gpu_stop(serving: backend.Serving, environ: Mapping[str, str], ledger: Ledger) -> GpuStop | None:
+    """On Modal: the serving GPU stops when the night's outermost phase ends, unless a live chat or
+    another run under ``ledger``'s night lock could be cut (``serving.stop``); on SageMaker the copy
+    count goes to 0 as before (``sleep_now``)."""
+    if serving.name != "modal" or environ.get(GPU_STOP_ENV, "").strip() == "0":
+        return None
+    return GpuStop(ModalCli(), config.serve_app_name(config.serve_precision()), turns=glimmer_turns(),
+                   window=window_path(data_root()), night_running=lambda: held_elsewhere(ledger))
+
+
 def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     require_sleep_host()
     for user_id, persona in options.personas.items():
@@ -324,7 +341,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=gpu_rate), mind_state=mind_state, channel=channel,
         intentions=LedgerIntentions(), homework=homework,
-        wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
+        wake=serving.wake, sleep=serving.sleep_now, gpu_stop=gpu_stop(serving, os.environ, ledger), retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
     )
 
