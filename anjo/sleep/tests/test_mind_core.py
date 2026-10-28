@@ -36,7 +36,11 @@ SEPARATION_MARGIN = 0.3  # over the same core with no fast weights
 RECALL_MARGIN = 0.25  # recall at the locked threshold, over no fast weights
 MIN_GAP_RECALL = 0.5  # the gap family alone: 24 of 32 on each seed
 MAX_FALSE_PER_100 = 2.0
-TRANSPLANT_TOLERANCE = 0.1  # mean risk shift of the unrelated open thread's slot: 0.047 / 0.066 / 0.036
+# The unrelated open thread's risk holds on average: the mean shift of its own slot is 0.047 / 0.066 /
+# 0.036, and 0.063 / 0.100 / 0.030 with the pairs where it shares a slot with the moved history
+# (6 / 2 / 3 pairs, exempt from the bound). The max is reported only, not bounded: 0.131 / 0.162 /
+# 0.080 here, and seed 1 reaches 0.664 over 64 pairs.
+TRANSPLANT_TOLERANCE = 0.1
 MIN_RELEVANT_GAP = 0.25  # the booking's risk, after cancellations minus after deliveries: 0.56 / 0.76 / 0.31
 # Of 16 pairs, speak about the booking after cancellations and not after deliveries: half of them.
 # Measured 10 / 15 / 14; a core without its fast memory flips 1 / 0 / 0.
@@ -169,6 +173,12 @@ def test_the_dream_threshold_is_locked_on_validation() -> None:
     assert run.core.thresholds.ignite == evaluate.lock_ignite(run.core, lives[4:], seed=3)
     dreamt = evaluate.dream_traces(run.core, lives[4:], seed=3)
     assert all(call.p_speak >= 0.0 and call.cites for trace in dreamt for call in trace.calls)
+    # each life dreams from the seed afresh, as the CLI's findings do: a life's ignitions don't hang on the lives before it
+    alone = evaluate.dream_traces(run.core, lives[5:], seed=3)
+    assert dreamt[1] == alone[0] and dreamt[0] == evaluate.dream_traces(run.core, lives[4:5], seed=3)[0]
+    locked = evaluate.night_ignitions(run.core, lives[4], seed=3)
+    assert [(day, i.score, i.cited_event_ids) for day, i in locked] == [
+        (c.day, c.p_speak, c.cites) for c in dreamt[0].calls if c.p_speak >= run.core.thresholds.ignite]
     assert evaluate.score(dreamt, lives[4:], run.core.thresholds.ignite).false_per_100 <= evaluate.MAX_FALSE_PER_100
 
 
@@ -233,6 +243,7 @@ def test_transplant_flips_only_the_relevant_slot(trained: api.Core) -> None:
     assert result.relevant_gap >= MIN_RELEVANT_GAP, result
     assert result.flipped >= MIN_FLIPPED, result
     assert result.mean_unrelated_shift <= TRANSPLANT_TOLERANCE, result
+    assert result.unrelated_cited >= result.unrelated_found and result.max_unrelated_shift >= result.mean_unrelated_shift
 
 
 def test_core_learns_a_planted_dependency(

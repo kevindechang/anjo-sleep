@@ -1,7 +1,9 @@
 """``python -m anjo.sleep.mind.core``: train MIND's core and run it offline (torch, CPU, no network).
 
 - ``toy --out DIR``: train on generated toy lives (fresh ones each epoch) and evaluate on held-out
-  ones, the transplant pairs included. A smoke run of the whole chain, minutes on one CPU thread.
+  ones, the transplant pairs included (16 and 64). A smoke run of the whole chain, minutes on one
+  CPU thread. The transplant's claim is an average: the unrelated thread's risk holds on average,
+  its largest shift is reported as a tail and not bounded (``TRANSPLANT_CLAIM``).
 - ``train --export DIR --latents DIR --out DIR``: train on an export's lives (a labelled split,
   ``core-train``). About ``--val-share`` of its lives are held back by template (``split_lives``),
   for the best epoch and the locked thresholds, since ``core-val``'s labels stay sealed.
@@ -12,12 +14,15 @@
   life's id and the arm label: ``core-N``, ``core-N-reset``, ``core-N-nofast``, kept apart from APD's
   pre-registered arm names), quoting the cited evidence as each record's problem.
   ``--reset-each-night`` is N-reset; ``--dream`` adds each night's ignitions, kept at the dream's
-  own threshold (locked on the same held-back lives as the speak threshold). ``--threshold``
+  own threshold (locked on the same held-back lives as the speak threshold). A dreaming run is
+  labelled ``-dream`` and stays out of the headline: its two locked budgets together may reach twice
+  ``evaluate.MAX_FALSE_PER_100`` false interventions per 100 person-days. ``--threshold``
   reports at another operating point than the locked one, and every record and the summary then
   say so (``threshold_by_hand``): such a run is exploration, not a score. Prints the compute it took.
 - ``render --runs DIR --arm B --export DIR --out FILE``: another arm's stored APD runs
   (``DIR/<life>.<arm>.json``) as finding records in the core's form (``findings.in_core_form``:
-  the first two cited items quoted, a fixed conclusion), for one blind judge pass over both arms.
+  the first two cited items quoted; a suspicion takes the core's fixed conclusion, a retraction a
+  fixed sentence of its kind, a resolution keeps its own), for one blind judge pass over both arms.
   Their cites are the export's event ids. The headline for both is ``prescore``; the judge's
   reading of B's own prose stays secondary.
 - ``prescore --findings FILE --labels DIR``: the deterministic pre-score against the planted items
@@ -52,6 +57,10 @@ MODEL_FILE: Final = "core.npz"
 CARD_FILE: Final = "model_card.json"
 TOY_LIVES_PER_EPOCH: Final = 128
 QUOTE_CHARS: Final = 160  # of each cited item, in a finding's problem
+TRANSPLANT_CLAIM: Final = (
+    "The unrelated open thread's risk holds on average: mean_unrelated_shift leaves out the pairs where it "
+    "shares a slot with what moved, mean_unrelated_shift_all keeps them. max_unrelated_shift is a reported "
+    "tail, not a bound.")
 ARM_NAME: Final = re.compile(r"[A-Za-z0-9-]{1,32}")
 
 
@@ -102,9 +111,10 @@ def run_toy(args: argparse.Namespace) -> dict[str, Any]:
                                  patience=args.patience, batch_size=16)
     seconds = time.perf_counter() - start
     test = toy.lives(64, seed=3)
-    pairs = evaluate.transplant(trained.core, toy.pairs(16, seed=5), tolerance=0.1)
+    pairs = {f"transplant_{n}": dataclasses.asdict(evaluate.transplant(trained.core, toy.pairs(n, seed=5), tolerance=0.1))
+             for n in (16, 64)}
     note = {"source": "toy", "lives_per_epoch": TOY_LIVES_PER_EPOCH, "validation": 48, "test": 64, "dim": toy.DIM}
-    card = _card(trained, seconds, note, args.seed, test, {"transplant": dataclasses.asdict(pairs)})
+    card = _card(trained, seconds, note, args.seed, test, {**pairs, "transplant_claim": TRANSPLANT_CLAIM})
     _write(args.out, trained.core, card)
     return card
 
@@ -176,32 +186,28 @@ def quoting(texts: dict[str, str]) -> Callable[[tuple[str, ...]], str]:
 
 def life_calls(core: Core, stream: LabelledStream, *, reset: bool, dream: bool, seed: int) -> list[findings.Raised]:
     """The core's calls over one life: each night's decision, and when ``dream`` its ignitions at the
-    dream's locked threshold (``evaluate.DREAM_STEPS`` steps, as locked)."""
+    dream's locked threshold, dreamt as the lock dreamt them (``evaluate.night_ignitions``)."""
     run = evaluate.trace(core, stream, reset_each_night=reset)
     calls = [findings.Raised(c.day, c.p_speak, c.cites, "speak") for c in run.calls]
     if not dream:
         return calls
-    rng = np.random.default_rng(seed)
-    state = core.init_state(stream.life_id)
-    for day in stream.days:
-        if reset:
-            state = core.init_state(stream.life_id)
-        for event in (e for e in stream.events if e.t.date() == day):
-            state, _ = core.observe(state, event)
-        calls.extend(findings.Raised(day, i.score, i.cited_event_ids, i.kind)
-                     for i in core.dream(state, evaluate.DREAM_STEPS, rng))
+    calls.extend(findings.Raised(day, i.score, i.cited_event_ids, i.kind)
+                 for day, i in evaluate.night_ignitions(core, stream, seed=seed, reset_each_night=reset))
     return sorted(calls, key=lambda c: c.day)
 
 
-def arm_label(core: Core, reset: bool) -> str:
+def arm_label(core: Core, reset: bool, dream: bool = False) -> str:
     """The core's own arm labels, apart from APD's pre-registered arm names: ``core-N``,
-    ``core-N-reset`` (its state reset each night), ``core-N-nofast`` (trained without fast weights)."""
-    return "core-N" + ("-nofast" if not core.config.fast else "") + ("-reset" if reset else "")
+    ``core-N-reset`` (its state reset each night), ``core-N-nofast`` (trained without fast weights),
+    and ``-dream`` when ignitions join the speak calls (never the headline)."""
+    return ("core-N" + ("-nofast" if not core.config.fast else "") + ("-reset" if reset else "")
+            + ("-dream" if dream else ""))
 
 
 def run_findings(args: argparse.Namespace) -> dict[str, Any]:
     core = Core.load(args.model)
-    arm = args.arm or arm_label(core, args.reset_each_night)
+    arm = arm_label(core, args.reset_each_night, args.dream) if args.arm is None else (
+        args.arm.removesuffix("-dream") + ("-dream" if args.dream else ""))  # a dreaming run is never the headline
     streams = data.load_export(args.export, args.latents)
     topic = quoting(_texts(args.export))
     line, by_hand = (core.threshold, False) if args.threshold is None else (args.threshold, True)

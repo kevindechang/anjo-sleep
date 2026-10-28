@@ -13,8 +13,10 @@ intervention on a thread already caught is a **repeat**. Any other intervention 
   ``MAX_FALSE_PER_100`` false interventions per 100 person-days, on validation lives; the highest
   such threshold on ties. Test lives are then scored at it, untouched. ``lock_ignite`` locks the
   dream's own threshold the same way on the same lives: each night's ignitions
-  (``dream_traces``, ``DREAM_STEPS`` steps, seeded) are scored as interventions. The two budgets
-  are separate, so speak calls and ignitions together stay within twice ``MAX_FALSE_PER_100``.
+  (``night_ignitions``, ``DREAM_STEPS`` steps, each life's dream noise drawn from the seed afresh,
+  as the CLI's findings draw it) are scored as interventions. The two budgets are separate, so
+  speak calls and ignitions together may reach twice ``MAX_FALSE_PER_100``: the headline is the
+  speak calls alone, and a run with ignitions is labelled apart from it.
 - ``calibration``: Brier score and reliability bins of each open slot's risk against what happened
   to the thread it cites (it surfaced within the horizon), and of the self-error head against the
   risk's realized squared error.
@@ -25,9 +27,11 @@ intervention on a thread already caught is a **repeat**. Any other intervention 
   must flip (speak about it after the history of cancellations, not after the deliveries), and the
   slot of an unrelated thread still open at the cut (a plan and a conflicting constraint, not yet
   raised: a thread able to fail), a slot citing neither the booking nor any event that differs
-  between the histories, should keep its risk within ``tolerance`` on average; its mean risk and
-  the largest shift are reported too, since the shared fast memory lets a little of the history
-  reach every later write.
+  between the histories, should keep its risk within ``tolerance`` **on average**. Pairs where the
+  thread shares its slot with what moved are exempt from that mean; ``mean_unrelated_shift_all``
+  is the mean with them (any slot of the thread but the booking's own). The largest shift is a reported tail, not a bound: the shared fast memory lets a
+  little of the history reach every later write, and on one toy seed a single pair in 64 moves by
+  0.66.
 - ``separation``: the threshold-free AUC of each labelled thread's peak risk, problems against
   decoys.
 """
@@ -44,7 +48,7 @@ import numpy as np
 from anjo.sleep.mind.core.api import Core
 from anjo.sleep.mind.core.state import CoreState
 from anjo.sleep.mind.core.toy import TransplantPair
-from anjo.sleep.mind.core.types import EventLatent, LabelledStream, Predictions, ThreadLabel
+from anjo.sleep.mind.core.types import EventLatent, Ignition, LabelledStream, Predictions, ThreadLabel
 
 MAX_FALSE_PER_100: Final = 1.0
 BINS: Final = 10
@@ -115,6 +119,8 @@ class Transplant:
     unrelated_found: int  # pairs whose unrelated thread holds a slot of its own in both histories
     tolerance: float
     mean_unrelated_risk: float = 0.0  # that slot's risk after the cancellations: how able to fail it looks
+    mean_unrelated_shift_all: float = 0.0  # any slot of the thread but the booking's: the exempt pairs too
+    unrelated_cited: int = 0  # pairs where such a slot exists in both histories
 
 
 # ── Traces ────────────────────────────────────────────────────────────────────
@@ -235,19 +241,32 @@ def lock_threshold(core: Core, val: Sequence[LabelledStream]) -> float:
     return _lock(traces(core, val), val)
 
 
+def night_ignitions(
+    core: Core, stream: LabelledStream, *, seed: int, steps: int = DREAM_STEPS, ignite_at: float | None = None,
+    reset_each_night: bool = False,
+) -> tuple[tuple[date, Ignition], ...]:
+    """Each night's ignitions over one life, at ``ignite_at`` (the core's locked threshold when
+    ``None``). The dream noise is drawn from ``seed`` afresh for each life, so a life's ignitions
+    never hang on the lives dreamt before it."""
+    rng = np.random.default_rng(seed)
+    state, out = core.init_state(stream.life_id), list[tuple[date, Ignition]]()
+    for day in stream.days:
+        if reset_each_night:
+            state = core.init_state(stream.life_id)
+        state = _run(core, state, [e for e in stream.events if e.t.date() == day])
+        out.extend((day, ignition) for ignition in core.dream(state, steps, rng, ignite_at=ignite_at))
+    return tuple(out)
+
+
 def dream_traces(
     core: Core, streams: Sequence[LabelledStream], *, seed: int, steps: int = DREAM_STEPS,
 ) -> tuple[LifeTrace, ...]:
     """Each night's ignitions as calls (their score, their cites), every one of them (no threshold)."""
-    rng = np.random.default_rng(seed)
-    out = []
-    for stream in streams:
-        state, calls = core.init_state(stream.life_id), list[DayCall]()
-        for day in stream.days:
-            state = _run(core, state, [e for e in stream.events if e.t.date() == day])
-            calls.extend(DayCall(day, i.score, i.cited_event_ids) for i in core.dream(state, steps, rng, ignite_at=0.0))
-        out.append(LifeTrace(stream.life_id, tuple(calls), ()))
-    return tuple(out)
+    return tuple(
+        LifeTrace(stream.life_id, tuple(DayCall(day, i.score, i.cited_event_ids) for day, i in night_ignitions(
+            core, stream, seed=seed, steps=steps, ignite_at=0.0)), ())
+        for stream in streams
+    )
 
 
 def lock_ignite(core: Core, val: Sequence[LabelledStream], *, seed: int) -> float:
@@ -324,7 +343,7 @@ def transplant(
     core: Core, pairs: Sequence[TransplantPair], *, tolerance: float, threshold: float | None = None,
 ) -> Transplant:
     line = core.threshold if threshold is None else threshold
-    flipped, gaps, shifts, risks = 0, [], [], []
+    flipped, gaps, shifts, risks, every = 0, [], [], [], []
     for pair in pairs:
         cancelled = _run(core, _run(core, core.init_state(pair.person), pair.problem), pair.now)
         delivered = _run(core, _run(core, core.init_state(pair.person), pair.benign), pair.now)
@@ -343,8 +362,14 @@ def transplant(
         if a is not None and b is not None:
             shifts.append(abs(a - b))
             risks.append(a)
+        loose = (pair.relevant,)  # the exempt pairs too: any slot of the thread but the booking's own
+        a, b = (_risk_citing(core, cancelled, pair.unrelated, excluding=loose),
+                _risk_citing(core, delivered, pair.unrelated, excluding=loose))
+        if a is not None and b is not None:
+            every.append(abs(a - b))
     return Transplant(
         pairs=len(pairs), flipped=flipped, relevant_gap=math.fsum(gaps) / max(len(gaps), 1),
         mean_unrelated_shift=math.fsum(shifts) / max(len(shifts), 1), max_unrelated_shift=max(shifts, default=0.0),
         unrelated_found=len(shifts), tolerance=tolerance, mean_unrelated_risk=math.fsum(risks) / max(len(risks), 1),
+        mean_unrelated_shift_all=math.fsum(every) / max(len(every), 1), unrelated_cited=len(every),
     )

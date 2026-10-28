@@ -11,9 +11,12 @@ from ``topic`` (the CLI quotes the cited evidence, which the judge sees anyway).
 decision is kept at the speak threshold, a dream's ignition at the dream's own (``ignite``).
 
 **Another arm in the core's form** (``in_core_form``): for one blind judge pass, another arm's
-findings (the notebook baseline B's) are rewritten the way the core writes its own, the cited
-evidence quoted as the problem and a fixed conclusion, so the judge can't tell the arms apart by
-their prose. Day, id, probability, cites and kind stay as reported.
+findings (the notebook baseline B's) are rewritten the way the core writes its own: the cited
+evidence quoted as the problem, and for a suspicion the core's fixed conclusion, so the judge
+can't tell the arms apart by their prose. Each finding keeps its kind, and only a suspicion reads
+as a flag: a retraction takes a fixed sentence of its own (``RETRACTED``), and a resolution keeps
+its conclusion, since APD scores a resolution on whether that conclusion holds (and the core
+never resolves, so it gives nothing away). Day, id, probability and cites stay as reported.
 
 **The pre-score** costs nothing and needs no judge: a planted item is caught when a report cites
 one of its origin or disambiguating ids on a day from its knowable day to its cutoff (the day
@@ -39,6 +42,7 @@ CONCLUSIONS: Final[Mapping[Source, str]] = {
     "missing": "Something this needs is still missing.",
     "collision": "Two of these plans are likely to collide.",
 }
+RETRACTED: Final = "On the cited evidence, this is not a problem after all."
 
 
 @dataclass(frozen=True)
@@ -78,8 +82,9 @@ def reports(
 
 
 def in_core_form(report: FindingReport, topic: Topic) -> FindingReport:
-    """Another arm's finding as the core writes its own (see the module docstring)."""
-    return replace(report, problem=topic(report.cites), conclusion=CONCLUSIONS["speak"])
+    """Another arm's finding as the core writes its own, its kind kept (see the module docstring)."""
+    conclusion = {"suspicion": CONCLUSIONS["speak"], "retraction": RETRACTED}.get(report.kind, report.conclusion)
+    return replace(report, problem=topic(report.cites), conclusion=conclusion)
 
 
 # ── The pre-score ─────────────────────────────────────────────────────────────

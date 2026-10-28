@@ -131,10 +131,23 @@ def test_core_calls_become_finding_records() -> None:
     assert all(r.kind == "suspicion" and r.problem.startswith("about") for r in out)
     assert [r.cites for r in findings.reports(calls, threshold=0.5)] == [("e-d0-1", "e-d1-1"), ("e-d1-1",)]  # no dream line
 
-    theirs = dataclasses.replace(out[0], finding_id="b-3", problem="B's own prose", conclusion="B's own words", kind="retraction")
-    mine = findings.in_core_form(theirs, lambda cites: "quoted " + " / ".join(cites))
-    assert (mine.problem, mine.conclusion) == ("quoted e-d0-1 / e-d1-1", findings.CONCLUSIONS["speak"])
-    assert (mine.finding_id, mine.day, mine.p, mine.cites, mine.kind) == ("b-3", _day(1), 0.70, theirs.cites, "retraction")
+
+def test_renderer_keeps_each_b_finding_kind() -> None:
+    def quote(cites: tuple[str, ...]) -> str:
+        return "quoted " + " / ".join(cites)
+
+    base = findings.reports([findings.Raised(_day(1), 0.7, ("e-d0-1", "e-d1-1"), "speak")], threshold=0.5)[0]
+    seen = {}
+    for kind in ("suspicion", "retraction", "resolution"):
+        theirs = dataclasses.replace(base, finding_id="b-3", problem="B's own prose", conclusion="The decoy is fine.",
+                                     kind=kind)
+        mine = findings.in_core_form(theirs, quote)
+        assert mine.problem == "quoted e-d0-1 / e-d1-1"
+        assert (mine.finding_id, mine.day, mine.p, mine.cites, mine.kind) == ("b-3", _day(1), 0.7, theirs.cites, kind)
+        seen[kind] = mine.conclusion
+    assert seen["suspicion"] == findings.CONCLUSIONS["speak"]  # only a suspicion reads as the core's flag
+    assert seen["retraction"] == findings.RETRACTED  # a fixed sentence of its own kind, never a flag
+    assert seen["resolution"] == "The decoy is fine."  # it scores on whether its own conclusion holds
 
 
 def test_prescore_counts_cited_overlap_inside_each_items_window() -> None:

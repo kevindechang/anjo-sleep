@@ -67,20 +67,25 @@ def test_train_findings_and_prescore_end_to_end(tmp_path: Path, capsys: pytest.C
     assert cli.main(["findings", "--model", str(model / cli.MODEL_FILE), "--export", str(export),
                      "--latents", str(latents), "--out", str(found), "--dream", "--threshold", "0"]) == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["lives"] == 8 and summary["events"] > 0 and summary["findings"] > 0 and summary["arm"] == "core-N"
+    assert summary["lives"] == 8 and summary["events"] > 0 and summary["findings"] > 0
+    assert summary["arm"] == "core-N-dream"  # ignitions stay out of the headline arm
     assert summary["threshold_by_hand"] is True and summary["threshold"] == 0.0
     assert summary["dream_steps"] == evaluate.DREAM_STEPS and summary["ignite_threshold"] == card["thresholds"]["ignite"]
     rows = [json.loads(line) for line in found.read_text().splitlines()]
     assert len(rows) == summary["findings"]
     assert all(row["kind"] == "suspicion" and row["cites"] and row["problem"].startswith("said ") for row in rows)
-    assert {row["arm"] for row in rows} == {"core-N"} and all(row["threshold_by_hand"] for row in rows)
+    assert {row["arm"] for row in rows} == {"core-N-dream"} and all(row["threshold_by_hand"] for row in rows)
     dreamt = [row for row in rows if row["conclusion"] != findings.CONCLUSIONS["speak"]]
     assert all(row["p"] >= card["thresholds"]["ignite"] for row in dreamt)  # ignitions at their own locked line
 
     locked = tmp_path / "locked.jsonl"
     assert cli.main(["findings", "--model", str(model / cli.MODEL_FILE), "--export", str(export),
                      "--latents", str(latents), "--out", str(locked)]) == 0
-    assert json.loads(capsys.readouterr().out)["threshold_by_hand"] is False
+    plain = json.loads(capsys.readouterr().out)
+    assert plain["threshold_by_hand"] is False and plain["arm"] == "core-N"
+    assert cli.main(["findings", "--model", str(model / cli.MODEL_FILE), "--export", str(export),
+                     "--latents", str(latents), "--out", str(locked), "--dream", "--arm", "core-N"]) == 0
+    assert json.loads(capsys.readouterr().out)["arm"] == "core-N-dream"  # an override can't put ignitions in the headline
 
     assert cli.main(["prescore", "--findings", str(found), "--labels", str(export / "labels")]) == 0
     scored = json.loads(capsys.readouterr().out)
