@@ -6,12 +6,14 @@
   hypotheses there is one start state, with its hypothesis set frozen, the catch-all last.
 - **Branches** (``run_branches``): ``REPLAY_K`` per start state, each on a fresh copy of the log
   with its own thinker (``ReplayModels.thinker_for``: Glimmer at ``BRANCH_TEMPERATURE``, one seed
-  per branch). Each runs one night's inquiry budget on the real loop, focused on the start state's
+  per branch, its prompts dated on the branch's night). Each runs one night's inquiry budget on the real loop, focused on the start state's
   question, with every tool masked to the start state's night (``as_of``, m = 0): a branch can
   never see what came later. The branch's ``RunStart`` names the next night, so K5's stall count
   starts afresh, as a new night's would; ``as_of`` stays the start state's. Nothing arrives, so
   there is no notice pass. Each branch ends with its credence vector over the frozen set, a
-  hypothesis it added counted in the catch-all (``frozen_credences``).
+  hypothesis it added counted in the catch-all (``frozen_credences``), and how each of its
+  thinker's calls ended (its thinker records them: ``RecordingThinker``), so only applied turns
+  whose reply ended at a stop token train (``Branch.targets``).
 - **Provenance:** a start state's ancestry is every model whose text its workspace holds: the
   life's evidence and the M run's thinker turns. The M run records no model for a ``world_query``
   answer (``Answered``) or a resolver's verdict (``Resolved``), so a workspace holding either (a
@@ -24,11 +26,12 @@ label isn't Spark Open's by the API's report, is never sampled.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from anjo.sleep.mind.apd.arms import BriefedThinker, LifeSearch, MemoryLog, MindCore, load_brief, mind_core, seen_by
 from anjo.sleep.mind.apd.types import ArmRun, Life
@@ -44,18 +47,35 @@ from anjo.sleep.mind.inquiry.types import (
     WorkspaceEvent,
     catch_all_id,
 )
-from anjo.sleep.mind.replay.types import REPLAY_K, Branch, LabelBook, ReplayRefused, StartState, check_synthetic
+from anjo.sleep.mind.replay.types import (
+    REPLAY_K,
+    Branch,
+    CallEnd,
+    LabelBook,
+    ReplayRefused,
+    StartState,
+    check_synthetic,
+)
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.provenance import union
 from anjo.sleep.spark_inquiry import ChatFn, SparkResolver
 
-ThinkerFactory = Callable[[int], Thinker]
+
+class RecordingThinker(Thinker, Protocol):
+    """A thinker that records how each of its calls ended, one per call, in order."""
+
+    @property
+    def calls(self) -> Sequence[CallEnd]: ...
+
+
+ThinkerFactory = Callable[[int, date], RecordingThinker]  # a branch's seed and its night
 
 
 @dataclass(frozen=True)
 class ReplayModels:
-    """The branches' models. ``thinker_for(seed)`` is the thinker for one branch (Glimmer at
-    ``BRANCH_TEMPERATURE`` with that seed, ``served.branch_thinkers``); the world query and screen
+    """The branches' models. ``thinker_for(seed, night)`` is the thinker for one branch (Glimmer
+    at ``BRANCH_TEMPERATURE`` with that seed, dated on that night: ``served.branch_thinkers``); the
+    world query and screen
     are the M arm's. The resolver is the M arm's too, ``SparkResolver`` over ``resolver_chat``
     (Spark Open), built per branch on a chat that keeps the model each reply names."""
 
@@ -192,8 +212,9 @@ class _SeenWorld:
 def _branch(start: StartState, life: Life, models: ReplayModels, index: int, seed: int, budget: Budget,
             core: MindCore, brief: str) -> Branch:
     world, resolver = _SeenWorld(models.world), _SeenChat(models.resolver_chat)
+    thinker = models.thinker_for(seed, branch_night(start))
     ports = InquiryPorts(
-        thinker=BriefedThinker(models.thinker_for(seed), brief), screen=models.screen,
+        thinker=BriefedThinker(thinker, brief), screen=models.screen,
         search=LifeSearch(life.evidence), world=world, resolver=SparkResolver(chat=resolver),
         log=MemoryLog(start.events),
     )
@@ -202,16 +223,23 @@ def _branch(start: StartState, life: Life, models: ReplayModels, index: int, see
         begun, ports, budget, night=branch_night(start), targets=start.targets, as_of=start.as_of,
         focus=start.question_id,
     )
+    if len(thinker.calls) != len(run.turns):
+        raise ValueError("a branch's thinker records how each of its calls ended, one per turn")
+    ends = {turn.seq: end for turn, end in zip(run.turns, thinker.calls, strict=True)}
     on_question = {event.step.seq for event in run.events if event.step.focus == start.question_id}
     turns = tuple(turn for turn in run.turns if turn.seq in on_question)
     ended = frozen_credences(run.ws.hypotheses_of(start.question_id), start)
-    complete = bool(turns) and ended is not None and all(turn.reply.text for turn in run.turns)
-    credences = ended or frozen_credences(begun.hypotheses_of(start.question_id), start) or {}
     ancestry = union([
         start.ancestry, frozenset(turn.reply.model for turn in run.turns), frozenset(world.models),
         frozenset(resolver.models),
     ])
-    return Branch(start.id, index, seed, credences, run.budget.tokens_used, turns, complete, ancestry)
+    branch = Branch(
+        start.id, index, seed, ended or frozen_credences(begun.hypotheses_of(start.question_id), start) or {},
+        run.budget.tokens_used, turns, False, ancestry, ends={seq: ends[seq] for seq in on_question if seq in ends},
+        applied=frozenset(e.step.seq for e in run.events if e.step.applied and e.step.seq in on_question),
+        failed=sum(1 for end in thinker.calls if end.failed), day=branch_night(start),
+    )
+    return dataclasses.replace(branch, complete=ended is not None and not branch.failed and bool(branch.targets))
 
 
 def run_branches(

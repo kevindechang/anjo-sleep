@@ -8,11 +8,13 @@ Gemini (``beats``). Replay is claimed only if it beats both, M (did replay help?
 
 The claim's words are the spec's; the sentence for no claim is new copy. Both wait on Kevin. No
 sentence calls it overnight personal learning, and none says "next-investigation choice": that
-step isn't isolated here. Every sentence calls the result a pilot of N lives.
+step isn't isolated here. Every sentence calls the result a pilot of N lives. When any arm's
+thinker call failed, no arm is scored, and the section says only that the comparison is invalid
+(``invalid``).
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -108,4 +110,15 @@ def section(audited: Sequence[LifeScore], gemini: Sequence[LifeScore]) -> str:
     return "\n\n".join((
         "## Replay (Task 17b)", claim(pairs), "\n".join(_pair_line(pair) for pair in pairs),
         table([*audited, *gemini]),
+    )) + "\n"
+
+
+def invalid(failed: Mapping[ArmName, int]) -> str:
+    """The section when a thinker call failed: the counts, and no sentence that any arm wins or loses."""
+    counts = ", ".join(f"{arm} {count}" for arm, count in failed.items())
+    # COPY-PENDING(kevin): the spec gives no sentence for a failed run.
+    return "\n\n".join((
+        "## Replay (Task 17b)",
+        f"The comparison is invalid: thinker calls failed during the arms' runs ({counts}). An arm with a "
+        "failed call is never scored, so this pilot makes no comparison between the arms.",
     )) + "\n"

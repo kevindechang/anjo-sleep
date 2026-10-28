@@ -41,7 +41,7 @@ from anjo.sleep.mind.inquiry.types import (
     ScreenPurpose,
 )
 from anjo.sleep.mind.replay.sample import ReplayModels
-from anjo.sleep.mind.replay.types import BRANCH_TEMPERATURE
+from anjo.sleep.mind.replay.types import BRANCH_TEMPERATURE, STOPPED, CallEnd
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.types import Evidence, Target
@@ -164,13 +164,16 @@ class FakeGlimmer:
     """The thinker: a NOTICE once the lens and the kitchen are both in view; then HYPOTHESIZE,
     ASSESS each search hit, CONCLUDE once the leader reaches 0.8, and otherwise search again, so a
     night with nothing new stalls (K5) and leaves the question live. Every reply is drawn from the
-    seed, the temperature and the prompt alone."""
+    seed, the temperature and the prompt alone. ``calls`` records how each call ended, as the
+    served thinker does: a reply longer than the call's cap is cut there (``"length"``)."""
 
     seed: int = 0
     temperature: float = 0.0
+    calls: list[CallEnd] = field(default_factory=list, compare=False)
 
     def propose(self, rendered: str, max_tokens: int) -> ModelReply:
         if max_tokens <= 0:
+            self.calls.append(CallEnd(None))
             return ModelReply(text="", tokens=0, model=GLIMMER)
         rng = random.Random(f"{self.seed}:{self.temperature}:{rendered}")
         if "## Today's new evidence" in rendered:
@@ -178,6 +181,7 @@ class FakeGlimmer:
         else:
             text = json.dumps(self._cycle(rendered, rng))
         tokens = 150 if self.temperature == 0 else 120 + rng.randrange(240)
+        self.calls.append(CallEnd("length" if tokens > max_tokens else STOPPED))
         return ModelReply(text=text, tokens=min(tokens, max_tokens), model=GLIMMER)
 
     def _notice(self, text: str) -> list[dict[str, Any]]:
@@ -252,7 +256,7 @@ def fake_models(thinker: FakeGlimmer | None = None) -> ArmModels:
     return ArmModels(thinker=thinker or FakeGlimmer(), world=FakeWorld(), screen=FakeScreen(), resolver=FakeResolver())
 
 
-def _branch_thinker(seed: int) -> FakeGlimmer:
+def _branch_thinker(seed: int, night: date) -> FakeGlimmer:
     return FakeGlimmer(seed, BRANCH_TEMPERATURE)
 
 

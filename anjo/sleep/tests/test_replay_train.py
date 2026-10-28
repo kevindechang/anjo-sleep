@@ -11,6 +11,7 @@ import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,9 @@ from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
 from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, served
 from anjo.sleep.mind.replay.dataset import ReplayData
-from anjo.sleep.mind.replay.types import RENDER_DAY, Branch, StartState
+from anjo.sleep.mind.replay.types import Branch, CallEnd, StartState
 from anjo.sleep.serving import config, framing
-from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.serving.client import ServingError, VllmClient
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train, thinker
 from anjo.sleep.train.dataset import Dataset
@@ -119,29 +120,49 @@ def test_thinker_rows_match_the_served_rendering_token_for_token() -> None:
     client = VllmClient.over(server)
     models = replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(client))
     data = _replay(models)
-    cfg = training_config(LoraCfg(), len(data.thinker1.examples), warm=False, revision="a" * 40, night=RENDER_DAY)
+    night = thinker.render_night(data)
+    cfg = training_config(LoraCfg(), len(data.thinker1.examples), warm=False, revision="a" * 40, night=night)
     template = colab_train.template_kwargs(cfg)
-    assert template["current_date"] == RENDER_DAY.isoformat() and cfg["rendering"] == client.rendering
+    assert template["current_date"] == night.isoformat() and cfg["rendering"] == client.rendering
     rows = [json.loads(line) for d in (data.thinker1, data.shuffled) for line in d.to_jsonl().splitlines()]
     assert rows and all(row["provenance"] == "glimmer" for row in rows)
+    assert len({row["current_date"] for row in rows}) >= 2  # rows served on different nights
     for row in rows:
         plain = colab_train.plain_row(tokenizer, row, template)
         prompt_ids = tokenizer(plain["prompt"])["input_ids"]
         reply_ids = tokenizer(plain["completion"], add_special_tokens=False)["input_ids"]
         assert server.served.get(row["prompt"][-1]["content"]) == prompt_ids  # what the thinker was sent
         colab_train._check_tokens(tokenizer, row, "completion", prompt_ids, reply_ids, template)
+        undated = {key: value for key, value in row.items() if key != "current_date"}
+        if row["current_date"] != night.isoformat():  # on the run's date, it isn't what was served
+            assert tokenizer(colab_train.plain_row(tokenizer, undated, template)["prompt"])["input_ids"] != prompt_ids
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        colab_train.plain_row(tokenizer, {**rows[0], "current_date": "17 Sep"}, template)
+
+
+class _Failing(_Server):
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        if path == "/v1/completions":
+            raise ServingError("/v1/completions answered 503")
+        return super().post(path, body)
 
 
 def test_branch_and_arm_thinkers_are_served_as_the_night_serves_mind() -> None:
     server = _Server(_Glimmer())
     client = VllmClient.over(server)
-    branch = served.branch_thinkers(client)(7)
-    assert (branch.temperature, branch.seed, branch.adapter) == (0.8, 7, None)
-    base = served.arm_thinker(client, None)
+    day = date(2026, 9, 9)
+    branch = served.branch_thinkers(client)(7, day)
+    assert (branch.temperature, branch.seed, branch.adapter, branch.clock.day) == (0.8, 7, None, day)
+    base = served.arm_thinker(client, None, served.NightClock())
     assert (base.temperature, base.adapter) == (0.0, None)
+    with pytest.raises(ValueError, match="night"):  # an arm's call before its night is set
+        base.propose("anything", 50)
     reply = branch.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
-    assert reply.model == "meta-models/Muse-Glimmer-30B"
+    assert reply.model == "meta-models/Muse-Glimmer-30B" and branch.calls == [CallEnd("stop")]
     assert branch.propose("anything", 0).tokens == 0 and not server.served.get("anything")
+    broken = served.branch_thinkers(VllmClient.over(_Failing(_Glimmer())))(7, day)
+    failed = broken.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
+    assert (failed.text, failed.tokens, broken.calls) == ("", 50, [CallEnd(None, failed=True)])
 
 
 class FakeColab:
@@ -217,11 +238,11 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
     assert len({ref.id for ref in refs}) == 2 and published == [ref.id for ref in refs]
     for ref in refs:
         config.check_adapter_name(ref.id)
-        assert ref.night == RENDER_DAY
+        assert ref.night == thinker.render_night(data)
     settings = [json.loads(arg.split("=", 1)[1]) for args in cli.calls if args[3] == "exec"
                 for arg in args if arg.startswith("ANJO_TRAIN_CONFIG=")]
     assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both
-    assert settings[0]["current_date"] == RENDER_DAY.isoformat() and settings[0]["warm_start"] is False
+    assert settings[0]["current_date"] == thinker.render_night(data).isoformat() and settings[0]["warm_start"] is False
     assert cli.commands().count("new") == 2 and cli.commands().count("stop") == 2
     assert ledger.open_holds() == () and ledger.used("colab_cu") > 0
     assert found.hold_cu == pytest.approx(15.0)

@@ -11,7 +11,8 @@ on the completion (her reply) only, no packing, and every row longer than ``max_
 dropped and counted rather than cut. A warm start loads the previous adapter as trainable.
 
 **Train as served.** Each row goes to TRL as plain text, rendered the way the server renders a
-request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` with the
+request: Glimmer's chat template at the night's ``reasoning_strength`` and ``current_date`` (or the
+row's own ``current_date``, for replay's rows, each served on its own night) with the
 generation prompt (``<|start|>assistant``), then the reply's channel header ``" to=user<|message|>"``
 on the prompt side, and the reply closed by ``<|eot|>``. So the loss falls on the reply and
 ``<|eot|>`` only. (TRL's conversational form would train the header too.) The host cleaned every
@@ -241,6 +242,17 @@ def template_kwargs(cfg: dict[str, Any]) -> dict[str, str]:
     return {"reasoning_strength": cfg["reasoning_strength"], "current_date": cfg["current_date"]}
 
 
+def row_template(template: dict[str, str], row: dict[str, Any]) -> dict[str, str]:
+    """``template`` for one row: a row that carries its own ``current_date`` (replay's rows, each
+    served on its own night, Task 17b) is rendered on that date, any other on the run's."""
+    if "current_date" not in row:
+        return template
+    day = row["current_date"]
+    if not isinstance(day, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+        raise ValueError(f"row {row.get('id')}'s current_date is YYYY-MM-DD")
+    return {**template, "current_date": day}
+
+
 def check_clean(row: dict[str, Any]) -> None:
     """A row as the host cleaned it: no special token's text anywhere, and no reasoning phrase in a
     system turn, which would stop the template writing the night's strength."""
@@ -259,7 +271,8 @@ def plain_row(tokenizer: Any, row: dict[str, Any], template: dict[str, str]) -> 
     on, which puts the BOS first itself, so the template's own BOS is left off: one BOS, as the
     server has."""
     check_clean(row)
-    prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False, **template)
+    prompt = tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, tokenize=False,
+                                           **row_template(template, row))
     if not isinstance(prompt, str) or not prompt.startswith(tokenizer.bos_token):
         raise ValueError("the chat template's prompt starts with the BOS")
     return {"prompt": prompt[len(tokenizer.bos_token):] + USER_CHANNEL,
@@ -285,7 +298,7 @@ def _check_tokens(tokenizer: Any, row: dict[str, Any], side: str, prompt_ids: Se
     template's prompt with the generation prompt, then the header (as the night's client asks vLLM
     to tokenize them), the trained tokens are the reply and ``<|eot|>``, and the two together are
     the template's own render of the conversation, reply included."""
-    ids = {"tokenize": True, "return_dict": False, **template}
+    ids = {"tokenize": True, "return_dict": False, **row_template(template, row)}
     served = [*tokenizer.apply_chat_template(row["prompt"], add_generation_prompt=True, **ids),
               *tokenizer(USER_CHANNEL, add_special_tokens=False)["input_ids"]]
     reply = [*tokenizer(_reply(row[side]), add_special_tokens=False)["input_ids"],

@@ -9,7 +9,7 @@ import dataclasses
 import json
 import random
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -21,6 +21,7 @@ from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, score
 from anjo.sleep.mind.replay.types import (
     REPLAY_K,
+    CallEnd,
     TOKEN_PENALTY,
     Branch,
     Label,
@@ -28,7 +29,6 @@ from anjo.sleep.mind.replay.types import (
     Scored,
     StartState,
 )
-from anjo.sleep.mind.inquiry.ports import Thinker
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.provenance import GLIMMER, HOSTED
 from anjo.sleep.train.dataset import Dataset
@@ -119,15 +119,18 @@ def test_replay_tools_time_masked() -> None:
     for prompt in prompts:
         assert not any(item.id in prompt or item.text in prompt for item in later)
         assert "## Today's new evidence" not in prompt  # no notice pass: nothing arrives in a branch
-    counted = fakes.FakeGlimmer()
     seen: list[str] = []
 
     class Spy:
+        def __init__(self) -> None:
+            self.inner = fakes.FakeGlimmer()
+            self.calls = self.inner.calls
+
         def propose(self, rendered: str, max_tokens: int) -> it.ModelReply:
             seen.append(rendered)
-            return counted.propose(rendered, max_tokens)
+            return self.inner.propose(rendered, max_tokens)
 
-    models = dataclasses.replace(fakes.fake_replay_models(), thinker_for=lambda seed: Spy())
+    models = dataclasses.replace(fakes.fake_replay_models(), thinker_for=lambda seed, night: Spy())
     _branches(start, life, models)
     assert seen and all(not any(item.text in text for item in later) for text in seen)
 
@@ -436,8 +439,9 @@ def test_sampling_skips_nothing_it_was_given_and_counts_tokens() -> None:
     life, starts = _starts()
     calls: list[int] = []
 
-    def factory(seed: int) -> Thinker:
+    def factory(seed: int, night: date) -> sample.RecordingThinker:
         calls.append(seed)
+        assert night == sample.branch_night(starts[0])  # dated on the branch's own night
         return fakes.FakeGlimmer(seed, 0.8)
 
     models = dataclasses.replace(fakes.fake_replay_models(), thinker_for=factory)
@@ -457,3 +461,36 @@ def test_the_night_label_of_a_branch_counts_k5_afresh() -> None:
     branches = _branches(start, life)
     assert all(len(branch.turns) >= 3 for branch in branches)  # each branch still gets its own night
     assert start.night + timedelta(days=1) == sample.branch_night(start)
+
+
+def test_only_applied_turns_that_ended_at_a_stop_token_train() -> None:
+    life, starts = _starts()
+
+    class Cut:
+        """The branch thinker, but every second call is cut at its token cap and the third fails."""
+
+        def __init__(self, seed: int) -> None:
+            self.inner, self.calls = fakes.FakeGlimmer(seed, 0.8), list[CallEnd]()
+
+        def propose(self, rendered: str, max_tokens: int) -> it.ModelReply:
+            reply = self.inner.propose(rendered, max_tokens)
+            n = len(self.calls) + 1
+            self.calls.append(CallEnd(None, failed=True) if n == 3 else CallEnd("length" if n % 2 == 0 else "stop"))
+            return dataclasses.replace(reply, text="") if n == 3 else reply
+
+    clean = _branches(starts[0], life)
+    assert all(branch.complete and not branch.failed for branch in clean)
+    for branch in clean:
+        rejected = [t.seq for t in branch.turns if t.seq not in branch.applied]
+        assert set(branch.applied) <= {t.seq for t in branch.turns}
+        assert {t.seq for t in branch.targets} == set(branch.applied) and branch.day == sample.branch_night(starts[0])
+        assert not set(rejected) & {t.seq for t in branch.targets}
+    cut = _branches(starts[0], life, dataclasses.replace(fakes.fake_replay_models(), thinker_for=lambda s, n: Cut(s)))
+    for branch in cut:
+        assert all(branch.ends[t.seq].finish == "stop" and t.seq in branch.applied for t in branch.targets)
+        assert any(end.finish == "length" for end in branch.ends.values())
+        assert not any(branch.ends[t.seq].finish == "length" for t in branch.targets)
+        assert branch.failed and not branch.complete  # a failed call makes a branch incomplete
+    built = dataset.build([life], starts[:1], {starts[0].id: cut}, resolve.LabelBook().with_label(
+        Label(starts[0].id, "q1.h2a", SPARK_OPEN)), brief=BRIEF)
+    assert built.dropped["incomplete"] == 1 and not built.thinker1.examples

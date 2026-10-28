@@ -8,10 +8,12 @@
 - **thinker-shuffled** permutes the scores among the start state's k branches *before* the winner
   is picked (``permute``, then the same ``best``), so it trains on a random branch's trajectory.
   The permutation is seeded per start state.
-- **Rows:** each of the trajectory's thinker turns on the start state's question is one example:
-  the prompt is the brief and the rendered workspace as one user message, exactly what the thinker
-  was sent (``BriefedThinker``), and the completion is Glimmer's raw reply. A row past
-  ``DEFAULT_MAX_SEQ_TOKENS`` is dropped (``truncated``).
+- **Rows:** each of the trajectory's targets (``Branch.targets``: its turns on the start state's
+  question that the kernel applied, each reply ended at a stop token) is one example: the prompt
+  is the brief and the rendered workspace as one user message, exactly what the thinker was sent
+  (``BriefedThinker``), the completion is Glimmer's raw reply, and the row is rendered on the date
+  it was served on (the branch's night). A row past ``DEFAULT_MAX_SEQ_TOKENS`` is dropped
+  (``truncated``).
 - **Same size and settings:** the dataset with more rows is cut to the other's count by a seeded
   draw (``over_cap``), so both train with the same step plan.
 - **Provenance:** every text in a row comes from Spark Open or deterministic code, and Glimmer's
@@ -97,17 +99,19 @@ def served_prompt(brief: str, turn: Turn) -> str:
 
 
 def _example(branch: Branch, turn: Turn, brief: str) -> Example:
+    if branch.day is None:
+        raise ValueError(f"branch {branch.index} of {branch.start_id} records no date its prompts were served on")
     prompt = (("user", served_prompt(brief, turn)),)
     tokens = sum(estimate_tokens(text) + ROLE_OVERHEAD_TOKENS for _, text in prompt)
     tokens += estimate_tokens(turn.reply.text) + ROLE_OVERHEAD_TOKENS
     return Example(
         id=f"{branch.start_id}:b{branch.index}:t{turn.seq}", prompt=prompt, completion=turn.reply.text,
-        context_dropped=False, tokens=tokens, new=True,
+        context_dropped=False, tokens=tokens, new=True, current_date=branch.day,
     )
 
 
 def _rows(winners: Iterable[Branch], brief: str, max_tokens: int) -> tuple[list[Example], int]:
-    rows = [_example(branch, turn, brief) for branch in winners for turn in branch.turns]
+    rows = [_example(branch, turn, brief) for branch in winners for turn in branch.targets]
     kept = [row for row in rows if row.tokens <= max_tokens]
     return kept, len(rows) - len(kept)
 

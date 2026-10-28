@@ -67,6 +67,8 @@ def _arms(held_out: int, brief: str) -> str:
         shuffled=fakes.FakeGlimmer(seed=2, temperature=0.4),
     )
     runs = compare.run_replay_arms(lives, fakes.fake_models(), thinkers, brief=brief)
+    if not runs.valid:
+        return report.invalid(runs.failed)
     problems = {life.id: fakes.fake_problems(life) for life in lives}
     scored = compare.score_replay_arms(lives, problems, runs, audited=fakes.FakeJudge(), gemini=fakes.FakeJudge())
     return report.section([sheet.score for sheet in scored.audited], scored.gemini)

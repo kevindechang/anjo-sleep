@@ -31,9 +31,7 @@ REPLAY_K: Final = 4  # branches per start state
 BRANCH_TEMPERATURE: Final = 0.8
 TOKEN_PENALTY: Final = 0.01  # λ: score points per 1,000 tokens, registered on development
 UNDETERMINED: Final = "undetermined"
-# Every Glimmer call in replay and in its arms is dated this day (the day after every APD life
-# ends): the training script renders one date per run, so the rows and the served prompts match.
-RENDER_DAY: Final = date(2026, 9, 17)
+STOPPED: Final = "stop"  # vLLM's finish_reason for a reply that ended at a stop token
 APD_LIFE_ID: Final = re.compile(r"^development-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+$")
 
 
@@ -96,12 +94,23 @@ class Label:
 
 
 @dataclass(frozen=True)
+class CallEnd:
+    """How one thinker call ended: vLLM's ``finish_reason`` (``STOPPED`` at a stop token,
+    ``"length"`` cut at its token cap), or ``failed`` (no reply: empty text charged its cap)."""
+
+    finish: str | None
+    failed: bool = False
+
+
+@dataclass(frozen=True)
 class Branch:
     """One branch's end: its credence vector over the frozen set (a hypothesis the branch added
     is counted in the catch-all), the tokens it spent, its thinker turns on the start state's
-    question (the trajectory a dataset trains on), and every model whose text its prompts held.
-    ``complete``: it took at least one turn on the question, no call failed, and the question
-    still has hypotheses at the end."""
+    question (its trajectory), and every model whose text its prompts held. ``ends`` is how each
+    of those turns' calls ended, ``applied`` the turns whose operation the kernel applied,
+    ``failed`` the branch's failed thinker calls and ``day`` the date its prompts were rendered
+    on. ``complete``: no call failed, at least one turn is a target, and the question still has
+    hypotheses at the end."""
 
     start_id: str
     index: int
@@ -111,9 +120,25 @@ class Branch:
     turns: tuple[Turn, ...]
     complete: bool
     ancestry: frozenset[str] | None
+    ends: Mapping[int, CallEnd] = field(default_factory=dict, hash=False)
+    applied: frozenset[int] = frozenset()
+    failed: int = 0
+    day: date | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "credences", MappingProxyType(dict(self.credences)))
+        object.__setattr__(self, "ends", MappingProxyType(dict(self.ends)))
+
+    @property
+    def targets(self) -> tuple[Turn, ...]:
+        """The turns a dataset trains on: those the kernel applied whose reply ended at a stop
+        token. A rejected or malformed turn, or a reply cut at its token cap, never is (an earlier
+        one may still shape a later prompt)."""
+        return tuple(
+            turn for turn in self.turns
+            if turn.seq in self.applied and (end := self.ends.get(turn.seq)) is not None
+            and end.finish == STOPPED and not end.failed
+        )
 
 
 @dataclass(frozen=True)

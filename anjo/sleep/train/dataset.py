@@ -80,6 +80,7 @@ class Example:
     tokens: int
     new: bool
     teacher: bool = False  # the target is the Spark Open teacher's candidate (full practice)
+    current_date: date | None = None  # the date its prompt was served on, when not the run's (Task 17b)
 
 
 @dataclass(frozen=True)
@@ -127,10 +128,12 @@ class Dataset:
     def to_jsonl(self, *, pairs: bool = False) -> str:
         """The rows the training script reads: conversational prompt/completion, so TRL puts the
         loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
-        rejected) for the DPO pass. Every text is cleaned as the server's prompt is."""
+        rejected) for the DPO pass. Every text is cleaned as the server's prompt is. A row with its
+        own ``current_date`` carries it, and is rendered on it."""
         rows = [
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
-             "prompt": _messages(example.prompt), "completion": _reply(example.completion)}
+             "prompt": _messages(example.prompt), "completion": _reply(example.completion),
+             **({} if example.current_date is None else {"current_date": example.current_date.isoformat()})}
             for example in self.examples
         ]
         if pairs:

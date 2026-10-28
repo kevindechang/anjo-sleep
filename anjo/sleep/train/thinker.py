@@ -6,8 +6,9 @@
   builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else. The runner holds
   each job's worst case on the ``colab_cu`` pool before its VM starts; ``train_thinkers`` first
   checks the pool can hold both jobs, so it never trains one and stops on the other.
-- **Rendering:** the rows are rendered on ``RENDER_DAY`` (the date the training script is given)
-  at the server's reasoning strength; each adapter records that rendering and its
+- **Rendering:** each row is rendered at the server's reasoning strength on the date it was
+  served on (its ``current_date``: the branch's night); the run's own date, and the adapter's
+  ``night``, is the latest of them (``render_night``). Each adapter records that rendering and its
   ``CheckpointRef`` carries it, so the server never serves it under another (``served.py``).
 - **Dry run first:** ``plan`` is pure, and a dry run (the default) prints it (rows, tokens, steps,
   estimated A100 minutes and compute units, and the hold beside what the pool has left) and
@@ -22,12 +23,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import TRAINING_TIMEOUT_S, Ledger
 from anjo.sleep.mind.replay.dataset import ReplayData
-from anjo.sleep.mind.replay.types import RENDER_DAY
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, TrainError, fresh_adapter_name, plan_steps, train_lora_with_receipt
@@ -121,6 +122,14 @@ def _check_room(found: ThinkerPlan, timeout_s: float) -> None:
         raise BudgetStop(f"{POOL} can't hold both replay jobs ({room:.1f} left)")
 
 
+def render_night(data: ReplayData) -> date:
+    """The latest date a row was served on: the training run's own date. Every row carries one."""
+    days = [example.current_date for d in (data.thinker1, data.shuffled) for example in d.examples]
+    if not days or any(day is None for day in days):
+        raise TrainError("every replay row carries the date it was served on")
+    return max(day for day in days if day is not None)
+
+
 def _used(adapter_cache: Path) -> frozenset[str]:
     return frozenset(p.name for p in adapter_cache.iterdir()) if adapter_cache.is_dir() else frozenset()
 
@@ -139,11 +148,12 @@ def train_thinkers(
         raise TrainError("replay's adapters train on the Colab runner only")
     _check_room(found, timeout_s)
     used: frozenset[str] = _used(adapter_cache)
+    night = render_night(data)
     refs: tuple[CheckpointRef, ...] = ()
     for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
         name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
         ref, _ = train_lora_with_receipt(
-            None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=RENDER_DAY, name=name,
+            None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
             workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
             timeout_s=timeout_s,
         )
