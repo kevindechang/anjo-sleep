@@ -19,9 +19,10 @@ it off the serving path). Everything else is here:
 - every paid step's hold on the sleep host's budget ledger;
 - practice's calls and the generation gates' (collapse, safety) side by side, ``ANJO_SLEEP_CONCURRENCY``
   at once (8 by default, ``parallel``); the general gate's log-probabilities at the server's 16;
-- the gates' prompts dated one fixed day (``gates.EVAL_DAY``) and, on a server pinned to a Glimmer
-  revision, the base model's gate answers kept across nights (``gates.base_cache``) in
-  ``sleep/gate_base.jsonl``, encrypted at rest and keyed on the server (``gate_cache``).
+- the gates' prompts dated one fixed day (``gates.EVAL_DAY``) and the base model's gate answers kept
+  across nights (``gates.base_cache``) in ``sleep/gate_base.jsonl``, encrypted at rest and keyed on
+  what the server reports at the first gate (``gate_cache``: the root it serves Glimmer from and the
+  revision that root names), never on this host's settings alone.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -32,11 +33,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date
-from pathlib import Path
-from typing import Final
+from pathlib import Path, PurePosixPath
+from typing import Any, Final
 
 from anjo.sleep import baseten_api, meta_api, parallel
 from anjo.sleep.app.cleared_sessions import is_synthetic
@@ -88,7 +91,7 @@ from anjo.sleep.practice.full import CappedChat, FullPractice
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.serving import backend, config
-from anjo.sleep.serving.client import MAX_TOKENS, TOP_K, TOP_P, VllmClient
+from anjo.sleep.serving.client import TOP_K, TOP_P, ServingError, VllmClient
 from anjo.sleep.types import Probe
 
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour", USD list prices
@@ -158,20 +161,58 @@ class AppGates:
         return {"general": self._general.check, "collapse": collapse.check, "safety": self._safety.check}
 
 
-def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache | None:
-    """The base model's gate answers kept across nights, keyed on everything the server answers by:
-    the weights' revision, precision, vLLM release, backend, rendering, sampling, reply cap and the
-    gates' date. None when the revision isn't pinned: weights that could change under the same name
-    are asked every night."""
-    serve = config.ServeConfig.from_env()
-    if serve.revision is None:
-        return None
-    fingerprint = canonical({
-        "model": config.MODEL, "revision": serve.revision, "precision": vars(serve.precision),
-        "vllm": serve.vllm_version, "backend": serving.name, "rendering": client.rendering,
-        "max_tokens": MAX_TOKENS, "top_p": TOP_P, "top_k": TOP_K, "day": EVAL_DAY.isoformat(),
-    })
-    return BaseCache(JsonlBaseStore(data_root() / SLEEP_DIR / GATE_BASE_FILE, codec=CODEC), serving=fingerprint)
+REVISION: Final = re.compile(r"[0-9a-f]{40}")
+
+
+class _Served:
+    """The server's fingerprint for the gates' base side, asked once a run at the first gate (after
+    the night wakes Glimmer): the root vLLM serves Glimmer from and the revision it names, with the
+    client's rendering, sampling and cap. None when the server can't be asked or names no revision."""
+
+    def __init__(self, backend_name: str, client: VllmClient) -> None:
+        self._backend, self._client = backend_name, client
+        self._lock = threading.Lock()
+        self._asked = False
+        self._found: str | None = None
+
+    def __call__(self) -> str | None:
+        with self._lock:
+            if not self._asked:
+                self._asked, self._found = True, self._fingerprint()
+            return self._found
+
+    def _root(self) -> str | None:
+        try:
+            listed: Any = self._client.models().get("data")
+        except ServingError as error:
+            logger.warning("the server can't say what it serves (%s): the gates ask the base model", type(error).__name__)
+            return None
+        roots = [m.get("root") for m in listed if isinstance(m, dict) and m.get("id") == config.MODEL] if isinstance(listed, list) else []
+        return roots[0] if roots and isinstance(roots[0], str) else None
+
+    def _fingerprint(self) -> str | None:
+        root = self._root()
+        revision = PurePosixPath(root).name if root else ""
+        if not REVISION.fullmatch(revision):
+            logger.warning("the server names no Glimmer revision: the gates ask the base model")
+            return None
+        serve = config.ServeConfig.from_env()
+        if serve.revision != revision:
+            logger.warning("the server serves revision %s, this host pins %s: keyed on the server's",
+                           revision[:12], (serve.revision or "none")[:12])
+        return canonical({
+            "model": config.MODEL, "root": root, "revision": revision, "precision": vars(serve.precision),
+            "vllm": serve.vllm_version, "backend": self._backend, "rendering": self._client.rendering,
+            "max_tokens": self._client.max_tokens, "top_p": TOP_P, "top_k": TOP_K, "day": EVAL_DAY.isoformat(),
+        })
+
+
+def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
+    """The base model's gate answers kept across nights, keyed on what the server reports (``_Served``)
+    and everything else it answers by: precision, vLLM release, backend, rendering, sampling, reply
+    cap and the gates' date. A server that can't be asked is a miss, never a hit."""
+    return BaseCache(JsonlBaseStore(data_root() / SLEEP_DIR / GATE_BASE_FILE, codec=CODEC),
+                     serving=_Served(serving.name, client))
 
 
 def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...]]:

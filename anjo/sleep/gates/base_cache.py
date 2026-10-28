@@ -9,8 +9,9 @@ its answers back on every later night; only the checkpoint's side is asked every
 - **The key** is a SHA-256 over everything the base side depends on: ``serving``, the gate's name,
   this cache's ``VERSION`` and the gate's own parts (its items, seeds, temperature, max_tokens and
   any prompt it renders). Any change is a new key, so the base is asked again; the old key stays
-  kept for a night that goes back to it. A server whose revision isn't pinned has no ``serving``
-  fingerprint, and the app passes no cache at all.
+  kept for a night that goes back to it. ``serving`` is what the server itself reports, read once
+  a run at the first gate (the app's ``gate_cache``); when it can't be read, or names no revision,
+  it is None and every base answer is asked and none is kept: a miss, never a hit.
 - **Only the base side is kept.** The gates hand this cache nothing but the base model's answers;
   the checkpoint's side never reaches it. The safety gate keeps the base model's replies, never
   their flags, so tonight's reply check reads them afresh.
@@ -78,17 +79,23 @@ class BaseCache:
     """A gate's view of the kept base sides: the store and the server's fingerprint."""
 
     store: BaseStore
-    serving: str
+    serving: str | Callable[[], str | None]  # the server's fingerprint, or how to ask for it
 
     def answers(
         self, gate: str, parts: Mapping[str, Any], compute: Callable[[], list[T]], valid: Callable[[list[Any]], bool],
     ) -> list[T]:
-        """The base side under this key: kept, or computed now and kept."""
-        key = base_key(gate, self.serving, parts)
+        """The base side under this key: kept, or computed now and kept. With no fingerprint it is
+        computed and not kept."""
+        serving = self.serving() if callable(self.serving) else self.serving
+        if serving is None:
+            logger.info("%s gate: the server's fingerprint is unknown, so the base model is asked", gate)
+            return compute()
+        key = base_key(gate, serving, parts)
         kept = self.store.get(key)
         if kept is not None and valid(kept):
             logger.info("%s gate: the base model's answers read back (key %s)", gate, key[:12])
             return kept
+        logger.info("%s gate: no base answers under key %s, so the base model is asked", gate, key[:12])
         fresh = compute()
         self.store.put(key, gate, fresh)
         return fresh

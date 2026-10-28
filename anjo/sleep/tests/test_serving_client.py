@@ -143,3 +143,28 @@ def test_complete_caps_one_call_at_its_own_max_tokens() -> None:
     assert fake.requests[-1][1]["max_tokens"] == 77  # MIND's thinker passes what is left of tonight's tokens
     client.complete(None, [{"role": "user", "content": "hi"}], temperature=0.0)
     assert fake.requests[-1][1]["max_tokens"] == MAX_TOKENS
+
+
+def test_models_asks_the_server_once_in_a_slot_and_max_tokens_is_read_only() -> None:
+    asked: list[tuple[str, str]] = []
+    listed = {"data": [{"id": config.MODEL, "root": f"/weights/{config.MODEL}/{'a' * 40}"}]}
+
+    def server(request: httpx.Request) -> httpx.Response:
+        asked.append((request.method, request.url.path))
+        return httpx.Response(200, json=listed)
+
+    client = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(server), max_tokens=512)
+    assert client.models() == listed and asked == [("GET", "/v1/models")]
+    assert client.max_tokens == 512 and client.on(NIGHT).max_tokens == 512
+    with pytest.raises(AttributeError):
+        client.max_tokens = 9  # type: ignore[misc]
+
+    def lost(request: httpx.Request) -> httpx.Response:
+        asked.append((request.method, request.url.path))
+        raise httpx.ReadTimeout("lost", request=request)
+
+    asked.clear()
+    flaky = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(lost))
+    with pytest.raises(ServingError, match="/v1/models"):
+        flaky.models()
+    assert asked == [("GET", "/v1/models")]  # sent once: a request lost in transport doesn't go again
