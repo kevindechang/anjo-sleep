@@ -12,7 +12,7 @@ import re
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -121,6 +121,39 @@ def test_no_item_comes_from_sealed_probes(monkeypatch: pytest.MonkeyPatch, tmp_p
         assert not any(name.startswith(("anjo.sleep.probes", "anjo.sleep.prereg")) for name in _imports(module))
 
 
+# Counterfeits that give themselves away by their grammar or their scale, not by what the persona said.
+BAD: Final = (
+    r"\ba (?:[aei]|o(?!ne)|8|1[18]\b|1[18],)",  # "a" before a vowel sound: "a 11 dollar grant"
+    r"\ban (?![aeiou]|8|1[18]\b|1[18],|hour|honest|heir)",  # "an" before a consonant sound
+    r"\b(?:the|a|whole|each) (?:midnight|noon|dawn)s?\b",  # a point in time used as a stretch of time
+    r"\b(?:years|minutes|hours) of runway\b",  # a unit far off the line's own scale (weeks)
+    r"\bfinal (?:minute|hour|day)\b",
+    r"\bat the same (?:day|week|month|year)\b", r"\blate-night (?:minutes|days)\b",  # a unit that doesn't read there
+    r"\ba [0-9] dollar grant\b", r"\bcosts [0-9,]{4,} dollars per hour\b",  # an amount far off the true one
+    r"\bDay [0-9]+\.[0-9]",  # a fraction where a whole number stood
+)
+
+
+def test_no_counterfeit_gives_itself_away() -> None:
+    items = knowledge.build_file(_persona_path())
+    for item in items:
+        for choice in item.choices:
+            assert not any(re.search(bad, choice, flags=re.IGNORECASE) for bad in BAD), (item.id, choice)
+    scale = list(knowledge.UNITS)
+    for item in (i for i in items if i.kind == "unit"):
+        true = scale.index(knowledge.unit_of(item.key))
+        for n, choice in enumerate(item.choices):
+            if n != item.answer:  # a unit swaps only with its neighbours on the scale: days with hours or weeks
+                changed = [word for word, was in zip(choice.lower().split(), item.statement.lower().split(), strict=True)
+                           if word != was and knowledge.unit_of(word.strip(".,;")) in scale]
+                assert changed and all(abs(scale.index(knowledge.unit_of(w.strip(".,;"))) - true) == 1 for w in changed), (
+                    item.id, choice)
+    assert [knowledge.indefinite(word) for word in ("11", "18", "8", "80", "800", "8,000", "11,000", "8.5", "eighty",
+                                                    "hour", "evening")] == ["an"] * 11
+    assert [knowledge.indefinite(word) for word in ("14,000", "1,100", "110", "2.10", "year", "one", "week",
+                                                    "1,300", "night")] == ["a"] * 9
+
+
 # ── the scorer ───────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -128,9 +161,10 @@ def _adapter(arm: str, night: int) -> str:
     return f"p-{hashlib.sha256(arm.encode()).hexdigest()[:12]}-n{night}"
 
 
-def _life(root: Path, account: str, arm: str, nights: int, *, untrained: Sequence[int] = ()) -> None:
+def _life(root: Path, account: str, arm: str, nights: int, *, untrained: Sequence[int] = (),
+          first: date = START) -> None:
     for number in range(1, nights + 1):
-        night = START + timedelta(days=number - 1)
+        night = first + timedelta(days=number - 1)
         folder = root / account / "nights" / night.isoformat()
         folder.mkdir(parents=True)
         start = datetime(2026, 10, 29, tzinfo=timezone.utc) + timedelta(hours=2 * number)
@@ -210,8 +244,9 @@ def test_paired_ci_uses_the_same_items() -> None:
     b = {f"k{n}": float(n % 7) for n in range(40)}
     a = {key: value + 1.0 for key, value in reversed(list(b.items()))}  # every item exactly 1 above, listed backwards
     b["only-b"] = 50.0  # an item one side lacks never enters the comparison
-    found = knowledge_score.paired(a, b, resamples=400, seed=3)
-    assert found.n == 40 and found.diff == pytest.approx(1.0)
+    sources = {key: f"s{n // 5}" for n, key in enumerate(b)}  # 8 statements, 5 items each (and the extra)
+    found = knowledge_score.paired(a, b, clusters=sources, resamples=400, seed=3)
+    assert found.n == 40 and found.clusters == 8 and found.diff == pytest.approx(1.0)
     assert found.low == pytest.approx(1.0) and found.high == pytest.approx(1.0)  # each resample draws the same items on both sides
     noisy = {key: value + (1.0 if n % 2 else -1.0) for n, (key, value) in enumerate(b.items()) if key != "only-b"}
     spread = knowledge_score.paired(noisy, b, resamples=400, seed=3)
@@ -219,6 +254,13 @@ def test_paired_ci_uses_the_same_items() -> None:
     assert spread.low < spread.diff < spread.high
     assert knowledge_score.paired(noisy, b, resamples=400, seed=3) == spread  # a fixed seed: the same interval
     assert knowledge_score.paired({}, b, resamples=10, seed=3).n == 0
+    together = {key: (1.0 if n // 5 % 2 else -1.0) for n, key in enumerate(a)}  # a statement's items move together
+    zero = dict.fromkeys(a, 0.0)
+    by_item = knowledge_score.paired(together, zero, resamples=400, seed=3)
+    by_source = knowledge_score.paired(together, zero, clusters=sources, resamples=400, seed=3)
+    assert by_item.clusters == 40 and by_source.clusters == 8
+    assert by_item.low is not None and by_item.high is not None and by_source.low is not None and by_source.high is not None
+    assert by_source.high - by_source.low > by_item.high - by_item.low  # the statement is what is resampled
 
 
 def test_unseen_items_are_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -253,8 +295,22 @@ def test_unseen_items_are_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert seed["seen_accuracy"] == pytest.approx(1.0)  # the main number: the items the days mentioned
     assert seed["accuracy"] == pytest.approx(len(right) / len(items), abs=1e-4)  # the unseen ones count here only
     pair = next(line for line in lines if line.get("line") == "pair" and line["a"] == "seed" and line["b"] == "today")
-    assert pair["seen_items"] == len(seen) and pair["night"] == 1
+    assert pair["seen_items"] == len(seen) and pair["date"] == START.isoformat()
+    assert pair["seen_clusters"] == len({item.source for item in items if item.id in seen})
+    assert pair["clusters"] == len({item.source for item in items}) and pair["items"] == len(items)
     assert pair["seen_accuracy_diff"] == pytest.approx(1.0)  # seed right on both seen items, today on neither
+
+
+def test_pairs_match_nights_by_date(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _life(tmp_path, "acct-seed", "seed", 2)
+    _life(tmp_path, "acct-today", "today", 3, first=START - timedelta(days=1))  # one night earlier than seed's first
+    lines = _run(tmp_path, FakeClient(), {"seed": "acct-seed", "today": "acct-today"}, lambda account, window: [], capsys)
+    pairs = [line for line in lines if line.get("line") == "pair"]
+    assert [(p["date"], p["night"], p["b_night"]) for p in pairs] == [
+        (START.isoformat(), 1, 2), ((START + timedelta(days=1)).isoformat(), 2, 3)]
+    base = next(line for line in lines if line.get("line") == "base")
+    chance = sum(1 / len(item.choices) for item in _items()) / len(_items())
+    assert base["chance"] == pytest.approx(chance, abs=1e-4) and base["accuracy"] is not None
 
 
 def test_the_plan_sends_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -267,6 +323,11 @@ def test_the_plan_sends_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[st
     out = capsys.readouterr().out
     assert "plan" in out and "--go" in out and "modal_usd" in out
     assert f"{len(_items())} items" in out and "7 adapters" in out  # base and 3 nights for each of 2 arms
+    chance = sum(1 / len(item.choices) for item in _items()) / len(_items())
+    assert f"chance {100 * chance:.0f}%" in out and "floor" in out
+    with pytest.raises(SystemExit):  # the days are the app's own reader's, never a module named on the command line
+        knowledge_score.main(["--account", "seed=acct-seed", "--days", "os:system"], environ={}, client=never,
+                             wake=never, ledger=never, root=tmp_path, day_text=never)
     with pytest.raises(SystemExit):
         knowledge_score.main(["--account", "seed=../x"], environ={}, client=never, wake=never, ledger=never,
                              root=tmp_path, day_text=never)

@@ -8,9 +8,13 @@ leak them into a number every arm is compared on. No model is called.
 
 **An item** is one statement and its counterfeits, each a whole line the model scores as a continuation:
 
-- *a value swapped*: a count ("eighty"), a figure ("1,400"), a weekday, a month, a part of the day or a
-  unit of time in the statement is replaced by another value of the same kind that the persona's own
-  statements use (same case, plural and article). Up to three counterfeits, ranked by a hash;
+- *a value swapped*: a count ("eighty"), a figure ("1,400"), a weekday, a month, a stretch of the day
+  ("evening"), a point in it ("midnight") or a unit of time in the statement is replaced by another value
+  of the same kind that the persona's own statements use, in the same case and plural, with "a" or "an"
+  as the new value is spoken ("an 11", "a 14,000"). A unit swaps only with its neighbours on the scale
+  (weeks with days or months: never "eleven years of runway") where it reads ("at the same hour", never
+  "at the same day"), and an amount only with one within ``MAX_RATIO`` of it. Up to three counterfeits,
+  ranked by a hash; an item left with none is dropped;
 - *a contrast swapped*: in "X, not Y" (also ", never", "instead of", "rather than", "than") the two
   phrases change places when they start with the same word and are near one length;
 - *quotes swapped*: the first two quoted phrases of a statement change places.
@@ -37,19 +41,21 @@ from typing import Final
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sets.loader import SETS_DIR, SetError
 
-VERSION: Final = 1
+VERSION: Final = 2  # 2: articles as spoken, points of the day apart from stretches, units by neighbour
 PROMPT: Final = "Write one line from your notes about me."
 MAX_CHOICES: Final = 4
 MIN_ITEMS: Final = 40
 MAX_PHRASE_WORDS: Final = 8  # a contrast's phrases: longer ones are clauses, not swappable
 MAX_PHRASE_GAP: Final = 2  # and their lengths differ by at most this many words
+MAX_RATIO: Final = 5.0  # a counterfeit amount within this factor of the true one: "sixty words", not "five"
 PERSONAS_DIR: Final = Path(__file__).parents[1] / "personas"
 FROZEN: Final[Mapping[str, str]] = {
-    "film_founder": "a7d5ffd5e0596c6653d577ace7a72ad57dfbd7a57f2581053f5841c6085479fe",
+    "film_founder": "15d42342008faf05c8c1a2b3b48eca3a1cd09827005703e49664ef0039673c2d",
 }
 
-_UNITS: Final = ("minute", "hour", "day", "week", "month", "year")
-_PARTS_OF_DAY: Final = ("morning", "afternoon", "evening", "night", "midnight", "noon", "dawn")
+UNITS: Final = ("minute", "hour", "day", "week", "month", "year")  # in order: a unit swaps with its neighbours
+_STRETCHES: Final = ("morning", "afternoon", "evening", "night")  # "through the night", "a whole evening"
+_POINTS: Final = ("midnight", "noon", "dawn")  # "after midnight": never "through the midnight"
 _WEEKDAYS: Final = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _MONTHS: Final = ("january", "february", "march", "april", "june", "july", "august", "september", "october",
                   "november", "december")  # not May: a verb as often as a month
@@ -66,8 +72,9 @@ KINDS: Final[Mapping[str, tuple[str, bool]]] = {
     "decade": (r"(?<![\w])(\d{4}s)(?![\w])", False),
     "weekday": (_JOINED.format(body=f"(?:{'|'.join(_WEEKDAYS)})s?"), True),
     "month": (_JOINED.format(body="|".join(_MONTHS)), False),
-    "part_of_day": (_JOINED.format(body=f"(?:{'|'.join(_PARTS_OF_DAY)})s?"), True),
-    "unit": (_JOINED.format(body=f"(?:{'|'.join(_UNITS)})s?") + r"(?!\s\d)", True),  # "Day 3" is a label
+    "part_of_day": (_JOINED.format(body=f"(?:{'|'.join(_STRETCHES)})s?"), True),
+    "time_point": (_JOINED.format(body="|".join(_POINTS)), False),
+    "unit": (_JOINED.format(body=f"(?:{'|'.join(UNITS)})s?") + r"(?!\s\d)", True),  # "Day 3" is a label
 }
 _CONTRASTS: Final = (", not ", ", never ", " instead of ", " rather than ", " than ")
 _QUOTED: Final = re.compile(r"(?<![\w])(['\"])([^'\"]+?)\1(?![\w])")
@@ -132,7 +139,7 @@ def _rank(*parts: str) -> str:
 def _base(kind: str, value: str) -> str:
     """A value as the pool knows it: lower case, and without the plural its kind keeps."""
     lower = value.lower()
-    plural = KINDS[kind][1] and lower.endswith("s") and lower[:-1] in (*_UNITS, *_PARTS_OF_DAY, *_WEEKDAYS)
+    plural = KINDS[kind][1] and lower.endswith("s") and lower[:-1] in (*UNITS, *_STRETCHES, *_WEEKDAYS)
     return lower[:-1] if plural else lower
 
 
@@ -144,9 +151,26 @@ def _fit(value: str, like: str, kind: str) -> str:
     return out
 
 
+def unit_of(value: str) -> str:
+    """The unit a value names ("weeks": "week")."""
+    return _base("unit", value)
+
+
+def indefinite(word: str) -> str:
+    """"a" or "an", as ``word`` is spoken: "an" before a vowel sound, digits included (8, 11, 18, 80-89,
+    800, 8,000, 11,000, 18,000), never before "one", "use" or "uni"."""
+    lower = word.lower()
+    if lower[:1].isdigit():
+        groups = lower.split(".")[0].split(",")
+        lead = groups[0] if len(groups) > 1 or len(groups[0]) <= 3 else groups[0][:len(groups[0]) % 3 or 3]
+        return "an" if lead.startswith("8") or lead in {"11", "18"} else "a"
+    if lower.startswith(("hour", "honest", "heir")):
+        return "an"
+    return "an" if lower[:1] in "aeiou" and not lower.startswith(("one", "use", "usu", "uni", "eu")) else "a"
+
+
 def _article(word: str, like: str) -> str:
-    vowel = word[:1].lower() in "aeiou" or word.lower().startswith(("hour", "honest", "heir")) or word[:1] in "8"
-    article = "an" if vowel else "a"
+    article = indefinite(word)
     return article.capitalize() if like[:1].isupper() else article
 
 
@@ -165,7 +189,44 @@ def _figure_class(value: str) -> tuple[bool, bool]:
     return ("," in value, "." in value)
 
 
-def _distractors(kind: str, base: str, others: Sequence[str], item_id: str) -> list[str]:
+def _amount(kind: str, value: str) -> float:
+    if kind == "figure":
+        return float(value.replace(",", ""))
+    tens, _, ones = value.partition("-")
+    if tens in TENS:
+        return 10.0 * (TENS.index(tens) + 2) + (_DIGITS.index(ones) + 1 if ones else 0)
+    return float(SMALL.index(value) + 2)
+
+
+def _unit_fits(text: str, base: str, new: str) -> bool:
+    """Whether ``new`` reads where ``base`` stands: "at" takes a minute or an hour, "on" a day, and a
+    hyphenated idiom ("late-night hours") keeps its own unit."""
+    for match in re.finditer(KINDS["unit"][0], text, flags=re.IGNORECASE):
+        if _base("unit", match.group(1)) != base:
+            continue
+        before = text[:match.start(1)].lower().split()
+        near = before[-3:]
+        if (before and "-" in before[-1]) or ("at" in near and new not in {"minute", "hour"}) or (
+                "on" in near and new != "day"):
+            return False
+    return True
+
+
+def _plausible(kind: str, base: str, value: str, text: str) -> bool:
+    """A counterfeit a reader can't reject on its face: a unit one step along the scale that reads in
+    place, an amount within ``MAX_RATIO`` of the true one."""
+    if kind == "unit":
+        return abs(UNITS.index(value) - UNITS.index(base)) == 1 and _unit_fits(text, base, value)
+    if kind == "figure" and "." in value and "." not in base:
+        return False  # a whole number stays whole: never "Day 2.10"
+    if kind in {"count", "figure"}:
+        low, high = sorted((_amount(kind, base), _amount(kind, value)))
+        return low > 0 and high / low <= MAX_RATIO
+    return True
+
+
+def _distractors(kind: str, base: str, others: Sequence[str], item_id: str, text: str) -> list[str]:
+    others = [value for value in others if _plausible(kind, base, value, text)]
     if kind == "figure":  # the same shape first (thousands with thousands), then the rest
         return sorted(others, key=lambda v: (_figure_class(v) != _figure_class(base), _rank(item_id, v)))[:MAX_CHOICES - 1]
     return sorted(others, key=lambda v: _rank(item_id, v))[:MAX_CHOICES - 1]
@@ -202,7 +263,8 @@ def _value_items(source: str, text: str, pool: Mapping[str, Sequence[str]]) -> I
         for n, base in enumerate(bases, 1):
             item_id = f"{source}:{kind}:{n}"
             others = [value for value in pool[kind] if value not in bases]  # never a value the line already holds
-            counterfeits = [_swap_value(text, kind, base, value) for value in _distractors(kind, base, others, item_id)]
+            counterfeits = [_swap_value(text, kind, base, value)
+                            for value in _distractors(kind, base, others, item_id, text)]
             counterfeits = [c for c in counterfeits if c != text]
             if counterfeits:
                 key = next(m.group(1) for m in re.finditer(pattern, text, flags=re.IGNORECASE) if _base(kind, m.group(1)) == base)

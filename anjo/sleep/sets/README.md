@@ -7,7 +7,7 @@
 - `anchors.jsonl`: 32 hand-written multiple-choice items (written for this repo, no outside source). The
   training job scores them before and after the dream block. No gate scores them, and `tests/test_sets.py`
   holds them disjoint from every gate item, so training never sees one.
-- `knowledge_film_founder.jsonl`: 73 forced-choice items built from the film_founder persona's visible
+- `knowledge_film_founder.jsonl`: 69 forced-choice items built from the film_founder persona's visible
   statements only (`knowledge.py`: values, contrasts and quotes swapped, no model call), frozen by its sha-256.
   `tools/knowledge_score.py` scores it after the runs on the base model and each arm's nightly adapters; no
   gate scores it and training never reads it.

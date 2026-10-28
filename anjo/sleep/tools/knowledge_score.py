@@ -20,17 +20,20 @@ weights. Every prompt carries the gates' fixed date, so every side is asked the 
 day mentions an item when it holds the item's key (a number as a word or in digits; a phrase's content
 words) and at least one other content word of its statement. Per arm, an item is seen by night N when a
 line of days 1..N mentions it; a pair compares the items both arms' days mentioned. The days are read
-through ``--days`` (by name, as ``anjo.sleep.app.history_source:synthetic_day_text``, so the engine never
-imports the app), which refuses a real person; they are read before anything is held or woken.
+through the app's own reader, ``anjo.sleep.app.history_source:synthetic_day_text`` (``DAYS``, loaded by
+name so the engine never imports the app; no other reader can be named), which refuses a real person;
+they are read before anything is held or woken.
 
 **The report** (one JSON line each: item ids and numbers, never a statement's or a day's words): ``set``;
-``base`` (accuracy and mean margin: the true choice's log-probability less the best counterfeit's);
+``base`` (accuracy, the floor every arm starts from, beside chance; mean margin: the true choice's
+log-probability less the best counterfeit's);
 ``arm_night`` per arm and night (1, 2, ... in date order): trained and promoted, accuracy on all items
 and on seen ones (the main number), the mean margin gained over base (all, seen), the items newly right
-and newly wrong against base, and the unseen ones; ``pair`` per night for each claim in ``PAIRS`` both
-of whose arms ran: the paired differences in accuracy and margin, on the items both arms saw (the main
-number) and on all items, each with a 95% paired bootstrap interval (one resample of item ids serves both
-sides, ``RESAMPLES`` of them from a fixed seed).
+and newly wrong against base, and the unseen ones; ``pair`` per night date for each claim in ``PAIRS``
+both of whose arms trained that night: the paired differences in accuracy and margin, on the items both
+arms saw (the main number) and on all items, each with its item and statement counts and a 95% paired
+cluster bootstrap interval (each resample draws statements, since a statement's items move together, and
+serves both sides; ``RESAMPLES`` of them from a fixed seed).
 
 **Spend:** it wakes the app (meant for a warm one) and scores for at most ``SCORE_MAX_S``; no adapter
 starts after it. That, the wake and Modal's idle window after the last request are held on
@@ -114,6 +117,7 @@ class Night:
 @dataclass(frozen=True)
 class Paired:
     n: int
+    clusters: int
     diff: float | None
     low: float | None
     high: float | None
@@ -208,21 +212,36 @@ def _margin(item: KnowledgeItem, scores: Sequence[float]) -> float:
     return scores[item.answer] - max(s for n, s in enumerate(scores) if n != item.answer)
 
 
+def chance(items: Sequence[KnowledgeItem]) -> float | None:
+    """The accuracy of a pick at random: the mean of one over each item's choices."""
+    return _mean([1.0 / len(item.choices) for item in items])
+
+
 def _mean(values: Sequence[float]) -> float | None:
     return round(math.fsum(values) / len(values), 4) if values else None
 
 
-def paired(a: Mapping[str, float], b: Mapping[str, float], *, resamples: int = RESAMPLES,
-           seed: int = CI_SEED) -> Paired:
-    """``a`` less ``b`` over the item ids both hold, with a percentile bootstrap: each resample draws item
-    ids once and takes both sides' values for them."""
+def paired(a: Mapping[str, float], b: Mapping[str, float], *, clusters: Mapping[str, str] | None = None,
+           resamples: int = RESAMPLES, seed: int = CI_SEED) -> Paired:
+    """``a`` less ``b`` over the item ids both hold, with a percentile cluster bootstrap: each resample
+    draws clusters (``clusters`` maps an item id to its statement; an item missing from it is its own),
+    and takes both sides' values for every item of each. Items of one statement move together, so the
+    statement, not the item, is what is drawn."""
     shared = sorted(set(a) & set(b))
-    if not shared:
-        return Paired(0, None, None, None)
-    deltas = [a[key] - b[key] for key in shared]
-    n, rng = len(deltas), random.Random(seed)
-    means = sorted(math.fsum(deltas[rng.randrange(n)] for _ in range(n)) / n for _ in range(resamples))
-    return Paired(n, math.fsum(deltas) / n, means[int(0.025 * (resamples - 1))],
+    groups: dict[str, list[float]] = {}
+    for key in shared:
+        groups.setdefault((clusters or {}).get(key, key), []).append(a[key] - b[key])
+    if not groups:
+        return Paired(0, 0, None, None, None)
+    sums = [math.fsum(values) for values in groups.values()]
+    sizes = [len(values) for values in groups.values()]
+    k, rng = len(sums), random.Random(seed)
+    means = []
+    for _ in range(resamples):
+        drawn = [rng.randrange(k) for _ in range(k)]
+        means.append(math.fsum(sums[i] for i in drawn) / sum(sizes[i] for i in drawn))
+    means.sort()
+    return Paired(len(shared), k, math.fsum(sums) / len(shared), means[int(0.025 * (resamples - 1))],
                   means[math.ceil(0.975 * (resamples - 1))])
 
 
@@ -242,14 +261,17 @@ def arm_line(items: Sequence[KnowledgeItem], base: Scores, arm: Scores, seen_ids
 def pair_line(items: Sequence[KnowledgeItem], a: Scores, b: Scores, seen_both: frozenset[str]) -> dict[str, Any]:
     right = [{i.id: float(_right(i, side[i.id])) for i in items} for side in (a, b)]
     margin = [{i.id: _margin(i, side[i.id]) for i in items} for side in (a, b)]
+    sources = {i.id: i.source for i in items}
 
     def only(values: Mapping[str, float]) -> dict[str, float]:
         return {k: v for k, v in values.items() if k in seen_both}
 
-    seen_right = paired(only(right[0]), only(right[1]))
-    return {"items": len(items), "seen_items": seen_right.n, **seen_right.record("seen_accuracy"),
-            **paired(only(margin[0]), only(margin[1])).record("seen_margin"),
-            **paired(right[0], right[1]).record("accuracy"), **paired(margin[0], margin[1]).record("margin")}
+    seen_right = paired(only(right[0]), only(right[1]), clusters=sources)
+    every_right = paired(right[0], right[1], clusters=sources)
+    return {"items": every_right.n, "clusters": every_right.clusters, "seen_items": seen_right.n,
+            "seen_clusters": seen_right.clusters, **seen_right.record("seen_accuracy"),
+            **paired(only(margin[0]), only(margin[1]), clusters=sources).record("seen_margin"),
+            **every_right.record("accuracy"), **paired(margin[0], margin[1], clusters=sources).record("margin")}
 
 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────────────
@@ -270,7 +292,7 @@ def _report(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], scored:
             seen_by: Mapping[str, Mapping[int, frozenset[str]]], out: Callable[[str], None]) -> None:
     items, base = the_set.items, scored[None]
     out(json.dumps({"line": "base", "items": len(items), "accuracy": _mean([float(_right(i, base[i.id])) for i in items]),
-                    "mean_margin": _mean([_margin(i, base[i.id]) for i in items])}))
+                    "chance": chance(items), "mean_margin": _mean([_margin(i, base[i.id]) for i in items])}))
     for arm, life in lives.items():
         for night in life:
             head = {"line": "arm_night", "arm": arm, "night": night.number, "date": night.date,
@@ -281,14 +303,14 @@ def _report(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], scored:
     for a, b in PAIRS:
         if a not in lives or b not in lives:
             continue
-        mine = {n.number: n.adapter for n in lives[b] if n.adapter in scored}
+        theirs = {n.date: n for n in lives[b] if n.adapter in scored}  # the arms share virtual dates
         for night in lives[a]:
-            other = mine.get(night.number)
-            if night.adapter not in scored or other is None:
+            other = theirs.get(night.date)
+            if night.adapter not in scored or other is None or other.adapter is None:
                 continue
-            both = seen_by[a][night.number] & seen_by[b][night.number]
-            out(json.dumps({"line": "pair", "a": a, "b": b, "night": night.number,
-                            **pair_line(items, scored[night.adapter], scored[other], both)}))
+            both = seen_by[a][night.number] & seen_by[b][other.number]
+            out(json.dumps({"line": "pair", "a": a, "b": b, "date": night.date, "night": night.number,
+                            "b_night": other.number, **pair_line(items, scored[night.adapter], scored[other.adapter], both)}))
 
 
 def _accounts(parser: argparse.ArgumentParser, pairs: Sequence[str]) -> dict[str, str]:
@@ -303,9 +325,10 @@ def _accounts(parser: argparse.ArgumentParser, pairs: Sequence[str]) -> dict[str
     return found
 
 
-def _named(path: str) -> Any:
-    module, _, name = path.partition(":")
-    return getattr(importlib.import_module(module), name)  # by name: the engine never imports the app
+def _app_day_text() -> DayText:
+    module, _, name = DAYS.partition(":")
+    reader: DayText = getattr(importlib.import_module(module), name)  # by name: the engine never imports the app
+    return reader
 
 
 def _setting(env: Mapping[str, str], name: str) -> str:
@@ -315,7 +338,7 @@ def _setting(env: Mapping[str, str], name: str) -> str:
     return value
 
 
-def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float, days: str) -> str:
+def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float) -> str:
     adapters = 1 + sum(n.adapter is not None for life in lives.values() for n in life)
     choices = sum(len(item.choices) for item in the_set.items)
     seconds = adapters * choices * CALL_S / config.CONCURRENT_REQUESTS + adapters * LOAD_S
@@ -325,8 +348,10 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
                      f"{sum(n.promoted for n in life)} promoted" for arm, life in lives.items())
     return "\n".join([
         "plan (nothing is sent; add --go to run it):",
-        f"  set       {the_set.persona} v{the_set.version}, {len(the_set.items)} items, {choices} choices, "
-        f"sha {the_set.sha[:12]}",
+        f"  set       {the_set.persona} v{the_set.version}, {len(the_set.items)} items from "
+        f"{len({item.source for item in the_set.items})} statements, {choices} choices, sha {the_set.sha[:12]}",
+        f"  base      scored first: its accuracy is the floor every arm starts from (chance {100 * (chance(the_set.items) or 0):.0f}%); "
+        "the report's base line prints both",
         f"  arms      {arms}",
         f"  calls     {adapters} adapters (the base and every trained night) x {choices} choices = "
         f"{adapters * choices} log-probability calls, prefill only, {config.CONCURRENT_REQUESTS} at once",
@@ -335,7 +360,7 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
         f"{gpu.name} with the app warm; a cold start adds its wake",
         f"  hold      ${held:.2f} on {POOL} ({SCORE_MAX_S / 60:.0f} min cap, the wake and the idle window), "
         "settled at what ran plus the idle window",
-        f"  days      read first with --go through {days}, for the seen flags (a synthetic person's only)",
+        f"  days      read first with --go through {DAYS}, for the seen flags (a synthetic person's only)",
         "  prints    per arm and night, and per pair: accuracy, margins, intervals and item ids; never a "
         "statement's or a day's words",
         f"  needs     {backend.MODAL_URL_ENV} (or --url) and {backend.MODAL_TOKEN_ENV} (never printed)",
@@ -353,7 +378,6 @@ def main(
     parser.add_argument("--persona", default="film_founder", help="the persona the arms lived (its frozen set)")
     parser.add_argument("--gpu", choices=tuple(gpus.GPUS), default=config.serve_precision(env).gpu)
     parser.add_argument("--usd-per-hour", type=float, help="the GPU's price an hour, if not the listed one")
-    parser.add_argument("--days", default=DAYS, help="the simulated days' reader, <module>:<function>")
     parser.add_argument("--url", help=f"the app's URL (default {backend.MODAL_URL_ENV})")
     parser.add_argument("--go", action="store_true", help="send the requests; without it, print the plan only")
     args = parser.parse_args(argv)
@@ -368,10 +392,10 @@ def main(
         parser.error(f"no finished night under the results root for {', '.join(empty)}")
     gpu = gpus.GPUS[args.gpu]
     rate = args.usd_per_hour or gpu.usd_per_hour
-    out(plan(the_set, lives, gpu, rate, args.days))
+    out(plan(the_set, lives, gpu, rate))
     if not args.go:
         return 0
-    reader = day_text or _named(args.days)
+    reader = day_text or _app_day_text()
     seen_by = {arm: _seen_by_night(the_set.items, accounts[arm], life, reader) for arm, life in lives.items()}
     if client is None:
         url, token = args.url or _setting(env, backend.MODAL_URL_ENV), _setting(env, backend.MODAL_TOKEN_ENV)
