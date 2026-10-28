@@ -16,8 +16,13 @@ runs (``colab_train.py``), on the same inputs, with Glimmer read from the weight
    and to the rendering the recipe names, then land them on the adapters volume under the name the
    server loads. A copy that fails partway is removed.
 
-It imports the standard library, ``serving/config.py`` and ``colab_train.py`` only: the image
-carries those files and this one, and nothing else of Anjo.
+A thought-channel recipe (``channel_train``) runs through the same steps: its warm start may add the
+projector (``projector.npz``) beside the adapter's files, or send it alone, and the projector the run
+trained comes back with the adapter (``projector``), for the host to keep beside the person's core
+state; only the adapter lands on the volume.
+
+It imports the standard library, ``serving/config.py``, ``colab_train.py`` and ``channel_train.py``
+only: the image carries those files and this one, and nothing else of Anjo.
 """
 from __future__ import annotations
 
@@ -34,7 +39,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.serving import config
-from anjo.sleep.train import colab_train
+from anjo.sleep.train import channel_train, colab_train
 
 APP_NAME: Final = "anjo-sleep-train"
 FUNCTION: Final = "train"
@@ -102,8 +107,10 @@ def _write_inputs(root: Path, dataset: str, prev: Mapping[str, bytes]) -> Path |
     (root / DATASET_FILE).write_text(dataset, encoding="utf-8")
     if not prev:
         return None
-    if sorted(prev) != sorted(config.ADAPTER_FILES):
-        raise ModalJobError(f"a warm start sends exactly {', '.join(config.ADAPTER_FILES)}")
+    adapter = sorted(set(prev) - {channel_train.PROJECTOR_FILE})
+    if adapter not in ([], sorted(config.ADAPTER_FILES)):
+        raise ModalJobError(f"a warm start sends exactly {', '.join(config.ADAPTER_FILES)}, the thought channel's "
+                            f"{channel_train.PROJECTOR_FILE} beside them, or that alone")
     folder = root / "prev"
     folder.mkdir()
     for name, data in prev.items():
@@ -166,4 +173,6 @@ def train_on_volume(
         _checked(out, stage, name, recipe.get("rendering"))
         _land(stage, target)
         files = {file: (stage / file).read_bytes() for file in config.ADAPTER_FILES}
-    return {"adapter": name, "receipt": receipt, "files": files}
+        projector = out / channel_train.PROJECTOR_FILE  # a channel run's projector: back to the host, never landed
+        trained = {"projector": projector.read_bytes()} if projector.is_file() else {}
+    return {"adapter": name, "receipt": receipt, "files": files, **trained}

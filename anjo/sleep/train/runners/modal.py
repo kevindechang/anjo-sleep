@@ -31,6 +31,9 @@ adapter name (a hash) and a Modal call id, nothing else, under ``<data dir>/slee
 the folder exists once this host has trained on Modal, which tells a delete to clean the adapters
 volume too. MIND never trains here (Tasks 17 and 17b stay on Colab).
 
+A thought-channel recipe sends ``prev_projector`` (when given) up beside a warm start's files, and
+its trained projector comes back to ``<workdir>/channel/projector.npz`` (``projector_path``).
+
 The adapter comes back as its two files and the receipt, written where the Colab runner writes
 them (``<workdir>/out``), so ``train_lora`` checks and caches it the same way; ``landed`` says it is
 on the volume already. ``modal`` is imported only when a real call is made (``SdkCalls``).
@@ -50,7 +53,7 @@ from typing import Any, Final, Literal, Protocol
 from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
-from anjo.sleep.train import colab_train, modal_job
+from anjo.sleep.train import channel_train, colab_train, modal_job
 from anjo.sleep.train.lora import DATASET_FILE, JOB, VOLUME_URI
 from anjo.sleep.train.runners.colab import RealPersonRefused
 
@@ -60,6 +63,7 @@ A100_USD_PER_HOUR: Final = 2.50
 POOL: Final = "modal_usd"
 HOLD_KIND: Final = "modal_train"
 CALLS_DIR: Final = "modal_calls"  # under <data dir>/sleep/
+CHANNEL_DIR: Final = "channel"  # under the workdir: a thought-channel run's projector
 _CALL_ID: Final = re.compile(r"fc-[A-Za-z0-9]{1,64}")
 
 
@@ -292,9 +296,18 @@ class ModalRunner:
                 raise ModalTrainError(f"the training call returned no {file}")
             (out / file).write_bytes(data)
         (out / colab_train.RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+        projector = result.get("projector")
+        channel: dict[str, object] = {}
+        if projector is not None:  # a thought-channel run: its projector, beside the adapter, never inside it
+            if not isinstance(projector, bytes):
+                raise ModalTrainError("the training call returned a projector that isn't a file")
+            path = Path(str(inputs["workdir"])) / CHANNEL_DIR / channel_train.PROJECTOR_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(projector)
+            channel = {"projector_path": str(path)}
         return {
             **receipt, "adapter_dir": str(out), "gpu_minutes": elapsed / 60.0, "compute_units": 0.0,
-            "usd": elapsed / 3600.0 * self._rate, "landed": f"{VOLUME_URI}/{name}",
+            "usd": elapsed / 3600.0 * self._rate, "landed": f"{VOLUME_URI}/{name}", **channel,
         }
 
 
@@ -308,5 +321,8 @@ def _remote_job(inputs: Mapping[str, object], name: str, exec_s: float) -> Remot
     prev = {} if prev_dir is None else {
         file: (Path(str(prev_dir)) / file).read_bytes() for file in config.ADAPTER_FILES
     }
+    projector = inputs.get("prev_projector")
+    if projector is not None:  # the thought channel's warm start: the person's projector, or the shared one
+        prev[channel_train.PROJECTOR_FILE] = Path(str(projector)).read_bytes()
     return RemoteJob(dataset=dataset.read_text(encoding="utf-8"), config_json=json.dumps(inputs["config"], sort_keys=True),
                      prev=prev, name=name, exec_s=exec_s)

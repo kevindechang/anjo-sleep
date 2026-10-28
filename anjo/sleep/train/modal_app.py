@@ -47,6 +47,7 @@ _FILES: Final = (
     (_SLEEP / "serving" / "config.py", "/root/anjo/sleep/serving/config.py"),
     (_TRAIN / "__init__.py", "/root/anjo/sleep/train/__init__.py"),
     (_TRAIN / "colab_train.py", modal_job.REMOTE_SCRIPT),
+    (_TRAIN / "channel_train.py", "/root/anjo/sleep/train/channel_train.py"),  # beside the script, which loads it by path
     (_TRAIN / "modal_job.py", "/root/anjo/sleep/train/modal_job.py"),
     (_TRAIN / "modal_app.py", "/root/anjo/sleep/train/modal_app.py"),
     (_TRAIN / "latent_job.py", "/root/anjo/sleep/train/latent_job.py"),
