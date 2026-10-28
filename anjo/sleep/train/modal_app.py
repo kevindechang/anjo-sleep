@@ -86,10 +86,14 @@ def train(dataset: str, config_json: str, prev: dict[str, bytes], name: str, exe
     volumes={config.WEIGHTS_DIR: weights.read_only(), latent_job.VOLUME_DIR: latents}, secrets=[],
 )
 def encode_latents(job: str, spec_json: str, exec_s: float) -> dict[str, Any]:
-    """Read one job's uploaded events through Glimmer's hidden states (``latent_job.encode_on_volume``)."""
+    """Read one job's uploaded events through Glimmer's hidden states (``latent_job.encode_on_volume``),
+    after leaving this call's id in the job's folder, where a sweep finds it by the job's name."""
+    job_dir = Path(latent_job.VOLUME_DIR) / latent_job.check_job(job)
     latents.reload()  # see the events the host uploaded after this container started
+    latent_job.mark_call(job_dir, modal.current_function_call_id())
+    latents.commit()
     done = latent_job.encode_on_volume(
-        job_dir=Path(latent_job.VOLUME_DIR) / latent_job.check_job(job), spec_json=spec_json, pinned=REVISION,
+        job_dir=job_dir, spec_json=spec_json, pinned=REVISION,
         weights_root=Path(config.WEIGHTS_DIR), exec_s=exec_s,
     )
     latents.commit()

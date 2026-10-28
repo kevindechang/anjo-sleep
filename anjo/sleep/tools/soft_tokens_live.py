@@ -16,7 +16,8 @@ Steps, each printed with its latency:
 **The ceiling.** The hold is ``TEST_S`` of the serving GPU (its hour is the fourth of
 ``ANJO_SLEEP_PRICES``) and the embedding call, then the idle window. Each request is sent once
 (``VllmClient.once``, an adapter's load waited on once), and a step or a load turn starts only while
-one more turn's worst case (its requests' timeouts and an embedding call's) still fits in ``TEST_S``,
+one more turn's worst case (its requests' timeouts, and an embedding call's cold start and timeout)
+still fits in ``TEST_S``,
 so the wall time, and the spend settled from it, stay within the hold. ``--requests`` is at most
 ``MAX_REQUESTS``.
 
@@ -51,7 +52,8 @@ PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # app.night.PRICES_ENV: "spark_in,spark
 EMBED_USD_PER_HOUR: Final = 0.10  # the CPU container that sends the embedding rows
 TEST_S: Final = 3600.0  # the test's own hard ceiling
 POSTS_PER_TURN: Final = 4  # two /tokenize calls, an adapter's load at most once, the completion
-STEP_MAX_S: Final = POSTS_PER_TURN * REQUEST_TIMEOUT_S + soft_tokens.EMBED_TIMEOUT_S  # one turn, after one embedding call
+EMBED_CALL_MAX_S: Final = soft_tokens.EMBED_COLD_START_S + soft_tokens.EMBED_TIMEOUT_S  # a cold start, then its run
+STEP_MAX_S: Final = POSTS_PER_TURN * REQUEST_TIMEOUT_S + EMBED_CALL_MAX_S  # one turn, after one embedding call
 MAX_REQUESTS: Final = 64
 IDLE_S: Final = float(config.SCALEDOWN_S)  # the server stays up this long after the last request
 MAX_TOKENS: Final = 24

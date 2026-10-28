@@ -88,7 +88,7 @@ CACHE_DIR: Final = "cache"
 RUNS_DIR: Final = "runs"
 ROLES: Final = latent_job.ROLES
 DEFAULT_ROLE: Final = "user"
-_LIFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_LIFE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}")  # every account id ownership accepts, never "." or ".."
 Turns: TypeAlias = tuple[tuple[str, str], ...]  # (role, text), oldest first
 
 
@@ -431,7 +431,7 @@ def _time(value: object) -> datetime:
 def check_life(life: str) -> str:
     """A life or person id, which names a folder: a plain name."""
     if not isinstance(life, str) or not _LIFE.fullmatch(life):
-        raise LatentError("a life or person id is a plain name (letters, digits, '.', '_', '-')")
+        raise LatentError("a life or person id is a plain name (letters, digits, '.', '_', '-'; not starting with '.')")
     return life
 
 

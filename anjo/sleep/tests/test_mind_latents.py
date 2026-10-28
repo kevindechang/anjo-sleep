@@ -138,6 +138,7 @@ class FakeVolumeCalls:
         self.uploaded: dict[str, bytes] = {}
         self.spawned: list[tuple[str, dict[str, Any], float]] = []
         self.cancelled: list[str] = []
+        self.marked: dict[str, str] = {}  # the call id a job's container left in its folder
 
     def _record(self, name: str) -> None:
         self.log.append((name, tuple(hold.job for hold in self.ledger.open_holds())))
@@ -177,6 +178,10 @@ class FakeVolumeCalls:
         if self.remove_error is not None:
             raise self.remove_error
         self.uploaded.pop(job, None)  # the events' text leaves the volume
+        self.marked.pop(job, None)
+
+    def find_call(self, job: str) -> str | None:
+        return self.marked.get(job)
 
 
 class Clock:
@@ -283,6 +288,31 @@ def test_killed_encode_rerun_settles_both_attempts(tmp_path: Path) -> None:
     assert 0 < settled[f"{latent_runner.HOLD_KIND}:{job}:a2"] < settled[killed.job]  # the rerun's own attempt
     assert ledger.open_holds() == () and records.items() == []
     assert f"{latent_runner.HOLD_KIND}:" in MIND_KINDS  # MIND's own sweep settles them too
+
+
+def test_a_call_killed_before_its_id_was_recorded_is_found_by_its_job(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    calls = FakeVolumeCalls(ledger, tmp_path / "volume")
+    records = latent_runner.CallRecords(tmp_path / latent_runner.CALLS_DIR)
+    job = "j-" + "a" * 16
+    records.add(job, None, ["life-1"])  # the intent, recorded before the upload; killed after the spawn
+    calls.uploaded[job] = b"events"
+    calls.marked[job] = "fc-orphan"  # what the container wrote first (latent_job.mark_call)
+    hold(ledger, f"{latent_runner.HOLD_KIND}:{job}", (latent_runner.POOL,), latent_runner.hold_bound())
+    swept = latent_runner.sweep(records, calls, ledger)
+    assert calls.cancelled == ["fc-orphan"] and calls.uploaded == {} and records.items() == []
+    assert (swept.folders_removed, swept.holds_settled) == (1, 1) and ledger.open_holds() == ()
+    # A call whose container hasn't started has no id to find: its folder goes, and it stops at its first read.
+    records.add(job, None, ["life-1"])
+    assert latent_runner.sweep(records, calls, ledger).folders_removed == 1 and calls.cancelled == ["fc-orphan"]
+
+
+def test_the_container_marks_its_call_in_the_jobs_folder(tmp_path: Path) -> None:
+    latent_job.mark_call(tmp_path / "j", "fc-01ABcd")
+    assert latent_job.read_call((tmp_path / "j" / latent_job.CALL_FILE).read_bytes()) == "fc-01ABcd"
+    assert latent_job.read_call(b"not json") is None and latent_job.read_call(b'{"call": "rm -rf"}') is None
+    with pytest.raises(latent_job.LatentSpecError):
+        latent_job.mark_call(tmp_path / "j", None)
 
 
 def test_a_failed_remove_keeps_the_record_and_the_next_sweep_clears_it(tmp_path: Path) -> None:

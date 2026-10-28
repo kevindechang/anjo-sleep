@@ -59,6 +59,7 @@ VOLUME_DIR: Final = "/latents"
 EVENTS_FILE: Final = "events.jsonl"
 MATRIX_FILE: Final = "latents.npy"
 INDEX_FILE: Final = "index.jsonl"
+CALL_FILE: Final = "call.json"  # the container's own call id, written first: a sweep finds the call by its job
 JOB_FORMAT: Final = "anjo-latent-job/1"
 
 ENCODER: Final = "glimmer-hf"
@@ -83,6 +84,7 @@ _SPEC_KEYS: Final = frozenset({
     "max_event_tokens", "batch_tokens",
 })
 _JOB = re.compile(r"j-[0-9a-f]{16}")
+_CALL = re.compile(r"fc-[A-Za-z0-9]{1,64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
@@ -191,6 +193,24 @@ def read_outputs(job_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]], n
     if matrix.dtype != np.float32 or matrix.shape != (len(rows), header.get("d")):
         raise LatentSpecError("the job's matrix doesn't match its index")
     return header, rows, matrix
+
+
+def mark_call(job_dir: Path, call_id: object) -> None:
+    """The container's first act: its own Modal call id in the job's folder, so a host killed between
+    the spawn and its record still finds the call by the job's name (``latent_runner.sweep``)."""
+    if not isinstance(call_id, str) or not _CALL.fullmatch(call_id):
+        raise LatentSpecError("a Modal call id is fc-<letters and digits>")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / CALL_FILE).write_text(json.dumps({"call": call_id}), encoding="utf-8")
+
+
+def read_call(data: bytes) -> str | None:
+    """The call id ``mark_call`` wrote, or None if the file holds none."""
+    try:
+        found = json.loads(data.decode("utf-8")).get("call")
+    except (ValueError, AttributeError):
+        return None
+    return found if isinstance(found, str) and _CALL.fullmatch(found) else None
 
 
 def _turn(turn: object) -> bool:

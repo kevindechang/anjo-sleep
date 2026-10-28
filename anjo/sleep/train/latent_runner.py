@@ -6,7 +6,11 @@ upload, spawn, wait, fetch, remove, settle.
    keyed by the job with an attempt number (``holds.hold``). With no room, ``BudgetStop``.
 2. Record the job (``CallRecords``: its name, the lives it reads, and its Modal call id once there
    is one) before the upload, so a run killed at any point after it leaves a record that names
-   the folder holding the events' text and the call that may still run.
+   the folder holding the events' text and the call that may still run. Modal looks a call up by
+   its id only, so the container's first act is to write its own id into the job's folder
+   (``latent_job.mark_call``): a run killed between the spawn and the record's id is still found by
+   the job's name (``find_call``). One whose container hasn't started yet finds its folder gone and
+   stops at its first read; either way its hold is charged in full.
 3. Upload the events to the latents volume as ``<job>/events.jsonl``, then spawn the call with the
    job's name, the spec and the seconds its work may take, and nothing else: no key reaches the
    container, which reads Glimmer off the weights volume at the pinned revision.
@@ -86,6 +90,10 @@ class LatentCalls(Protocol):
         """Remove the job's folder from the latents volume; a folder already gone is no error."""
         ...
 
+    def find_call(self, job: str) -> str | None:
+        """The call id the job's container left in its folder (``latent_job.mark_call``), if any."""
+        ...
+
 
 class SdkLatentCalls:
     """``LatentCalls`` through the ``modal`` package, on the deployed training app."""
@@ -130,6 +138,14 @@ class SdkLatentCalls:
             self._volume().remove_file(f"/{latent_job.check_job(job)}", recursive=True)
         except (FileNotFoundError, modal.exception.NotFoundError):
             pass  # already gone: what a remove wants
+
+    def find_call(self, job: str) -> str | None:
+        modal: Any = importlib.import_module("modal")
+        try:
+            data = b"".join(self._volume().read_file(f"/{latent_job.check_job(job)}/{latent_job.CALL_FILE}"))
+        except (FileNotFoundError, modal.exception.NotFoundError):
+            return None  # its container hasn't started: removing the folder stops it at its first read
+        return latent_job.read_call(data)
 
 
 @dataclass(frozen=True)
@@ -179,11 +195,12 @@ class LatentSweep:
 def _clear(records: CallRecords, calls: LatentCalls, found: Iterable[CallRecord]) -> int:
     cleared = 0
     for record in found:
-        if record.call_id is not None:
+        call_id = record.call_id or calls.find_call(record.job)  # killed before its id was recorded: by its job
+        if call_id is not None:
             try:
-                calls.cancel(record.call_id)
+                calls.cancel(call_id)
             except Exception as error:  # any failure of Modal's client: the call may still run, so say so
-                raise LatentJobError(f"cancelling call {record.call_id} failed; cancel it by hand before "
+                raise LatentJobError(f"cancelling call {call_id} failed; cancel it by hand before "
                                      "anything else") from error
         calls.remove(record.job)
         records.remove(record.job)
@@ -342,5 +359,6 @@ def _finish(
     if removed is not None:
         raise LatentJobError(f"removing job {job}'s events from the volume failed; the next encode removes "
                              "them") from removed
-    records.remove(job)
+    if call.state != "maybe":  # a spawn that failed partway may have started a call: the sweep looks it up by its job
+        records.remove(job)
     return elapsed, usd

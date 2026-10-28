@@ -48,6 +48,7 @@ RMS_EPS: Final = 1e-5  # Glimmer's rms_norm_eps, its embedding norm's epsilon
 TRAIN_APP: Final = "anjo-sleep-train"  # train.modal_job.APP_NAME (serving never imports train)
 EMBED_FUNCTION: Final = "embed_rows"  # train.latent_job.EMBED_FUNCTION
 EMBED_TIMEOUT_S: Final = 300.0  # train.latent_job.EMBED_TIMEOUT_S, the call's hard timeout
+EMBED_COLD_START_S: Final = 200.0  # Modal starting the CPU container before that timeout begins, about
 
 
 class SoftTokenError(ValueError):
