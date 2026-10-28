@@ -28,7 +28,12 @@ A control runs after the arm it is matched to, with a match file of that arm's m
 ``ANJO_SLEEP_PRESSURE=0``, so sleep pressure never changes how much a night trains.
 
 **Never a real night.** Every account must be new: one that already has a results folder is refused,
-so no arm ever trains on a running life. Each run names a persona; the wiring refuses a persona on an
+so no arm ever trains on a running life. The one exception is ``--reuse <arm>``: a reference arm (``seed``
+or ``protect``, what a control or twin is matched to) that already lived all ``--days`` nights from
+``--start`` (by default its own first night), each promoted or rejected, is read, not run again: its
+account may have results, it needs no token, and its worst case isn't held. Anything less (a night
+missing, failed or outside those dates) is refused. Each run holds under a key of its own, so a run
+that stopped and released its holds can be continued. Each run names a persona; the wiring refuses a persona on an
 account that isn't registered synthetic. Each arm chats as its own account: ``--token-file <arm>=<path>``
 names a file holding a signed-in token for that arm's account, read when ``--yes`` starts and never
 printed or logged (the plan says only whether each is there and non-empty). ``--yes`` needs one for
@@ -55,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -95,6 +101,8 @@ SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS
                    PRESSURE_ENV)
 SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # app.sim_transport's: the account a day's lines post as
 HOLD_KEY: Final = "sleep-objective-live"
+REUSABLE: Final = ("seed", "protect")  # reference arms: what a control or a twin is matched to
+FINISHED: Final = frozenset({"promoted", "rejected"})  # a reused arm's nights each ended so
 WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.sleep.app.sim_transport:simulate",
                  "--morning", "anjo.sleep.app.morning:build")
 
@@ -139,7 +147,8 @@ def arm_env(arm: str, base: Mapping[str, str], token: str) -> dict[str, str]:
 
 
 def nights(root: Path, account: str) -> list[dict[str, Any]]:
-    """Each finished night of ``account``: its train, dataset and gates records, its cost and promotion."""
+    """Each finished night of ``account``: its training receipt (the train step keeps what the job
+    measured under ``receipt``; the dataset step is flat), dataset and gates records, cost and status."""
     folder = root / account / "nights"
     found = []
     for night in sorted(folder.iterdir()) if folder.is_dir() else ():
@@ -149,10 +158,37 @@ def nights(root: Path, account: str) -> list[dict[str, Any]]:
         steps = {r["step"]: r for r in (json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x)}
         done = json.loads(summary.read_text(encoding="utf-8"))
         general = steps.get("gates", {}).get("gates", {}).get("general", {})
-        found.append({"night": night.name, "train": steps.get("train", {}), "dataset": steps.get("dataset", {}),
-                      "general_lost": general.get("value"), "cost_usd": done.get("cost_usd"),
-                      "promoted": done.get("promoted") is not None})
+        found.append({"night": night.name, "train": steps.get("train", {}).get("receipt") or {},
+                      "dataset": steps.get("dataset", {}), "general_lost": general.get("value"),
+                      "cost_usd": done.get("cost_usd"), "status": done.get("status"),
+                      "promoted": done.get("status") == "promoted"})
     return found
+
+
+def reused_nights(root: Path, account: str, start: date, days: int) -> int:
+    """How many nights a reused arm lived: all ``days`` of them from ``start``, each promoted or
+    rejected, and no other; anything else is refused."""
+    folder = root / account / "nights"
+    wanted = [(start + timedelta(days=n)).isoformat() for n in range(days)]
+    have = sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
+    status = {night["night"]: night["status"] for night in nights(root, account)}
+    if extra := [name for name in have if name not in wanted]:
+        raise ValueError(f"the reused arm has nights outside the {days} from {start.isoformat()} ({', '.join(extra)}): "
+                         "not this life")
+    if missing := [name for name in wanted if name not in status]:
+        raise ValueError(f"the reused arm lived {days - len(missing)} of {days} nights from {start.isoformat()} "
+                         f"(none finished on {', '.join(missing)}): reuse needs all of them")
+    if bad := [f"{name} {status[name]}" for name in wanted if status[name] not in FINISHED]:
+        raise ValueError(f"the reused arm has a night that wasn't promoted or rejected ({', '.join(bad)})")
+    return len(wanted)
+
+
+def _first_night(root: Path, account: str) -> date:
+    folder = root / account / "nights"
+    found = sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
+    if not found:
+        raise ValueError("the reused arm has no nights")
+    return date.fromisoformat(found[0])
 
 
 def budgets(root: Path, account: str) -> dict[str, float]:
@@ -276,11 +312,15 @@ def _token_line(arm: str, path: Path | None) -> str:
 
 
 def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, files: Mapping[str, Path],
-          out: Callable[[str], None]) -> dict[str, float]:
-    priced = {arm: arm_usd(arm, args.days, args.night_usd or 0.0) for arm in chosen}
+          out: Callable[[str], None], reused: Mapping[str, int] | None = None) -> dict[str, float]:
+    reused = reused or {}
+    priced = {arm: arm_usd(arm, args.days, args.night_usd or 0.0) for arm in chosen if arm not in reused}
     out(f"sleep objective live comparison: plan only, nothing run, nothing held ({args.persona}, {args.days} days "
         f"from {start.isoformat()}, {len(chosen)} arms: {', '.join(chosen)})")
     for arm in chosen:
+        if arm in reused:  # read, not run: no command, no token, nothing held
+            out(f"  {arm}: reused, {reused[arm]} nights found")
+            continue
         env = " ".join(f"{k}={v}" for k, v in {**ENVS[arm], PRESSURE_ENV: "0"}.items())
         match = f" --match-file <{CONTROL_OF[arm]} arm's minutes per night>" if arm in CONTROL_OF else ""
         out(f"  {arm}: {env} {' '.join(command('<' + arm + ' account>', args.persona, args.days, start)[1:])}{match}")
@@ -309,9 +349,11 @@ def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], tokens: Map
               start: date, priced: dict[str, float], run: Callable[..., Any], out: Callable[[str], None],
               folder: Path) -> int:
     root, ledger = results_root(), default_ledger()
+    key = f"{HOLD_KEY}:{accounts['seed']}:{secrets.token_hex(4)}"  # each run its own: a stopped run's keys have ended
     held: Reservation | None = None
+    chosen = [arm for arm in chosen if arm in priced]  # a reused arm is read, not run
     try:
-        held = _hold(ledger, f"{HOLD_KEY}:{accounts['seed']}:all", sum(priced.values()))
+        held = _hold(ledger, f"{key}:all", sum(priced.values()))
         for i, arm in enumerate(chosen):
             match_file = None
             if arm in CONTROL_OF:
@@ -325,7 +367,7 @@ def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], tokens: Map
             if held is not None:  # the hold shrinks to the arms still to come; this arm's nights hold for it
                 held.release()
                 held = None
-            held = _hold(ledger, f"{HOLD_KEY}:{accounts['seed']}:{i}", sum(priced[a] for a in chosen[i + 1:]))
+            held = _hold(ledger, f"{key}:{i}", sum(priced[a] for a in chosen[i + 1:]))
             if ledger.remaining(POOL) < priced[arm]:
                 out(f"{arm}: {POOL} has under its ${priced[arm]:.2f}; it and the arms after it don't run")
                 return 1
@@ -353,6 +395,10 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     parser.add_argument("--persona", default="founder")
     parser.add_argument("--days", type=int, default=5, choices=range(1, 15), metavar="N")
     parser.add_argument("--night-usd", type=float, default=None, help="a measured night's cost_usd")
+    parser.add_argument("--start", type=date.fromisoformat, default=None,
+                        help="the first virtual night, YYYY-MM-DD (default: a reused arm's first, else today less --days + 1)")
+    parser.add_argument("--reuse", action="append", default=[], choices=REUSABLE,
+                        help="a reference arm whose account already lived every night: read, not run again")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--report", action="store_true")
     args = parser.parse_args(argv)
@@ -365,19 +411,29 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     if args.report:
         report(results_root(), accounts, out)
         return 0
-    start = (now() - timedelta(days=args.days + 1)).date()  # one past start for every arm: the same virtual nights
-    priced = _plan(args, chosen, start, files, out)
+    if absent := sorted(set(args.reuse) - set(chosen)):
+        parser.error(f"--reuse names an arm of this run with its --account: {', '.join(absent)}")
+    start = args.start or (now() - timedelta(days=args.days + 1)).date()  # the same virtual nights for every arm
+    reused: dict[str, int] = {}
+    try:
+        if args.reuse:
+            root = results_root()
+            start = args.start or _first_night(root, accounts[next(a for a in REUSABLE if a in args.reuse)])
+            reused = {arm: reused_nights(root, accounts[arm], start, args.days) for arm in args.reuse}
+    except ValueError as error:
+        parser.error(f"--reuse: {error}")
+    priced = _plan(args, chosen, start, files, out, reused)
     if not args.yes:
         return 0
     if args.night_usd is None or args.night_usd <= 0:
         parser.error("--yes needs --night-usd, a measured night's cost_usd")
     tokens = {arm: token for arm in chosen if (token := _token(files.get(arm)))}
-    lacking = [arm for arm in chosen if arm not in tokens]
+    lacking = [arm for arm in chosen if arm not in tokens and arm not in reused]
     if lacking:
         parser.error(f"--yes needs a non-empty --token-file for every arm, so each chats as its own account: "
                      f"{', '.join(lacking)}")
     root = results_root()
-    used = [accounts[arm] for arm in chosen if (root / accounts[arm]).exists()]
+    used = [accounts[arm] for arm in chosen if arm not in reused and (root / accounts[arm]).exists()]
     if used:
         parser.error(f"{len(used)} account(s) already have results: every arm runs on a new synthetic account")
     left = default_ledger().remaining(POOL)

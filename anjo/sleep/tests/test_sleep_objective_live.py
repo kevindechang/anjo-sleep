@@ -38,16 +38,27 @@ def _ledger(tmp_path: Path, cap: float) -> Ledger:
     return Ledger(tmp_path / "ledger.jsonl", caps={**dict.fromkeys(POOLS, 0.0), "modal_usd": cap})
 
 
+def _train_step(receipt: dict[str, Any]) -> dict[str, Any]:
+    """A night log's train step as a real night writes it (seed2's 2026-10-24 night, the numbers made up):
+    the adapter and its parents at the top, everything the training job measured under ``receipt``."""
+    return {"step": "train", "status": "ok", "uses": "new", "system": None, "noop": False, "adapter": "p-0a1b2c3d4e5f-n1",
+            "parent": None, "from_last_promoted": None,
+            "receipt": {"accumulation": 4, "adapter": "p-0a1b2c3d4e5f-n1", "compute_units": 0.0, "dropped_truncated": 0,
+                        "epochs": 1, "examples": 12, "gpu": "A100-80GB", "gpu_minutes": 6.5, "objective": "sft_dpo_seed",
+                        "pairs": 3, "planned_steps": 8, "steps": 8, "warm_start": False, **receipt}}
+
+
 def _night(root: Path, account: str, day: str, *, minutes: dict[str, float] | None, dream: Any = None,
-           match: dict[str, float] | None = None) -> None:
+           match: dict[str, float] | None = None, status: str = "promoted") -> None:
     folder = root / account / "nights" / day
     folder.mkdir(parents=True)
-    train = {"step": "train", "train_minutes": 5.0, **({"terms": {"minutes": minutes}} if minutes else {}),
-             **({"match": match} if match else {})}
+    train = _train_step({"train_minutes": 5.0, **({"terms": {"minutes": minutes}} if minutes else {}),
+                         **({"match": match} if match else {})})
     dataset = {"step": "dataset", **({"terms": {"dreams": dream, "dream_seconds": 30.0}} if dream is not None else {})}
     gates = {"step": "gates", "gates": {"general": {"value": 0.5}}}
     (folder / "log.jsonl").write_text("\n".join(json.dumps(r) for r in (train, dataset, gates)) + "\n")
-    (folder / "summary.json").write_text(json.dumps({"cost_usd": 1.25, "promoted": {"id": "x"}}))
+    (folder / "summary.json").write_text(json.dumps({"cost_usd": 1.25, "status": status,
+                                                     "checkpoint": {"id": "x"} if status == "promoted" else None}))
     scores = root / account / "scores"
     scores.mkdir(exist_ok=True)
     n = len(list(scores.glob("night-*.json"))) + 1
@@ -66,7 +77,7 @@ class _Runs:
     def __call__(self, cmd: list[str], *, env: dict[str, str], check: bool) -> Any:
         account = cmd[cmd.index("--user") + 1]
         match = json.loads(Path(cmd[cmd.index("--match-file") + 1]).read_text()) if "--match-file" in cmd else None
-        self.calls.append({"account": account, "env": env, "match": match,
+        self.calls.append({"account": account, "env": env, "match": match, "cmd": cmd,
                            "held": [r.bound.amount for r in self.ledger.open_holds()]})
         seeded = env[objective.OBJECTIVE_ENV] == "sft_dpo_seed"
         _night(self.root, account, DAY, minutes={"sft": 1.0, "seed": 2.0, "dpo": 0.5} if seeded else None,
@@ -235,7 +246,7 @@ def test_the_report_reads_numbers_per_arm_and_flags_an_unmatched_night(tmp_path:
     _night(tmp_path, "syn-a", "2026-10-24", minutes={"seed": 1.0, "dpo": 0.5})
     _night(tmp_path, "syn-a", "2026-10-25", minutes={"seed": 3.0})
     (tmp_path / "syn-a" / "nights" / "2026-10-24" / "log.jsonl").write_text("\n".join(json.dumps(r) for r in (
-        {"step": "train", "train_minutes": 6.0, "terms": {"minutes": {"seed": 1.0, "dpo": 0.5}, "dreams": dreams}},
+        _train_step({"train_minutes": 6.0, "terms": {"minutes": {"seed": 1.0, "dpo": 0.5}, "dreams": dreams}}),
         {"step": "gates", "gates": {"general": {"value": 0.5}}})) + "\n")
     _night(tmp_path, "syn-c", "2026-10-24", minutes=None, match={"budget_minutes": 1.0, "minutes": 1.2})
     lines: list[str] = []
@@ -251,3 +262,67 @@ def test_the_report_reads_numbers_per_arm_and_flags_an_unmatched_night(tmp_path:
         live.budgets(tmp_path, "syn-z")
     with pytest.raises(ValueError, match="minutes by term"):
         live.budgets(tmp_path, "syn-c")
+
+
+def test_a_real_train_step_is_read_from_its_receipt(tmp_path: Path) -> None:
+    minutes = {"dpo": 0.5, "dream": 0.0, "imitate": 0.25, "seed": 1.0, "sft": 2.0}
+    _night(tmp_path, "syn-a", "2026-10-24", minutes=minutes, status="rejected")
+    _night(tmp_path, "syn-c", "2026-10-24", minutes=None, match={"budget_minutes": 3.25, "minutes": 3.3})
+    log = tmp_path / "syn-a" / "nights" / "2026-10-24" / "log.jsonl"
+    step = json.loads(log.read_text().splitlines()[0])
+    assert set(step) == {"adapter", "from_last_promoted", "noop", "parent", "receipt", "status", "step", "system", "uses"}
+    assert "terms" not in step and "train_minutes" not in step  # nothing the job measured sits at the top
+    assert live.budgets(tmp_path, "syn-a") == {"2026-10-24": 3.25}  # every term but DPO
+    night = live.nights(tmp_path, "syn-a")[0]
+    assert night["promoted"] is False and night["status"] == "rejected"
+    table = live.report(tmp_path, {"seed": "syn-a", "today": "syn-c"}, lambda line: None)
+    assert table["seed"]["train_minutes_mean"] == 5.0 and table["seed"]["minutes_by_term"] == [minutes]
+    assert table["today"]["match"] == [{"night": "2026-10-24", "budget": 3.25, "used": 3.3, "mismatch": False}]
+    assert live.nights(tmp_path, "syn-c")[0]["promoted"] is True
+
+
+REUSE = ["--account", "seed=syn-a", "--account", "today=syn-n", "--account", "fold=syn-m"]
+
+
+def test_reuse_reads_a_finished_reference_arm_instead_of_running_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    first = _Runs(root, ledger, fail="syn-c")  # the first run stops after the seed arm, its holds released
+    assert live.main([*ACCOUNTS, *_tokens(tmp_path, ACCOUNTS), "--days", "1", "--night-usd", "2.0", "--yes"],
+                     run=first, out=lambda line: None, now=lambda: NOW) == 1
+    assert not ledger.open_holds()
+    runs, lines = _Runs(root, ledger), list[str]()
+    tokens = _tokens(tmp_path, REUSE)[2:]  # no token for the reused arm: it doesn't chat
+    argv = [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "seed", "--night-usd", "2.0"]
+    assert live.main(argv, run=runs, out=lines.append, now=lambda: NOW) == 0  # the plan
+    assert "  seed: reused, 1 nights found" in lines and not runs.calls
+    priced = {arm: live.arm_usd(arm, 1, 2.0) for arm in ("today", "fold")}
+    assert any(line.startswith(f"total worst case ${sum(priced.values()):.2f}") for line in lines)  # seed's not counted
+    assert live.main([*argv, "--yes"], run=runs, out=lines.append, now=lambda: NOW) == 0
+    assert [c["account"] for c in runs.calls] == ["syn-n", "syn-m"]  # seed read, not rerun; a new key for the hold
+    today, fold = runs.calls
+    assert today["match"] == {DAY: 3.0} and all(f"--start {DAY}" in " ".join(c["cmd"]) for c in runs.calls)
+    assert today["held"] == [pytest.approx(priced["fold"])] and fold["held"] == [] and not ledger.open_holds()
+
+
+def test_reuse_refuses_an_arm_it_cant_read_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, ledger = _setup(tmp_path, monkeypatch)
+    _night(root, "syn-a", DAY, minutes={"sft": 1.0, "dpo": 0.5})
+    _night(root, "syn-a", "2026-10-25", minutes={"sft": 1.0}, status="failed")
+    runs = _Runs(root, ledger)
+    tokens = _tokens(tmp_path, REUSE)[2:]
+    cases = {
+        "missing": [*REUSE, *tokens, "--days", "3", "--start", DAY, "--reuse", "seed"],  # 2 of 3 nights
+        "failed": [*REUSE, *tokens, "--days", "2", "--start", DAY, "--reuse", "seed"],  # its second night failed
+        "start": [*REUSE, *tokens, "--days", "1", "--start", "2026-10-23", "--reuse", "seed"],  # another start
+        "extra": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "seed"],  # a night past the life's
+        "control": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "today"],  # not a reference arm
+        "absent": [*REUSE, *tokens, "--days", "1", "--start", DAY, "--reuse", "protect"],  # not an arm of this run
+    }
+    for name, argv in cases.items():
+        with pytest.raises(SystemExit):
+            live.main([*argv, "--night-usd", "2.0", "--yes"], run=runs, out=lambda line: None, now=lambda: NOW)
+        assert not runs.calls, name
+    with pytest.raises(SystemExit):  # without --reuse an account with results is refused, as ever
+        live.main([*REUSE, *_tokens(tmp_path, REUSE), "--days", "1", "--start", DAY, "--night-usd", "2.0", "--yes"],
+                  run=runs, out=lambda line: None, now=lambda: NOW)
+    assert not runs.calls and not ledger.open_holds()
