@@ -128,15 +128,17 @@ def _score(raw: Any) -> float:
     return float(raw["score"] if isinstance(raw, dict) else raw)
 
 
-def _scores(person_dir: Path) -> list[tuple[date, Mapping[str, float]]]:
-    """Each scored night's personal-arm score per dimension, in night order."""
+def _scores(person_dir: Path) -> list[tuple[date, str | None, Mapping[str, float]]]:
+    """Each scored night's probe subset (None: the full set) and personal-arm score per dimension,
+    in night order."""
     folder = person_dir / "scores"
     found = []
     for path in sorted(folder.glob("night-*.json")) if folder.is_dir() else []:
         record = _json(path)
         try:
             arm = record["arms"].get(PERSONAL_ARM) or {}
-            found.append((date.fromisoformat(record["night"]), {name: _score(stat) for name, stat in arm.items()}))
+            found.append((date.fromisoformat(record["night"]), record.get("subset"),
+                          {name: _score(stat) for name, stat in arm.items()}))
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ChangesError(f"{path.name}: not a score record") from None
     return sorted(found, key=lambda item: item[0])
@@ -145,8 +147,8 @@ def _scores(person_dir: Path) -> list[tuple[date, Mapping[str, float]]]:
 def _score_lines(person_dir: Path, since: date) -> list[Change]:
     lines: list[Change] = []
     scored = _scores(person_dir)
-    for (_, before), (night, after) in zip(scored, scored[1:], strict=False):
-        if night < since:
+    for (_, was, before), (night, now, after) in zip(scored, scored[1:], strict=False):
+        if night < since or was != now:  # a score moves only against a night scored on the same probes
             continue
         for name in sorted(set(before) & set(after)):
             move = after[name] - before[name]

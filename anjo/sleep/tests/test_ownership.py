@@ -269,11 +269,22 @@ def test_undo_with_no_earlier_version_says_so(tmp_path: Path) -> None:
 # ── What changed ─────────────────────────────────────────────────────────────
 
 
-def _score(path: Path, number: int, night: date, personal: float) -> None:
+def _score(path: Path, number: int, night: date, personal: float, subset: str | None = None) -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / f"night-{number:02d}.json").write_text(json.dumps({
         "night": night.isoformat(), "arms": {"3": {"knowledge": {"score": personal}, "overall": {"score": personal}},
-                                             "1": {"knowledge": {"score": 0.5}}}}), encoding="utf-8")
+                                             "1": {"knowledge": {"score": 0.5}}},
+        **({} if subset is None else {"subset": subset})}), encoding="utf-8")
+
+
+def test_a_score_moves_only_against_a_night_scored_on_the_same_probes(tmp_path: Path) -> None:
+    person = tmp_path / "results" / "p1"
+    _score(person / "scores", 1, NIGHT, 0.50)  # the full run
+    _score(person / "scores", 2, SECOND, 0.70, subset="daily-v1")  # the daily subset: 14 of its probes
+    _score(person / "scores", 3, THIRD, 0.64, subset="daily-v1")
+    changes = what_changed("p1", NIGHT, results=lambda uid: tmp_path / "results" / uid)
+    assert [(c.night, c.kind) for c in changes] == [(THIRD, "score"), (THIRD, "score")]
+    assert "0.70 to 0.64" in changes[0].line and "0.50" not in "\n".join(c.line for c in changes)
 
 
 def test_what_changed_reads_the_night_logs_and_the_score_moves(tmp_path: Path) -> None:
