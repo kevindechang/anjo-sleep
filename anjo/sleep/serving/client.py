@@ -65,6 +65,11 @@ busy past the bound looks the same, and an engine that stalls while the API serv
 caught. A turn's poster (``app.runtime``) is its own ``HttpPoster``, under its 20 s deadline, and
 never retries.
 
+**A long call is read from Modal's result URL.** Past 150 s Modal answers 303 to a URL that serves the
+result to a GET, holding each hop up to 150 s (mornings of 2026-10-24/25 read that empty 303 as "not
+JSON"). ``HttpPoster`` follows it on the server's own host only, inside the post's one timeout; a call
+still running then is ``TransportFailed``, and any other redirect a ``ServingError`` naming its status.
+
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
 by the app, never here), or the SageMaker endpoint's signed envelope
@@ -106,6 +111,7 @@ ATTEMPTS: Final = len(BACKOFF_S) + 1
 # one goes again once, inside ATTEMPTS and the same bound. It is the same idempotent post, so at worst
 # vLLM computes the answer twice; no liveness question is asked, since the proxy answered.
 PROXY_STATUSES: Final = frozenset({502, 503, 504})
+RESULT_HOPS: Final = 4  # Modal's 303s one post follows: 300 s holds two 150 s waits; never forever
 
 # Waking a scaled-to-zero server (``wake``): poll until it answers, under one hard total timeout.
 WAKE_TOTAL_TIMEOUT_S: Final = 600.0  # a cold start of the 30B model, with room to spare
@@ -224,14 +230,15 @@ class Poster(Protocol):
     def close(self) -> None: ...
 
 
-def json_object(path: str, raw: bytes | str) -> dict[str, Any]:
-    """A reply's JSON object, or ``ServingError`` naming the path."""
+def json_object(path: str, raw: bytes | str, status: int | None = None) -> dict[str, Any]:
+    """A reply's JSON object, or ``ServingError`` naming the path, and the reply's ``status`` when given."""
+    named = "" if status is None else f" (HTTP {status})"
     try:
         data = json.loads(raw)
     except ValueError:
-        raise ServingError(f"{path} sent a reply that is not JSON") from None
+        raise ServingError(f"{path} sent a reply that is not JSON{named}") from None
     if not isinstance(data, dict):
-        raise ServingError(f"{path} sent a reply that is not an object")
+        raise ServingError(f"{path} sent a reply that is not an object{named}")
     return data
 
 
@@ -260,15 +267,16 @@ def check_url(base_url: str) -> str:
 class HttpPoster:
     """vLLM's server with the bearer token: Modal's https URL, or a tunnel's loopback end. A
     loopback request never takes a proxy from the environment (``trust_env``), so the token
-    never leaves this machine on its way to the tunnel."""
+    never leaves this machine on its way to the tunnel. ``clock`` times a post's hops (``_send``)."""
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
-        timeout_s: float = REQUEST_TIMEOUT_S,
+        timeout_s: float = REQUEST_TIMEOUT_S, clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.base_url = check_url(base_url)
         if not token:
             raise ServingError("the serving token is set")
+        self._timeout_s, self._clock = timeout_s, clock
         self._http = httpx.Client(
             base_url=self.base_url, headers={"Authorization": f"Bearer {token}"},
             transport=transport, timeout=timeout_s, trust_env=not is_loopback(httpx.URL(self.base_url).host),
@@ -278,11 +286,37 @@ class HttpPoster:
         self._http.close()
 
     def _send(self, path: str, body: Mapping[str, Any], timeout_s: float | None) -> httpx.Response:
-        timeout = httpx.USE_CLIENT_DEFAULT if timeout_s is None else timeout_s
+        """One POST, and Modal's 303 to its result followed with a GET on what is left of ``timeout_s``
+        (None: the poster's), so every hop ends within it. Any other redirect is ``ServingError``."""
+        budget = self._timeout_s if timeout_s is None else timeout_s
+        deadline = self._clock() + budget
         try:
-            return self._http.post(path, json=dict(body), timeout=timeout)
+            response = self._http.post(path, json=dict(body), timeout=budget)
+            for _ in range(RESULT_HOPS):
+                target = self._result_url(response)
+                if target is None:
+                    break
+                left = deadline - self._clock()
+                if left <= 0:
+                    raise TransportFailed(f"{path} was still running after {budget:.0f} s (HTTP 303)")
+                response = self._http.get(target, timeout=left)
         except httpx.HTTPError as error:
             raise TransportFailed(f"{path} failed in transport ({type(error).__name__})") from None
+        if 300 <= response.status_code < 400:
+            raise ServingError(f"{path} returned HTTP {response.status_code}, a redirect it doesn't follow")
+        return response
+
+    def _result_url(self, response: httpx.Response) -> httpx.URL | None:
+        """Modal's 303 target for a post's result if on this server (scheme, host, port), else None."""
+        location = response.headers.get("location")
+        if response.status_code != httpx.codes.SEE_OTHER or not location:
+            return None
+        try:
+            target = response.url.join(location)
+        except httpx.InvalidURL:
+            return None
+        base = httpx.URL(self.base_url)
+        return target if (target.scheme, target.host, target.port) == (base.scheme, base.host, base.port) else None
 
     def post(self, path: str, body: Mapping[str, Any], *, timeout_s: float | None = None) -> dict[str, Any]:
         """``timeout_s`` is this request's alone; None keeps the poster's."""
@@ -293,7 +327,7 @@ class HttpPoster:
             raise ProxyFailed(f"{path} returned HTTP {response.status_code}")
         if response.is_error:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
-        return json_object(path, response.content)
+        return json_object(path, response.content, response.status_code)
 
     def answers(self, timeout_s: float) -> bool:
         """Whether vLLM answers ``WAKE_PATH`` within ``timeout_s``. Only its API server handles it, so a
@@ -538,7 +572,7 @@ class VllmClient:
         stage: Stage | None = None, load_wait_s: float = LOAD_WAIT_S, clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
+        poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s, clock=clock)
         self._load_wait_s, self._clock, self._sleep = load_wait_s, clock, sleep
         self._setup(poster, max_tokens, adapters_dir, timeout_s, stage)
 
