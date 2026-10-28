@@ -26,9 +26,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol
 
-from anjo.sleep.serving import client
+from anjo.sleep.serving import client, config
 from anjo.sleep.serving.client import ServingError, VllmClient, WakeResult
-from anjo.sleep.serving.config import ADAPTERS_DIR, APP_NAME, STAGED_ADAPTERS_DIR, ServeConfigError
+from anjo.sleep.serving.config import ADAPTERS_DIR, STAGED_ADAPTERS_DIR, ServeConfigError
 
 if TYPE_CHECKING:
     from anjo.sleep.serving.sagemaker.serving import SageMakerServing
@@ -94,7 +94,8 @@ def stage_on_modal(name: str) -> str | None:
     it. Any failure, a wait past ``STAGE_TIMEOUT_S`` included, is ``ServingError`` naming its type only."""
     try:
         modal: Any = importlib.import_module("modal")
-        staged = modal.Cls.from_name(APP_NAME, "Serve")().stage.spawn(name).get(timeout=STAGE_TIMEOUT_S)
+        app = config.serve_app_name(config.serve_precision())  # the app this host's ANJO_SLEEP_SERVE_GPU names
+        staged = modal.Cls.from_name(app, "Serve")().stage.spawn(name).get(timeout=STAGE_TIMEOUT_S)
     except Exception as error:
         raise ServingError(f"staging an adapter on Modal failed ({type(error).__name__})") from None
     return STAGED_ADAPTERS_DIR if staged else None

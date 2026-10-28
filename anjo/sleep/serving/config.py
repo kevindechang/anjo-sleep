@@ -8,6 +8,21 @@ the server Modal runs can't drift apart.
 it, on one L40S) or ``BF16_A100`` (bf16 on one A100-80GB, the fallback). The base model and every
 personal adapter share one server, so every arm serves at the same precision by construction.
 
+**The GPU is a deploy setting** (``ANJO_SLEEP_SERVE_GPU``; unset is ``SERVING``, today's L40S). Another
+GPU deploys as a second app beside today's (``serve_app_name``: ``anjo-sleep-serve-h100``), on the same
+volumes and secret, so it can be benched without replacing the one that serves. Each serves Glimmer
+at FP8 (``SERVE_GPUS``): natively on the H100 (Hopper) as on the L40S (Ada), weights and activations
+in FP8; the A100 (Ampere) has no FP8 tensor cores, so vLLM keeps the weights in FP8 and computes in
+bf16 (its FP8 Marlin kernel, weight-only), and its numerics differ. ``Precision.gpu`` names the GPU,
+so the gates' kept base answers (``app.night``'s fingerprint) never cross GPUs. The host that calls a
+second app sets the same ``ANJO_SLEEP_SERVE_GPU`` (staging names its app; the fingerprint its GPU).
+
+**Requests at once** (``ANJO_SLEEP_SERVE_MAX_INPUTS``, 16 unset, at most 64): what one container
+takes (Modal's ``max_inputs``) and what a client keeps in flight (``CONCURRENT_REQUESTS``), so set it
+the same on the deploy and on the host. KV room isn't what holds it to 16: a gate request is about
+1,200 tokens (a short prompt and a reply of at most 1,024), about 104 MB of KV at Glimmer's 86.5 KB a
+token, so the L40S's 5.78 GiB holds about 59 of them at once (only 32k-token requests are held to two).
+
 **Reasoning.** Glimmer answers in channels: ``to=self`` for its reasoning, closed by ``<|eom|>``,
 then ``to=user`` for the reply, closed by ``<|eot|>``. In Sleep it always answers directly: every
 call sends the chat's token ids with the reply's header (``USER_CHANNEL``) already written, to
@@ -41,6 +56,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 APP_NAME: Final = "anjo-sleep-serve"
@@ -105,7 +121,9 @@ SCALEDOWN_S: Final = 600
 SERVE_TIMEOUT_S: Final = 3 * 3600
 STARTUP_TIMEOUT_S: Final = 20 * 60
 DOWNLOAD_TIMEOUT_S: Final = 3600
-CONCURRENT_REQUESTS: Final = 16
+MAX_INPUTS_ENV: Final = "ANJO_SLEEP_SERVE_MAX_INPUTS"
+DEFAULT_MAX_INPUTS: Final = 16
+MAX_MAX_INPUTS: Final = 64
 # Every arm (the base and each person's adapter) shares one GPU by design, so a wake never starts a
 # second container: on 2026-10-28 one wake started two L40S containers before this was set.
 MAX_CONTAINERS: Final = 1
@@ -146,8 +164,44 @@ class Precision:
 
 
 FP8_L40S: Final = Precision(name="fp8", gpu="L40S", quantization="fp8", dtype="bfloat16")
+FP8_H100: Final = Precision(name="fp8", gpu="H100", quantization="fp8", dtype="bfloat16")
+FP8_A100: Final = Precision(name="fp8", gpu="A100-80GB", quantization="fp8", dtype="bfloat16")  # weight-only
 BF16_A100: Final = Precision(name="bf16", gpu="A100-80GB", quantization=None, dtype="bfloat16")
 SERVING: Final = FP8_L40S  # the fallback is BF16_A100: change this line, then redeploy
+SERVE_GPU_ENV: Final = "ANJO_SLEEP_SERVE_GPU"
+SERVE_GPUS: Final = MappingProxyType({p.gpu: p for p in (FP8_L40S, FP8_H100, FP8_A100)})
+NATIVE_FP8: Final = frozenset({"L40S", "H100"})  # FP8 tensor cores: Ada and Hopper; Ampere has none
+
+
+def serve_precision(environ: Mapping[str, str] | None = None) -> Precision:
+    """The serving precision: ``SERVING`` unless ``ANJO_SLEEP_SERVE_GPU`` names another GPU."""
+    env = os.environ if environ is None else environ
+    gpu = env.get(SERVE_GPU_ENV, "").strip()
+    if not gpu:
+        return SERVING
+    if gpu not in SERVE_GPUS:
+        raise ServeConfigError(f"{SERVE_GPU_ENV} is one of {', '.join(SERVE_GPUS)}")
+    return SERVING if SERVE_GPUS[gpu].gpu == SERVING.gpu else SERVE_GPUS[gpu]
+
+
+def serve_app_name(precision: Precision) -> str:
+    """Today's app for ``SERVING``; a second app, named for its GPU, for any other."""
+    return APP_NAME if precision is SERVING else f"{APP_NAME}-{precision.gpu.lower()}"
+
+
+def max_inputs(environ: Mapping[str, str] | None = None) -> int:
+    """Requests one container takes at once, and one client keeps in flight: 16 unless set."""
+    env = os.environ if environ is None else environ
+    raw = env.get(MAX_INPUTS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MAX_INPUTS
+    found = int(raw) if raw.isdigit() else 0
+    if not 1 <= found <= MAX_MAX_INPUTS:
+        raise ServeConfigError(f"{MAX_INPUTS_ENV} is a whole number from 1 to {MAX_MAX_INPUTS}")
+    return found
+
+
+CONCURRENT_REQUESTS: Final = max_inputs()  # read once, at import, on the host and in the image alike
 
 
 @dataclass(frozen=True)
@@ -165,6 +219,7 @@ class ServeConfig:
     vllm_version: str
     hf_secret: str | None = None
     prompt_embeds: bool = False
+    max_inputs: int = DEFAULT_MAX_INPUTS
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:
@@ -182,9 +237,10 @@ class ServeConfig:
         if hf_secret is not None and not _SECRET.fullmatch(hf_secret):
             raise ServeConfigError(f"{HF_SECRET_ENV} names a Modal secret, never its value")
         return cls(
-            precision=SERVING, revision=revision, tool_parser=parser,
+            precision=serve_precision(env), revision=revision, tool_parser=parser,
             gpu_snapshot=env.get(SNAPSHOT_ENV, "").strip() == "1", vllm_version=version,
             hf_secret=hf_secret, prompt_embeds=env.get(PROMPT_EMBEDS_ENV, "").strip() == "1",
+            max_inputs=max_inputs(env),
         )
 
     def pinned_revision(self) -> str:

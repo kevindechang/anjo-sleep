@@ -414,3 +414,53 @@ def test_each_function_gets_only_its_own_secret(
     (download,) = recorder.by("function")
     assert serve["secrets"] == [config.SECRET_NAME]
     assert download["secrets"] == ([] if hf_secret is None else [hf_secret])
+
+
+def test_serve_gpu_setting_default_is_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``ANJO_SLEEP_SERVE_GPU`` unset is today's server: FP8 on one L40S, app ``anjo-sleep-serve``, 16
+    requests at once. Another GPU is a second app beside it (so a bench deploy never replaces it), at
+    FP8: native on the H100 (Hopper) as on the L40S (Ada); weight-only on the A100 (Ampere has no FP8
+    tensor cores), so its numerics differ. ``ANJO_SLEEP_SERVE_MAX_INPUTS`` raises what one container takes."""
+    today = ServeConfig.from_env({})
+    assert today.precision is config.SERVING is config.FP8_L40S and today.max_inputs == 16
+    assert config.serve_precision({}) is config.SERVING
+    assert config.serve_app_name(today.precision) == config.APP_NAME == "anjo-sleep-serve"
+    assert config.serve_app_name(config.serve_precision({config.SERVE_GPU_ENV: "L40S"})) == "anjo-sleep-serve"
+    assert config.max_inputs({}) == config.DEFAULT_MAX_INPUTS == config.CONCURRENT_REQUESTS == 16
+
+    h100 = ServeConfig.from_env({config.SERVE_GPU_ENV: " H100 ", config.MAX_INPUTS_ENV: "32"})
+    assert (h100.precision.gpu, h100.precision.quantization, h100.max_inputs) == ("H100", "fp8", 32)
+    assert config.serve_app_name(h100.precision) == "anjo-sleep-serve-h100"
+    a100 = config.serve_precision({config.SERVE_GPU_ENV: "A100-80GB"})
+    assert (a100.gpu, a100.quantization) == ("A100-80GB", "fp8")
+    assert config.serve_app_name(a100) == "anjo-sleep-serve-a100-80gb"
+    assert config.NATIVE_FP8 == frozenset({"L40S", "H100"})  # the A100 runs FP8 weights through Marlin, in bf16
+    for wrong in ("h100", "B200", "A100"):
+        with pytest.raises(ServeConfigError, match=config.SERVE_GPU_ENV):
+            ServeConfig.from_env({config.SERVE_GPU_ENV: wrong})
+    for wrong in ("0", "65", "x", "16.0"):
+        with pytest.raises(ServeConfigError, match=config.MAX_INPUTS_ENV):
+            config.max_inputs({config.MAX_INPUTS_ENV: wrong})
+
+    # The Modal app: today's name, GPU and concurrency, and an image env that names neither setting
+    # (an unchanged image is not rebuilt).
+    monkeypatch.setenv(config.REVISION_ENV, REVISION)
+    for name in (config.SERVE_GPU_ENV, config.MAX_INPUTS_ENV):
+        monkeypatch.delenv(name, raising=False)
+    recorder = _Recorder()
+    _import_app(monkeypatch, recorder)
+    assert recorder.by("app") == [{"name": "anjo-sleep-serve"}]
+    assert recorder.by("cls")[0]["gpu"] == "L40S"
+    assert recorder.by("concurrent")[0]["max_inputs"] == 16
+    (env,) = recorder.by("env")
+    assert config.SERVE_GPU_ENV not in env["values"] and config.MAX_INPUTS_ENV not in env["values"]
+
+    # A second app on an H100 taking 32 at once: both settings baked into its image, read the same there.
+    monkeypatch.setenv(config.SERVE_GPU_ENV, "H100")
+    monkeypatch.setenv(config.MAX_INPUTS_ENV, "32")
+    recorder = _Recorder()
+    _import_app(monkeypatch, recorder)
+    assert recorder.by("app") == [{"name": "anjo-sleep-serve-h100"}]
+    assert recorder.by("cls")[0]["gpu"] == "H100" and recorder.by("concurrent")[0]["max_inputs"] == 32
+    (env,) = recorder.by("env")
+    assert (env["values"][config.SERVE_GPU_ENV], env["values"][config.MAX_INPUTS_ENV]) == ("H100", "32")
