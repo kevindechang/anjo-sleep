@@ -345,7 +345,7 @@ def test_toggle_pairs_pre_generated_and_labeled() -> None:
     assert client.post(f"{API}/toggles/{SCENE.id}").status_code == 401
 
 
-def test_a_scenes_toggles_and_stop_answers_wait_for_this_visits_vote() -> None:
+def test_a_scenes_toggles_and_stop_answers_wait_for_a_vote() -> None:
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
     _write_answers(ScriptedModel(), FakeServing())
     _write_starters()
@@ -361,7 +361,37 @@ def test_a_scenes_toggles_and_stop_answers_wait_for_this_visits_vote() -> None:
     assert client.post(toggles, headers=headers).json()["notes_off"] is not None
     assert all(client.post(path, headers=headers).status_code == 200 for path in stops)
     assert client.post(f"{API}/toggles/{words.SCENES[0].id}", headers=headers).status_code == 403  # per scene
-    assert client.post(toggles, headers=_visit(client)).status_code == 403  # per visit
+
+
+def test_after_a_reload_the_address_that_voted_keeps_the_scene_open() -> None:
+    from fastapi.testclient import TestClient
+
+    from anjo.sleep.tests.app.test_demo_page import _behind_caddy
+
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _write_answers(ScriptedModel(), FakeServing())
+    _write_starters()
+    client = TestClient(_behind_caddy(_client(_service()).app))
+    a, b = {"X-Forwarded-For": "8.8.8.8"}, {"X-Forwarded-For": "1.1.1.1"}
+
+    def visit(address: dict[str, str]) -> dict[str, str]:
+        return {**address, HEADER: client.post(f"{API}/visits", json={"adult": True}, headers=address).json()["token"]}
+
+    first = visit(a)
+    pair = client.post(f"{API}/starters/{SCENE.id}", headers=first).json()
+    assert client.post(f"{API}/vote", json={"pair_id": pair["pair_id"], "choice": "right"}, headers=first).status_code == 200
+    reloaded = visit(a)  # the same address, a new visit: its one vote on the scene today is in
+    assert client.get(f"{API}/nights", headers=a).json()["voted"] == [SCENE.id]
+    assert client.post(f"{API}/toggles/{SCENE.id}", headers=reloaded).json()["notes_off"] is not None
+    assert client.post(f"{API}/nights/n5/starters/{SCENE.id}", headers=reloaded).status_code == 200
+    again = client.post(f"{API}/starters/{SCENE.id}", headers=reloaded).json()
+    refused = client.post(f"{API}/vote", json={"pair_id": again["pair_id"], "choice": "left"}, headers=reloaded)
+    assert refused.status_code == 409 and refused.json()["detail"] == words.COPY["scene_voted"]  # the page's cue
+    other = visit(b)  # an address that hasn't voted on it
+    assert client.get(f"{API}/nights", headers=b).json()["voted"] == []
+    for path in (f"{API}/toggles/{SCENE.id}", f"{API}/nights/n5/starters/{SCENE.id}"):
+        closed = client.post(path, headers=other)
+        assert closed.status_code == 403 and closed.json()["detail"] == words.COPY["vote_first"], path
 
 
 def test_a_pair_that_takes_no_vote_opens_its_scene_at_once() -> None:

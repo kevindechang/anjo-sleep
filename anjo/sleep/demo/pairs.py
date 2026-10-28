@@ -14,10 +14,11 @@ pair ``open`` would refuse. One vote per starter scene is the address's, a day
 (``Limiter.claim_scene_vote``), since a reload starts a new visit.
 
 **Settled scenes.** ``settled`` says whether a visit has voted on a starter scene's pair, or was
-shown one that takes no vote. Only then may it see that scene's answers outside the blind pair (the
-toggles, the night slider): her weights notes off share arm 4's weights, so seeing them first would
-let a visitor match the style and vote informed. A visit's settled scenes are remembered past its
-pairs' expiry, for the last ``MAX_TRACKED`` visits.
+shown one that takes no vote. Then, or once its address has voted on the scene today
+(``Limiter.voted_scenes``), it may see that scene's answers outside the blind pair (the toggles, the
+night slider): her weights notes off share arm 4's weights, so seeing them first would let a visitor
+match the style and vote informed. A visit's settled scenes are remembered past its pairs' expiry,
+for the last ``MAX_TRACKED`` visits.
 
 Pairs live in memory for ``PAIR_TTL_S``. Past ``MAX_PAIRS`` a new pair is refused (``busy``) rather
 than the oldest dropped, so a flood never expires someone's pair before they vote. A restart forgets

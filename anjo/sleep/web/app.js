@@ -143,8 +143,13 @@
       node.querySelector(".verdict").focus();
       settled(node);
     } catch (error) {
-      buttons.forEach((button) => { button.disabled = false; });
       say(error.message);
+      if (error.message === copy.scene_voted) { // this address voted on the scene today: nothing here is blind
+        group.hidden = true;
+        settled(node);
+        return;
+      }
+      buttons.forEach((button) => { button.disabled = false; });
     }
   }
 

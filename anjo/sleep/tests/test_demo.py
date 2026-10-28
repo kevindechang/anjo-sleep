@@ -156,6 +156,7 @@ def test_limiter_fails_closed() -> None:
     assert _refused(restarted.visit, "b", NOW).status == 503
     assert _refused(restarted.admit, "b", "v", 1, NOW).status == 503
     assert _refused(lambda: restarted.buy_warm_time(NOW, 600, covered_until=None, pay=_pay())).status == 503
+    assert _refused(restarted.voted_scenes, "b", NOW).status == 503  # no scene opens on unread counters
     store.fail_load = False
     store.fail_save = False
     restarted.visit("b", NOW)

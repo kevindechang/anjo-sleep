@@ -31,10 +31,11 @@ The full step (Nov 2) adds, with no vote on any of them:
 - ``toggles``: on a starter scene, her weights notes off beside the base model (arm 3 against arm
   1, from the night answers at her latest stop), and the swap measurement's pair if it ran
   (``toggles``). Both labeled pre-generated, neither blind.
-- ``stop_starter`` and ``toggles`` answer a scene only once this visit has voted on its blind pair,
-  or was shown one that takes no vote (``PairRegistry.settled``; else 403 ``vote_first``): arm 3
-  shares arm 4's weights, so its answers seen first would let a visitor match the style and vote
-  informed.
+- ``stop_starter`` and ``toggles`` answer a scene only once this visit was shown its blind pair with
+  no vote to take (``PairRegistry.settled``), or this address has voted on the scene today, in this
+  visit or an earlier one (``Limiter.voted_scenes``, the one-vote-a-day record; unreadable counters
+  refuse). Else 403 ``vote_first``: arm 3 shares arm 4's weights, so its answers seen first would let
+  a visitor match the style and vote informed. ``nights`` lists the scenes this address has voted on.
 - ``mind``: her mind panel, built by the app (``panel``, ``record``) with the held-out text filtered.
 
 A stop whose checkpoint was trained under another rendering than the one serving answers nothing,
@@ -213,6 +214,7 @@ class NightsView:
     generated_at: str | None
     toggles: tuple[SceneToggles, ...]
     live: str
+    voted: tuple[str, ...] = ()  # the starter scenes this address has voted on today
 
 
 @dataclass(frozen=True)
@@ -348,12 +350,13 @@ class DemoService:
         toggles = tuple(SceneToggles(scene.id, _notes_off(stops, answers, scene) is not None,
                                      swaps is not None and swaps.pair(scene) is not None) for scene in words.SCENES)
         live = self._limiter.live_state(now, self._answer_s, covered_until=self._upkeep.covered_until())
-        return NightsView(views, None if answers is None else answers.generated_at, toggles, live)
+        voted = self._limiter.voted_scenes(client, now)
+        return NightsView(views, None if answers is None else answers.generated_at, toggles, live, voted)
 
     def stop_starter(self, client: str, token: str, key: str, scene_id: str, now: datetime) -> StopReply:
         visit = self._visit(token, now)
         self._limiter.request(client, now)
-        scene = self._settled_scene(visit, scene_id)
+        scene = self._settled_scene(visit, client, scene_id, now)
         stop = self._stop(key)
         answers = self._read(self._night_answers)
         found = None if answers is None else answers.find(_checkpoint_id(stop), scene)
@@ -386,7 +389,7 @@ class DemoService:
     def toggles(self, client: str, token: str, scene_id: str, now: datetime) -> ToggleView:
         visit = self._visit(token, now)
         self._limiter.request(client, now)
-        scene = self._settled_scene(visit, scene_id)
+        scene = self._settled_scene(visit, client, scene_id, now)
         answers, swaps = self._read(self._night_answers), self._read(self._swaps)
         notes_off = _notes_off(self._stops(), answers, scene)
         swap = None if swaps is None else swaps.pair(scene)
@@ -470,10 +473,11 @@ class DemoService:
             raise Refused(404, "unknown_scene")
         return scene
 
-    def _settled_scene(self, visit: str, scene_id: str) -> words.Scene:
-        """``scene_id``'s scene, once ``visit`` may see its answers outside the blind pair."""
+    def _settled_scene(self, visit: str, client: str, scene_id: str, now: datetime) -> words.Scene:
+        """``scene_id``'s scene, once ``visit`` may see its answers outside the blind pair: its pair
+        took no vote, or ``client`` has voted on the scene today. Unreadable counters refuse (503)."""
         scene = self._scene(scene_id)
-        if not self._pairs.settled(visit, scene.id):
+        if not (self._pairs.settled(visit, scene.id) or scene.id in self._limiter.voted_scenes(client, now)):
             raise Refused(403, "vote_first")
         return scene
 

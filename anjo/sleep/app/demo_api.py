@@ -155,6 +155,7 @@ def _nights_out(view: NightsView) -> dict[str, Any]:
         "stops": [{**_stop_out(v.stop), "ready": list(v.ready)} for v in view.stops or ()],
         "generated_at": view.generated_at, "live": view.live,
         "toggles": [{"scene": t.scene, "notes_off": t.notes_off, "swap": t.swap} for t in view.toggles],
+        "voted": list(view.voted),
     }
 
 

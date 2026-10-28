@@ -9,7 +9,7 @@
   const { call, element, paragraphs, copy, byId } = demo;
   const answers = new Map(); // "<stop>/<scene>" -> a stop's pre-generated answer
   const toggleCache = new Map(); // scene -> the toggles' pairs
-  const voted = new Set(); // scenes this visit has voted on (or that take no vote): the server checks too
+  const voted = new Set(); // scenes voted on from this address today (or that take no vote): the server checks too
   let nights = null;
   let scenes = [];
 
@@ -219,6 +219,7 @@
       byId("slider-state").textContent = error.message;
       return;
     }
+    (nights.voted || []).forEach((scene) => voted.add(scene)); // voted from this address today, any visit
     if (nights.state !== "ok") {
       byId("slider-state").textContent = copy.slider_unavailable;
       return;
