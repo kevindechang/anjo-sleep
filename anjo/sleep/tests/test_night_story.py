@@ -31,10 +31,13 @@ FULL = st.Story(
     sleep=st.Sleep(kind="deep", pressure=0.62, threshold=0.5, reason="pressure"),
     brief=st.Brief(folded=3),
     dream=st.Dream(questions=2, ignitions=(st.Ignition("risk", 0.81, ("e-0a1b", "e-2c3d")),),
-                   threads=(st.Thread(3, 0.7, ("e-0a1b",)),), boundaries=(st.Boundary("s-9f", 3, 4),)),
-    rehearse=st.Rehearse(scenes=16, seeded=(st.Seed(3, 10),), flagged=6, corrected=2),
-    learn=st.Learn(rows=8, surprise=st.Surprise(applied=True, rows=8, mean=1.1), channel_loss=0.42, stamp="proj-3",
-                   seeding_kl=0.031, fold=8, core_adaptation=0.2),
+                   threads=(st.Thread(3, 0.7, ("e-0a1b",)),), boundaries=(st.Boundary("s-9f", 3, 4),),
+                   dreams=st.Dreams(candidates=12, kept=9, keep_rate=0.75)),
+    rehearse=st.Rehearse(scenes=16, seeded=st.Seeded(threads=(3,), picked=4), flagged=6, corrected=2),
+    learn=st.Learn(rows=8, surprise=st.Surprise(applied=True, rows=8), channel_loss=0.42, stamp="9f86d081884c",
+                   seeding=st.Seeding(rows=10, kl_before=0.05, kl_after=0.031, minutes=1.2),
+                   imitation=st.Imitation(rows=3, reward=0.6, minutes=0.8), fold=8,
+                   protect=st.Protect(basis="anchors", rank=16, minutes=0.4), core_adaptation=0.2),
     check=st.Check(gates=(st.Gate("general", True, False, 0.0, 2.0), st.Gate("safety", False, True, 0.0, 0.0)),
                    promoted=True),
     wake=st.Wake(morning=st.Morning(replies=28, no_verdict=1), self_model=st.SelfModel(predicted=0.3, actual=0.25)),
@@ -59,6 +62,17 @@ PROMOTED = _log({"step": "close_day", "status": "ok"}, {"step": "extract", "stat
                 GATES, {"step": "promote", "status": "ok", "promoted": "a-n1"}, {"step": "note", "status": "ok"},
                 {"step": "finish", "status": "ok"})
 GPU = ("practice", "dataset", "train", "gates", "promote")
+
+# What the core's night and the sleep objective log (mind-frontier, sleep-objective): ids, counts, numbers
+SEEDED = {**PRACTICE, "seeded": {"picked": 4, "threads": [3]}}  # practice seeded on 4 of the dream's picks
+DATASET: dict[str, Any] = {"step": "dataset", "status": "ok", "examples": 8, "mind_weighted": 8, "terms": {
+    "seeds": 10, "dream_candidates": 12, "dreams": 9, "dreams_dropped": {"probe": 3}, "dreams_keep_rate": 0.75,
+    "dreams_by_seed": {"boundary": 5, "picked": 4, "random": 0}, "dream_seconds": 30.0, "anchors": 32}}
+TERMS: dict[str, Any] = {"rows": {"sft": 8, "dpo": 6, "seed": 10, "imitate": 3, "dream": 4},
+         "minutes": {"sft": 0.5, "dpo": 0.3, "seed": 1.2, "imitate": 0.8, "dream": 0.4, "anchor": 0.1},
+         "seed_kl_before": 0.05, "seed_kl_after": 0.031, "imitation_reward": 0.6, "fold_rank": 8, "folded_to": 8,
+         "protect": {"basis": "anchors", "rank": 16, "rank_min": 16, "modules": 4, "sequences": 32,
+                     "sequences_asked": 32, "energy": 0.91, "minutes": 0.4, "slot_left_on_basis": 0.0}}
 
 
 # MIND's core's dream step, as mind-frontier logs it (``mind.core.night``'s receipt): ids and numbers only
@@ -91,6 +105,12 @@ def _napped(mind: bool) -> list[dict[str, Any]]:
                 *({"step": name, "status": "skipped", "why": NAP_WHY} for name in GPU), {"step": "finish", "status": "ok"})
 
 
+TRAINED = {"step": "train", "status": "ok", "adapter": "a-n1", "surprise_weights": "applied",
+           "receipt": {**CHANNEL_RECEIPT, "terms": TERMS}}
+EVERYTHING = [*_with(_swapped(_swapped(_swapped(PROMOTED, SEEDED), DATASET), TRAINED), "notice", CORE_DREAM),
+              *_log({"step": "morning", "status": "ok", "replies": 28, "no_verdict": 1})]
+
+
 def _walk(value: Any, where: str = "story") -> None:
     """No field anywhere is missing, None, or an empty marker."""
     assert value is not None, where
@@ -111,11 +131,13 @@ def _walk(value: Any, where: str = "story") -> None:
     FULL, st.tell(NIGHT, "napped", _napped(mind=True)), st.tell(NIGHT, "promoted", PROMOTED),
     replace(FULL, rehearse=st.Reused(NIGHT, 16)), st.tell(NIGHT, "napped", _with(_napped(mind=True), "notice", CORE_DREAM)),
     replace(FULL, brief=st.Kept("2026-10-28", "BriefError: x")), replace(FULL, brief=st.Kept(st.EMPTY, "BriefError: x")),
+    st.tell(NIGHT, "promoted", EVERYTHING),
 ], ids=["every record filled", "a nap", "a promoted night", "practice reused", "a nap the core dreamt in",
-        "yesterday's brief kept", "the empty brief kept"])
+        "yesterday's brief kept", "the empty brief kept", "everything the night logs"])
 def test_the_story_round_trips_through_its_json(told: st.Story) -> None:
     record = told.record()
-    assert record["version"] == st.STORY_VERSION == 3  # 2: a reused practice is its own record; 3: the brief
+    # 2: a reused practice is its own record; 3: the brief; 4: the core's and the sleep objective's records
+    assert record["version"] == st.STORY_VERSION == 4
     assert st.story_from(json.loads(json.dumps(record))) == told
 
 
@@ -134,6 +156,12 @@ def test_the_story_round_trips_through_its_json(told: st.Story) -> None:
     (lambda r: {**r, "version": 2}, "version"),  # before the brief was its own record
     (lambda r: {**r, "brief": {"kept_from": "2026-10-28"}}, "brief"),  # neither a fold nor a kept brief
     (lambda r: {**r, "brief": {"folded": "3"}}, "brief.folded"),
+    (lambda r: {**r, "version": 3}, "version"),  # before the core's and the sleep objective's records
+    (lambda r: {**r, "dream": {**r["dream"], "dreams": {"candidates": 12, "kept": 9}}}, "dream.dreams"),
+    (lambda r: {**r, "rehearse": {**r["rehearse"], "seeded": [{"slot": 3, "scenes": 10}]}}, "rehearse.seeded"),
+    (lambda r: {**r, "learn": {**r["learn"], "seeding_kl": 0.031}}, "seeding_kl"),  # version 3's field
+    (lambda r: {**r, "learn": {**r["learn"], "protect": {"basis": "anchors", "rank": 16}}}, "learn.protect"),
+    (lambda r: {**r, "learn": {**r["learn"], "surprise": {"applied": True, "rows": 8, "mean": 1.1}}}, "learn.surprise"),
 ])
 def test_a_story_that_breaks_the_schema_is_refused_by_where(change: Any, says: str) -> None:
     with pytest.raises(st.StoryError, match=says.replace(".", r"\.")):
@@ -165,11 +193,12 @@ def test_a_promoted_night_tells_what_it_already_knows_and_leaves_the_rest_not_ru
     told = TOLD["promoted"]
     assert told.sleep == st.Sleep("deep", 0.7, 0.5, "pressure")
     assert isinstance(told.dream, st.Dream) and told.dream.questions == 2
-    assert told.dream.ignitions == told.dream.threads == told.dream.boundaries == st.NotRun(st.DREAM_NOT_YET)
-    assert told.rehearse == st.Rehearse(16, st.NotRun(st.CURRICULUM_NOT_YET), flagged=6, corrected=2)
+    assert told.dream.ignitions == told.dream.threads == told.dream.boundaries == st.NotRun(st.CORE_OFF)
+    assert told.dream.dreams == st.NotRun(st.TERMS_OFF)
+    assert told.rehearse == st.Rehearse(16, st.NotRun(st.CORE_OFF), flagged=6, corrected=2)
     assert isinstance(told.learn, st.Learn) and told.learn.rows == 8
     assert told.learn.channel_loss == told.learn.stamp == st.NotRun(st.CHANNEL_OFF)
-    assert told.learn.fold == st.NotRun(st.FOLD_NOT_YET)
+    assert told.learn.seeding == told.learn.imitation == told.learn.fold == told.learn.protect == st.NotRun(st.TERMS_OFF)
     assert told.check == st.Check((st.Gate("general", True, False, 0.0, 2.0), st.Gate("safety", False, True, 0.0, 0.0)), True)
     assert told.wake == st.Wake(st.NotRun(st.SCORED_IN_MORNING), st.NotRun(st.SELF_MODEL_NOT_YET))
     assert TOLD["rejected"].check.promoted is False  # type: ignore[union-attr]
@@ -192,7 +221,8 @@ def test_a_nap_story_stops_after_the_dream(name: str) -> None:
     assert isinstance(told.sleep, st.Sleep) and told.sleep.kind == "nap"
     assert all(getattr(told, stage) == st.NotRun(st.LEARNING_TOMORROW) for stage in STAGES[1:])
     assert told.dream == (st.NotRun(DEFER_WHY) if name.endswith("on") else st.Dream(
-        st.NotRun(st.MIND_OFF), st.NotRun(st.DREAM_NOT_YET), st.NotRun(st.DREAM_NOT_YET), st.NotRun(st.DREAM_NOT_YET)))
+        st.NotRun(st.MIND_OFF), st.NotRun(st.CORE_OFF), st.NotRun(st.CORE_OFF), st.NotRun(st.CORE_OFF),
+        st.NotRun(st.LEARNING_TOMORROW)))
 
 
 def test_the_morning_fills_wake_ok_failed_or_uncounted() -> None:
@@ -236,7 +266,7 @@ def test_the_brief_says_what_it_folded_or_why_it_didnt() -> None:
 def test_a_practice_without_a_critic_says_so() -> None:
     told = st.tell(NIGHT, "promoted", _swapped(PROMOTED, {**PRACTICE, "spark": {}}))
     why = st.NotRun(st.NO_CRITIC)
-    assert told.rehearse == st.Rehearse(16, st.NotRun(st.CURRICULUM_NOT_YET), why, why)
+    assert told.rehearse == st.Rehearse(16, st.NotRun(st.CORE_OFF), why, why)
 
 
 def test_a_reused_practice_says_whose_it_was_never_that_it_ran() -> None:
@@ -255,7 +285,8 @@ def test_a_reused_practice_says_whose_it_was_never_that_it_ran() -> None:
 
 def test_the_cores_dream_fills_the_dream_from_its_step() -> None:
     told = st.tell(NIGHT, "promoted", _with(PROMOTED, "notice", CORE_DREAM))
-    assert told.dream == FULL.dream  # its ignitions, the threads its curriculum picked, its boundaries
+    assert isinstance(FULL.dream, st.Dream)  # its ignitions, the threads its curriculum picked, its boundaries
+    assert told.dream == replace(FULL.dream, dreams=st.NotRun(st.TERMS_OFF))
     unpicked = st.tell(NIGHT, "promoted", _with(PROMOTED, "notice", {**CORE_DREAM, "picks": None}))
     assert unpicked.dream.threads == st.NotRun(st.NO_CURRICULUM)  # type: ignore[union-attr]
     failed = st.tell(NIGHT, "failed", _with(PROMOTED[:4], "notice", {"step": "dream", "status": "failed", "error": "StoreError"}))
@@ -266,10 +297,69 @@ def test_the_cores_dream_fills_the_dream_from_its_step() -> None:
         st.tell(NIGHT, "promoted", _with(PROMOTED, "notice", {**CORE_DREAM, "ignitions": [{"kind": "risk"}]}))
 
 
-def test_a_nap_shows_the_cores_cpu_dream_and_stops_after_it() -> None:
+def test_a_nap_shows_its_cpu_dream_without_the_gpu_stages() -> None:
     told, dreamt = st.tell(NIGHT, "napped", _with(_napped(mind=True), "notice", CORE_DREAM)), FULL.dream
-    assert isinstance(dreamt, st.Dream) and told.dream == replace(dreamt, questions=st.NotRun(DEFER_WHY))
+    assert isinstance(dreamt, st.Dream)  # the core's dream, all CPU; Glimmer's dreams wait for her next deep sleep
+    assert told.dream == replace(dreamt, questions=st.NotRun(DEFER_WHY), dreams=st.NotRun(st.LEARNING_TOMORROW))
     assert all(getattr(told, stage) == st.NotRun(st.LEARNING_TOMORROW) for stage in STAGES[1:])
+
+
+def test_everything_the_night_logs_fills_its_record() -> None:
+    told = st.tell(NIGHT, "promoted", EVERYTHING)
+    assert told.dream == FULL.dream and told.rehearse == FULL.rehearse  # the dream, Glimmer's dreams, the seeding
+    assert isinstance(FULL.learn, st.Learn)
+    assert told.learn == replace(FULL.learn, core_adaptation=st.NotRun(st.ADAPTATION_NOT_YET))  # no record says it
+    assert told.wake == st.Wake(st.Morning(28, 1), st.NotRun(st.SELF_MODEL_NOT_YET))  # nor this: a plain line
+
+
+def _terms(**changes: Any) -> list[dict[str, Any]]:
+    return _swapped(EVERYTHING, {**TRAINED, "receipt": {**CHANNEL_RECEIPT, "terms": {**TERMS, **changes}}})
+
+
+@pytest.mark.parametrize(("log", "field", "said"), [
+    (_swapped(EVERYTHING, {**SEEDED, "seeded": {"picked": 0, "threads": [3]}}), "rehearse.seeded", st.FELL_BACK),
+    (_swapped(EVERYTHING, PRACTICE), "rehearse.seeded", st.SEEDING_UNLOGGED),
+    (_swapped(EVERYTHING, {**CORE_DREAM, "picks": None}), "rehearse.seeded", st.NO_CURRICULUM),
+    (_swapped(EVERYTHING, {"step": "dream", "status": "ok", "noop": True, "why": "fake latents for a real person"}),
+     "dream.ignitions", "fake latents for a real person"),
+    (_swapped(EVERYTHING, {"step": "dream", "status": "ok", "noop": True, "why": "fake latents for a real person"}),
+     "rehearse.seeded", "fake latents for a real person"),
+    (_swapped(EVERYTHING, {**DATASET, "terms": {**DATASET["terms"], "dreams": "not wired"}}), "dream.dreams",
+     st.DREAMS_NOT_WIRED),
+    (_swapped(EVERYTHING, {**DATASET, "terms": {"seeds": 10, "anchors": 0}}), "dream.dreams", st.DREAMS_OFF),
+    (_swapped(EVERYTHING, {**DATASET, "terms": {**DATASET["terms"], "dream_candidates": 0, "dreams": 0,
+                                               "dreams_keep_rate": None}}), "dream.dreams", st.NO_DREAM_SEEDS),
+    (_swapped(EVERYTHING, {**TRAINED, "surprise_weights": None}), "learn.surprise", st.NO_SURPRISE),
+    (_terms(rows={**TERMS["rows"], "seed": 0}, seed_kl_before=None, seed_kl_after=None), "learn.seeding", st.NO_SEEDS),
+    (_terms(rows={**TERMS["rows"], "imitate": 0}, imitation_reward=None), "learn.imitation", st.NO_IMITATION),
+    (_terms(fold_rank=None, folded_to=None), "learn.fold", st.FOLD_OFF),
+    (_terms(protect=None), "learn.protect", st.PROTECT_OFF),
+], ids=["no pick could train", "practice didn't say", "curriculum off", "the core refused her",
+        "the core refused her: practice", "dreams not wired", "dreams term off", "no dream seeds", "no surprise weight",
+        "no seeding rows", "no imitation", "no fold", "no protected slot"])
+def test_a_missing_record_says_why_in_a_plain_line(log: list[dict[str, Any]], field: str, said: str) -> None:
+    told: Any = st.tell(NIGHT, "promoted", log)
+    for name in field.split("."):
+        told = getattr(told, name)
+    assert told == st.NotRun(said)
+
+
+def test_a_surprise_the_loss_did_not_apply_says_so() -> None:
+    told = st.tell(NIGHT, "promoted", _swapped(EVERYTHING, {**TRAINED, "surprise_weights": "not applied (objective sft)"}))
+    assert isinstance(told.learn, st.Learn) and told.learn.surprise == st.Surprise(applied=False, rows=8)
+
+
+def test_the_words_the_story_reads_are_the_ones_its_steps_write() -> None:
+    from anjo.sleep.train import colab_train, terms
+    assert st.NOT_WIRED == terms.DREAMS_NOT_WIRED
+    assert st.APPLIED == colab_train.surprise_weights(colab_train.SEED_OBJECTIVE, [{"weight": 1.5}])
+
+
+def test_a_term_that_reported_no_number_says_so_never_zero() -> None:
+    told = st.tell(NIGHT, "promoted", _terms(seed_kl_after=None, imitation_reward=None))
+    assert isinstance(told.learn, st.Learn)
+    assert told.learn.seeding == st.Seeding(10, 0.05, st.NotRun(st.NOT_REPORTED), 1.2)
+    assert told.learn.imitation == st.Imitation(3, st.NotRun(st.NOT_REPORTED), 0.8)
 
 
 def test_the_channels_training_fills_its_loss_and_stamp_never_a_path() -> None:

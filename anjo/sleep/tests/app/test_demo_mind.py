@@ -216,9 +216,10 @@ def test_the_panel_carries_last_nights_loop_from_its_story_file() -> None:
     _seed_mind(_held_out())
     told = st.Story(
         night=_day(5), status="promoted", sleep=st.Sleep("deep", 0.7, 0.5, "pressure"), brief=st.Brief(3),
-        dream=st.Dream(2, (st.Ignition("risk", 0.8, ("e-0a1b2c",)),), st.NotRun(st.DREAM_NOT_YET), st.NotRun(st.DREAM_NOT_YET)),
-        rehearse=st.Rehearse(16, st.NotRun(st.CURRICULUM_NOT_YET), 6, 2),
-        learn=st.Learn(8, *(st.NotRun("not yet"),) * 6),
+        dream=st.Dream(2, (st.Ignition("risk", 0.8, ("e-0a1b2c",)),), st.NotRun(st.NO_CURRICULUM), (),
+                       st.NotRun(st.TERMS_OFF)),
+        rehearse=st.Rehearse(16, st.NotRun(st.NO_CURRICULUM), 6, 2),
+        learn=st.Learn(8, *(st.NotRun(st.TERMS_OFF),) * 8),
         check=st.Check((st.Gate("safety", True, False, 0.0, 0.0),), promoted=True),
         wake=st.Wake(st.Morning(28, 0), st.NotRun(st.SELF_MODEL_NOT_YET)))
     (night_logs(ACCOUNT) / _day(5).isoformat() / STORY).write_text(json.dumps(told.record()))

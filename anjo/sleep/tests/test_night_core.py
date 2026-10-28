@@ -35,10 +35,12 @@ WAITS = bridge.CoreView(decision=Decision(speak=False, slot=None, p_speak=0.1),
 
 @dataclass
 class FakeCore:
-    """Dreams the day (item ``n`` weighs ``n + 2``), picks its first ``picks`` items and keeps each unit."""
+    """Dreams the day (item ``n`` weighs ``n + 2``), picks its first ``picks`` items (on ``threads``) and keeps
+    each unit."""
 
     view: bridge.CoreView | None = WAITS
     picks: int = 1
+    threads: tuple[int, ...] = ()
     keep_fails: bool = False
     people: frozenset[str] = frozenset({UID})
     days: list[list[str]] = field(default_factory=list)
@@ -51,8 +53,9 @@ class FakeCore:
         day = list(evidence)
         self.days.append([item.id for item in day])
         picked = ("not-trainable",) if self.picks < 0 else tuple(item.id for item in day[:self.picks])
+        chosen = {"picks": {"threads": [{"slot": slot} for slot in self.threads], "evidence_ids": list(picked)}}
         return Dreamt(state_id=STATE, rehearse=picked, weights={item.id: n + 2.0 for n, item in enumerate(day)},
-                      view=self.view, receipt={"state": STATE, "picked": list(picked)})
+                      view=self.view, receipt={"state": STATE, "picked": list(picked), **(chosen if self.threads else {})})
 
     def dreamt(self, user_id: str, night: date) -> Dreamt | None:
         return None
@@ -145,6 +148,15 @@ def test_a_dream_with_nothing_to_rehearse_seeds_practice_as_before(tmp_path: Pat
     seeds = Seeds(world)
     _night(world, core=FakeCore(picks=picks), practice=seeds)
     assert seeds.seeded == [[f"{UID}-{NIGHT.isoformat()}-e{i}" for i in range(3)]]
+
+
+@pytest.mark.parametrize(("picks", "seeded"), [(1, 1), (0, 0), (-1, 0)],
+                         ids=["one pick", "nothing picked", "nothing trainable picked"])
+def test_practice_logs_how_many_of_the_dreams_picks_it_was_seeded_on(tmp_path: Path, picks: int, seeded: int) -> None:
+    result = _night(_world(tmp_path), core=FakeCore(picks=picks, threads=(3, 5)))
+    assert step(result.log_path, "practice")["seeded"] == {"picked": seeded, "threads": [3, 5]}  # 0: it fell back
+    other = _night(_world(tmp_path / "off"))
+    assert "seeded" not in step(other.log_path, "practice")  # without the core, today's record
 
 
 def test_a_person_deleted_during_the_night_gets_no_unit(tmp_path: Path) -> None:

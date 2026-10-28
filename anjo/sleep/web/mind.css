@@ -231,8 +231,9 @@
   font-size: var(--text-small);
   color: var(--ink-soft);
 }
+.stage-numbers dt { grid-column: 1; }
 .stage-numbers dd { margin: 0; text-align: right; }
-.stage-numbers dd[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.stage-numbers dd.why { grid-column: 1 / -1; margin-bottom: var(--space-1); text-align: left; font-style: italic; text-wrap: pretty; }
 .stage-gates { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; font-size: var(--text-small); }
 .stage-gates li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
 .stage-cites { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }

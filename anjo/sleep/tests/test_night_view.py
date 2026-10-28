@@ -48,10 +48,13 @@ def test_the_loop_runs_left_to_right_with_one_key_number_and_its_evidence() -> N
     assert LINKS == {"dream": "mind-questions", "rehearse": "dailies", "learn": None, "check": "mind-gates",
                      "wake": "mind-chart"}
     assert stages["dream"]["cites"] == ["e-0a1b", "e-2c3d"]  # the events the dream rests on, ids only
-    assert _numbers(stages["dream"]) == {"questions": 2, "ignitions": 1, "threads": 1, "boundaries": 1}
-    assert _numbers(stages["rehearse"]) == {"flagged": 6, "corrected": 2, "seeded": 1}
-    assert _numbers(stages["learn"]) == {"surprise": 1.1, "surprise_rows": 8, "channel_loss": 0.42, "stamp": "proj-3",
-                                         "seeding_kl": 0.031, "fold": 8, "core_adaptation": 0.2}
+    assert _numbers(stages["dream"]) == {"questions": 2, "ignitions": 1, "threads": 1, "boundaries": 1,
+                                         "dreams": 9, "dream_candidates": 12, "dream_keep_rate": 0.75}
+    assert _numbers(stages["rehearse"]) == {"flagged": 6, "corrected": 2, "seeded": 4, "seeded_threads": 1}
+    assert _numbers(stages["learn"]) == {
+        "surprise": True, "surprise_rows": 8, "channel_loss": 0.42, "stamp": "9f86d081884c", "seed_rows": 10,
+        "seeding_kl_before": 0.05, "seeding_kl_after": 0.031, "imitation_rows": 3, "imitation_reward": 0.6, "fold": 8,
+        "protect": "anchors", "protect_minutes": 0.4, "core_adaptation": 0.2}
     check = stages["check"]
     assert (check["of"], check["promoted"]) == (1, True)  # a switched-off gate is never counted as passed
     assert check["gates"] == [{"gate": "general", "kind": "pass", "value": 0.0, "threshold": 2.0},
@@ -64,7 +67,11 @@ def test_what_didnt_run_is_greyed_with_its_reason() -> None:
     assert stages["wake"]["state"] == "not_run" and stages["wake"]["reason"] == st.SCORED_IN_MORNING
     assert stages["wake"]["key"] is None
     numbers = _numbers(stages["learn"])
-    assert numbers["channel_loss"] == ("not_run", st.CHANNEL_OFF) and numbers["fold"] == ("not_run", st.FOLD_NOT_YET)
+    assert numbers["channel_loss"] == ("not_run", st.CHANNEL_OFF) and numbers["fold"] == ("not_run", st.TERMS_OFF)
+    assert {numbers[name] for name in ("seeding", "imitation", "protect")} == {("not_run", st.TERMS_OFF)}
+    assert numbers["surprise"] == ("not_run", st.NO_SURPRISE)
+    assert _numbers(stages["dream"])["dreams"] == ("not_run", st.TERMS_OFF)
+    assert _numbers(stages["rehearse"])["seeded"] == ("not_run", st.CORE_OFF)
     quiet = _by(story_view([(1, TOLD["nothing_new"])]))
     assert quiet["dream"]["state"] == "not_run" and quiet["dream"]["reason"] == st.MIND_OFF
     assert all((quiet[name]["state"], quiet[name]["reason"]) == ("not_run", st.NOTHING_NEW)
@@ -103,7 +110,7 @@ def test_the_lede_claims_the_whole_loop_only_when_it_ran() -> None:
     assert isinstance(dreamt, st.Dream) and isinstance(rehearsed, st.Rehearse)
     for story in (TOLD["promoted"], TOLD["napped, MIND on"], TOLD["failed at gates"],
                   replace(FULL, dream=replace(dreamt, threads=st.NotRun(st.NO_CURRICULUM))),
-                  replace(FULL, rehearse=replace(rehearsed, seeded=st.NotRun(st.CURRICULUM_NOT_YET))),
+                  replace(FULL, rehearse=replace(rehearsed, seeded=st.NotRun(st.FELL_BACK))),
                   replace(FULL, rehearse=st.Reused(NIGHT, 16)), replace(FULL, check=st.Check((), promoted=False))):
         assert _claims(story) is False
     assert "rehearsed_the_dream" not in story_view([]) and "rehearsed_the_dream" not in story_view(None)
@@ -159,9 +166,11 @@ def test_night_js_reads_only_words_in_the_copy_and_draws_with_no_html() -> None:
     assert read and read <= set(words.COPY), sorted(read - set(words.COPY))
     for stage in st.STAGES:
         assert {f"story_stage_{stage}", f"story_line_{stage}"} <= set(words.COPY), stage
-    for name in ("questions", "ignitions", "threads", "boundaries", "flagged", "corrected", "seeded", "surprise",
-                 "surprise_rows", "channel_loss", "stamp", "seeding_kl", "fold", "core_adaptation", "no_verdict",
-                 "self_model_predicted", "self_model_actual"):
+    for name in ("questions", "ignitions", "threads", "boundaries", "dreams", "dream_candidates", "dream_keep_rate",
+                 "flagged", "corrected", "seeded", "seeded_threads", "surprise", "surprise_rows", "channel_loss", "stamp",
+                 "seeding", "seed_rows", "seeding_kl_before", "seeding_kl_after", "imitation", "imitation_rows",
+                 "imitation_reward", "fold", "protect", "protect_minutes", "core_adaptation", "no_verdict",
+                 "self_model", "self_model_predicted", "self_model_actual"):
         assert f"story_number_{name}" in words.COPY, name
     assert "innerHTML" not in script and "eval(" not in script and "localStorage" not in script
     assert "http://" not in script and "https://" not in script
@@ -233,6 +242,21 @@ def test_night_js_says_when_the_brief_was_kept(tmp_path: Path) -> None:
             assert "loop-brief" not in drawn["classes"]
         else:
             assert line in drawn["text"] and "loop-brief" in drawn["classes"] and "BriefError" not in drawn["text"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_night_js_says_why_a_number_is_missing_once_in_plain_words(tmp_path: Path) -> None:
+    harness = tmp_path / "harness.js"
+    harness.write_text((Path(__file__).parent / "night_js_harness.js").read_text())
+    handed = {"questions": {"state": "none", "items": []}, "story": story_view([(1, TOLD["promoted"])])}
+    run = subprocess.run([str(NODE), str(harness), str(WEB_DIR / "night.js"), json.dumps(dict(words.COPY)),
+                          json.dumps(handed)], capture_output=True, text=True, timeout=60, check=False)
+    assert run.returncode == 0, run.stderr
+    text = json.loads(run.stdout)["text"]
+    assert "not yet" not in text  # a record that's off or missing says why, never that it's coming
+    assert text.count(st.TERMS_OFF) == 2  # once in the dream, once for the four terms it groups in learn
+    assert text.count(st.CORE_OFF) == 2 and text.count(st.CHANNEL_OFF) == 1  # the dream's three, then rehearse
+    assert st.ADAPTATION_NOT_YET in text and st.SELF_MODEL_NOT_YET in text  # no record says either: plain lines
 
 
 def test_the_page_claims_nothing_before_the_story_says_what_ran() -> None:
