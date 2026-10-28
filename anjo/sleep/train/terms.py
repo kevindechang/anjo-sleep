@@ -22,8 +22,9 @@ The message and the reply passed the dataset's three rules already: seeding take
 
 **Dreams** (``dream_rows``): Glimmer's candidates from MIND's dream seeds (``night/dreams.py``),
 each resting on at least one real event, cleared by its ancestry, its message and reply held to the
-decontaminator's three rules and its thread (the student's input) to C's. **Anchors** (``anchor_rows``): a fixed, seeded 32 of the
-general gate's 200 items, which the training job scores before and after the dream block.
+decontaminator's three rules and its thread (the student's input) to C's. **Anchors** (``anchor_rows``): the 32
+hand-written items of ``sets/anchors.jsonl``, which the training job scores before and after the dream block. No gate
+scores them: training must never see a gate item.
 """
 from __future__ import annotations
 
@@ -41,7 +42,7 @@ from anjo.sleep.night.meter import SpendMeter
 from anjo.sleep.ports import Decontaminator, EvidenceStore
 from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.provenance import may_train, union
-from anjo.sleep.sets.loader import load_general
+from anjo.sleep.sets.loader import load_anchors
 from anjo.sleep.train.dataset import (
     DEFAULT_MAX_SEQ_TOKENS,
     ROLE_OVERHEAD_TOKENS,
@@ -56,6 +57,7 @@ from anjo.sleep.types import Evidence, Probe
 DAY_KINDS: Final = ("lesson", "correction", "preference", "tone_request")  # what the person said today
 ANCHORS: Final = 32
 SEED_DROPS: Final = ("missing", "teacher_target", "no_context", "uncleared", "probe", "truncated")
+DREAMS_NOT_WIRED: Final = "not wired"  # the dataset receipt's dreams while MIND's dream states are not
 DREAM_DROPS: Final = ("unanchored", "uncleared", "probe", "truncated")
 NOTES_HEAD: Final = "What you know about them, from your notes:"
 TODAY_HEAD: Final = "What they told you today:"
@@ -145,8 +147,8 @@ def dream_rows(
 
 
 def anchor_rows(seed: int, n: int = ANCHORS) -> tuple[AnchorRow, ...]:
-    """A fixed, seeded ``n`` of the general gate's items: the same every night of a run."""
-    ranked = sorted(load_general(), key=lambda item: hashlib.sha256(f"{seed}:anchor:{item.id}".encode()).hexdigest())
+    """A fixed, seeded ``n`` of the anchor set's items (disjoint from every gate): the same every night of a run."""
+    ranked = sorted(load_anchors(), key=lambda item: hashlib.sha256(f"{seed}:anchor:{item.id}".encode()).hexdigest())
     return tuple(AnchorRow(id=item.id, question=item.question, choices=tuple(item.choices), answer=item.answer)
                  for item in ranked[:n])
 
@@ -165,7 +167,7 @@ def attach_night_terms(
         done |= {"seeds": len(seeds), "seeds_dropped": dropped}
     dreams: tuple[DreamRow, ...] = ()
     if deps.terms.dreams and not deps.dreams.available:
-        done["dreams"] = "no dream source: MIND's dream states aren't wired"
+        done["dreams"] = DREAMS_NOT_WIRED
     elif deps.terms.dreams:
         timer = deps.timer or time.monotonic
         started = timer()

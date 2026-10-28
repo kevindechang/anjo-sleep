@@ -14,6 +14,29 @@ def test_general_set_loads_with_provenance():
     assert (s.SETS_DIR / "PROVENANCE.md").exists()
 
 
+def test_anchors_are_disjoint_from_every_gate_item():
+    anchors = s.load_anchors()
+    assert len(anchors) == s.ANCHOR_ITEMS and {a.source for a in anchors} == s.ANCHOR_SOURCES
+
+    def norm(text):
+        return " ".join(text.lower().split())
+
+    general = s.load_general()
+    gate_text = {norm(g.question) for g in general} | {norm(c.prompt) for c in s.load_collapse()}
+    gate_items = {(norm(g.question), tuple(norm(c) for c in g.choices)) for g in general}
+    assert not {norm(a.question) for a in anchors} & gate_text
+    assert not {(norm(a.question), tuple(norm(c) for c in a.choices)) for a in anchors} & gate_items
+    assert not {a.id for a in anchors} & {g.id for g in general}
+
+
+def test_anchors_refuse_a_gate_source(tmp_path):
+    row = {"id": "a1", "source": "mmlu", "subject": "s", "question": "q", "choices": ["a", "b", "c"], "answer": 0}
+    f = tmp_path / "a.jsonl"
+    f.write_text(json.dumps(row) + "\n")
+    with pytest.raises(s.SetError):
+        s.load_anchors(f, expected=None)
+
+
 def test_collapse_set_loads():
     assert len(s.load_collapse()) == 60
 

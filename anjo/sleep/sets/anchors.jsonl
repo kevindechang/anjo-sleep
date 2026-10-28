@@ -1,0 +1,32 @@
+{"id": "a01", "source": "handwritten", "subject": "science", "question": "What is the chemical symbol for sodium?", "choices": ["Na", "So", "Sd", "S"], "answer": 0}
+{"id": "a02", "source": "handwritten", "subject": "arithmetic", "question": "How many sides does a hexagon have?", "choices": ["five", "six", "seven", "eight"], "answer": 1}
+{"id": "a03", "source": "handwritten", "subject": "science", "question": "Which planet is closest to the Sun?", "choices": ["Venus", "Earth", "Mercury", "Mars"], "answer": 2}
+{"id": "a04", "source": "handwritten", "subject": "science", "question": "At sea level, water boils at how many degrees Celsius?", "choices": ["90", "100", "110", "120"], "answer": 1}
+{"id": "a05", "source": "handwritten", "subject": "science", "question": "Which gas do plants take in from the air to make their food?", "choices": ["oxygen", "nitrogen", "carbon dioxide", "helium"], "answer": 2}
+{"id": "a06", "source": "handwritten", "subject": "arithmetic", "question": "What is 7 times 8?", "choices": ["54", "56", "58", "64"], "answer": 1}
+{"id": "a07", "source": "handwritten", "subject": "geography", "question": "Which ocean lies between Africa and Australia?", "choices": ["the Atlantic", "the Arctic", "the Pacific", "the Indian"], "answer": 3}
+{"id": "a08", "source": "handwritten", "subject": "language", "question": "Which word means the opposite of \"ancient\"?", "choices": ["modern", "old", "broken", "distant"], "answer": 0}
+{"id": "a09", "source": "handwritten", "subject": "science", "question": "Which organ pumps blood around the human body?", "choices": ["the lungs", "the liver", "the heart", "the kidneys"], "answer": 2}
+{"id": "a10", "source": "handwritten", "subject": "arithmetic", "question": "How many minutes are there in two hours?", "choices": ["100", "120", "140", "200"], "answer": 1}
+{"id": "a11", "source": "handwritten", "subject": "science", "question": "Ice is the solid form of", "choices": ["salt.", "water.", "air.", "sand."], "answer": 1}
+{"id": "a12", "source": "handwritten", "subject": "science", "question": "Which of these animals is a mammal?", "choices": ["a shark", "a dolphin", "a trout", "an octopus"], "answer": 1}
+{"id": "a13", "source": "handwritten", "subject": "geography", "question": "What is the capital of Japan?", "choices": ["Kyoto", "Osaka", "Tokyo", "Nagoya"], "answer": 2}
+{"id": "a14", "source": "handwritten", "subject": "arithmetic", "question": "A train covers 60 kilometres in one hour. At the same speed, how far does it go in three hours?", "choices": ["120 km", "180 km", "200 km", "240 km"], "answer": 1}
+{"id": "a15", "source": "handwritten", "subject": "science", "question": "Which instrument measures temperature?", "choices": ["a barometer", "a thermometer", "a ruler", "a compass"], "answer": 1}
+{"id": "a16", "source": "handwritten", "subject": "language", "question": "What is the plural of \"mouse\" (the animal)?", "choices": ["mouses", "mice", "meese", "mouse's"], "answer": 1}
+{"id": "a17", "source": "handwritten", "subject": "commonsense", "question": "Which month has the fewest days in a year that is not a leap year?", "choices": ["February", "April", "June", "November"], "answer": 0}
+{"id": "a18", "source": "handwritten", "subject": "science", "question": "Light from the Sun takes about how long to reach the Earth?", "choices": ["eight seconds", "eight minutes", "eight hours", "eight days"], "answer": 1}
+{"id": "a19", "source": "handwritten", "subject": "arithmetic", "question": "Which shape has exactly three sides?", "choices": ["a square", "a triangle", "a circle", "a pentagon"], "answer": 1}
+{"id": "a20", "source": "handwritten", "subject": "science", "question": "What do honeybees make in their hives?", "choices": ["silk", "honey", "milk", "wool"], "answer": 1}
+{"id": "a21", "source": "handwritten", "subject": "commonsense", "question": "She dropped the glass on the stone floor, and it", "choices": ["floated up to the ceiling.", "shattered into pieces.", "grew twice as large.", "turned into water."], "answer": 1}
+{"id": "a22", "source": "handwritten", "subject": "language", "question": "A person who writes poems is called a", "choices": ["sculptor.", "poet.", "carpenter.", "pilot."], "answer": 1}
+{"id": "a23", "source": "handwritten", "subject": "arithmetic", "question": "Which of these is the heaviest?", "choices": ["a gram", "a kilogram", "a milligram", "a microgram"], "answer": 1}
+{"id": "a24", "source": "handwritten", "subject": "geography", "question": "On which continent is Egypt?", "choices": ["Asia", "Europe", "Africa", "South America"], "answer": 2}
+{"id": "a25", "source": "handwritten", "subject": "arithmetic", "question": "What is the square root of 81?", "choices": ["7", "8", "9", "10"], "answer": 2}
+{"id": "a26", "source": "handwritten", "subject": "commonsense", "question": "He was thirsty after his long run, so he", "choices": ["drank a glass of water.", "put on a heavy coat.", "painted the fence.", "posted a letter."], "answer": 0}
+{"id": "a27", "source": "handwritten", "subject": "science", "question": "About how long does the Earth take to turn once on its axis?", "choices": ["one hour", "one day", "one month", "one year"], "answer": 1}
+{"id": "a28", "source": "handwritten", "subject": "language", "question": "Which of these words is a verb?", "choices": ["quickly", "happy", "run", "blue"], "answer": 2}
+{"id": "a29", "source": "handwritten", "subject": "arithmetic", "question": "What is 15 percent of 200?", "choices": ["15", "20", "30", "45"], "answer": 2}
+{"id": "a30", "source": "handwritten", "subject": "science", "question": "Which metal is a liquid at room temperature?", "choices": ["iron", "mercury", "copper", "aluminium"], "answer": 1}
+{"id": "a31", "source": "handwritten", "subject": "commonsense", "question": "To make the bedroom darker at night, she", "choices": ["closed the curtains.", "opened every window.", "switched on all the lamps.", "painted the walls white."], "answer": 0}
+{"id": "a32", "source": "handwritten", "subject": "science", "question": "Which is the largest planet in our solar system?", "choices": ["Earth", "Saturn", "Jupiter", "Neptune"], "answer": 2}

@@ -166,6 +166,15 @@ def test_switches_off_are_todays_night(tmp_path: Path) -> None:
     assert result["p1"].status == "promoted" and "terms" not in step(result["p1"].log_path, "dataset")
 
 
+def test_unwired_dreams_say_so_in_the_dataset_receipt(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    deps = replace(world.deps(), terms=Terms(seed=True, dreams=True))
+    result = run_night_batch_with(deps, {"p1": NIGHT}, windows={"p1": window(NIGHT)})
+    receipt = step(result["p1"].log_path, "dataset")["terms"]
+    assert receipt["dreams"] == terms.DREAMS_NOT_WIRED == "not wired" and receipt["anchors"] == 0
+
+
 def test_the_night_command_sets_the_terms_only_when_a_switch_is_on(tmp_path: Path,
                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.night import __main__ as command
