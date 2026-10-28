@@ -1,13 +1,14 @@
 """The sweep at the start of every night command (Task 5).
 
 A run killed hard (SIGKILL, power loss) runs no ``finally``: its holds stay open at their full
-bound forever, and its Colab VM may still run. So ``swept_night``, before any new hold:
+bound forever, and its Colab VM or Modal call may still run. So ``swept_night``, before any new hold:
 
 1. takes the night lock (``night.lock`` beside the ledger). The OS frees an ``flock`` when its
    process dies, however it dies, so while the lock is held no other night run is live on this
    host. A second command stops with ``NightBusy`` and touches nothing;
-2. stops every Colab session the runner made (the night command passes that step in, so this
-   module never imports training). A stop that fails raises, and every hold stays open;
+2. stops every Colab session, or cancels every Modal call, the training runner made (the night
+   command passes that step in, so this module never imports training). A stop that fails raises,
+   and every hold stays open;
 3. settles every open hold of the night's own kinds at its full bound. Work may have run, so the
    worst case is the honest charge: a release could undercount.
 
@@ -27,7 +28,7 @@ from typing import Final
 
 from anjo.sleep.budget import Ledger
 
-NIGHT_KINDS: Final = ("night:", "night_gpu:", "colab_train:", "colab_life:", "morning:", "sim:")
+NIGHT_KINDS: Final = ("night:", "night_gpu:", "colab_train:", "colab_life:", "modal_train:", "morning:", "sim:")
 LOCK_NAME: Final = "night.lock"
 _HELD: ContextVar[frozenset[Path]] = ContextVar("night_lock_held", default=frozenset())
 

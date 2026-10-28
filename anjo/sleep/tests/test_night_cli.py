@@ -1,7 +1,7 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
-"""``python -m anjo.sleep.night`` (Task 5): a real person runs only with ``--allow-real``, and the
-wiring is named, never imported by the core."""
+"""``python -m anjo.sleep.night`` (Task 5): a real person runs only with ``--allow-real``, the wiring
+is named, never imported by the core, and the training runner's leftovers are swept first."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from anjo.sleep.night.__main__ import main
+from anjo.sleep.tests.test_modal_runner import FakeCalls
 
 BASE = ["--wiring", "anjo.sleep.tests.test_night_cli:never", "--night", "2026-10-28"]
 
@@ -34,6 +35,13 @@ def no_colab(monkeypatch: pytest.MonkeyPatch) -> Cli:
     cli = Cli()
     monkeypatch.setattr("anjo.sleep.night.__main__._colab_cli", lambda: cli)
     return cli
+
+
+@pytest.fixture(autouse=True)
+def no_modal(monkeypatch: pytest.MonkeyPatch) -> FakeCalls:
+    calls = FakeCalls()
+    monkeypatch.setattr("anjo.sleep.night.__main__._modal_calls", lambda: calls)
+    return calls
 
 
 def test_a_user_without_a_persona_needs_allow_real(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -97,15 +105,21 @@ def test_a_failed_note_still_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert main([*BASE, "--user", "u1", "--persona", "founder"]) == 0
 
 
+@pytest.mark.parametrize("runner", ["colab", "modal"])
 def test_the_night_command_sweeps_a_killed_run_before_the_wiring(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_colab: Cli,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_colab: Cli, no_modal: FakeCalls, runner: str,
 ) -> None:
-    from anjo.sleep.budget import default_ledger
+    from anjo.sleep.budget import Bound, default_ledger
     from anjo.sleep.tests.test_night_sweep import _killed
+    from anjo.sleep.train.runners.modal import CALLS_DIR, CallRecords
 
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANJO_SLEEP_TRAIN_RUNNER", runner)
     no_colab.listed = "[anjo-sleep-p-aaaaaaaaaaaa-n3] gpu-a100-s-1 | Hardware: A100 | Shape: High-RAM | Variant: GPU\n"
+    records = CallRecords(tmp_path / "sleep" / CALLS_DIR)
+    records.add("p-aaaaaaaaaaaa-n4", "fc-00000009")  # the Modal call a killed run left
     _killed(default_ledger())
+    assert default_ledger().reserve("modal_train:2026-10-28:u1:a1", ("modal_usd",), Bound(2.5, 7200.0)) is not None
     seen: list[int] = []
 
     def wiring(trainer: object, options: object) -> object:
@@ -115,8 +129,13 @@ def test_the_night_command_sweeps_a_killed_run_before_the_wiring(
     monkeypatch.setattr("anjo.sleep.tests.test_night_cli.never", wiring)
     with pytest.raises(RuntimeError, match="stop here"):
         main([*BASE, "--user", "u1", "--persona", "founder"])
-    assert seen == [0]  # every stale hold settled before the wiring ran
-    assert no_colab.calls == [("sessions",), ("stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3")]
+    assert seen == [0]  # every stale hold settled before the wiring ran, Modal's training holds too
+    if runner == "colab":
+        assert no_colab.calls == [("sessions",), ("stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3")]
+        assert no_modal.cancelled == []  # each night sweeps its own runner only
+    else:
+        assert no_modal.cancelled == ["fc-00000009"] and records.items() == []
+        assert no_colab.calls == []
 
 
 def test_a_simulated_day_runs_its_night_on_the_virtual_clock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

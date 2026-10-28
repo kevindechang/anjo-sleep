@@ -1,5 +1,5 @@
-"""The night's ``Trainer`` (Task 5): ``train_lora_with_receipt`` on a GPU runner (Colab for now),
-publishing each finished adapter to the serving volume under its never-reused name."""
+"""The night's ``Trainer`` (Task 5): ``train_lora_with_receipt`` on a GPU runner (Modal by default, or
+Colab: ``runners/choice.py``), publishing each finished adapter to the server under its never-reused name."""
 from __future__ import annotations
 
 import dataclasses

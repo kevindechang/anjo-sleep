@@ -3,22 +3,31 @@
 Every key is read from the environment here, once, and goes only into the clients that need it.
 A missing one stops the run before anything is created or paid for, naming the variable (never a
 value). ``--fake`` needs none of this.
+
+Training runs on the engine's own runner, picked by ``ANJO_SLEEP_TRAIN_RUNNER`` as the night picks
+it (``train/runners/choice.py``): Modal's deployed training app by default, which lands the adapter
+on the volume the server loads from, or Colab, whose adapter is then uploaded there. The runner's
+budget ledger and call records live in a fresh temporary folder: the example person is synthetic.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from anjo.sleep import baseten_api, meta_api
-from anjo.sleep.examples.synthetic.modal_train import ModalTrainRunner
+from anjo.sleep.budget import Ledger
 from anjo.sleep.examples.synthetic.services import ExampleError, Services
 from anjo.sleep.serving.backend import MODAL_TOKEN_ENV, MODAL_URL_ENV, ModalServing
 from anjo.sleep.serving import config
 from anjo.sleep.serving.config import REVISION_ENV
+from anjo.sleep.train.runners import choice
+from anjo.sleep.train.runners.colab import ColabCli
+from anjo.sleep.train.runners.modal import CALLS_DIR, SdkCalls
 
 BASETEN_KEYS: Final = ("BASETEN_API_KEY", baseten_api.KEY_ENV)
 MODAL_CONFIG_ENV: Final = "MODAL_CONFIG_PATH"
@@ -77,10 +86,19 @@ def build_services(environ: Mapping[str, str] | None = None) -> Services:
         raise MissingKeys(f"missing {', '.join(missing)}. {HELP}")
     if importlib.util.find_spec("modal") is None:
         raise ExampleError("the modal package is not installed: pip install \".[modal]\", or run with --fake")
+    try:
+        runner = choice.runner_name(env)
+    except choice.RunnerChoiceError as error:
+        raise ExampleError(str(error)) from None
     if not env.get(baseten_api.KEY_ENV, "").strip():
         os.environ[baseten_api.KEY_ENV] = env["BASETEN_API_KEY"].strip()  # baseten_api reads its own name
     serving = ExampleServing(env[MODAL_URL_ENV].strip(), env[MODAL_TOKEN_ENV].strip())
+    state = Path(tempfile.mkdtemp(prefix="anjo-sleep-example-runner-"))
+    chosen = choice.build(runner, ledger=Ledger(state / "budget.jsonl"), calls_dir=state / CALLS_DIR,
+                          is_synthetic=lambda person_id: True, colab_cli=ColabCli, modal_calls=SdkCalls)
+    landed = choice.publisher(runner, serving.upload_adapter, serving="modal")
     return Services(
         spark=baseten_api.chat, judge=meta_api.chat, glimmer=serving.client(), serving=serving,
-        gpu=ModalTrainRunner(), revision=env[REVISION_ENV].strip(),
+        gpu=chosen.runner, revision=env[REVISION_ENV].strip(),
+        publish=None if landed == serving.upload_adapter else landed,
     )

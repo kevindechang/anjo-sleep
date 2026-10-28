@@ -33,6 +33,21 @@ downloaded):
    ``/v1/completions`` are the prompt ids TRL trained on, token for token.
 
 It prints one line per step and exits 1 on the first failed check.
+
+``--runner modal`` or ``--runner colab`` is the same night on real Glimmer, on the runner the night
+trains on (``runners/choice.py``), with the night's own recipe and template: ``sft_dpo`` from cold on
+``smoke_dataset``, under a one-hour hard timeout (``SMOKE_TIMEOUT_S``). Without ``--run`` it only
+prints the plan: the job and the hold it would take, read from the budget ledger, which it never
+writes. Nothing is held, started or spent::
+
+    ANJO_DATA_DIR=<data dir> python -m anjo.sleep.train.smoke --runner modal          # the plan
+    ANJO_DATA_DIR=<data dir> ANJO_SLEEP_GLIMMER_REVISION=<commit> \
+        python -m anjo.sleep.train.smoke --runner modal --run                       # paid: Kevin's go
+
+With ``--run`` it takes the night lock and sweep, holds the worst case, trains a synthetic smoke
+person (a fresh one each run) and checks the receipt as the CPU run does. The adapter it trains is
+nobody's and served nowhere; on Modal it lands on the adapters volume, and the run prints the command
+that removes it.
 """
 from __future__ import annotations
 
@@ -41,20 +56,36 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import struct
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any, Final
 
+from anjo.sleep.budget import Bound, BudgetError, Ledger, Pool, default_ledger
+from anjo.sleep.night.sweep import NightBusy, swept_night
+from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config, framing
 from anjo.sleep.serving.client import VllmClient
-from anjo.sleep.train import colab_train, smoke_model
+from anjo.sleep.stops import BudgetStop
+from anjo.sleep.train import colab_train, modal_job, smoke_model
 from anjo.sleep.train.dataset import Dataset, Example, Pair
-from anjo.sleep.train.lora import DATASET_FILE, DEFAULT_TARGET_MODULES, LoraCfg, training_config
+from anjo.sleep.train.lora import (
+    DATASET_FILE,
+    DEFAULT_TARGET_MODULES,
+    JOB,
+    LoraCfg,
+    TrainError,
+    adapter_name,
+    train_lora_with_receipt,
+    training_config,
+)
+from anjo.sleep.train.runners import choice, colab
+from anjo.sleep.train.runners import modal as modal_runner
 
 NIGHT: Final = date(2001, 2, 3)  # a virtual night no wall clock is on: a prompt dated by a clock shows
 REVISION: Final = "0" * 40  # the recipe names a revision; the smoke run's model is a local folder
@@ -62,6 +93,12 @@ MIN_STEPS: Final = 2  # two optimizer steps for SFT on the four rows that fit
 LONG_WORDS: Final = 9000  # one word is one token, so these rows exceed max_seq_length (8192)
 RUN_TIMEOUT_S: Final = 1800.0
 OFFLINE: Final = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"}
+SMOKE_OWNER: Final = "smoke-train-"  # the GPU smoke's synthetic person, a fresh one each run
+SMOKE_TIMEOUT_S: Final = 3600.0  # the GPU smoke's hard timeout, held in full before it starts
+# Each runner's pool and its A100-80GB rate an hour: Modal's in dollars, Colab's in compute units.
+PRICES: Final[Mapping[str, tuple[Pool, float]]] = {
+    "modal": (modal_runner.POOL, modal_runner.A100_USD_PER_HOUR), "colab": (colab.POOL, colab.A100_CU_PER_HOUR),
+}
 _LORA_KEY: Final = re.compile(
     rf"base_model\.model\.(?P<module>{colab_train.TEXT_DECODER}\.(?P<name>[a-z0-9_]+))\.lora_[AB]\.weight")
 
@@ -302,11 +339,96 @@ def smoke(python: str, root: Path, tokenizer: Path | None = None) -> list[str]:
     return lines
 
 
-def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - needs the training stack
+def _money(runner: str, amount: float) -> str:
+    return f"${amount:.2f}" if runner == "modal" else f"{amount:.2f} CU"
+
+
+def gpu_plan(runner: str, ledger: Ledger, revision: str | None) -> list[str]:
+    """What ``--run`` would do on ``runner``, and the hold it would take; read only."""
+    pool, rate = PRICES[runner]
+    data = smoke_dataset()
+    where = f"{modal_job.APP_NAME}, one {modal_job.GPU}" if runner == "modal" else f"a Colab {colab.GPU} VM"
+    return [
+        f"runner: {runner} ({where})",
+        f"job: {JOB}, sft_dpo from cold on {len(data.examples)} examples and {len(data.pairs)} pairs (one of each "
+        f"too long), Glimmer at revision {revision or f'(unset: {config.REVISION_ENV})'}",
+        f"hold: {_money(runner, Bound(rate, SMOKE_TIMEOUT_S).amount)} on {pool} (the {SMOKE_TIMEOUT_S / 3600:g} h "
+        f"hard timeout at {_money(runner, rate)} an hour), {_money(runner, ledger.remaining(pool))} left",
+    ]
+
+
+def _served_nowhere(folder: Path, name: str) -> None:
+    """The smoke's adapter is nobody's: it is never published to the server."""
+
+
+def run_on_gpu(runner: GpuRunner, root: Path, person: str, revision: str) -> tuple[str, dict[str, object]]:
+    """The smoke night on Glimmer: ``smoke_dataset`` with the night's own recipe, ``sft_dpo`` from cold,
+    on ``runner`` under ``SMOKE_TIMEOUT_S``. Returns the adapter's name and its checked receipt."""
+    data, cfg = smoke_dataset(), LoraCfg(objective="sft_dpo", min_optimizer_steps=MIN_STEPS)
+    name = adapter_name(person, 1, 0)
+    ckpt, _ = train_lora_with_receipt(
+        None, data, cfg, runner, person_id=person, night=NIGHT, name=name, workdir=root / "work",
+        adapter_cache=root / "adapters", publish=_served_nowhere, revision=revision, timeout_s=SMOKE_TIMEOUT_S,
+    )
+    receipt: dict[str, object] = json.loads((root / "work" / "out" / colab_train.RECEIPT).read_text(encoding="utf-8"))
+    _expect(receipt, examples=4, dropped_truncated=1, pairs=2, pairs_dropped_truncated=1, steps=MIN_STEPS,
+            objective="sft_dpo", rows_checked=6, dpo_reference="adapter_off", rendering=ckpt.rendering)
+    if not isinstance(receipt["dpo_steps"], int) or receipt["dpo_steps"] < 1:
+        raise SmokeError("the DPO pass made no optimizer step")
+    return name, receipt
+
+
+def gpu_main(
+    runner: str, *, run: bool, out: Callable[[str], None] = print, environ: Mapping[str, str] | None = None,
+    modal_calls: Callable[[], modal_runner.ModalCalls] = modal_runner.SdkCalls,
+    colab_cli: Callable[[], colab.ColabCli] = colab.ColabCli,
+) -> int:
+    """The smoke on ``runner``: the plan, and with ``run`` the paid night. Exit 0 passed, 1 failed, 2 refused."""
+    env = os.environ if environ is None else environ
+    try:
+        ledger = default_ledger(env)
+    except BudgetError as error:
+        out(f"smoke refused: {error}")
+        return 2
+    revision = env.get(config.REVISION_ENV, "").strip() or None
+    for line in gpu_plan(runner, ledger, revision):
+        out(line)
+    if not run:
+        out("nothing was held, started or spent; --run trains, holding the amount above first")
+        return 0
+    if revision is None:
+        out(f"smoke refused: {config.REVISION_ENV} names Glimmer's pinned commit")
+        return 2
+    person = f"{SMOKE_OWNER}{secrets.token_hex(6)}"
+    chosen = choice.build(runner, ledger=ledger, calls_dir=ledger.path.parent / modal_runner.CALLS_DIR,
+                          is_synthetic=lambda person_id: person_id.startswith(SMOKE_OWNER),
+                          colab_cli=colab_cli, modal_calls=modal_calls)
+    try:
+        with swept_night(ledger, chosen.sweep), tempfile.TemporaryDirectory(prefix="anjo-train-smoke-") as root:
+            name, receipt = run_on_gpu(chosen.runner, Path(root), person, revision)
+    except (SmokeError, TrainError, modal_runner.ModalTrainError, colab.ColabError, BudgetStop, NightBusy,
+            TimeoutError) as error:
+        out(f"smoke failed: {error}")
+        return 1
+    out(f"trained {name} on {receipt.get('gpu')}: {receipt['steps']} SFT steps on {receipt['examples']} examples, "
+        f"{receipt['dpo_steps']} DPO steps on {receipt['pairs']} pairs, every row's tokens checked; smoke passed")
+    if runner == "modal":
+        out(f"the adapter is nobody's; remove it: modal volume rm {config.ADAPTERS_VOLUME} /{name} --recursive")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - needs the training stack or a GPU
     parser = argparse.ArgumentParser(prog="python -m anjo.sleep.train.smoke")
-    parser.add_argument("--python", required=True, help="a Python with TRAIN_PACKAGES and TORCH installed")
-    parser.add_argument("--tokenizer", type=Path, help="a folder with Glimmer's tokenizer and chat template")
+    parser.add_argument("--runner", choices=("cpu", *choice.RUNNERS), default="cpu",
+                        help="cpu: the tiny model here; modal or colab: Glimmer on the night's runner")
+    parser.add_argument("--run", action="store_true", help="modal or colab: train (paid); without it, the plan")
+    parser.add_argument("--python", help="cpu: a Python with TRAIN_PACKAGES and TORCH installed")
+    parser.add_argument("--tokenizer", type=Path, help="cpu: a folder with Glimmer's tokenizer and chat template")
     args = parser.parse_args(argv)
+    if args.runner != "cpu":
+        return gpu_main(args.runner, run=args.run)
+    if not args.python:
+        parser.error("--runner cpu needs --python")
     with tempfile.TemporaryDirectory(prefix="anjo-train-smoke-") as root:
         try:
             lines = smoke(args.python, Path(root), args.tokenizer)
