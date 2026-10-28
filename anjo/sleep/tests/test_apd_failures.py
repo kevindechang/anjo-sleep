@@ -1,7 +1,8 @@
 # mypy: disable-error-code="untyped-decorator"
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
-"""Why each generation attempt failed, and a reasoning generator's reply shapes (MIND's data):
-every failed attempt recorded with no text, the writer reading the answer and not the reasoning."""
+"""Why each generation attempt failed, a reasoning generator's reply shapes, and ``probe-writer``
+(MIND's data): every failed attempt recorded with no text, the writer reading the answer and not
+the reasoning, and the probe printing a reply's shape, never its words."""
 from __future__ import annotations
 
 import dataclasses
@@ -15,9 +16,10 @@ import httpx
 import pytest
 
 from anjo.sleep import fireworks_api
+from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generators
+from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generators, probe
 from anjo.sleep.mind.apd.live import RunsFailed
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.mind.apd.judging import Rate
@@ -202,3 +204,83 @@ def test_a_failed_gate_is_recorded_by_gate_item_and_day(tmp_path: Path, monkeypa
     lines.clear()
     assert cli.main(["--data", str(data), "calls"], out=lines.append) == 0
     assert "Failed attempts: 1" in lines and failed in lines
+
+
+# ── probe-writer ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(("shape", "seen"), [
+    ("plain", ["think_tags=False", "starts_with_brace=True", "writer_reads=ok", "finish_reason=stop"]),
+    ("think", ["think_tags=True", "reasoning_tokens=40", "writer_reads=ok"]),
+    ("fenced", ["fenced=True", "starts_with_brace=False", "answer_json=True", "writer_reads=ok"]),
+    ("reasoning_field", ["reasoning_chars=26", "'reasoning_content'", "writer_reads=ok"]),
+    ("length", ["finish_reason=length", "answer_json=False", "writer_reads=not a JSON object"]),
+])
+def test_probe_prints_each_replys_shape_never_its_text(monkeypatch: pytest.MonkeyPatch, shape: str,
+                                                       seen: list[str]) -> None:
+    recorded, lines = Recorded(shape), list[str]()
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-test")
+
+    spent = probe.run(DEEPSEEK, 2, RATE, lines.append,
+                      call=partial(fireworks_api.generate, transport=recorded.transport))
+
+    assert [line.split(":")[0] for line in lines] == ["probe 1", "probe 2"]
+    for part in seen:
+        assert all(part in line for line in lines), (part, lines)
+    assert 0 < spent < 2 * RATE.worst
+    _no_text(recorded.texts(), "\n".join(lines))
+    assert "Let me plan" not in "\n".join(lines) and "The person" not in "\n".join(lines)
+
+
+def test_probe_counts_a_rejected_call_at_its_worst_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    lines: list[str] = []
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-test")
+    rejected = partial(fireworks_api.generate, transport=fakes.generator_transport("rejected"))
+    assert probe.run(DEEPSEEK, 1, RATE, lines.append, call=rejected) == pytest.approx(RATE.worst)
+    assert lines == [f"probe 1: failed: Fireworks chat with {DEEPSEEK.model} returned HTTP 400"]
+
+
+def test_probe_writer_is_planned_first_and_refused_without_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_call(*args: Any, **kw: Any) -> ChatResult:
+        raise AssertionError("the plan calls nothing")
+
+    monkeypatch.setattr(fireworks_api, "generate", no_call)
+    command = ["probe-writer", "--generator", "deepseek-v4p1-flash"]
+    lines: list[str] = []
+
+    assert cli.main(command, out=lines.append) == cli.REFUSED_CODE
+    assert "needs --live" in lines[0]
+    lines.clear()
+    assert cli.main(["--live", *command], out=lines.append) == 0
+    worst = 3 * Rate(*DEEPSEEK.list_prices or (0, 0)).worst
+    assert lines[0].startswith("Plan: probe-writer: 3 writer call(s) on deepseek-v4p1-flash")
+    assert f"Hold on {FIREWORKS.pool}: ${worst:.4f}" in lines[1] and lines[-1].startswith("Nothing has run")
+    with pytest.raises(SystemExit):
+        cli.main(["--live", "probe-writer", "--generator", "spark"], out=lines.append)  # not on Fireworks
+    with pytest.raises(SystemExit):
+        cli.main(["--live", *command, "--n", str(probe.MAX_PROBES + 1)], out=lines.append)
+
+
+def test_probe_writer_runs_held_and_settles_what_it_cost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: the shared ledger in a temporary data dir, Fireworks answering with think tags
+    recorded, lines = Recorded("think"), list[str]()
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-test")
+    monkeypatch.setattr(fireworks_api, "generate", partial(fireworks_api.generate, transport=recorded.transport))
+
+    # Act
+    code = cli.main(["--live", "--yes", "probe-writer", "--generator", "deepseek-v4p1-flash", "--n", "2",
+                     "--generator-prices", "0.30,1.20"], out=lines.append)
+
+    # Assert: two calls, held on Fireworks' pool first and settled at what they cost, nothing left open
+    assert code == 0 and len(recorded.bodies) == 2
+    events = list(read_records(tmp_path / "sleep" / "budget.jsonl", PLAIN))
+    (reserve,) = [e for e in events if e["op"] == "reserve"]
+    (settle,) = [e for e in events if e["op"] == "settle"]
+    assert str(reserve["job"]).startswith("apd:probe:writer:deepseek-v4p1-flash:") and reserve["pools"] == [
+        FIREWORKS.pool]
+    assert float(reserve["amount"]) == pytest.approx(2 * RATE.worst) and 0 < float(settle["amount"]) < 2 * RATE.worst
+    assert RunLedger(tmp_path / "sleep" / "budget.jsonl").open_holds() == ()
+    assert [line.split(":")[0] for line in lines if line.startswith("probe ")] == ["probe 1", "probe 2"]
+    assert lines[-1] == f"Settled ${float(settle['amount']):.4f} on {FIREWORKS.pool}."
+    _no_text(recorded.texts(), "\n".join(lines))

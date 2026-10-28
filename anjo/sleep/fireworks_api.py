@@ -11,6 +11,7 @@ the MIND core, and why).
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal
 
 import httpx
@@ -66,9 +67,11 @@ def generate(
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    on_reply: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> ChatResult:
     """One chat completion on a core split's generator, its reply capped at ``max_tokens``; a
-    reasoning model is asked for ``reasoning_effort``, and its reasoning tokens count as output."""
+    reasoning model is asked for ``reasoning_effort``, and its reasoning tokens count as output.
+    ``on_reply`` sees the reply's whole JSON body (``mind.apd.probe``)."""
     return post_chat(
         provider="Fireworks",
         url=URL,
@@ -82,4 +85,5 @@ def generate(
         max_tokens=max_tokens,
         extra=None if reasoning_effort is None else {"reasoning_effort": reasoning_effort},
         count_reasoning=True,
+        on_reply=on_reply,
     )

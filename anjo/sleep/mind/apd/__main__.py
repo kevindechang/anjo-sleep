@@ -37,7 +37,9 @@ and calls nothing, so it needs no ``--live``. A core split and the pairs are wri
 V4.1 Flash and read by Gemini unless ``--generator`` and ``--reader`` say otherwise (``gen_args``);
 APD's own splits stay Spark Open's. ``calls`` prints where the generated lives' calls went, per
 gate, days read and item, with their tokens (``calls``), and every failed attempt, where and why
-(``failures``); it too reads the data dir only.
+(``failures``); it too reads the data dir only. ``probe-writer --generator G --n 3`` makes a few
+tiny writer calls on a Fireworks generator and prints each reply's shape, no text (``probe``); it
+needs no ``--data`` but is paid, so ``--live`` plans it and ``--live --yes`` runs it.
 
 Spark Open runs on the one provider ``ANJO_SLEEP_MIND_SPARK`` names (``mind.spark_provider``:
 Fireworks by default, or Baseten), read once per command, its calls held on that provider's pool.
@@ -78,6 +80,7 @@ from anjo.sleep.mind.apd import (
     pairs,
     pilot,
     plan,
+    probe,
     timing,
 )
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
@@ -99,7 +102,7 @@ from anjo.sleep.mind.apd.types import (
     Life,
     LifeSplit,
 )
-from anjo.sleep.mind.spark_provider import SparkProvider, from_env
+from anjo.sleep.mind.spark_provider import FIREWORKS, SparkProvider, from_env
 from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.prereg.ledger import (
@@ -178,6 +181,13 @@ def _parser() -> argparse.ArgumentParser:
     judged.add_argument("--held-out", action="store_true")
     commands.add_parser("report", help="the APD report, with 17b's section")
     commands.add_parser("calls", help="where the generated lives' and pairs' calls went: per gate, days read, item")
+    probed = commands.add_parser("probe-writer", help="a few tiny writer calls on a Fireworks generator: each "
+                                 "reply's shape, never its text")
+    probed.add_argument("--generator", required=True, choices=tuple(probe.PROBED))
+    probed.add_argument("--n", type=int, default=probe.DEFAULT_PROBES, help=f"how many calls, 1 to {probe.MAX_PROBES} "
+                        f"(default {probe.DEFAULT_PROBES})")
+    probed.add_argument("--generator-prices", help="its in,out list prices (USD per million tokens; default its "
+                        "checked list prices)")
     exported = commands.add_parser("labels", help="a split's event streams, and a labelled split's labels")
     exported.add_argument("--out", type=Path, required=True, help="the export's folder")
     exported.add_argument("--pairs", action="store_true", help="the counterfactual pairs instead of a split")
@@ -590,6 +600,34 @@ def _labels(args: argparse.Namespace, out: Out) -> int:
     return 0
 
 
+def _probe_writer(parser: argparse.ArgumentParser, args: argparse.Namespace, out: Out) -> int:
+    if args.fake:
+        parser.error("probe-writer probes the live generator; its fakes are the tests'")
+    if not 1 <= args.n <= probe.MAX_PROBES:
+        parser.error(f"--n is 1 to {probe.MAX_PROBES}")
+    found, rate = probe.PROBED[args.generator], gen_args.generator_rate(args)
+    if rate is None:
+        parser.error(f"--generator {found.name} needs --generator-prices in,out to price its hold")
+    if not args.live:
+        out(f"probe-writer calls {found.name} on Fireworks, which costs money: it needs --live, which prints its "
+            "plan, then --live --yes.")
+        return REFUSED_CODE
+    for line in probe.plan_lines(found, args.n, rate, FIREWORKS.pool):
+        out(line)
+    if not args.yes:
+        return 0
+    from anjo.sleep.budget import default_ledger
+    try:
+        probe.live(found, args.n, rate, RunLedger(default_ledger().path), out)
+    except MindBusy as error:
+        out(f"{error}.")
+        return BUSY
+    except BudgetStop as error:
+        out(f"Stopped: {error}.")
+        return STOPPED
+    return 0
+
+
 def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
     with _signals_exit():
         return _main(argv, out)
@@ -602,6 +640,8 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
     _check_split(parser, args)
     if args.command == "labels":  # reads the data dir and writes the export; no call, no spend
         return _labels(args, out)
+    if args.command == "probe-writer":  # paid, but needs no data dir: planned with --live, run with --live --yes
+        return _probe_writer(parser, args, out)
     if args.command == "calls":  # reads the data dir's call logs and failed attempts; no call, no spend
         data = DataDir(args.data)
         failed = failures.recorded(data.failed())
