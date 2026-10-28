@@ -82,3 +82,16 @@ def test_a_night_without_cost_parts_is_refused(tmp_path: Path) -> None:
     (folder / "summary.json").write_text(json.dumps(summary))
     with pytest.raises(SystemExit):
         cost.main(["--from", str(folder)])
+
+
+def test_a_month_from_a_pressure_trace_prints_each_nights_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = _night(tmp_path / "night")
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps([{"turns": 60, "evidence": 12}, {"turns": 2, "evidence": 1}] * 15))
+    assert cost.main(["--from", str(folder), "--pressure-trace", str(trace), "--month-usd", "10"]) == 0
+    out = capsys.readouterr().out
+    assert "a month from the pressure trace" in out and "of the month's $10 cap" in out
+    assert "deep  pressure" in out and "nap   below_threshold" in out
+    trace.write_text("[1, 2]")
+    with pytest.raises(SystemExit, match="pressure trace"):
+        cost.main(["--from", str(folder), "--pressure-trace", str(trace)])

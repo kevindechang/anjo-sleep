@@ -343,14 +343,17 @@ class CountedChat:
                 attempt += 1
                 continue
             self._priced(messages, result.input_tokens, result.output_tokens,
-                         0.0 if self.rate is None else self.rate.usd(result.input_tokens, result.output_tokens))
+                         0.0 if self.rate is None else self.rate.usd(result.input_tokens, result.output_tokens),
+                         reply=result)
             return result
 
     def _priced(self, messages: list[dict[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
-                failed: bool = False) -> None:
+                failed: bool = False, reply: ChatResult | None = None) -> None:
         self.usd += usd
         if self.log is not None:
-            self.log.add(messages, tokens_in, tokens_out, usd, failed=failed)
+            self.log.add(messages, tokens_in, tokens_out, usd, failed=failed,
+                         reply_chars=None if reply is None else len(reply.text),
+                         finish=None if reply is None else reply.finish_reason)
 
 
 def spark_rate(prices: Prices | None) -> Rate | None:

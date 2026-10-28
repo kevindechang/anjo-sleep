@@ -10,6 +10,10 @@ as its example. Both sides go through the decontaminator: a probe in the chosen 
 example and its pair, one in the rejected side drops the pair only (``pairs_dropped``). Pair rows
 are written only for the ``sft_dpo`` objective (``to_jsonl(pairs=True)``).
 
+With the thought channel on, a transcript carries the core state its reply was made under, and its
+example and pair rows carry it as ``core`` (``night.core_snapshot``): a replayed row keeps the state
+of the night it was made on, and the training job splices that state's soft tokens into its prompt.
+
 In order, the builder:
 
 1. takes the stored practice items, never held-out ones, and refuses (and counts) any that
@@ -89,6 +93,7 @@ class Example:
     teacher: bool = False  # the target is the Spark Open teacher's candidate (full practice)
     current_date: date | None = None  # the date its prompt was served on, when not the run's (Task 17b)
     weight: float = 1.0  # its loss weight: MIND's surprise at the evidence it was made from (the Sleep link)
+    core: str | None = None  # the core state its reply was made under (``night.core_snapshot``, JSON), channel on
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,7 @@ class Pair:
     chosen_from: str
     rejected_from: str
     tokens: int  # the prompt and the longer side
+    core: str | None = None  # its example's core state (JSON), channel on
 
 
 def _messages(prompt: tuple[Message, ...]) -> list[dict[str, str]]:
@@ -144,13 +150,14 @@ class Dataset:
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
              "prompt": _messages(example.prompt), "completion": _reply(example.completion),
              **({} if example.current_date is None else {"current_date": example.current_date.isoformat()}),
-             **({} if example.weight == 1.0 else {"weight": example.weight})}
+             **({} if example.weight == 1.0 else {"weight": example.weight}),
+             **({} if example.core is None else {"core": json.loads(example.core)})}
             for example in self.examples
         ]
         if pairs:
             rows += [
                 {"id": pair.id, "prompt": _messages(pair.prompt), "chosen": _reply(pair.chosen),
-                 "rejected": _reply(pair.rejected)}
+                 "rejected": _reply(pair.rejected), **({} if pair.core is None else {"core": json.loads(pair.core)})}
                 for pair in self.pairs
             ]
         return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
@@ -193,7 +200,7 @@ def _example(transcript: PracticeTranscript, *, new: bool, drop_context: bool) -
     return Example(
         id=transcript.id, prompt=prompt, completion=transcript.reply,
         context_dropped=transcript.context is not None and drop_context, tokens=tokens, new=new,
-        teacher=transcript.target == "teacher",
+        teacher=transcript.target == "teacher", core=transcript.core,
     )
 
 
@@ -204,7 +211,7 @@ def _pair(transcript: PracticeTranscript, example: Example) -> Pair:
     return Pair(
         id=transcript.id, prompt=example.prompt, chosen=transcript.reply, rejected=transcript.rejected,
         chosen_from=transcript.target, rejected_from=transcript.rejected_from or "glimmer",
-        tokens=prompt + longer + ROLE_OVERHEAD_TOKENS,
+        tokens=prompt + longer + ROLE_OVERHEAD_TOKENS, core=example.core,
     )
 
 

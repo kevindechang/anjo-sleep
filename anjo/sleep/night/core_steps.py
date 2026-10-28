@@ -4,7 +4,7 @@ With ``ANJO_SLEEP_MIND_CORE=1`` and MIND's inquiry on, the app gives the night a
 (``deps.core``) that serves the demo persona's people only; for anyone else, and with the switch
 off (``NoCore``), every hook here leaves the night as it was, and her night log has no dream.
 
-- **Dream** (step 2c, after the notice pass, before the probes and the choice): the core observes
+- **Dream** (step 2d, after the notice pass, before the probes and the choice): the core observes
   her stored evidence it has not observed yet (a killed night's day too), from her last kept
   state, dreams, opens a question through the kernel for each ignition that cites her real
   evidence, picks the threads she is least sure of or most at risk on, consolidates, and keeps the
@@ -34,7 +34,7 @@ from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import Evidence
 
 if TYPE_CHECKING:
-    from anjo.sleep.night.run import _Night
+    from anjo.sleep.night.state import PersonNight
 
 
 class CoreSteps:
@@ -42,33 +42,33 @@ class CoreSteps:
 
     deps: NightDeps
 
-    def _job(self, p: _Night, step: str) -> str:
+    def _job(self, p: PersonNight, step: str) -> str:
         raise NotImplementedError
 
-    def _call(self, p: _Night, step: str) -> MindCall:
+    def _call(self, p: PersonNight, step: str) -> MindCall:
         return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
                         spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
                         cancelled=lambda: self.deps.cancel(p.uid), core_view=p.dreamt.view)
 
-    def _dreams(self, p: _Night) -> tuple[tuple[str, Callable[[_Night], Mapping[str, Any]]], ...]:
+    def _dreams(self, p: PersonNight) -> tuple[tuple[str, Callable[[PersonNight], Mapping[str, Any]]], ...]:
         """The dream step, only for a person the core serves: for anyone else the night's log is
         today's to the byte."""
         return (("dream", self._dream),) if self.deps.core.serves(p.uid) else ()
 
-    def _dream(self, p: _Night) -> Mapping[str, Any]:
+    def _dream(self, p: PersonNight) -> Mapping[str, Any]:
         """Her stored evidence through tonight, never a practice scene or a held-out item; the core
         observes only what its state has not."""
         evidence = [item for item in p.store.stored(p.night) if not item.held_out and item.kind != "practice"]
         p.dreamt = self.deps.core.dream(self._call(p, "dream"), evidence)
         return dict(p.dreamt.receipt)
 
-    def _seeded(self, p: _Night) -> list[Evidence]:
+    def _seeded(self, p: PersonNight) -> list[Evidence]:
         """What practice is seeded on: the dream's picks it may train on, else the trainable evidence as before."""
         trainable = list(p.store.trainable(p.night))
         picked = frozenset(p.dreamt.rehearse)
         return [item for item in trainable if item.id in picked] or trainable
 
-    def _weighted(self, p: _Night, data: Dataset) -> Dataset:
+    def _weighted(self, p: PersonNight, data: Dataset) -> Dataset:
         """Tonight's rows weighted by the mean surprise of the evidence they were made from; a row
         made from none of today's evidence, or on another night, keeps 1.0."""
         if not p.dreamt.weights:
@@ -83,7 +83,7 @@ class CoreSteps:
                 found[example.id] = math.fsum(known) / len(known)
         return data.weighted(found)
 
-    def _surprise(self, p: _Night, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    def _surprise(self, p: PersonNight, receipt: Mapping[str, Any]) -> dict[str, Any]:
         """For a night whose rows carry surprise weights: whether the training job applied them,
         as it reported (``train.colab_train``), else that it did not say."""
         if p.data is None or all(example.weight == 1.0 for example in p.data.examples):
@@ -91,7 +91,7 @@ class CoreSteps:
         said = receipt.get("surprise_weights")
         return {"surprise_weights": said if isinstance(said, str) else "not applied (the training job did not report)"}
 
-    def _kept(self, p: _Night) -> dict[str, Any]:
+    def _kept(self, p: PersonNight) -> dict[str, Any]:
         """The night's unit, for the summary; a disk or store failure to keep it is recorded, not raised."""
         if p.dreamt.state_id is None or self.deps.cancel(p.uid):  # a deleted person's mind is never written again
             return {}

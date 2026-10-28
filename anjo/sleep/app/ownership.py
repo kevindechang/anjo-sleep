@@ -73,6 +73,7 @@ TOMBSTONE_DIR: Final = "deleted"
 LOCK_NAME: Final = "night.lock"  # night/sweep.py's lock, beside the budget ledger
 LOCK_TIMEOUT_S: Final = 120.0
 TRAINING_DIR: Final = "training"  # LoraTrainer's root: adapters/<name> and work/<name>
+PROJECTOR_SUFFIX: Final = ".projector.npz"  # train.lora's: a night's projector, beside its adapter (a test holds them equal)
 SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
 BUCKET_ENV: Final = "ANJO_SLEEP_S3_BUCKET"
 MODAL_URL_ENV: Final = "ANJO_SLEEP_MODAL_URL"
@@ -174,8 +175,11 @@ def adapter_names(user_id: str) -> Names:
 
 
 def _training(user_id: str, adapters: Names) -> list[Path]:
+    """Each adapter's local copy and work folder, and the thought channel's projector its night trained,
+    kept beside the copy (``<name>.projector.npz``, ``train.lora.PROJECTOR_SUFFIX``)."""
     root = data_root() / SLEEP_DIR / TRAINING_DIR
-    return [root / part / name for name in sorted(adapters) for part in ("adapters", "work")]
+    return [path for name in sorted(adapters) for path in (
+        root / "adapters" / name, root / "work" / name, root / "adapters" / f"{name}{PROJECTOR_SUFFIX}")]
 
 
 def _results(user_id: str, adapters: Names) -> list[Path]:

@@ -111,11 +111,13 @@ def post_chat(
     retries: Retries | None = None,
     extra: Mapping[str, Any] | None = None,
     count_reasoning: bool = False,
+    on_reply: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> ChatResult:
     """POST one chat completion to ``url`` and parse the reply. ``max_tokens`` caps the reply
     (sent as ``max_completion_tokens``); ``retries`` sends a busy provider's 429 or 5xx again.
     ``extra`` adds fields to the request (a reasoning model's effort); ``count_reasoning`` counts
-    every generated token as output, reasoning included however the provider reports it."""
+    every generated token as output, reasoning included however the provider reports it;
+    ``on_reply`` is handed the parsed reply's whole JSON body (a probe of its shape)."""
     body: dict[str, Any] = {**(extra or {}), "model": model, "messages": messages}
     if tools is not None:
         body["tools"] = tools
@@ -143,6 +145,8 @@ def post_chat(
     if response.is_error:
         raise ModelApiError(f"{where} returned HTTP {response.status_code}")
     result = _parse(response, where, count_reasoning=count_reasoning)
+    if on_reply is not None:
+        on_reply(response.json())
     logger.info(
         "%s: HTTP %d, %d tokens in, %d out",
         where, response.status_code, result.input_tokens, result.output_tokens,

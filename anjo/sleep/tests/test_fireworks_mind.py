@@ -42,9 +42,10 @@ PRICES = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=1.
 LIVE = ["--live", "--prices", "1.25,4.25,1.5,2.61", "--judge-prices", "1.25,4.25,0.75,3.75"]
 MESSAGES: list[dict[str, Any]] = [{"role": "user", "content": "hello"}]
 ROOT = Path(__file__).parents[1]
-# Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment.
+# Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment
+# (the thought channel's pretraining targets included: generated lives, on MIND's Spark pool, never a night).
 FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
-                   "mind/replay/", "tests/", "deploy/")
+                   "mind/replay/", "tools/thought_channel.py", "tests/", "deploy/")
 
 
 def _ok(model: str) -> dict[str, Any]:

@@ -78,6 +78,10 @@ def test_the_wiring_gets_the_trainer_and_options(monkeypatch: pytest.MonkeyPatch
         main([*BASE, "--user", "u1", "--persona", "founder"])
     [(trainer, options)] = seen
     assert isinstance(trainer, LoraTrainer) and options.personas == {"u1": "founder"} and not options.allow_real
+    assert options.force_deep is False
+    with pytest.raises(RuntimeError, match="stop here"):
+        main([*BASE, "--user", "u1", "--persona", "founder", "--force-deep"])
+    assert seen[-1][1].force_deep is True  # tonight is a deep sleep whatever its pressure
 
 
 def test_the_trainer_deletes_the_plain_text_dataset_even_on_failure(tmp_path: Path) -> None:

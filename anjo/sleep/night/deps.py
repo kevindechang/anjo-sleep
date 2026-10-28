@@ -35,7 +35,9 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
+from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
 from anjo.sleep.note.hold import Fact, NoteWriter
 from anjo.sleep.ports import (
     Chooser,
@@ -344,6 +346,7 @@ class NightSettings:
     practice_scenes: int = 16  # full practice's scenes a night, 16 to 20
     practice_teacher: bool = True  # full practice's Spark Open teacher candidate
     mind_inquiry: bool = False  # MIND's inquiry in the night (Task 17: steps 2b, 4 and 10); off is Task 7a's night
+    force_deep: bool = False  # a deep sleep tonight whatever the pressure (``--force-deep``); the month's cap still wins
 
 
 @dataclass(frozen=True)
@@ -391,6 +394,16 @@ class NightDeps:
     sleep: Callable[[], None] | None = None
     # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
     retries: Callable[[], int] = field(default=lambda: 0)
+    # Nap or deep sleep (``sleep_pressure.py``); None: every night may train, the night before naps (tests, fakes).
+    sleep_policy: SleepPolicy | None = None
+    # The person's own turns inside the night's window, a count; None counts none.
+    turns: Callable[[str, tuple[datetime, datetime]], int] | None = None
+    # MIND's core's ``sleep_pressure(state)`` drops in here; the stand-in until it ships.
+    sleep_pressure: Callable[[SleepState], float] = sleep_pressure
+    # The thought channel (``channel_night``): MIND's state of a person as of the night, and the channel's
+    # setup. Either None is today's night: no soft tokens, no ``core`` on any row.
+    mind_state: MindState | None = None
+    channel: ChannelSetup | None = None
 
 
 @dataclass(frozen=True)
@@ -399,7 +412,8 @@ class NightOptions:
     trainer: the batch's night, and each synthetic person's persona (their sealed probes and the
     collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``.
     ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7);
-    ``mind_inquiry`` turns on MIND's inquiry (Task 17)."""
+    ``mind_inquiry`` turns on MIND's inquiry (Task 17); ``force_deep`` makes tonight a deep sleep
+    whatever its pressure (``night/sleep_pressure.py``)."""
 
     night: date
     personas: Mapping[str, str]
@@ -407,6 +421,7 @@ class NightOptions:
     practice_scenes: int = 16
     practice_teacher: bool = True
     mind_inquiry: bool = False
+    force_deep: bool = False
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]

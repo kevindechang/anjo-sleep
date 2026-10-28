@@ -15,12 +15,20 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from anjo.sleep.night.sleep_pressure import Reason, SleepMark, sleep_mark
+
 SUMMARY: Final = "summary.json"
 LOG: Final = "log.jsonl"
 PERSONAL_ARM: Final = "3"  # her own weights, scored against the starting model (arm 1)
 OVERALL: Final = "overall"
 MIN_MOVE: Final = 0.01  # a score move smaller than this is not reported
-Kind = Literal["promoted", "rejected", "failed", "nothing_new", "studied", "note", "score"]
+Kind = Literal["promoted", "rejected", "failed", "nothing_new", "napped", "studied", "note", "score"]
+WHY_SLEPT: Final[dict[Reason, str]] = {  # why a night napped or slept deep (``night/sleep_pressure.py``), in plain words
+    "forced": "a deep sleep was asked for", "max_days": "the days since her last deep sleep reached the limit",
+    "pressure": "her sleep pressure reached the threshold", "below_threshold": "her sleep pressure was under the threshold",
+    "too_little_new": "there was too little new since her last deep sleep",
+    "month_cap": "a deep sleep would have passed this month's budget",
+}
 
 
 class ChangesError(ValueError):
@@ -53,6 +61,7 @@ class NightView:
     action: str | None  # the chooser's action code, or None
     note: str | None  # the note step's outcome code, or None
     skipped: tuple[str, ...] = ()  # gates switched off that night: judged nothing, never passed
+    sleep: SleepMark | None = None  # a nap or a deep sleep, its pressure and why; None before naps were logged
 
 
 def _json(path: Path) -> Any:
@@ -93,6 +102,7 @@ def _view(folder: Path) -> NightView | None:
             steps=tuple(StepView(str(s["step"]), str(s["status"]), str(s["uses"]), s.get("system")) for s in steps),
             action=action, note=None if note is None else str(note),
             skipped=tuple(str(name) for name, gate in (record.get("gates") or {}).items() if gate.get("skipped")),
+            sleep=sleep_mark(record.get("sleep")),
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ChangesError(f"{folder.name}: not a night record") from None
@@ -105,16 +115,23 @@ def night_views(person_dir: Path) -> list[NightView]:
     return sorted((view for view in found if view is not None), key=lambda view: view.night)
 
 
+def _pressure(mark: SleepMark) -> str:
+    return f"{WHY_SLEPT[mark.reason]}: {mark.pressure:.2f} against {mark.threshold:.2f}"
+
+
 def _night_lines(view: NightView) -> list[Change]:
     when = view.night.isoformat()
     lines: list[Change] = []
+    deep = "" if view.sleep is None or view.sleep.kind != "deep" else f" It was a deep sleep ({_pressure(view.sleep)})."
     if view.status == "promoted":
-        lines.append(Change(view.night, "promoted", f"{when}: she learned from your day, and this new version is the one you talk to."))
+        lines.append(Change(view.night, "promoted", f"{when}: she learned from your day, and this new version is the one you talk to.{deep}"))
     elif view.status == "rejected":
         failed = ", ".join(name for name, passed in view.gates if not passed and name not in view.skipped)
-        lines.append(Change(view.night, "rejected", f"{when}: she trained overnight but held the update back ({failed or 'a check'} did not pass), so the earlier version still serves."))
+        lines.append(Change(view.night, "rejected", f"{when}: she trained overnight but held the update back ({failed or 'a check'} did not pass), so the earlier version still serves.{deep}"))
     elif view.status == "nothing_new":
-        lines.append(Change(view.night, "nothing_new", f"{when}: there was nothing new to learn from, so she changed nothing."))
+        lines.append(Change(view.night, "nothing_new", f"{when}: there was nothing new to learn from, so she changed nothing.{deep}"))
+    elif view.status == "napped" and view.sleep is not None:
+        lines.append(Change(view.night, "napped", f"{when}: she napped ({_pressure(view.sleep)}): she read your day, changed no weights, and left her thinking for her next deep sleep."))
     else:
         where = f" at {view.failed_at}" if view.failed_at else ""
         lines.append(Change(view.night, "failed", f"{when}: the night stopped{where}, so the earlier version still serves."))
