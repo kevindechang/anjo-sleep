@@ -35,7 +35,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
     records this offer's decision point too, before the note settles its target, offered or not: a
     night with no second offer records one that allows nothing. A nap writes none: nothing shares, and
     the note is ``deferred``, its target unsettled.
-11. ``finish``: the ``NightResult`` and every receipt.
+11. ``finish``: the ``NightResult``, every receipt, and the night told as one loop (``story.py``).
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
@@ -91,6 +91,7 @@ from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.train.dataset import build_night_dataset
 from anjo.sleep.train.lora import fresh_adapter_name
+from anjo.sleep.train.terms import attach_night_terms
 from anjo.sleep.types import (
     MAX_NIGHT_ACTIONS,
     Choice,
@@ -545,11 +546,14 @@ class NightRunner:
         if not data.examples:
             raise ValueError("no training example survived the dataset's checks")
         p.data = data
-        return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
+        done = {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
                 "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
                 "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
+        if self.deps.terms.seed:  # sft_dpo_seed's rows (train/terms.py); off, the night is today's
+            p.data, done["terms"] = attach_night_terms(self.deps, p.uid, p.night, p.store, p.sealed, data, p.spend)
+        return done
 
     def _train(self, p: PersonNight) -> Mapping[str, Any]:
         registry = self.deps.registry
@@ -706,7 +710,7 @@ class NightRunner:
             "steps": [record["step"] for record in p.log.steps()],
             **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
             **({} if p.gpu_batch is None else {"gpu_batch": {"digest": p.gpu_batch[0], "people": p.gpu_batch[1]}}),
-        })
+        }, night=p.night)
         return result
 
 

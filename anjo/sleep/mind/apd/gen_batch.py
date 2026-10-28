@@ -13,8 +13,11 @@
   gate's verdict, and for an unreadable reply its field, length and finish reason, never its
   text: recorded in ``failed.jsonl`` (``generate-attempt``), kept in the call log (a skipped life's
   too, ``calls.failed_log_id``) and printed, one line each, whether the life then passed or not.
-- **A life that still fails is skipped:** every attempt failed a rule or a gate
-  (``GenerationError``), a model call failed after its tries (``ModelApiError``), or a reader's
+- **A call that still fails on a transient failure** (a 429, a 5xx, a timeout or a reset, after
+  its tries: ``retry``) ends its attempt, not its life (``CallFailed``); the next attempt starts
+  after a cool-down (``backend.cool_down``), and the attempt's 429s are kept with its failure.
+- **A life that still fails is skipped:** every attempt failed a rule, a gate or a call
+  (``GenerationError``), a model call failed for good (``ModelApiError``: a 400, say), or a reader's
   reply was unreadable (``gates.GateError``). It is recorded (``DataDir.record_failed``), the run
   goes on, and at its end ``live.RunsFailed`` names every skipped life; a rerun generates only
   those (a life on disk is never generated again).
@@ -42,8 +45,8 @@ from functools import partial
 from types import TracebackType
 from typing import Final, TypeVar
 
-from anjo.sleep.mind.apd import failures, gates, generate, readers
-from anjo.sleep.mind.apd.backend import Backend, Flight, held_attempt, life_calls
+from anjo.sleep.mind.apd import failures, gates, generate, readers, retry
+from anjo.sleep.mind.apd.backend import Backend, Flight, cool_down, held_attempt, life_calls
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import GenerationError, GenerationFailed, Generated, LifeSpec
@@ -147,41 +150,63 @@ def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None) 
     the backend's generator (``generators``), its gates read by its reader (``readers``), every
     try logged to ``log`` when given."""
     model, writes = backend.read_by.reads_with(backend.provider), backend.generator.writes_with(backend.provider)
+    on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(generate.MAX_ATTEMPTS):
+        if on_call is not None:
+            cool_down(backend)
+            on_call = None
         if backend.ceiling is not None:
             backend.ceiling.check()  # before the attempt's hold
         if log is not None:
             log.attempt = attempt
-        with failing(log, attempt), held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
-                                                 life_calls(spec.prevalence), log) as (writer, reader, auditor):
-            try:
-                built, problems = generate.life(spec.field, spec.families, spec.prevalence,
-                                                generate.attempt_seed(spec.seed, attempt), split=spec.split, chat=writer,
-                                                model=writes)
-            except GenerationFailed as failed:
-                failed_at(log, failures.of_rule(attempt, failed))
-                continue
-            verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
+        try:
+            with failing(log, attempt), held_attempt(backend, f"{spec.split}:{spec.seed}:{attempt}",
+                                                     life_calls(spec.prevalence), log) as (writer, reader, auditor):
+                try:
+                    built, problems = generate.life(spec.field, spec.families, spec.prevalence,
+                                                    generate.attempt_seed(spec.seed, attempt), split=spec.split,
+                                                    chat=writer, model=writes)
+                except GenerationFailed as failed:
+                    failed_at(log, failures.of_rule(attempt, failed))
+                    continue
+                verdicts = gates.check(built, problems, reader=reader, auditor=auditor, model=model)
+        except CallFailed as failed:
+            on_call = failed
+            continue
         if gates.passed(verdicts):
             return Generated(built, problems, attempt + 1, verdicts)
         failed_at(log, *failures.of_verdicts(attempt, built, verdicts))
-    raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts")
+    raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts{last_call(on_call)}")
+
+
+class CallFailed(RuntimeError):
+    """An attempt's call still failed on a transient failure after its tries: the attempt ends, and
+    the next one starts after a cool-down."""
+
+
+def last_call(failed: CallFailed | None) -> str:
+    return "" if failed is None else f"; the last ended on a call: {failed}"
 
 
 def failed_at(log: CallLog | None, *found: failures.AttemptFailure) -> None:
-    """Keep why an attempt failed in ``log``, when there is one."""
-    if log is not None:
-        log.failures.extend(found)
+    """Keep why an attempt failed in ``log``, when there is one, with the attempt's 429s."""
+    if log is None:
+        return
+    count, waits = log.rate_limits()
+    log.failures.extend(dataclasses.replace(failure, rate_limits=count, waits_s=waits) for failure in found)
 
 
 @contextmanager
 def failing(log: CallLog | None, attempt: int) -> Iterator[None]:
     """An attempt ended by a call that still failed or a reply that couldn't be read: kept in
-    ``log`` at its last call, and raised on (the life is skipped)."""
+    ``log`` at its last call. A transient failure (``retry.transient``) ends the attempt
+    (``CallFailed``); any other is raised on (the life is skipped)."""
     try:
         yield
     except (ModelApiError, gates.GateError) as error:
         failed_at(log, failures.of_error(attempt, error, None if log is None else log.last()))
+        if isinstance(error, ModelApiError) and retry.transient(error):
+            raise CallFailed(str(error)) from error
         raise
 
 

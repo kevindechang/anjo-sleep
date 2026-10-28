@@ -4,8 +4,9 @@ lets Glimmer read MIND's state, trained together in one run (one system: ``brief
 **What it trains.** A night's rows (``train.dataset``) may carry the core state each was made under
 (``core``, a ``night.core_snapshot.CoreSnapshot``: the projector's input, never the raw state). With
 a recipe ``channel`` block, the training script (``colab_train.main``) hands the run to ``main`` here
-instead of TRL: each row's prompt goes to Glimmer as input embeddings, with K soft tokens, the
-projector's output for the row's reading, spliced in just before the ``<|eot|>`` that closes the
+instead of TRL (an ``sft_dpo_seed`` recipe goes to ``sleep_job``, which trains the channel in the one
+loss): each row's prompt goes to Glimmer as input embeddings, with K soft tokens, the projector's
+output for the row's reading, spliced in just before the ``<|eot|>`` that closes the
 latest user turn, exactly as the server splices them (``serving.soft_tokens.splice``). The loss is
 on the reply and ``<|eot|>`` only, as in the SFT pass; gradients reach the LoRA through the frozen
 4-bit base and the projector through the soft tokens. For the first ``projector_warmup`` share of the
@@ -27,8 +28,9 @@ both sides, and scored after training with their own state and with the empty re
 **The pieces compose** (one loss, one budget, one job): ``Channel`` puts the projector on a model
 (``soft`` for a reading, ``splice`` and ``batch`` for a sequence as the server sends it, ``logps`` for
 the replies' log-probabilities, ``projector_groups`` for an optimizer); ``sft_loss`` and
-``contrast_loss`` are the channel's terms; ``train_pass`` is this run's loop over them. Another loss
-adds its own terms over ``Channel.logps`` and puts ``projector_groups`` in its optimizer.
+``contrast_loss`` are the channel's terms; ``train_pass`` is this run's loop over them; ``open_channel``
+and ``save_channel`` start and end a run's projector. ``sleep_job`` (the one loss, ``sleep_loss``) opens
+and saves it the same way, splices with ``Channel.splice`` and puts ``projector_groups`` in its optimizer.
 
 **The projector's math** is ``serving.projector_math`` (the host serves it, so it lives there): this
 module re-exports it, imported, or loaded by path beside this file's copy on the image (the training
@@ -372,13 +374,45 @@ def feature_stats(params: dict[str, Any], readings: Sequence[Reading]) -> dict[s
 # ── The run (GPU VM only) ─────────────────────────────────────────────────────
 
 
+def open_channel(model: Any, tokenizer: Any, ch: Mapping[str, Any], *, seed: int, prev: str | None,
+                 readings: Mapping[str, Reading], device: Any) -> tuple[Channel, dict[str, Any]]:  # pragma: no cover
+    """The projector on ``model`` for a run (this one, or ``sleep_job``'s): the warm start's
+    (``PROJECTOR_FILE`` in ``prev``) or a fresh one scaled to the run's readings, held to the model's
+    embeddings and to numpy. Returns the channel and its receipt so far."""
+    hidden = int(_embedding_weight(model.get_input_embeddings()).shape[1])
+    found = Path(prev) / PROJECTOR_FILE if prev else None
+    fresh = found is None or not found.is_file()
+    real = [v for key, v in readings.items() if key != "empty"]
+    if found is not None and not fresh:
+        params, meta = load_params(found.read_bytes())
+        shape = (meta.get("k"), meta.get("d"), meta.get("width"), meta.get("hidden", HIDDEN))  # older saves: Glimmer's
+        if shape != (ch["k"], ch["d"], ch["width"], hidden):
+            raise ValueError("the warm start's projector has another K, core width, projector width or model width")
+    else:
+        rows = anchor_rows(tokenizer, model.get_input_embeddings(), ch["k"])
+        params = feature_stats(fresh_params(ch["k"], ch["d"], ch["width"], rows, seed, hidden=hidden), real)
+    run = Channel(model, params, device=device, eot=tokenizer.convert_tokens_to_ids(EOT))
+    return run, {"fresh": fresh, "projector_from": params_sha(params),
+                 "embeds_gap": check_embeds(run, tokenizer("The camera arrives on Friday.")["input_ids"]),
+                 "forward_gap": check_forward(run, real or [readings["empty"]])}
+
+
+def save_channel(run: Channel, out: Path, ch: Mapping[str, Any], opened: Mapping[str, Any]) -> dict[str, Any]:  # pragma: no cover
+    """The trained projector written beside the adapter (``PROJECTOR_FILE``, its shape, arm and the
+    projector it trained from in its meta), and the receipt's channel block as both runs give it."""
+    final = run.arrays()
+    meta = {"k": ch["k"], "d": ch["d"], "width": ch["width"], "arm": ch["arm"], "trained_from": opened["projector_from"]}
+    (out / PROJECTOR_FILE).write_bytes(save_params(final, meta))
+    return {"k": ch["k"], "arm": ch["arm"], **opened, "projector": params_sha(final)}
+
+
 def _encode(ct: Any, tokenizer: Any, row: dict[str, Any], side: str, template: dict[str, str],
             reply: str | None = None) -> tuple[list[int], list[int]]:  # pragma: no cover - needs the training stack
     """A row's prompt ids (as the server renders them, BOS first, the reply's header last) and one
     side's reply ids (closed by ``<|eot|>``), checked against the chat template's own render."""
     shaped = {**row, side: [{"role": "assistant", "content": reply}]} if reply is not None else row
-    plain = ct.plain_row(tokenizer, {k: v for k, v in shaped.items() if k in ("id", "prompt", side, "current_date")},
-                         template)
+    one = {"completion" if k == side else k: v for k, v in shaped.items() if k in ("id", "prompt", side, "current_date")}
+    plain = ct.plain_row(tokenizer, one, template)  # one side as a completion: a pair row holds both sides
     prompt_ids = list(tokenizer(text=plain["prompt"])["input_ids"])
     reply_ids = [*tokenizer(ct._reply(shaped[side]), add_special_tokens=False)["input_ids"],
                  tokenizer.convert_tokens_to_ids(EOT)]
@@ -442,24 +476,8 @@ def main(ct: Any, cfg: dict[str, Any]) -> int:  # pragma: no cover - runs only o
         model = PeftModel.from_pretrained(model, prev, is_trainable=True)
     else:
         model = get_peft_model(model, LoraConfig(**settings["lora"]))
-    device = torch.device("cpu" if smoke else "cuda:0")
-    hidden = int(_embedding_weight(model.get_input_embeddings()).shape[1])
-    projector_prev = Path(prev) / PROJECTOR_FILE if prev else None
-    if projector_prev is not None and projector_prev.is_file():
-        params, meta = load_params(projector_prev.read_bytes())
-        shape = (meta.get("k"), meta.get("d"), meta.get("width"), meta.get("hidden", HIDDEN))  # older saves: Glimmer's
-        if shape != (ch["k"], ch["d"], ch["width"], hidden):
-            raise ValueError("the warm start's projector has another K, core width, projector width or model width")
-        fresh = False
-    else:
-        rows = anchor_rows(tokenizer, model.get_input_embeddings(), ch["k"])
-        params = feature_stats(fresh_params(ch["k"], ch["d"], ch["width"], rows, cfg["seed"], hidden=hidden),
-                               [v for key, v in readings.items() if key != "empty"])
-        fresh = True
-    start_sha = params_sha(params)
-    run = Channel(model, params, device=device, eot=tokenizer.convert_tokens_to_ids(EOT))
-    embeds_gap = check_embeds(run, tokenizer("The camera arrives on Friday.")["input_ids"])
-    forward_gap = check_forward(run, [v for key, v in readings.items() if key != "empty"] or [readings["empty"]])
+    run, opened = open_channel(model, tokenizer, ch, seed=cfg["seed"], prev=prev, readings=readings,
+                               device=torch.device("cpu" if smoke else "cuda:0"))
     lora = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW([{"params": lora, "lr": cfg["learning_rate"]},
                                    *run.projector_groups(projector_lr=ch["projector_lr"], anchor_lr=ch["anchor_lr"])],
@@ -481,9 +499,7 @@ def main(ct: Any, cfg: dict[str, Any]) -> int:  # pragma: no cover - runs only o
     ct.record_rendering(out, cfg["rendering"])
     if base is not None:
         ct.record_base_model(out)
-    final = run.arrays()
-    meta = {"k": ch["k"], "d": ch["d"], "width": ch["width"], "arm": ch["arm"], "trained_from": start_sha}
-    (out / PROJECTOR_FILE).write_bytes(save_params(final, meta))
+    saved = save_channel(run, out, ch, opened)
     losses, margins = done["losses"], done["margins"]
     kept = len(order) + len(items["val"])
     receipt = {
@@ -493,13 +509,11 @@ def main(ct: Any, cfg: dict[str, Any]) -> int:  # pragma: no cover - runs only o
         "dpo_steps": dpo_steps, "pairs": len(items["pairs"]), "pairs_dropped_truncated": len(pair_rows) - len(items["pairs"]),
         "rows_checked": done["seen"], "dpo_reference": "adapter_off+projector_start" if items["pairs"] else "none",
         "rendering": cfg["rendering"],
-        "channel": {"k": ch["k"], "arm": ch["arm"], "fresh": fresh, "projector_from": start_sha,
-                    "projector": params_sha(final), "contrast_rows": len(items["contrast"]), "held_out": len(items["val"]),
+        "channel": {**saved, "contrast_rows": len(items["contrast"]), "held_out": len(items["val"]),
                     "projector_only_updates": min(done["steps"], int(ch["projector_warmup"] * planned)),
                     "train_margin_mean": float(np.mean(margins)) if margins else None,
                     "loss_first": float(np.mean(losses[:20])) if losses else None,
-                    "loss_last": float(np.mean(losses[-20:])) if losses else None,
-                    "embeds_gap": embeds_gap, "forward_gap": forward_gap, **held},
+                    "loss_last": float(np.mean(losses[-20:])) if losses else None, **held},
     }
     (out / ct.RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
     return 0

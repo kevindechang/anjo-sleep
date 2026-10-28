@@ -55,7 +55,7 @@ from anjo.sleep.demo.record import chart_view, ledger_view, task16_view
 from anjo.sleep.demo.slider import NightMark, Stop, plan_stops
 from anjo.sleep.demo.toggles import SwapSet, load_swaps
 from anjo.sleep.mind import expect
-from anjo.sleep.night.nightlog import LOG, SUMMARY
+from anjo.sleep.night.nightlog import LOG, STORY, SUMMARY
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.prereg.ledger import LedgerError, head_path, read_entries, read_pushed_head
 from anjo.sleep.probes.judge_brief import PERSONAS_DIR
@@ -89,15 +89,16 @@ def _folders(root: Path) -> Iterator[Path]:
 
 
 def night_files(user: str) -> tuple[NightFiles, ...]:
-    """Each night's summary and log records, in run order."""
+    """Each night's summary, log records and story (``night.story``, when it has one), in run order."""
     out = []
     for folder in _folders(night_logs(user)):
         summary = json.loads((folder / SUMMARY).read_text(encoding="utf-8"))
-        log = folder / LOG
+        log, told = folder / LOG, folder / STORY
         steps = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line] if log.exists() else []
+        story = json.loads(told.read_text(encoding="utf-8")) if told.exists() else None
         if not isinstance(summary, dict):
             raise ValueError(f"{folder.name}'s summary is not a record")
-        out.append(NightFiles(summary, tuple(steps)))
+        out.append(NightFiles(summary, tuple(steps), story if isinstance(story, dict) else None))
     return tuple(out)
 
 

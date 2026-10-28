@@ -8,6 +8,8 @@ verdicts, never a person's words.
   ``dataclasses.asdict`` can't copy it), with the night's receipts. Written once, atomically.
 - ``mind_points.jsonl``: a synthetic life's two decision points (Task 16, ``mind.points``), ids,
   numbers and times only.
+- ``story.json``: the night as one loop (``night/story.py``), told from ``log.jsonl`` when the night
+  finishes and told again after the morning; rewritten whole, atomically, each time.
 
 A night run again on the same date gets its own folder (``<date>.2``, ``<date>.3``), so no log is
 ever overwritten. A log whose folder was removed (the person deleted their data, Task 9) writes
@@ -17,6 +19,7 @@ published; for a real person, outside it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -24,13 +27,16 @@ from pathlib import Path
 from typing import Any, Final, Literal
 
 from anjo.sleep.checkpoints import ref_record
-from anjo.sleep.types import Choice, GateResult, NightResult
+from anjo.sleep.night.story import StoryError, tell
+from anjo.sleep.types import Choice, GateResult, NightResult, NightStatus
 
 LOG: Final = "log.jsonl"
 SUMMARY: Final = "summary.json"
 POINTS: Final = "mind_points.jsonl"
+STORY: Final = "story.json"
 Uses = Literal["new", "existing"]
 StepStatus = Literal["ok", "skipped", "failed"]
+logger = logging.getLogger(__name__)
 
 
 def night_folder(root: Path, night: date) -> Path:
@@ -120,13 +126,29 @@ class NightLog:
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
-    def finish(self, result: NightResult, receipts: Mapping[str, Any]) -> None:
+    def finish(self, result: NightResult, receipts: Mapping[str, Any], *, night: date | None = None) -> None:
+        """The summary; given the ``night``, its story too, told from this log as it stands."""
+        self._replace(SUMMARY, json.dumps({**result_record(result), **receipts}, sort_keys=True, indent=1, default=str))
+        if night is not None:
+            self.tell(night, result.status)
+
+    def tell(self, night: date, status: NightStatus) -> None:
+        """The night as one loop (``story.tell``) from this log's records, replacing the one told before.
+        A log the story can't be told from is logged and leaves the story as it was: the night's own
+        record never fails it, and the page says its story is unavailable."""
+        try:
+            record = tell(night, status, self.steps()).record()
+        except StoryError as error:
+            logger.warning("the story of night %s can't be told from its log: %s", night.isoformat(), error)
+            return
+        self._replace(STORY, json.dumps(record, indent=1))
+
+    def _replace(self, name: str, text: str) -> None:
         if not self.folder.is_dir():
             return  # removed by a delete (RF2)
-        pending = self.folder / f".{SUMMARY}.tmp"
-        pending.write_text(json.dumps({**result_record(result), **receipts}, sort_keys=True, indent=1, default=str),
-                           encoding="utf-8")
-        os.replace(pending, self.folder / SUMMARY)
+        pending = self.folder / f".{name}.tmp"
+        pending.write_text(text, encoding="utf-8")
+        os.replace(pending, self.folder / name)
 
 
 def summaries(root: Path) -> list[dict[str, Any]]:
