@@ -4,7 +4,8 @@
 the safety gate died on a ReadTimeout after 300 s for a request Modal never delivered).
 
 The night's client sends a request lost in transport again, at most twice, with a short pause; a
-status from the server is an answer and is never sent again. A warm server gets a shorter timeout
+status from the server is an answer and is never sent again, but for a 502, 503 or 504 Modal's proxy
+sent by itself, which goes again once within the same attempts. A warm server gets a shorter timeout
 per attempt than a cold start does, and every attempt of one request still ends inside the 300 s
 one request could always take. One client never has more requests in flight than one server
 container takes. A chat turn and the live page send once. The night log counts what was sent
@@ -90,7 +91,7 @@ def test_transport_error_gives_up_after_three_attempts() -> None:
     assert waits.slept == list(vllm.BACKOFF_S) and client.retries() == 2
 
 
-@pytest.mark.parametrize("status", [400, 429, 500, 503])
+@pytest.mark.parametrize("status", [400, 429, 500])
 def test_status_error_is_not_retried(status: int) -> None:
     def answer(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
@@ -103,6 +104,73 @@ def test_status_error_is_not_retried(status: int) -> None:
         client.complete(None, MESSAGES, temperature=1.0)
     assert seen == ["/tokenize"] and waits.slept == []  # the server answered: an answer is never sent again
     assert client.retries() == 0
+
+
+class Proxied(LiveVllm):
+    """vLLM behind Modal's proxy: the first requests to /v1/completions meet ``script`` in turn, a
+    status the proxy answers by itself while vLLM is healthy, or a transport error; then vLLM answers.
+    ``late`` moves ``waits``' clock by that much as each one is met."""
+
+    def __init__(self, *script: int | type[httpx.TransportError], waits: Waits | None = None, late: float = 0.0) -> None:
+        super().__init__()
+        self.script, self.waits, self.late = script, waits, late
+        self.sent = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path != COMPLETIONS:
+            return super().__call__(request)
+        self.sent += 1
+        if self.waits is not None:
+            self.waits.now += self.late
+        if self.sent > len(self.script):
+            return super().__call__(request)
+        met = self.script[self.sent - 1]
+        if isinstance(met, int):
+            return httpx.Response(met, text="<html>the proxy's own page</html>")
+        raise met("lost on the way", request=request)
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_proxy_status_goes_again_once(status: int) -> None:
+    """Night 1's morning (the seed arm, 2026-10-29) failed on one 502 from Modal's proxy while vLLM
+    was healthy. A 502, 503 or 504 is the proxy's answer, not vLLM's: the request goes again once."""
+    fake, waits = Proxied(status), Waits()
+    client = _client(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert fake.sent == 2 and waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1
+    assert fake.probes == []  # a status is no sign of a wedge: /v1/models is never asked
+
+
+def test_a_proxy_status_goes_again_only_once() -> None:
+    fake, waits = Proxied(502, 502), Waits()
+    client = _client(fake, waits)
+    with pytest.raises(ServingError, match="^/v1/completions returned HTTP 502$") as raised:
+        client.complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert not isinstance(raised.value, vllm.TransportFailed | vllm.ServerUnresponsive)
+    assert fake.sent == 2 and waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1
+    assert fake.probes == [] and client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"  # never marked down
+
+
+def test_a_proxy_status_stays_inside_the_attempt_budget() -> None:
+    fake, waits = Proxied(httpx.ReadTimeout, 502, 502), Waits()  # lost once, then the proxy's 502 twice
+    with pytest.raises(ServingError, match="HTTP 502"):
+        _client(fake, waits).complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert fake.sent == vllm.ATTEMPTS and waits.slept == list(vllm.BACKOFF_S)
+
+
+def test_a_proxy_status_goes_again_only_inside_one_requests_bound() -> None:
+    waits = Waits()
+    fake = Proxied(504, waits=waits, late=vllm.REQUEST_TIMEOUT_S - 1)  # the proxy gave up late in the 300 s
+    with pytest.raises(ServingError, match="HTTP 504"):
+        _client(fake, waits).complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert fake.sent == 1 and waits.slept == []
+
+
+def test_once_never_sends_a_proxy_status_again() -> None:
+    fake, waits = Proxied(502), Waits()
+    with pytest.raises(ServingError, match="HTTP 502"):
+        _client(fake, waits).once().complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert fake.sent == 1 and waits.slept == []
 
 
 def test_warm_attempt_timeout_is_shorter_than_cold() -> None:
