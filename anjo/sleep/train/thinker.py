@@ -9,7 +9,8 @@
   host's estimate, and the script, counting with the real tokenizer, stops before the model loads
   if any row would still be dropped (``keep_every_row``), so only the VM's boot is spent.
 - **Colab only, never Modal:** ``train_thinkers`` takes a ``ColabRunner``, which ``colab_runner``
-  builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else. The runner holds
+  builds to train replay's one synthetic owner (``REPLAY_OWNER``) and nobody else, in MIND's own
+  sessions (``anjo-mind-…``), so a Sleep night's sweep never stops one. The runner holds
   each job's worst case on the ``colab_cu`` pool before its VM starts; ``train_thinkers`` first
   checks the pool can hold both jobs, so it never trains one and stops on the other.
 - **Rendering:** each row is rendered at the server's reasoning strength on the date it was
@@ -18,7 +19,8 @@
   ``CheckpointRef`` carries it, so the server never serves it under another (``served.py``).
 - **Dry run first:** ``plan`` is pure, and a dry run (the default) prints it (rows, tokens, steps,
   estimated A100 minutes and compute units, and the hold beside what the pool has left) and
-  touches neither the runner nor a hold.
+  touches neither the runner nor a hold. A real one trains under MIND's lock
+  (``mind.sweep.mind_lock``), so no APD command's sweep stops its sessions or settles its holds.
 
 The estimates are the spec's: about 1-2M tokens in 30-60 minutes on one A100-80GB
 (``A100_TOKENS_PER_MINUTE``), plus ``SETUP_MINUTES`` for the VM, the installs and the base
@@ -35,6 +37,7 @@ from typing import Final
 
 from anjo.sleep.budget import TRAINING_TIMEOUT_S, Ledger
 from anjo.sleep.mind.replay.dataset import ReplayData
+from anjo.sleep.mind.sweep import lock_path, mind_lock
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import (
@@ -46,7 +49,7 @@ from anjo.sleep.train.lora import (
     plan_steps,
     train_lora_with_receipt,
 )
-from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, POOL, ColabCli, ColabRunner
+from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX, POOL, ColabCli, ColabRunner
 from anjo.sleep.types import CheckpointRef
 
 REPLAY_OWNER: Final = "apd-replay"  # the synthetic owner every replay adapter trains under
@@ -61,8 +64,10 @@ def is_replay_owner(person_id: str) -> bool:
 
 
 def colab_runner(cli: ColabCli, ledger: Ledger, *, clock: Callable[[], float] = time.monotonic) -> ColabRunner:
-    """The Colab runner for replay: it trains ``REPLAY_OWNER`` only, and never a real person."""
-    return ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_replay_owner, clock=clock)
+    """The Colab runner for replay: it trains ``REPLAY_OWNER`` only, never a real person, in
+    sessions named ``anjo-mind-…``."""
+    return ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_replay_owner, clock=clock,
+                       session_prefix=MIND_SESSION_PREFIX)
 
 
 @dataclass(frozen=True)
@@ -95,30 +100,36 @@ def _starts(data: Dataset) -> frozenset[str]:
     return frozenset(example.id.rsplit(":b", 1)[0] for example in data.examples)
 
 
-def shared_steps(data: ReplayData, cfg: LoraCfg) -> StepPlan:
+def shared_steps(data: ReplayData, cfg: LoraCfg, scale: int = 1) -> StepPlan:
     """The one step plan both adapters train with: the larger set's, so the smaller one's rows
     are each seen at least once too. Refuses sets that don't draw on the same start states."""
     if not data.thinker1.examples or _starts(data.thinker1) != _starts(data.shuffled):
         raise TrainError("thinker-1 and thinker-shuffled each hold one trajectory from the same start states")
-    return plan_steps(max(len(data.thinker1.examples), len(data.shuffled.examples)), cfg)
+    return plan_steps(scale * max(len(data.thinker1.examples), len(data.shuffled.examples)), cfg)
 
 
-def _adapter_plan(label: str, data: Dataset, steps: StepPlan) -> AdapterPlan:
+def _adapter_plan(label: str, data: Dataset, steps: StepPlan, scale: int = 1) -> AdapterPlan:
     seen = steps.steps * steps.accumulation * data.tokens / len(data.examples)  # tokens over every update
     minutes = SETUP_MINUTES + seen / A100_TOKENS_PER_MINUTE
     return AdapterPlan(
-        label=label, examples=len(data.examples), tokens=data.tokens, steps=steps.steps, epochs=steps.epochs,
-        accumulation=steps.accumulation, minutes=minutes, compute_units=minutes / 60.0 * A100_CU_PER_HOUR,
+        label=label, examples=scale * len(data.examples), tokens=scale * data.tokens, steps=steps.steps,
+        epochs=steps.epochs, accumulation=steps.accumulation, minutes=minutes,
+        compute_units=minutes / 60.0 * A100_CU_PER_HOUR,
     )
 
 
 def plan(
     data: ReplayData, cfg: LoraCfg = LoraCfg(), *, timeout_s: float = TRAINING_TIMEOUT_S,
-    remaining_cu: float | None = None,
+    remaining_cu: float | None = None, scale: int = 1,
 ) -> ThinkerPlan:
-    """What training both adapters would take, on one shared step plan."""
-    steps = shared_steps(data, cfg)
-    adapters = tuple(_adapter_plan(label, d, steps) for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
+    """What training both adapters would take, on one shared step plan. ``scale`` sizes it as if
+    each set held that many times its rows at the same tokens a row (APD's timing measures one
+    development life and projects all of them)."""
+    if scale < 1:
+        raise TrainError("a plan's scale is at least 1")
+    steps = shared_steps(data, cfg, scale)
+    adapters = tuple(_adapter_plan(label, d, steps, scale)
+                     for label, d in zip(LABELS, (data.thinker1, data.shuffled), strict=True))
     return ThinkerPlan(adapters=adapters, hold_cu=timeout_s / 3600.0 * A100_CU_PER_HOUR, remaining_cu=remaining_cu)
 
 
@@ -176,12 +187,13 @@ def train_thinkers(
     used: frozenset[str] = _used(adapter_cache)
     night, steps = render_night(data), shared_steps(data, cfg)
     refs: tuple[CheckpointRef, ...] = ()
-    for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
-        name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
-        ref, _ = train_lora_with_receipt(
-            None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
-            workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
-            timeout_s=timeout_s, steps=steps, keep_every_row=True,
-        )
-        used, refs = used | {name}, (*refs, ref)
+    with mind_lock(lock_path(ledger, workdir)):
+        for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
+            name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
+            ref, _ = train_lora_with_receipt(
+                None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
+                workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
+                timeout_s=timeout_s, steps=steps, keep_every_row=True,
+            )
+            used, refs = used | {name}, (*refs, ref)
     return found, refs

@@ -23,10 +23,13 @@ Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
 by the app, never here), or the SageMaker endpoint's signed envelope
 (``serving.sagemaker.invoke.SageMakerPoster``). The serving backend (``serving.backend``) picks one.
+The URL is https, or plain http on a loopback host only (``check_url``): the local end of an SSH
+tunnel to Glimmer on Colab (``serving.colab_vllm``), which never leaves this machine.
 Errors name the endpoint and the status, never a message's words.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -51,6 +54,7 @@ WAKE_POLL_TIMEOUT_S: Final = 10.0  # one poll; Modal's proxy may hold it while t
 WAKE_BACKOFF_START_S: Final = 2.0
 WAKE_BACKOFF_MAX_S: Final = 20.0
 WAKE_PATH: Final = "/v1/models"  # needs the bearer token and reaches vLLM, so it resets Modal's idle timer
+LOCALHOST: Final = "localhost"
 
 
 class ServingError(RuntimeError):
@@ -139,20 +143,43 @@ def json_object(path: str, raw: bytes | str) -> dict[str, Any]:
     return data
 
 
+def is_loopback(host: str) -> bool:
+    """Whether ``host`` names this machine: ``localhost`` or a loopback address, never a name
+    that merely starts like one."""
+    if host == LOCALHOST:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def check_url(base_url: str) -> str:
+    """``base_url`` without its trailing slash: https, or plain http on a loopback host only."""
+    try:
+        url = httpx.URL(base_url)
+    except httpx.InvalidURL:
+        raise ServingError("the serving URL is https, or http on a loopback host only") from None
+    if not (url.scheme == "https" or (url.scheme == "http" and is_loopback(url.host))):
+        raise ServingError("the serving URL is https, or http on a loopback host only")
+    return base_url.rstrip("/")
+
+
 class HttpPoster:
-    """vLLM's https server with the bearer token (Modal)."""
+    """vLLM's server with the bearer token: Modal's https URL, or a tunnel's loopback end. A
+    loopback request never takes a proxy from the environment (``trust_env``), so the token
+    never leaves this machine on its way to the tunnel."""
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
         timeout_s: float = REQUEST_TIMEOUT_S,
     ) -> None:
-        if not base_url.startswith("https://"):
-            raise ServingError("the serving URL is https")
+        self.base_url = check_url(base_url)
         if not token:
             raise ServingError("the serving token is set")
         self._http = httpx.Client(
-            base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
-            transport=transport, timeout=timeout_s,
+            base_url=self.base_url, headers={"Authorization": f"Bearer {token}"},
+            transport=transport, timeout=timeout_s, trust_env=not is_loopback(httpx.URL(self.base_url).host),
         )
 
     def close(self) -> None:
@@ -227,6 +254,12 @@ class VllmClient:
     @property
     def rendering(self) -> str:
         return framing.rendering(self._strength)
+
+    @property
+    def base_url(self) -> str | None:
+        """The server's URL, or ``None`` for a client over another ``Poster``."""
+        url = getattr(self._poster, "base_url", None)
+        return url if isinstance(url, str) else None
 
     def close(self) -> None:
         self._poster.close()

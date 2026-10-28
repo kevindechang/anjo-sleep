@@ -3,12 +3,14 @@ step does in the night (``night/mind.py``).
 
 - **Glimmer on Colab only:** every APD arm's thinker is Glimmer on Colab vLLM at one precision
   (``mind/inquiry/ports.py``), and replay's branches and 17b arms are too. ``colab_client``
-  refuses any server not named ``COLAB``: the night's SageMaker and Modal servers never serve
-  replay. No Colab serving backend exists yet, so nothing can pass it, and a live run stays unwired.
+  accepts only a live session of ``apd.colab_vllm.serve`` whose client points at its own tunnel's
+  loopback end: the night's SageMaker and Modal servers, a server merely named ``colab``, and a
+  session that has ended never serve replay.
 - **Held before it runs:** each start state's branches, and each held-out life's run of each arm,
   hold their Glimmer worst case on ``colab_cu`` (every thinker and ``world_query`` call of a night
   at the client's request timeout, at the A100 rate) and settle the wall time they took, while the
-  VM serves them. The labels hold their Spark Open worst case on ``baseten_mind_usd`` (one call
+  VM serves them. When the session itself holds its whole worst case (``serve`` does), ``Holds``
+  is built with ``gpu=False``, so the VM's time is held once. The labels hold their Spark Open worst case on ``baseten_mind_usd`` (one call
   per start state, at the most a call reads and writes), and so do the branches' resolver calls
   (``MIND_SPARK_CALLS`` a branch, as a night's step); each settles the dollars it metered. A pool
   without room stops replay before the call (``BudgetStop``). Without a ledger (tests and
@@ -22,14 +24,16 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
+from urllib.parse import urlsplit
 
 from anjo.sleep.budget import Bound, Ledger
+from anjo.sleep.mind.apd.colab_vllm import ColabSession
 from anjo.sleep.mind.replay.types import ReplayRefused
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, spark_usd, spark_worst_usd, usd
 from anjo.sleep.night.mind import GLIMMER_CALL_S, MIND_GLIMMER_CALLS
-from anjo.sleep.serving.client import VllmClient
+from anjo.sleep.serving.client import VllmClient, is_loopback
 from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, POOL
 
@@ -47,10 +51,16 @@ class GlimmerServer(Protocol):
 
 
 def colab_client(server: GlimmerServer) -> VllmClient:
-    """The client of Glimmer on Colab vLLM; any other server is refused before a call."""
-    if server.name != COLAB:
+    """The client of Glimmer on Colab vLLM: a live ``ColabSession``'s, pointing at its own
+    tunnel's loopback end. Any other server is refused before a call, whatever its name."""
+    if not isinstance(server, ColabSession) or server.name != COLAB:
         raise ReplayRefused(f"replay serves Glimmer on Colab vLLM only, at one precision, never on {server.name}")
-    return server.client()
+    if not server.live:
+        raise ReplayRefused(f"Colab session {server.session} isn't serving")
+    client = server.client()
+    if client.base_url != server.base_url or not is_loopback(urlsplit(server.base_url).hostname or ""):
+        raise ReplayRefused("replay reaches Colab vLLM only through its session's own loopback tunnel")
+    return client
 
 
 @dataclass(frozen=True)
@@ -62,6 +72,7 @@ class Holds:
     prices: Prices
     timer: Callable[[], float]
     job: str = "replay"
+    gpu: bool = True  # False when the serving session holds the VM's time itself
 
 
 @dataclass
@@ -87,7 +98,7 @@ def glimmer_seconds(nights: int) -> float:
 @contextmanager
 def held_gpu(holds: Holds | None, key: str, nights: int) -> Iterator[None]:
     """``nights`` of Glimmer held on ``colab_cu``, settled at the wall time they took."""
-    if holds is None:
+    if holds is None or not holds.gpu:
         yield
         return
     started = holds.timer()

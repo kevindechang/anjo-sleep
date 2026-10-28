@@ -72,7 +72,15 @@ from anjo.sleep.mind.inquiry._check import (
     freeze_tuple,
 )
 from anjo.sleep.mind.inquiry.ports import PredictionResolver, ScreenPort, Thinker, WorldQuery
-from anjo.sleep.mind.inquiry.types import FINDING_KINDS, FindingKind, Turn, WorkspaceEvent, check_turns
+from anjo.sleep.mind.inquiry.types import (
+    FINDING_KINDS,
+    Answered,
+    FindingKind,
+    Resolved,
+    Turn,
+    WorkspaceEvent,
+    check_turns,
+)
 from anjo.sleep.mind.inquiry.types import Edit as Edit
 from anjo.sleep.mind.inquiry.types import EditKind as EditKind
 from anjo.sleep.types import Evidence, Target
@@ -295,16 +303,62 @@ class FindingRegistry:
         return FindingRegistry((*self.reports, report))
 
 
+@dataclass
+class NightClock:
+    """The night the calls being made belong to; ``None`` before any is set. Every arm sets it as
+    each night starts, and a served Glimmer dates its prompts on it, so each prompt is dated on the
+    night whose evidence it sees."""
+
+    day: date | None = None
+
+
+WrittenPort = Literal["world", "resolver"]
+WRITTEN_PORTS: Final = frozenset(get_args(WrittenPort))
+
+
+@dataclass(frozen=True)
+class Written:
+    """The model that wrote one logged observation, as its API reported it: a ``world_query``
+    answer (``Answered``) or a resolver's verdict (``Resolved``), keyed to its step's ``seq``."""
+
+    seq: int
+    port: WrittenPort
+    model: str
+
+    def __post_init__(self) -> None:
+        check_count("seq", self.seq)
+        check_one_of("port", self.port, WRITTEN_PORTS)
+        check_text("model", self.model)
+
+
+@dataclass
+class Reported:
+    """The model the latest ``world_query`` answer and resolver reply named, as reported, held
+    until the step that logs it (``arms`` pairs them). A failed call reports nothing."""
+
+    last: dict[str, str] = field(default_factory=dict)
+
+    def saw(self, port: WrittenPort, model: str) -> None:
+        self.last[port] = model
+
+    def take(self, port: WrittenPort) -> str | None:
+        return self.last.pop(port, None)
+
+
 @dataclass(frozen=True)
 class ArmModels:
     """The model-backed ports every arm shares: the same Glimmer at the same precision as the
     thinker, the same ``world_query``, the screen and the resolver (MIND's arms use the last
-    two)."""
+    two). ``clock`` is the night the thinker and world query date their prompts on, which every
+    arm sets as each night starts; ``reported`` receives the model each world answer and resolver
+    reply named (live ports only: ``apd.live``)."""
 
     thinker: Thinker
     world: WorldQuery
     screen: ScreenPort
     resolver: PredictionResolver
+    clock: NightClock | None = field(default=None, compare=False)
+    reported: Reported | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -316,7 +370,9 @@ class ArmRun:
     notebook, A's reflections), for the decision-quality talker. ``events`` is the workspace log
     of a MIND arm, empty for A and B: the start states Task 17b replays and the log kill-resume
     rebuilds from. ``turns`` is every thinker call of a MIND arm, each indexed to its step in
-    ``events``, for Task 17b's replay dataset.
+    ``events``, for Task 17b's replay dataset. ``written`` is the model each logged world answer
+    and resolver verdict came from, as reported (``Written``): replay trains on a start state only
+    when every one it holds is recorded.
     """
 
     arm: ArmName
@@ -326,6 +382,7 @@ class ArmRun:
     contexts: Mapping[date, str] = field(hash=False)
     events: tuple[WorkspaceEvent, ...] = ()
     turns: tuple[Turn, ...] = ()
+    written: tuple[Written, ...] = ()
 
     def __post_init__(self) -> None:
         check_one_of("arm", self.arm, ARMS)
@@ -338,9 +395,29 @@ class ArmRun:
         for night in self.tokens:
             check_count("tokens", night)
         FindingRegistry(self.reports)
-        if (self.events or self.turns) and self.arm not in WORKSPACE_ARMS:
+        freeze_tuple(self, "written", Written)
+        if (self.events or self.turns or self.written) and self.arm not in WORKSPACE_ARMS:
             raise ValueError(f"arm {self.arm} keeps no workspace")
         check_turns(self.turns, self.events)
+        check_written(self.written, self.events)
+
+
+def model_written(entry: object) -> WrittenPort | None:
+    """The port whose model wrote a logged entry: a world answer with text, or a resolver's
+    verdict (a censored prediction is the code's, and a failed world call's empty answer holds no
+    model's text); ``None`` for anything else."""
+    if isinstance(entry, Answered) and entry.answer:
+        return "world"
+    if isinstance(entry, Resolved) and entry.outcome != "censored":
+        return "resolver"
+    return None
+
+
+def check_written(written: tuple[Written, ...], events: tuple[WorkspaceEvent, ...]) -> None:
+    """Each record names a logged world answer or resolver verdict of its own port, once."""
+    ports = {event.step.seq: model_written(event.step.entry) for event in events}
+    if len({w.seq for w in written}) != len(written) or any(ports.get(w.seq) != w.port for w in written):
+        raise ValueError("each written record names a logged world answer or resolver verdict, once")
 
 
 # ── Scores ────────────────────────────────────────────────────────────────────

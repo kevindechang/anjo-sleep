@@ -9,18 +9,20 @@
   per branch). Each runs one night's inquiry budget on the real loop, focused on the start state's
   question, with every tool masked to the start state's night (``as_of``, m = 0): a branch can
   never see what came later. Its prompts are dated on that night too, the night whose evidence it
-  sees, as an arm's are (``served.dated_core``). Only the branch's ``RunStart`` names the next night
+  sees, as an arm's are (``ReplayModels.thinker_for``). Only the branch's ``RunStart`` names the next night
   (``branch_night``), so K5's stall count starts afresh, as a new night's would. Nothing arrives, so
   there is no notice pass. Each branch ends with its credence vector over the frozen set, a
   hypothesis it added counted in the catch-all (``frozen_credences``), and how each of its
   thinker's calls ended (its thinker records them: ``RecordingThinker``), so only applied turns
   whose reply ended at a stop token train (``Branch.targets``).
 - **Provenance:** a start state's ancestry is every model whose text its workspace holds: the
-  life's evidence and the M run's thinker turns. The M run records no model for a ``world_query``
-  answer (``Answered``) or a resolver's verdict (``Resolved``), so a workspace holding either (a
-  failed call's empty answer and a censored prediction aside) has unknown ancestry and never
-  trains. A branch adds its own thinker turns, the model each world answer names, and the model
-  each resolver reply named, as Spark Open's API reported it (``ReplayModels.resolver_chat``).
+  life's evidence, the M run's thinker turns, and the model each ``world_query`` answer
+  (``Answered``) and resolver verdict (``Resolved``) came from, as its API reported it and the M
+  run recorded it (``ArmRun.written``). A workspace holding one the run didn't record (a failed
+  call's empty answer and a censored prediction aside) has unknown ancestry and never trains; the
+  dataset then trains only on cleared models. A branch adds its own thinker turns, the model each
+  world answer names, and the model each resolver reply named, as Spark Open's API reported it
+  (``ReplayModels.resolver_chat``).
 
 Only a start state with a usable label branches (``sample_all``): an undetermined one, or one whose
 label isn't Spark Open's by the API's report, is never sampled.
@@ -35,15 +37,13 @@ from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 
 from anjo.sleep.mind.apd.arms import BriefedThinker, LifeSearch, MemoryLog, MindCore, load_brief, mind_core, seen_by
-from anjo.sleep.mind.apd.types import ArmRun, Life
+from anjo.sleep.mind.apd.types import ArmRun, Life, model_written
 from anjo.sleep.mind.inquiry.ports import InquiryPorts, ScreenPort, Thinker, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
     LIVE_STATUSES,
-    Answered,
     Budget,
     Hypothesis,
     ModelReply,
-    Resolved,
     RunStart,
     WorkspaceEvent,
     catch_all_id,
@@ -112,13 +112,10 @@ def _as_of(events: Sequence[WorkspaceEvent]) -> datetime:
     return starts[-1].as_of
 
 
-def _unrecorded(events: Sequence[WorkspaceEvent]) -> bool:
+def _unrecorded(events: Sequence[WorkspaceEvent], written: Mapping[int, str]) -> bool:
     """Whether the log holds model output whose model the M run didn't record: a world answer
     with text, or a resolver's verdict (a censored prediction is the code's)."""
-    return any(
-        (isinstance(entry, Answered) and entry.answer) or (isinstance(entry, Resolved) and entry.outcome != "censored")
-        for entry in (event.step.entry for event in events)
-    )
+    return any(model_written(event.step.entry) is not None and event.step.seq not in written for event in events)
 
 
 def _evidence_ancestry(life: Life, as_of: datetime) -> frozenset[str] | None:
@@ -132,7 +129,9 @@ def _of_night(life: Life, run: ArmRun, night: date, events: tuple[WorkspaceEvent
     ws, as_of = core.fold(events), _as_of(events)
     end = events[-1].step.seq
     turns = frozenset(t.reply.model for t in run.turns if t.seq <= end)
-    ancestry = None if _unrecorded(events) else union([_evidence_ancestry(life, as_of), turns])
+    written = {w.seq: w.model for w in run.written if w.seq <= end}
+    ancestry = None if _unrecorded(events, written) else union(
+        [_evidence_ancestry(life, as_of), turns, frozenset(written.values())])
     found: list[StartState] = []
     for question in ws.questions:
         held = ws.hypotheses_of(question.id)

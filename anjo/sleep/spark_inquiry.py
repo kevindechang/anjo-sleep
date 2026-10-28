@@ -2,7 +2,7 @@
 ``PredictionResolver``, on Baseten's OpenAI-compatible API (``baseten_api``).
 
 The resolver always runs here (``resolve_prediction_v1.md``), and so does the screen
-(``anjo.sleep.app.screen``, through ``call``). The live night's thinker is base Glimmer and APD's
+(``anjo.sleep.mind.screen``, through ``call``). The live night's thinker is base Glimmer and APD's
 is Glimmer on Colab; the Spark Open thinker and ``world_query`` serve development runs and the
 thinker swap.
 

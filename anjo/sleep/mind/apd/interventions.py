@@ -331,10 +331,10 @@ def _branch(run: InquiryRun, question_id: str) -> Branch:
 
 def intervention_test(
     snapshots: Sequence[Snapshot], lives: Mapping[str, Life], models: ArmModels, wrong: WrongHypothesis, *,
-    core: MindCore | None = None, brief: str | None = None,
+    core: MindCore | None = None, brief: str | None = None, kinds: Sequence[EditKind] = EDIT_KINDS,
 ) -> tuple[tuple[InterventionResult, ...], tuple[Skipped, ...]]:
-    """Each snapshot resumed after each edit that applies, against its unedited twin; every
-    snapshot an edit skips is recorded."""
+    """Each snapshot resumed after each edit of ``kinds`` that applies, against its unedited twin;
+    every snapshot an edit skips is recorded."""
     core = core or mind_core()
     text = load_brief() if brief is None else brief
     results: tuple[InterventionResult, ...] = ()
@@ -342,7 +342,7 @@ def intervention_test(
     for snap in snapshots:
         life, point, ws = lives[snap.life_id], resume_point(snap.events), core.fold(snap.events)
         at = len(snap.events)
-        for kind in EDIT_KINDS:
+        for kind in kinds:
             edit = edit_for(kind, ws, snap.question_id, wrong)
             if not isinstance(edit, Edit):
                 skipped = (*skipped, Skipped(snap.life_id, at, kind, edit))

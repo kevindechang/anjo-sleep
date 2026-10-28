@@ -9,9 +9,10 @@ trained adapter sees the prompt it is served.
 
 - **The date:** the night dates its prompts on the night's clock (``app/night.py``), so every
   call here is dated on the night whose evidence it sees: an arm on each night of the life in turn
-  (``dated_core`` sets the ``NightClock`` before each loop call), and a branch on its start state's
-  night, which its tools are masked to (its ``RunStart`` names the next night only to restart the
-  stall count). A call with no night set is refused, never dated today.
+  (the arms set ``ArmModels.clock`` as each night starts: ``apd.arms.date_night``, the one dating
+  path for Task 17's arms and 17b's), and a branch on its start state's night, which its tools are
+  masked to (its ``RunStart`` names the next night only to restart the stall count). A call with
+  no night set is refused, never dated today.
 - **Sampling:** branches at ``BRANCH_TEMPERATURE``, one seed each; the arms (M on base Glimmer,
   M+replay and M+shuffled on their adapters) at temperature 0, as the night does.
 - **Failures are counted, never turned into text:** a failed call is empty text charged its cap,
@@ -25,32 +26,23 @@ dataset accepts.
 """
 from __future__ import annotations
 
-import dataclasses
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
-from typing import Any, Final
+from datetime import date
+from typing import Final
 
-from anjo.sleep.mind.apd.arms import MindCore
-from anjo.sleep.mind.inquiry.ports import InquiryPorts
-from anjo.sleep.mind.inquiry.types import Budget, InquiryRun, ModelReply, Workspace
+from anjo.sleep.mind.apd.types import NightClock as NightClock
+from anjo.sleep.mind.inquiry.types import ModelReply
 from anjo.sleep.mind.replay.spend import GlimmerServer, colab_client
 from anjo.sleep.mind.replay.types import BRANCH_TEMPERATURE, CallEnd
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving.client import ServingError, VllmClient
 from anjo.sleep.spark_inquiry import THINK_MAX_TOKENS
-from anjo.sleep.types import CheckpointRef, Evidence
+from anjo.sleep.types import CheckpointRef
 
 logger = logging.getLogger(__name__)
 ARM_TEMPERATURE: Final = 0.0
-
-
-@dataclass
-class NightClock:
-    """The night the calls being made belong to; ``None`` before any is set."""
-
-    day: date | None = None
 
 
 @dataclass(frozen=True)
@@ -112,20 +104,3 @@ def arm_thinker(server: GlimmerServer, adapter: CheckpointRef | None, clock: Nig
 
 def failed_calls(calls: Sequence[CallEnd]) -> int:
     return sum(1 for end in calls if end.failed)
-
-
-def dated_core(core: MindCore, clock: NightClock) -> MindCore:
-    """``core`` with ``clock`` set to each loop call's night before it runs, so an arm's thinker
-    dates every prompt on the night it belongs to."""
-
-    def notice(ws: Workspace, new: Sequence[Evidence], ports: InquiryPorts, budget: Budget, *, night: date,
-               **rest: Any) -> InquiryRun:
-        clock.day = night
-        return core.notice(ws, new, ports, budget, night=night, **rest)
-
-    def run_inquiry(ws: Workspace, ports: InquiryPorts, budget: Budget, *, night: date, as_of: datetime,
-                    **rest: Any) -> InquiryRun:
-        clock.day = night
-        return core.run_inquiry(ws, ports, budget, night=night, as_of=as_of, **rest)
-
-    return dataclasses.replace(core, notice=notice, run_inquiry=run_inquiry)

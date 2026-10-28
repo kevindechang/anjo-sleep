@@ -118,6 +118,20 @@ def test_errors_name_the_endpoint_never_the_words() -> None:
         VllmClient("http://serve.example", "tok")
 
 
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8001", "http://localhost:8001/", "http://[::1]:8001"])
+def test_vllm_client_allows_http_only_on_loopback(url: str) -> None:
+    def ok(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tokens": [1]})
+
+    client = VllmClient(url, "tok", transport=httpx.MockTransport(ok))
+    assert client.base_url == url.rstrip("/")
+    for refused in ("http://serve.example", "http://10.0.0.5:8000", "http://127.0.0.1.example:8000",
+                    "http://localhost.example", "ftp://127.0.0.1:8000", "127.0.0.1:8000"):
+        with pytest.raises(ServingError, match="https"):
+            VllmClient(refused, "tok")
+    assert VllmClient("https://serve.example", "tok").base_url == "https://serve.example"
+
+
 def test_the_client_serves_at_the_registered_precision() -> None:
     assert VllmClient.precision == config.SERVING.name
 
