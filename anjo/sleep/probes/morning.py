@@ -11,7 +11,9 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
   before any call, and the score file records ``wake_seconds``.
 - A night that already has a score file is refused before any call: the first score stands.
-- The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run.
+- The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run. A
+  backfill (``tools.morning_backfill``) passes ``pinned``: a past checkpoint its night promoted is scored
+  though a later one serves, and its file says ``pinned``; what serves never changes.
 - Arm 3x needs the registered donor's promoted adapter. Without one, 3x is left out and recorded
   under ``unavailable`` (specificity is then inconclusive); it is never filled in.
 - Every paid call is held first, the way ``night/holds.py`` does it: the arms on ``modal_usd`` and
@@ -338,16 +340,17 @@ def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER)
 
 def run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
 ) -> MorningResult:
     """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends."""
     with phase(morning.sleep):
-        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset)
+        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset,
+                            pinned=pinned)
 
 
 def _run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
 ) -> MorningResult:
     """Score every arm on ``user_id``'s sealed probes, on the checkpoint serving after ``night``.
 
@@ -364,7 +367,7 @@ def _run_morning(
     if promoted:
         if checkpoint is None:
             raise MorningError("a promoted night gives the checkpoint it promoted")
-        if serving != checkpoint:
+        if serving != checkpoint and not pinned:  # a backfill names a past one: scored, never served
             raise MorningError("the night's checkpoint is not the one serving now; nothing was scored")
     else:
         checkpoint = serving
@@ -430,6 +433,8 @@ def _run_morning(
     record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
     if subset is not None:
         record["subset"] = subset.name
+    if pinned:
+        record["pinned"] = True
     if no_verdict:
         record[NO_VERDICT] = no_verdict
     if woke is not None:

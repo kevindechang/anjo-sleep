@@ -213,9 +213,10 @@ def dreams_wired(root: Path, account: str) -> bool:
 
 
 def scores(root: Path, account: str) -> list[dict[str, Any]]:
+    """Each scored morning in night order: a backfill (``tools.morning_backfill``) may score an earlier night last."""
     folder = root / account / "scores"
     files = sorted(folder.glob("night-*.json")) if folder.is_dir() else []
-    return [json.loads(path.read_text(encoding="utf-8")) for path in files]
+    return sorted((json.loads(path.read_text(encoding="utf-8")) for path in files), key=lambda r: str(r.get("night", "")))
 
 
 def _arm_score(record: Mapping[str, Any], arm: str) -> float | None:
