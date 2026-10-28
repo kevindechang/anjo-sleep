@@ -91,3 +91,29 @@ def test_apds_own_splits_refuse_keep_off(tmp_path: Path, capsys: pytest.CaptureF
     assert not data.exists()
     assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-val", "--keep-off"],
                     out=lambda line: None) == 0
+
+
+LIVE = ["--live", "--prices", "1.25,4.25,2.50,1.95", "--judge-prices", "1.25,4.25,0.75,3.75"]
+
+
+def test_the_plan_warns_when_a_core_run_and_the_core_lives_on_disk_differ_on_keep_off(tmp_path: Path) -> None:
+    # Arrange: one core-train life written with --keep-off, one data dir's worth
+    data = tmp_path / "pilot"
+    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-train", "--keep-off"],
+                    out=lambda line: None) == 0
+
+    def warnings(*argv: str) -> list[str]:
+        lines: list[str] = []
+        assert cli.main([*LIVE, "--data", str(data), "--only", "2", "generate", *argv], out=lines.append) == 0
+        return [line for line in "\n".join(lines).splitlines() if line.startswith("Warning:")]
+
+    # Act / Assert: another core split without it is warned; with it, or on APD's own split, not
+    (warned,) = warnings("--split", "core-val")
+    assert "--keep-off is off" in warned and "1 core life was written with it" in warned
+    assert "every core split or none" in warned
+    assert warnings("--split", "core-val", "--keep-off") == [] and warnings() == []
+    # and the other way round: a core run with it, beside a core life written without it
+    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-val"],
+                    out=lambda line: None) == 0
+    (warned,) = warnings("--split", "core-test", "--keep-off")
+    assert "--keep-off is on" in warned and "1 core life was written without it" in warned

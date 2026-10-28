@@ -7,7 +7,7 @@ thrown away whole: the days the failure names are written again, the rest kept.
   ``gates.flagged_window``: one day, or two), and its days are written again, told which view
   gave the item away; a failed script audit names its days by date in its issues, and each is
   written again with the issues that name it (an issue naming no date names the one day whose
-  messages hold the longest run of its words, ``quoted_day``); a discoverability reader that missed an origin day
+  messages hold what it quotes, ``quoted_day``); a discoverability reader that missed an origin day
   (``gates.missed_origin_days``) has each origin day it passed over written again, told to make the
   planted fact findable without stating a conclusion. Any other discoverability verdict, an issue
   that names no day of the life and quotes none, or more than ``REPAIR_DAYS`` days in one round is
@@ -62,10 +62,14 @@ LEAK_REASON: Final = 'A reader shown {seen} {window} could already see the whole
 AUDIT_REASON: Final = "The script audit found: {issue}"
 DISCOVER_REASON: Final = 'A reader looking for the {family} about "{topic}" did not cite this day, though it rests on ' \
                          "what the person says here. Make that fact findable: say it plainly, in a message of its " \
-                         "own, without stating any conclusion, and write nothing else about {topic} on this day."
+                         "own, without stating any conclusion. Apart from this day's `plant` and `ask` beats, write " \
+                         "nothing about {topic} on this day."
 _DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
-QUOTE_WORDS: Final = 4  # the fewest of an undated issue's words in a row that name the day holding them
+QUOTED_WORDS: Final = 2  # the fewest words a quotation in an undated issue has to name the day holding it
+UNQUOTED_WORDS: Final = 6  # the fewest of an unquoted undated issue's words in a row that name the day holding them
 _WORD: Final = re.compile(r"[\w']+")
+_QUOTED: Final = re.compile(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\u2018([^\u2019]+)\u2019|(?<!\w)\'([^\']+)\'(?!\w)')
+_ELLIPSIS: Final = re.compile(r"\.\.\.|\u2026")
 
 
 @dataclass
@@ -156,19 +160,36 @@ def fixes(life: Life, problems: ProblemFile, verdicts: Sequence[GateVerdict], is
 
 
 def quoted_day(life: Life, issue: str) -> date | None:
-    """The day an issue naming no date quotes: the one day whose messages hold the longest run of
-    its words, at least ``QUOTE_WORDS`` long (case and punctuation aside); ``None`` when no run that
-    long is in any day's messages, or the longest is in more than one day's."""
-    said: dict[date, list[str]] = {}
-    for session in life.sessions:
-        said.setdefault(session.day, []).extend(_words(session.text))
-    words, texts = _words(issue), {day: f" {' '.join(found)} " for day, found in said.items() if day in life.days}
-    for size in range(len(words), QUOTE_WORDS - 1, -1):
+    """The day an issue naming no date quotes, case and punctuation aside. An issue with quotation
+    marks names the one day whose messages hold its quotations (each split at an ellipsis, a part
+    of at least ``QUOTED_WORDS`` words); its other words are not matched, so a paraphrase can't name
+    a day by a common phrase. One without names the one day holding the longest run of its words,
+    at least ``UNQUOTED_WORDS`` long. ``None`` when nothing is found, or it is on more than one day."""
+    texts = _day_texts(life)
+    if _QUOTED.search(issue) is not None:
+        quotes = [" ".join(words) for found in _QUOTED.finditer(issue)
+                  for part in _ELLIPSIS.split(next(group for group in found.groups() if group))
+                  if len(words := _words(part)) >= QUOTED_WORDS]
+        return _one({day for day, text in texts.items() for quote in quotes if f" {quote} " in text})
+    words = _words(issue)
+    for size in range(len(words), UNQUOTED_WORDS - 1, -1):
         runs = {" ".join(words[start:start + size]) for start in range(len(words) - size + 1)}
         days = {day for day, text in texts.items() if any(f" {run} " in text for run in runs)}
         if days:
-            return next(iter(days)) if len(days) == 1 else None
+            return _one(days)
     return None
+
+
+def _day_texts(life: Life) -> dict[date, str]:
+    """Each day's messages as one run of words, padded so a phrase matches only whole words."""
+    said: dict[date, list[str]] = {}
+    for session in life.sessions:
+        said.setdefault(session.day, []).extend(_words(session.text))
+    return {day: f" {' '.join(found)} " for day, found in said.items() if day in life.days}
+
+
+def _one(days: set[date]) -> date | None:
+    return next(iter(days)) if len(days) == 1 else None
 
 
 def _words(text: str) -> list[str]:

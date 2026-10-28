@@ -31,6 +31,7 @@ from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, DEFAULT_PER_MINUTE, Limiter
 from anjo.sleep.mind.apd.readers import READERS, Reader
+from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import CORE_SPLITS
 from anjo.sleep.mind.spark_provider import SparkProvider
 
@@ -176,6 +177,23 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
             f"changed or unread windows are paid for), so the worst case can reach {1 + repair.ROUNDS} times the one "
             f"shown. A round costs a share of the first check that grows the earlier its first day falls: on the "
             f"fakes, about 63% for day 6 of a six-item life",)
+
+
+def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
+    """A warning when a core split's ``generate`` and the core lives on disk differ on ``--keep-off``
+    (a life's made record says it): it goes on every core split or none, so the splits compare."""
+    split = split_of(args)
+    if args.command != "generate" or split not in CORE_SPLITS:
+        return ()
+    on = bool(getattr(args, "keep_off", False))
+    other = [life.id for core in CORE_SPLITS for life in data.lives(core)
+             if bool((data.made(life.id) or {}).get("keep_off")) != on]
+    if not other:
+        return ()
+    lives = "1 core life was" if len(other) == 1 else f"{len(other)} core lives were"
+    return (f"--keep-off is {'on' if on else 'off'} for this {split} run, but {lives} written "
+            f"{'without' if on else 'with'} it ({', '.join(other[:3])}{', ...' if len(other) > 3 else ''}); "
+            "it goes on every core split or none, so core-train, core-val and core-test stay comparable",)
 
 
 def pace_note(args: argparse.Namespace) -> str:
