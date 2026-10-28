@@ -204,7 +204,8 @@ modal app stop anjo-sleep-serve                                              # t
 ```
 
 On Modal, sleeping is Modal's own idle window, a running container sees a new adapter only after
-its next start, and the L40S costs about $2 an hour while up.
+its next start, and the L40S costs about $2 an hour while up. `Serve` runs one container at most
+(`config.MAX_CONTAINERS`): every arm shares one GPU, and on 2026-10-28 one wake started two.
 
 ### 1.7 Training on Modal (Colab is the fallback)
 
@@ -217,7 +218,7 @@ command, the accelerated runs and the synthetic example all read it. MIND's trai
 |---|---|
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
 | App, function | `anjo-sleep-train`, `train` (`train/modal_app.py`); the runner calls the deployed function by name |
-| GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 20 minutes |
+| GPU, limits | one A100-80GB; Modal's hard timeout of 2 h (§12.1's training cap), a 15-minute container start limit, no retries; the training script gets the job's timeout minus 21 minutes (the start, the return and a cancel's margin) |
 | Volumes | `anjo-sleep-weights` mounted read-only (Glimmer at the pinned revision), `anjo-sleep-adapters` read-write |
 | Image | Debian slim, Python 3.12, exactly `colab_train.TORCH` and `TRAIN_PACKAGES`, the list the Colab runner installs |
 | Secrets | none: no Hugging Face token and nothing from `.env`; Hugging Face runs offline in the container |
@@ -225,14 +226,16 @@ command, the accelerated runs and the synthetic example all read it. MIND's trai
 | Call records | `<data dir>/sleep/modal_calls/<adapter>.json`: an adapter name and a Modal call id, nothing else |
 
 Each job holds its whole hard timeout at that rate ($5.00 for the 2 h job) before the call starts,
-then settles the seconds the call ran. Modal also bills the container's CPU and memory beside the
+then settles the seconds the call ran, never more than the hold: the runner waits only for the
+time left less a minute's margin to cancel, so a call that times out never leaves an overage that
+would stop `modal_usd`, serving included. Modal also bills the container's CPU and memory beside the
 GPU, which the hold doesn't count, so compare the first nights on Modal's usage page with the ledger.
 In the container Glimmer loads from the weights volume at the revision the app was deployed with (a
 recipe without that revision is refused), the adapter is held to the upload's checks and its
 rendering, and it lands on the adapters volume under its name, so nothing downloads or uploads. A
 call that may still run is cancelled when its job fails, times out or is interrupted; a cancel that
 fails settles the whole hold and stops the night. A run killed hard leaves its call record, and the
-next night's sweep cancels that call before anything else. A delete cancels the person's running
+next night's sweep, on either runner, cancels that call before it settles any hold. A delete cancels the person's running
 call and, whenever this host has trained on Modal, removes their adapters from the adapters volume
 (RF2).
 
@@ -253,11 +256,19 @@ The smoke trains a fresh synthetic smoke person on the smoke dataset with the ni
 (`sft_dpo` from cold) under a one-hour timeout, so it holds $2.50. Without `--run` it prints the
 job and the hold, and holds, starts and spends nothing.
 
+Known limits, accepted (review of 2026-10-28):
+
+- The call record is written once the spawn returns, so a run killed between the two leaves a call
+  no sweep can see; Modal's own 2 h timeout ends it, and the sweep settles its hold at the full bound.
+- The synthetic example keeps its ledger and call records in a fresh temporary folder, so no night
+  sweeps a call a killed example run left; Modal's timeout ends that one too.
+- Holds count the A100 only, not the CPU and memory Modal bills beside it (above).
+
 **The Colab fallback.** `ANJO_SLEEP_TRAIN_RUNNER=colab` puts training back on Colab as it ran
 before (`runners/colab.py`, held on `colab_cu`), and the adapter is uploaded to the serving backend
-again. Switch between nights, not during one: each night's sweep covers its own runner only, so a
-Modal call a killed run left is cancelled only by a night on Modal (or by `modal app stop
-anjo-sleep-train`, after which the app is deployed again).
+again. Switch between nights, not during one. Every night sweeps both runners' leftovers before it
+settles their holds, whichever runner it trains on: Modal's recorded calls are cancelled, and Sleep's
+Colab sessions are stopped wherever the Colab CLI is installed.
 
 ### The Oct 28 checks (record the results here)
 
