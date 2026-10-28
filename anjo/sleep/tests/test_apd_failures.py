@@ -19,7 +19,7 @@ from anjo.sleep import fireworks_api
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generators, pairs, probe
+from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generate, generators, pairs, probe
 from anjo.sleep.mind.apd.backend import Halted
 from anjo.sleep.mind.apd.live import RunsFailed
 from anjo.sleep.mind.apd.ceiling import RunLedger
@@ -162,6 +162,57 @@ def test_a_drafted_or_cut_answer_is_never_read_as_the_day(tmp_path: Path, monkey
     _no_text(recorded.texts(), (data.root / "failed.jsonl").read_text(encoding="utf-8"), "\n".join(lines))
 
 
+# ── A day with nothing to place ───────────────────────────────────────────────
+
+
+def test_a_generators_day_with_no_beats_may_leave_placed_out() -> None:
+    beat = generate.Beat("i1.o1", "a fact", "plant")
+    unplaced = '{"messages": ["a", "b"]}'
+    # a core split's generator: a day with no beats reads a missing or empty ``placed`` as nothing placed
+    assert generate._read_day(unplaced, [], nothing_placed=True) == (["a", "b"], {})
+    for empty in ("null", "[]", "{}"):
+        assert generate._read_day(f'{{"messages": ["a"], "placed": {empty}}}', [], nothing_placed=True) == (["a"], {})
+    # a day with beats still needs them placed, as before
+    for text in (unplaced, '{"messages": ["a"], "placed": []}', '{"messages": ["a"], "placed": null}'):
+        with pytest.raises(generate.GenerationFailed, match="where its beats are") as failed:
+            generate._read_day(text, [beat], nothing_placed=True)
+        assert failed.value.field == "placed"
+    with pytest.raises(generate.GenerationFailed, match="unplaced or unknown"):
+        generate._read_day('{"messages": ["a"], "placed": {}}', [beat], nothing_placed=True)
+    # Spark Open's reading (APD's own lives) is unchanged
+    with pytest.raises(generate.GenerationFailed, match="where its beats are"):
+        generate._read_day(unplaced, [])
+
+
+@pytest.mark.parametrize(("shape", "generated"), [("unplaced_when_empty", True), ("never_placed", False)])
+def test_a_generator_leaving_placed_out_of_a_beatless_day_still_writes_the_life(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str, generated: bool) -> None:
+    backend, _ = _backend(tmp_path, monkeypatch, shape)
+    data = DataDir(tmp_path / "pilot")
+
+    if generated:
+        gen_batch.generate_lives(data, [SPEC], backend, lambda line: None)
+        assert len(data.lives("core-train")) == 1 and not data.failed()
+        return
+    with pytest.raises(RunsFailed):
+        gen_batch.generate_lives(data, [SPEC], backend, lambda line: None)
+    attempts = [raw for raw in data.failed() if raw["what"] == "generate-attempt"]
+    assert len(attempts) == 3 and {(raw["step"], raw["field"]) for raw in attempts} == {("writer", "placed")}
+    assert all(raw["reason"] == "a day doesn't say where its beats are" for raw in attempts)
+
+
+def test_only_a_generators_writer_is_told_placed_is_always_there() -> None:
+    def system(model: str) -> str:
+        return str(generate.writer_messages("film", 0, generate.LIFE_START, 1, [], [], model=model)[0]["content"])
+
+    prompt = generate.LIFE_PROMPT.read_text(encoding="utf-8")
+    assert system(FIREWORKS.model) == prompt  # Spark Open's prompt, APD's lives' own, is unchanged
+    assert DEEPSEEK.model is not None
+    told = system(DEEPSEEK.model)
+    assert told.startswith(prompt) and told[len(prompt):].strip() == generate.ALWAYS_PLACED
+    assert len(generate.ALWAYS_PLACED.splitlines()) == 1 and "`placed`" in generate.ALWAYS_PLACED
+
+
 # ── Each failed attempt, recorded ─────────────────────────────────────────────
 
 
@@ -192,7 +243,7 @@ def test_a_reply_cut_at_its_cap_fails_each_attempt_at_the_writer_and_says_so(
 
     # The skipped life's calls are kept too, each reply's length and finish reason with them
     (made_id,) = data.call_logs()
-    assert made_id.endswith(".failed")
+    assert made_id.endswith(".failed-1")
     logged = _logged(data, made_id)
     assert [c.attempt for c in logged] == [0, 1, 2] and {c.finish for c in logged} == {"length"}
 
@@ -200,6 +251,22 @@ def test_a_reply_cut_at_its_cap_fails_each_attempt_at_the_writer_and_says_so(
     folder = data.root / "calls"
     _no_text(recorded.texts(), (data.root / "failed.jsonl").read_text(encoding="utf-8"),
              *(path.read_text(encoding="utf-8") for path in folder.glob("*.jsonl")), "\n".join(lines))
+
+
+def test_a_life_skipped_again_on_a_rerun_keeps_each_runs_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: a life whose every reply is cut, run twice
+    backend, _ = _backend(tmp_path, monkeypatch, "length")
+    data = DataDir(tmp_path / "pilot")
+
+    # Act
+    for _ in range(2):
+        with pytest.raises(RunsFailed):
+            gen_batch.generate_lives(data, [SPEC], backend, lambda line: None)
+
+    # Assert: both runs' logs are kept, one per run, so ``calls`` sums what the ledger settled
+    logs = data.call_logs()
+    assert sorted(made_id.rsplit(".", 1)[1] for made_id in logs) == ["failed-1", "failed-2"]
+    assert all([c.attempt for c in _logged(data, made_id)] == [0, 1, 2] for made_id in logs)
 
 
 def test_a_rejected_request_skips_the_life_at_its_first_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -399,4 +466,4 @@ def test_a_life_stopped_mid_attempt_keeps_the_calls_it_made(tmp_path: Path, stop
 
     # Assert: the two calls it paid for are in its log, so ``calls`` still counts them
     (made_id,) = data.call_logs()
-    assert made_id.endswith(".failed") and [c.kind for c in _logged(data, made_id)] == ["write", "extract"]
+    assert made_id.endswith(".failed-1") and [c.kind for c in _logged(data, made_id)] == ["write", "extract"]

@@ -366,6 +366,11 @@ class DataDir:
         path.unlink(missing_ok=True)  # a rerun's log replaces the last, never doubles it
         append_records(path, PLAIN, list(records))
 
+    def call_log_ids(self) -> frozenset[str]:
+        """The ids of every saved call log, none of them read."""
+        folder = self.root / "calls"
+        return frozenset(path.stem for path in folder.glob("*.jsonl")) if folder.is_dir() else frozenset()
+
     def call_logs(self) -> dict[str, list[dict[str, Any]]]:
         """Every saved call log, by the id it was made for."""
         folder = self.root / "calls"

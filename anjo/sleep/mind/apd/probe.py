@@ -46,9 +46,9 @@ def beats_for(number: int) -> tuple[Beat, ...]:
     return BEATS if number % 2 == 0 else ()
 
 
-def messages(number: int) -> list[dict[str, Any]]:
-    """Probe ``number``'s writer call: day 1 of a life, no earlier days."""
-    return generate.writer_messages(FIELD, 0, generate.LIFE_START, number, [], beats_for(number))
+def messages(number: int, model: str) -> list[dict[str, Any]]:
+    """Probe ``number``'s writer call to ``model``: day 1 of a life, no earlier days."""
+    return generate.writer_messages(FIELD, 0, generate.LIFE_START, number, [], beats_for(number), model=model)
 
 
 def _count(found: object) -> object:
@@ -87,7 +87,7 @@ def _answer_shape(text: str, finish: object, beats: Sequence[Beat]) -> dict[str,
     except gates.GateError:
         return {"answer": "ok", **unread, "answer_json": False, "writer_reads": "not a JSON object"}
     try:
-        generate._read_day(found, beats)
+        generate._read_day(found, beats, nothing_placed=True)  # as the writer reads a core split's generator
         reads = "ok"
     except GenerationFailed as failed:
         reads = f"{failed} (field {failed.field})"
@@ -141,7 +141,7 @@ def run(generator: Generator, count: int, rate: Rate, out: Callable[[str], None]
         seen: list[Mapping[str, Any]] = []
         found.append(rate.worst)  # what it costs is unknown until it returns
         try:
-            result = send(generator.model, messages(number), None, generate.TIMEOUT_S,
+            result = send(generator.model, messages(number, generator.model), None, generate.TIMEOUT_S,
                           temperature=generate.WRITE_TEMPERATURE, max_tokens=retry.REPLY_MAX_TOKENS,
                           reasoning_effort=generator.reasoning_effort, on_reply=seen.append)
         except ModelApiError as error:

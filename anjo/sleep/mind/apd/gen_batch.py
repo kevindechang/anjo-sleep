@@ -258,7 +258,7 @@ def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
     finally:
         if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
             first = generate.life_id_for(spec.split, spec.field, spec.seed)
-            data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
+            data.save_calls(failed_log_id(first, data.call_log_ids()), [call.to_json() for call in log.calls])
     data.save_made(made.life.id, made_record(backend))
     data.save_calls(made.life.id, [call.to_json() for call in log.calls])
     data.save_life(made.life, made.problems)

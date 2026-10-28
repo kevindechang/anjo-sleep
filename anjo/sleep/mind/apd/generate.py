@@ -60,6 +60,9 @@ from anjo.sleep.types import Evidence, Target
 
 LIFE_PROMPT: Final = Path(__file__).parent / "prompts" / "life_v1.md"
 EXTRACT_PROMPT: Final = Path(__file__).parent / "prompts" / "extract_open_v1.md"
+# A core split's generator (DeepSeek) sometimes leaves ``placed`` out of a day with nothing to
+# place; told this line, and read leniently there (``_read_day``). Spark Open's prompt is unchanged.
+ALWAYS_PLACED: Final = "Always include `placed`, even on a day with nothing to place: then it is `{}`."
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -233,17 +236,20 @@ def _check_model(reply: ChatResult, model: str) -> None:
 
 
 def writer_messages(
-    field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat],
+    field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat], *,
+    model: str,
 ) -> list[dict[str, Any]]:
-    """The writer's call for day ``index`` (from 0): ``life_v1.md`` and the day's payload."""
+    """The writer's call for day ``index`` (from 0): ``life_v1.md`` (and, for a core split's
+    generator, ``ALWAYS_PLACED``) and the day's payload."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
         "plant": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "plant"],
         "ask": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "ask"],
     }
+    prompt = LIFE_PROMPT.read_text(encoding="utf-8")
     return [
-        {"role": "system", "content": LIFE_PROMPT.read_text(encoding="utf-8")},
+        {"role": "system", "content": f"{prompt.rstrip()}\n{ALWAYS_PLACED}\n" if model in BY_MODEL else prompt},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
 
@@ -252,13 +258,13 @@ def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
     beats: Sequence[Beat],
 ) -> tuple[list[str], dict[str, int]]:
-    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats), None, TIMEOUT_S,
+    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model), None, TIMEOUT_S,
                  temperature=WRITE_TEMPERATURE)
     _check_model(reply, model)
     text: str | None = None
     try:
         text = answered(reply, model)
-        return _read_day(text, beats)
+        return _read_day(text, beats, nothing_placed=model in BY_MODEL)
     except GenerationFailed as failed:
         raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
                         answer_chars=None if text is None else len(text), finish_reason=reply.finish_reason) from None
@@ -278,7 +284,9 @@ def answered(reply: ChatResult, model: str) -> str:
     return reply.text
 
 
-def _read_day(text: str, beats: Sequence[Beat]) -> tuple[list[str], dict[str, int]]:
+def _read_day(text: str, beats: Sequence[Beat], *, nothing_placed: bool = False) -> tuple[list[str], dict[str, int]]:
+    """A day's messages and where its beats are. With ``nothing_placed`` (a core split's
+    generator), a day with no beats may leave ``placed`` out, null or empty; a day with beats never."""
     try:
         body = gates.json_object(text)
     except gates.GateError:
@@ -286,6 +294,8 @@ def _read_day(text: str, beats: Sequence[Beat]) -> tuple[list[str], dict[str, in
     texts, placed = body.get("messages"), body.get("placed")
     if not isinstance(texts, list) or not texts or not all(isinstance(t, str) and t.strip() for t in texts):
         raise GenerationFailed("a day has no messages", field="messages")
+    if nothing_placed and not beats and placed in (None, [], {}):
+        placed = {}
     if not isinstance(placed, dict):
         raise GenerationFailed("a day doesn't say where its beats are", field="placed")
     return [t.strip() for t in texts], _check_placed(placed, beats, len(texts))

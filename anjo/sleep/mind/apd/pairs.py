@@ -253,7 +253,7 @@ def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
     finally:
         if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
             first = pair_id(pair_template(spec.template).field, spec.seed)
-            data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
+            data.save_calls(failed_log_id(first, data.call_log_ids()), [call.to_json() for call in log.calls])
     data.save_made(made.pair.id, made_record(backend))
     data.save_calls(made.pair.id, [call.to_json() for call in log.calls])
     data.save_pair(made.pair)

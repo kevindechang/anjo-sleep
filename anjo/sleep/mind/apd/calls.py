@@ -5,17 +5,17 @@ was sent: ``write``, ``extract``, ``leak``, ``discover``, ``identify``, ``audit`
 the item it read for (numbered in the order the attempt first read it: never its topic, which is
 the sealed file's), how many days it read, its tokens in and out as the provider counted them,
 what it was priced at, and its reply's length and finish reason (never its text).
-``DataDir.save_calls`` keeps a life's log, every attempt included, and a skipped, killed or
-stopped life's too (under ``failed_log_id``); ``breakdown`` prints it per gate, per days read and
-per item, which is what the plan's read shapes are checked against. The log also keeps why each failed attempt failed
-(``failures.AttemptFailure``).
+``DataDir.save_calls`` keeps a life's log, every attempt included, and a skipped, killed or stopped
+life's too, one per run (``failed_log_id``); ``breakdown`` prints it per gate, per days read and
+per item, which is what the plan's read shapes are checked against. The log also keeps why each
+failed attempt failed (``failures.AttemptFailure``).
 
 Pure.
 """
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
@@ -146,6 +146,10 @@ def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:
     return lines
 
 
-def failed_log_id(life_id: str) -> str:
-    """The id a life's log is kept under when it wasn't saved (its first attempt's life id)."""
-    return f"{life_id}.failed"
+def failed_log_id(life_id: str, taken: Collection[str] = ()) -> str:
+    """The id a life's log is kept under when it wasn't saved: its first attempt's life id and its
+    run (``-1``, ``-2``...), the first not ``taken``, so a rerun that fails again keeps both logs."""
+    run = 1
+    while f"{life_id}.failed-{run}" in taken:
+        run += 1
+    return f"{life_id}.failed-{run}"

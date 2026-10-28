@@ -454,7 +454,7 @@ class FakeLifeChat:
 
 
 REPLY_SHAPES: Final = ("plain", "think", "fenced", "reasoning_field", "length", "rejected", "draft_in_cut_think",
-                       "open_think", "two_fences")
+                       "open_think", "two_fences", "unplaced_when_empty", "never_placed")
 
 
 def generator_transport(shape: str) -> httpx.MockTransport:
@@ -464,8 +464,9 @@ def generator_transport(shape: str) -> httpx.MockTransport:
     its cap (``finish_reason`` length, the JSON unfinished); ``reasoning_effort`` refused with HTTP
     400; or a drafted answer that must never be read as the day's: fenced inside reasoning cut at
     its cap (``draft_in_cut_think``), fenced inside reasoning that never closed (``open_think``), or
-    fenced before the final fenced answer (``two_fences``). The reasoning is counted in the usage
-    as a provider counts it."""
+    fenced before the final fenced answer (``two_fences``); or a day written without ``placed``
+    when it has no beats (``unplaced_when_empty``), or always (``never_placed``). The reasoning is
+    counted in the usage as a provider counts it."""
     if shape not in REPLY_SHAPES:
         raise ValueError(f"no reply shape {shape!r}")
     chat = FakeLifeChat()
@@ -474,7 +475,7 @@ def generator_transport(shape: str) -> httpx.MockTransport:
         body = json.loads(request.content)
         if shape == "rejected":
             return httpx.Response(400, json={"error": {"message": "reasoning_effort is not supported"}})
-        answer = chat(body["model"], body["messages"], None, 30.0).text
+        answer = _unplaced(shape, chat(body["model"], body["messages"], None, 30.0).text)
         message: dict[str, Any] = {"role": "assistant", "content": answer}
         finish, reasoning = "stop", 0
         if shape == "think":
@@ -497,6 +498,16 @@ def generator_transport(shape: str) -> httpx.MockTransport:
                                          "choices": [{"message": message, "finish_reason": finish}]})
 
     return httpx.MockTransport(handle)
+
+
+def _unplaced(shape: str, answer: str) -> str:
+    """A writer's day without ``placed``, as ``shape`` leaves it out (an extraction is unchanged)."""
+    day = json.loads(answer)
+    if "placed" not in day or shape not in ("unplaced_when_empty", "never_placed"):
+        return answer
+    if shape == "unplaced_when_empty" and day["placed"]:
+        return answer
+    return json.dumps({"messages": day["messages"]})
 
 
 @dataclass
