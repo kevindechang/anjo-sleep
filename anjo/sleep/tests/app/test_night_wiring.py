@@ -367,3 +367,13 @@ def test_the_night_naps_or_sleeps_deep_under_the_environments_policy(monkeypatch
     monkeypatch.setenv("ANJO_SLEEP_MAX_DAYS", "never")
     with pytest.raises(SleepPolicyError):  # a setting it can't use stops the night before it starts
         night.build(NoTrainer(), options)
+    monkeypatch.setenv("ANJO_SLEEP_PRESSURE", "0")  # off: no policy, so every night sleeps deep, as before naps
+    assert night.build(NoTrainer(), options).sleep_policy is None
+
+
+def test_the_month_command_finds_her_nights_where_the_night_keeps_them() -> None:
+    from anjo.sleep.app.ownership import night_logs
+    from anjo.sleep.night import past
+
+    module, _, name = past.NIGHTS.partition(":")
+    assert getattr(__import__(module, fromlist=[name]), name) is night_logs

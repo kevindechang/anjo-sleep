@@ -27,7 +27,8 @@ it off the serving path). Everything else is here:
 
 A night naps or sleeps deep (``night/sleep_pressure.py``) under ``ANJO_SLEEP_MONTH_USD`` and
 ``ANJO_SLEEP_MAX_DAYS``, reading the person's own turn count (``own_turn_count``); ``--force-deep``
-(``NightOptions.force_deep``) makes it a deep sleep, the month's cap still winning.
+(``NightOptions.force_deep``) makes it a deep sleep, the month's cap still winning, and
+``ANJO_SLEEP_PRESSURE=0`` turns naps off. A nap wakes no Glimmer: MIND waits for her next deep sleep.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's

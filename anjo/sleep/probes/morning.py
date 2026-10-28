@@ -103,7 +103,12 @@ logger = logging.getLogger(__name__)
 
 class TooManyNoVerdicts(RuntimeError):
     """The judge gave no readable verdict on more than ``NO_VERDICT_MAX_SHARE`` of a comparison's
-    probes: its answers can't be read, so the morning stops and scores nothing."""
+    probes: its answers can't be read, so the morning stops and scores nothing. ``no_verdict`` counts
+    the run's unread (comparison, probe) pairs so far."""
+
+    def __init__(self, message: str, *, no_verdict: int = 0) -> None:
+        super().__init__(message)
+        self.no_verdict = no_verdict
 
 
 class MorningError(RuntimeError):
@@ -384,7 +389,7 @@ def _run_morning(
                     raise TooManyNoVerdicts(
                         f"the judge gave no readable verdict on {missing} of {judged} probes in {name}, more than "
                         f"{NO_VERDICT_MAX_SHARE:.0%}: its answers can't be read (has their format changed?), so "
-                        "nothing was scored")
+                        "nothing was scored", no_verdict=sum(no_verdict.values()))
             if not kept:
                 continue  # no probe has a verdict: the comparison is missing, never a 0.50 tie
             scored = _stats(score_outcomes([p for p, _ in kept], [f.outcome for _, f in kept], bootstrap=config))

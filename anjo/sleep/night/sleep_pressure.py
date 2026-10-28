@@ -2,9 +2,9 @@
 
 MIND and Sleep are one loop (dream, rehearse, learn, check, wake), and the loop has two depths:
 
-- a **nap** runs the night's CPU steps: the sweep, ``close_day``, ``extract``, ``notice``, MIND's
-  inquiry, the brief and the note. It costs about $0: no probes, practice, training, gates, promotion
-  or GPU morning;
+- a **nap** runs the night's CPU steps: the sweep, ``close_day``, ``extract``, the chooser, a study,
+  the brief. It wakes no Glimmer: no probes, practice, training, gates, promotion or GPU morning, and
+  MIND's notice and inquiry and the note wait for her next deep sleep (``sleep_night.py``);
 - a **deep sleep** is the full night.
 
 ``decide`` goes deep when pressure has built up to the threshold *and* there is enough new material
@@ -13,6 +13,8 @@ since the last deep sleep (``min_new_evidence``), or when the days since the las
 those rules. The month's budget comes last and always wins: the threshold rises from
 ``base_threshold`` to 1 as the person's settled spend this month nears ``month_usd``, and a deep
 sleep that would pass the cap becomes a nap whose reason says so (``month_cap``), never a silent one.
+``ANJO_SLEEP_PRESSURE=0`` turns all of it off (``policy_from`` gives no policy): every night is deep,
+as before naps.
 
 ``sleep_pressure`` is a stand-in until MIND's core ships its own ``sleep_pressure(state)``, which
 drops in through ``NightDeps.sleep_pressure`` with the same signature. It reads what the night
@@ -36,6 +38,7 @@ Reason = Literal["forced", "max_days", "pressure", "below_threshold", "too_littl
 KINDS: Final[tuple[Kind, ...]] = ("nap", "deep")
 REASONS: Final[tuple[Reason, ...]] = ("forced", "max_days", "pressure", "below_threshold", "too_little_new", "month_cap")
 
+PRESSURE_ENV: Final = "ANJO_SLEEP_PRESSURE"  # "0": off, every night deep; "1" or unset: on
 MONTH_USD_ENV: Final = "ANJO_SLEEP_MONTH_USD"
 MAX_DAYS_ENV: Final = "ANJO_SLEEP_MAX_DAYS"
 DEFAULT_MONTH_USD: Final = 15.0
@@ -165,7 +168,7 @@ def decide(state: SleepState, policy: SleepPolicy, *, pressure: float, force_dee
     return SleepDecision(kind, reason, pressure, threshold, force_deep, state, policy.month_usd)
 
 
-def policy_from(environ: Mapping[str, str]) -> SleepPolicy:
+def read_policy(environ: Mapping[str, str]) -> SleepPolicy:
     """The policy ``ANJO_SLEEP_MONTH_USD`` (dollars, default 15) and ``ANJO_SLEEP_MAX_DAYS`` (default 7)
     set; a value that isn't one stops the night before it starts."""
     raw_usd, raw_days = environ.get(MONTH_USD_ENV, "").strip(), environ.get(MAX_DAYS_ENV, "").strip()
@@ -175,6 +178,15 @@ def policy_from(environ: Mapping[str, str]) -> SleepPolicy:
     except ValueError:
         raise SleepPolicyError(f"{MONTH_USD_ENV} is dollars and {MAX_DAYS_ENV} a whole number of days") from None
     return SleepPolicy(month_usd=month_usd, max_days=max_days)
+
+
+def policy_from(environ: Mapping[str, str]) -> SleepPolicy | None:
+    """The night's policy (``read_policy``), or None when ``ANJO_SLEEP_PRESSURE=0`` turns sleep
+    pressure off: no nap, every night deep."""
+    switch = environ.get(PRESSURE_ENV, "").strip()
+    if switch not in ("", "0", "1"):
+        raise SleepPolicyError(f"{PRESSURE_ENV} is 0 (off) or 1 (on)")
+    return None if switch == "0" else read_policy(environ)
 
 
 @dataclass(frozen=True)

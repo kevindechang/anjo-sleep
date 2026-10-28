@@ -232,6 +232,29 @@ def test_night_phase_runs_dailies_after_morning_and_survives_its_failure(tmp_pat
     assert ran == ["dailies"] and [(s["step"], s["status"]) for s in steps] == [("morning", "ok"), ("dailies", "ok")]
 
 
+def test_a_failed_morning_is_logged_with_its_reason_and_the_line_still_comes(tmp_path: Path) -> None:
+    import json
+
+    from anjo.sleep.model_api import ModelApiError
+    from anjo.sleep.probes.morning import TooManyNoVerdicts
+
+    unreadable = TooManyNoVerdicts("the judge gave no readable verdict on 3 of 3 probes in 2C_vs_1", no_verdict=3)
+    for label, error in (("unread", unreadable), ("slow", ModelApiError("the judge timed out after 120s"))):
+        ran: list[str] = []
+
+        def score(*args: Any, failure: Exception = error, **kw: Any) -> None:
+            raise failure
+
+        result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label),
+                                       nights=_promoted(tmp_path / label), morning=lambda *a: None, score=score,
+                                       dailies=lambda *a: ran.append("dailies"))
+        steps = [json.loads(line) for line in result.log_path.read_text().splitlines()]
+        assert result.status == "promoted" and ran == ["dailies"]  # a failed morning never costs the line
+        assert [(s["step"], s["status"]) for s in steps] == [("morning", "failed"), ("dailies", "ok")]
+        assert steps[0]["why"] == f"morning failed: {type(error).__name__}: {error}"
+        assert steps[0].get("no_verdict") == (3 if label == "unread" else None)
+
+
 @pytest.mark.parametrize("status", ["rejected", "nothing_new"])
 def test_night_phase_generates_no_line_without_a_new_checkpoint(tmp_path: Path, status: str) -> None:
     ran: list[str] = []

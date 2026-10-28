@@ -131,7 +131,7 @@ def _night_lines(view: NightView) -> list[Change]:
     elif view.status == "nothing_new":
         lines.append(Change(view.night, "nothing_new", f"{when}: there was nothing new to learn from, so she changed nothing.{deep}"))
     elif view.status == "napped" and view.sleep is not None:
-        lines.append(Change(view.night, "napped", f"{when}: she napped ({_pressure(view.sleep)}): she thought your day over and changed no weights."))
+        lines.append(Change(view.night, "napped", f"{when}: she napped ({_pressure(view.sleep)}): she read your day, changed no weights, and left her thinking for her next deep sleep."))
     else:
         where = f" at {view.failed_at}" if view.failed_at else ""
         lines.append(Change(view.night, "failed", f"{when}: the night stopped{where}, so the earlier version still serves."))

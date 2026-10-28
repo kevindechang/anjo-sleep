@@ -33,7 +33,9 @@ default and has no effect on the day phase.
 
 A night that napped (``night/sleep_pressure.py``) trained nothing, so it runs no morning: its log
 records the morning ``skipped``, and no Dailies line is made. ``--force-deep`` makes the night a deep
-sleep whatever its pressure (the demo); the month's cap (``ANJO_SLEEP_MONTH_USD``) still wins.
+sleep whatever its pressure (the demo); the month's cap (``ANJO_SLEEP_MONTH_USD``) still wins. A
+morning that fails (a judge that can't be read, ``TooManyNoVerdicts``, or one that timed out) is
+logged ``failed`` with its reason and its unread verdicts, and a promoted night still gets its line.
 
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
 for example ``film_founder=<account id>``.
@@ -56,7 +58,8 @@ from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
 from anjo.sleep.night.sleep_night import NAP_WHY
-from anjo.sleep.probes.morning import DAILY, MorningResult, run_morning
+from anjo.sleep.night.state import safe_error
+from anjo.sleep.probes.morning import DAILY, MorningResult, TooManyNoVerdicts, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
@@ -179,24 +182,42 @@ def run_night_phase(
         if result.status == "napped":  # a nap trained nothing and runs no GPU morning: logged, never silent
             NightLog(result.log_path.parent).step("morning", "skipped", uses="new", system=None, why=NAP_WHY)
         elif result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
-            log, started = NightLog(result.log_path.parent), timer()
-            ports = (morning or _morning())(user, persona, plan.night)
-            sent_again = _retries(ports)
-            subset = DAILY if label == "development" else None  # the final runs ask every probe and arm
-            done = score(user, plan.night, result.checkpoint, morning=ports, label=label,
-                         promoted=result.status == "promoted", subset=subset)
-            receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
-            if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
-                receipt.update(replies=done.replies, judge_calls=done.judge_calls,
-                               **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
-            if subset is not None:
-                receipt["subset"] = subset.name
-            if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
-                receipt["retries"] = retries
-            log.step("morning", "ok", uses="new", system=None, **receipt)
+            log = NightLog(result.log_path.parent)
+            _score_morning(log, user, persona, plan.night, result, label=label, score=score, morning=morning,
+                           timer=timer)
             if result.status == "promoted":  # new weights: the line he'd now say differently
                 _pregenerate(log, dailies, timer, user, persona, plan.night, result)
     return result
+
+
+def _score_morning(
+    log: NightLog, user: str, persona: str, night: date, result: NightResult, *, label: str,
+    score: Callable[..., object], morning: Callable[..., object] | None, timer: Callable[[], float],
+) -> None:
+    """The morning's probe run, logged ``ok`` with what it asked, or ``failed`` with its reason (and
+    the unread verdicts when the judge couldn't be read). Either way the night and its line go on."""
+    started, ports, sent_again = timer(), None, 0
+    subset = DAILY if label == "development" else None  # the final runs ask every probe and arm
+    try:
+        ports = (morning or _morning())(user, persona, night)
+        sent_again = _retries(ports)
+        done = score(user, night, result.checkpoint, morning=ports, label=label,
+                     promoted=result.status == "promoted", subset=subset)
+    except Exception as error:  # a judge that can't be read, or one that timed out: logged, never lost
+        logger.warning("the morning for %s failed: %s", night.isoformat(), type(error).__name__)
+        unread: dict[str, Any] = {"no_verdict": error.no_verdict} if isinstance(error, TooManyNoVerdicts) else {}
+        log.step("morning", "failed", uses="new", system=None, seconds=round(timer() - started, 3),
+                 why=f"morning failed: {safe_error(error)}", **unread)
+        return
+    receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
+    if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
+        receipt.update(replies=done.replies, judge_calls=done.judge_calls,
+                       **({"no_verdict": done.no_verdict} if done.no_verdict else {}))  # unreadable, counted
+    if subset is not None:
+        receipt["subset"] = subset.name
+    if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
+        receipt["retries"] = retries
+    log.step("morning", "ok", uses="new", system=None, **receipt)
 
 
 def _pregenerate(

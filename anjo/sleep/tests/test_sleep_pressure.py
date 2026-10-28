@@ -1,7 +1,8 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """Sleep pressure: a nap or a deep sleep, decided once a night (``night/sleep_pressure.py``), on the
-night's own fakes. A nap runs MIND and the note and nothing on the GPU; the month's cap always wins."""
+night's own fakes. A nap runs the CPU steps, wakes no Glimmer and defers MIND's passes and the note to
+the next deep sleep; the month's cap always wins."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -13,12 +14,15 @@ from typing import Any
 import pytest
 
 from anjo.sleep.budget import CAPS, Ledger
-from anjo.sleep.night import cost
+from anjo.sleep.checkpoints import DATA_DIR_ENV
+from anjo.sleep.evidence.jsonl import PLAIN, read_records
+from anjo.sleep.night import cost, past
 from anjo.sleep.night.deps import NightSettings
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.holds import usd
-from anjo.sleep.night.past import days_since_deep, last_deep, month_spent, turns_since
+from anjo.sleep.night.past import COLAB_USD_PER_CU, days_since_deep, gpu_batches, last_deep, month_spent, notice_from, turns_since
 from anjo.sleep.night.run import GPU_STEPS, run_night_batch_with
+from anjo.sleep.night.sleep_night import DEFER_WHY
 from anjo.sleep.night.sleep_pressure import (
     DEEP_NIGHT_USD,
     SleepPolicy,
@@ -29,9 +33,10 @@ from anjo.sleep.night.sleep_pressure import (
     policy_from,
     sleep_pressure,
 )
+from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.tests.mind_night_fakes import LifeThinker, mind_night
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps, summary, thread
-from anjo.sleep.tests.test_night_mind import DUE_SOON, ON, _world
+from anjo.sleep.tests.test_night_mind import NIGHT_END, ON, _commitment, _world
 from anjo.sleep.types import NightResult, Target
 
 UID = "p1"
@@ -56,10 +61,24 @@ def _state(**changes: Any) -> SleepState:
     return replace(base, **changes)
 
 
-def _settle(ledger: Ledger, job: str, amount: float) -> None:
-    held = ledger.reserve(job, ("modal_usd",), usd(amount))
+def _settle(ledger: Ledger, job: str, amount: float, pool: Any = "modal_usd") -> None:
+    held = ledger.reserve(job, (pool,), usd(amount))
     assert held is not None
     held.settle(amount)
+
+
+def _holds_on(ledger: Ledger, pool: str) -> list[str]:
+    """Every hold ever taken on ``pool``, settled, released or open."""
+    events = read_records(ledger.path, PLAIN) if ledger.path.exists() else []
+    return [event["job"] for event in events if event["op"] == "reserve" and pool in event["pools"]]
+
+
+def _note_due(world: World) -> Target:
+    """A plan whose date has come, already prepared: the night's chooser holds a note on it."""
+    due = _commitment(UID, NIGHT_END - timedelta(hours=1))
+    world.targets(UID).upsert(due)
+    world.targets(UID).mark_acted(due.id, due.revision)
+    return due
 
 
 # ── the night ─────────────────────────────────────────────────────────────────
@@ -127,17 +146,38 @@ def test_month_cap_turns_deep_into_logged_nap(tmp_path: Path) -> None:
     assert summary(result.log_path)["sleep"]["reason"] == "month_cap"  # logged, never silent
 
 
-def test_nap_still_runs_mind_and_notes(tmp_path: Path) -> None:
-    world = _world(tmp_path, due=DUE_SOON)
-    mind = mind_night(world, LifeThinker(targets=(f"{UID}-t1", f"{UID}-c1")))
-    result = _night(world, settings=ON, inquiry=mind, notice=mind)
-    assert result.status == "napped" and world.gpu.opened == [] and world.trainer.calls == []
-    assert step(result.log_path, "notice")["noop"] is False
-    choose = step(result.log_path, "choose")
-    assert choose["action"] == "inquire" and choose["inquiry"]["ops"]["CONCLUDE"] == 1
-    note = step(result.log_path, "note")
-    assert note["outcome"] == "held" and note["target_id"] == f"{UID}-c1"
-    assert len(world.notifier.queued) == 1
+def test_a_nap_wakes_no_glimmer_and_defers_mind_and_the_note(tmp_path: Path) -> None:
+    world = _world(tmp_path, nights=2)
+    due = _note_due(world)
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    thinker, woke = LifeThinker(targets=(f"{UID}-t1", due.id)), []
+    mind = mind_night(world, thinker, ledger=ledger)
+
+    def wake() -> WakeResult:
+        woke.append(1)
+        return WakeResult(seconds=1.0, ok=True)
+
+    nap = _night(world, settings=ON, inquiry=mind, notice=mind, ledger=ledger, wake=wake)
+    assert nap.status == "napped" and step(nap.log_path, "sleep")["kind"] == "nap"
+    assert _holds_on(ledger, "modal_usd") == [] and woke == [] and thinker.prompts == []  # Glimmer slept on
+    assert world.writer.calls == [] and world.notifier.queued == [] and world.gpu.opened == []
+    notice = step(nap.log_path, "notice")
+    assert (notice["status"], notice["why"]) == ("skipped", DEFER_WHY)
+    choose = step(nap.log_path, "choose")
+    assert "inquire" not in choose["offered"] and choose["ports"]["inquiry"] == DEFER_WHY
+    assert (choose["action"], choose["target_id"]) == ("hold_note", due.id)
+    note = step(nap.log_path, "note")
+    assert (note["outcome"], note["target_id"], note["why"]) == ("deferred", due.id, DEFER_WHY)
+    assert not next(t for t in world.targets(UID).open_targets(NIGHT_END) if t.id == due.id).due_noted  # unsettled
+
+    later = NIGHT + timedelta(days=1)  # her next deep sleep notices the nap's day and words the note
+    deep = _night(world, night=later, settings=replace(ON, force_deep=True), inquiry=mind, notice=mind, ledger=ledger)
+    assert deep.status == "promoted" and step(deep.log_path, "sleep")["kind"] == "deep"
+    noticed = step(deep.log_path, "notice")
+    assert noticed["new"] == 6 and noticed["notice_from"] == NIGHT.isoformat()  # both days' items, the nap's first
+    worded = step(deep.log_path, "note")
+    assert (worded["outcome"], worded["target_id"]) == ("held", due.id) and len(world.notifier.queued) == 1
+    assert thinker.prompts and any(job.startswith(f"night:note:{UID}:{later.isoformat()}") for job in _holds_on(ledger, "modal_usd"))
 
 
 def test_force_deep_overrides(tmp_path: Path) -> None:
@@ -197,10 +237,11 @@ def test_high_risk_counts_due_commitments_and_lost_threads() -> None:
 
 
 def test_policy_from_the_environment() -> None:
-    assert policy_from({}) == SleepPolicy(month_usd=15.0, max_days=7)
+    assert policy_from({}) == SleepPolicy(month_usd=15.0, max_days=7) == policy_from({"ANJO_SLEEP_PRESSURE": "1"})
     assert policy_from({"ANJO_SLEEP_MONTH_USD": "10", "ANJO_SLEEP_MAX_DAYS": "3"}) == SleepPolicy(10.0, 3)
+    assert policy_from({"ANJO_SLEEP_PRESSURE": "0", "ANJO_SLEEP_MAX_DAYS": "never"}) is None  # off: every night deep
     for bad in ({"ANJO_SLEEP_MONTH_USD": "ten"}, {"ANJO_SLEEP_MONTH_USD": "0"}, {"ANJO_SLEEP_MAX_DAYS": "0"},
-                {"ANJO_SLEEP_MAX_DAYS": "2.5"}, {"ANJO_SLEEP_MONTH_USD": "nan"}):
+                {"ANJO_SLEEP_MAX_DAYS": "2.5"}, {"ANJO_SLEEP_MONTH_USD": "nan"}, {"ANJO_SLEEP_PRESSURE": "off"}):
         with pytest.raises(SleepPolicyError):
             policy_from(bad)
 
@@ -234,6 +275,10 @@ def test_the_last_deep_sleep_and_the_turns_since() -> None:
     assert turns_since(history, day[0], day[4]) == 5 + 7 + 11 and turns_since(history, day[3], day[5]) == 0
     naps = [_summary(day[1], kind="nap", status="napped"), _summary(day[2], kind="nap", status="napped")]
     assert days_since_deep(naps, day[5]) == 4  # never deep: counted from her first logged night
+    assert notice_from(history, day[4]) == day[4] and notice_from([], day[0]) == day[0]  # her last night woke
+    assert notice_from(history[:2], day[3]) == day[1]  # the day after the last night that woke
+    assert notice_from([*history, *naps[1:]], day[3]) == day[1]  # day 2's last run napped
+    assert notice_from(naps, day[3]) == day[1]  # only naps: everything since her first night
 
 
 def test_month_spent_counts_only_her_keys_this_month() -> None:
@@ -248,3 +293,54 @@ def test_month_spent_counts_only_her_keys_this_month() -> None:
         f"sim:{UID}:d0:s1:a1": 9.0, "colab_train:x": 9.0,  # the simulated day; not a dollar key of hers
     }
     assert month_spent(settled, UID, NIGHT) == pytest.approx(0.02 + 0.03 + 0.25 + 0.05 + 0.12 + 0.10)
+
+
+def test_a_rerun_counts_once_a_shared_session_splits_and_colab_units_are_priced() -> None:
+    on, pair = NIGHT.isoformat(), batch_digest([UID, "p2"])
+    settled = {
+        f"night:extract:{UID}:{on}:a1": 0.02, f"night:extract:{UID}:{on}:a2": 0.03,  # a rerun: its last run counts
+        f"night_gpu:{on}:{pair}:a1": 0.90,  # her batch with one other person: half is hers
+        f"night_gpu:{on}:{batch_digest(['p2', 'p3'])}:a1": 5.0,  # a batch she wasn't in
+    }
+    units = {f"colab_train:{on}:{UID}:a1": 2.0, f"colab_life:{on}:{UID}:a1": 1.0, f"colab_train:{on}:p2:a1": 9.0}
+    history = [{"night": on, "gpu_batch": {"digest": pair, "people": 2}},
+               {"night": on, "gpu_batch": {"digest": "x", "people": 0}}]  # not a batch: left out
+    assert gpu_batches(history) == {pair: 2}
+    spent = month_spent(settled, UID, NIGHT, batches=gpu_batches(history), units=units)
+    assert spent == pytest.approx(0.03 + 0.45 + 3.0 * COLAB_USD_PER_CU)
+
+
+def test_a_shared_batch_records_its_gpu_session_for_each_person(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    for uid in (UID, "p2"):
+        world.plan(uid, NIGHT, count=1)
+    results = run_night_batch_with(world.deps(), {UID: NIGHT, "p2": NIGHT})
+    expected = {"digest": batch_digest([UID, "p2"]), "people": 2}
+    assert all(summary(result.log_path)["gpu_batch"] == expected for result in results.values())
+    world.plan("p3", NIGHT, count=1)
+    alone = run_night_batch_with(world.deps(), {"p3": NIGHT})["p3"]  # her key's digest is hers alone: nothing to keep
+    assert alone.status == "promoted" and "gpu_batch" not in summary(alone.log_path)
+
+
+def test_the_month_command_prints_her_spend_and_the_room_left(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                            capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
+    ledger = Ledger(tmp_path / "sleep" / "budget.jsonl")
+    on, pair = NIGHT.isoformat(), batch_digest([UID, "p2"])
+    _settle(ledger, f"night:extract:{UID}:{on}:a1", 0.5)
+    _settle(ledger, f"morning:{on}:{UID}:judge:a1", 1.0)
+    _settle(ledger, f"night_gpu:{on}:{pair}:a1", 3.0)
+    _settle(ledger, f"colab_train:{on}:{UID}:a1", 10.0, pool="colab_cu")
+    folder = tmp_path / "nights" / on
+    folder.mkdir(parents=True)
+    (folder / "summary.json").write_text(json.dumps({"night": on, "gpu_batch": {"digest": pair, "people": 2}}))
+    assert past.main(["--month", UID, "--for-date", on, "--nights", str(tmp_path / "nights")]) == 0
+    report = json.loads(capsys.readouterr().out)
+    spent = 0.5 + 1.0 + 1.5 + 10.0 * COLAB_USD_PER_CU
+    assert report["spent_usd"] == pytest.approx(spent) and report["cap_usd"] == POLICY.month_usd
+    assert report["left_usd"] == pytest.approx(POLICY.month_usd - spent) and report["month"] == on[:7]
+    assert report["by_kind"] == pytest.approx({"night": 0.5, "morning": 1.0, "night_gpu": 1.5, "colab_train": 1.0})
+    assert report["deep_nights_left"] == int((POLICY.month_usd - spent) // DEEP_NIGHT_USD)
+    assert UID not in json.dumps(report)  # numbers only

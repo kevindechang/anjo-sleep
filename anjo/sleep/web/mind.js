@@ -263,13 +263,13 @@
     const tbody = element("tbody");
     for (const night of life.nights) {
       const row = element("tr");
-      const label = element("th", "", String(night.night));
+      // probes the judge gave no verdict on, across the row's arms: said once, beside the night
+      const unread = arms.reduce((sum, arm) => sum + ((night.no_verdict && night.no_verdict[arm]) || 0), 0);
+      const label = element("th", "", unread ? `${night.night} (${fill(copy.chart_no_verdict, { n: unread })})` : String(night.night));
       label.setAttribute("scope", "row");
       row.append(label, ...arms.flatMap((arm) => dims.map((d) => {
         const v = night.scores[arm] && night.scores[arm][d];
-        const unread = night.no_verdict && night.no_verdict[arm]; // probes the judge gave no verdict on
-        const shown = typeof v === "number" ? v.toFixed(2) : "–";
-        return element("td", "num", unread ? `${shown} (${fill(copy.chart_no_verdict, { n: unread })})` : shown);
+        return element("td", "num", typeof v === "number" ? v.toFixed(2) : "–");
       })));
       tbody.append(row);
     }
