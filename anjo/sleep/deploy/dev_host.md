@@ -207,6 +207,11 @@ its next start, and the L40S costs about $2 an hour while up.
 
 ### The Oct 28 checks (record the results here)
 
+0. **Text-only serve (seen live on Modal).** vLLM 0.28.0 with `--enable-lora` crashed at start-up in
+   `lora_shrink` (`assert token_lora_mapping.size(0) == M`): the profile run's dummy image ran
+   Glimmer's vision tower, which had LoRA wrappers. `serving.config.vllm_command` now passes
+   `--language-model-only`, so Modal, the SageMaker shim and the APD Colab session all skip the tower.
+
 1. **Glimmer loads on the L40S in FP8, with vLLM 0.28.0.** `deploy up` reaching InService proves the
    load; record vLLM's "maximum concurrency" line from the container log in §1.5. If FP8 doesn't
    fit, the fallback is BF16 on an A100-80GB, which on SageMaker is a larger instance type (and a

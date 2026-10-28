@@ -37,6 +37,7 @@ def test_glimmer_serves_at_fp8_on_one_l40s_with_lora_on() -> None:
     assert command[command.index("--quantization") + 1] == "fp8"
     assert command[command.index("--served-model-name") + 1] == config.MODEL
     assert "--enable-lora" in command
+    assert "--language-model-only" in command  # no LoRA on the vision tower: its dummy-image profile run crashes
     sizes = {flag: command[command.index(flag) + 1] for flag in ("--max-lora-rank", "--max-loras", "--max-cpu-loras")}
     assert sizes == {"--max-lora-rank": "32", "--max-loras": "8", "--max-cpu-loras": "16"}
     assert command[command.index("--reasoning-parser") + 1] == "muse_glimmer"  # content is the to=user channel
