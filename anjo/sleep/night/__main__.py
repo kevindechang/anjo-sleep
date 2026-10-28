@@ -12,9 +12,9 @@ collapse gate's fields). An account named without one is a real person, and runs
 ``--allow-real``, which Claude passes only for Kevin with his OK.
 
 Before anything else it takes the night lock and sweeps what a run killed hard left behind
-(``sweep.py``): the training runner's leftover calls are cancelled (Modal) or sessions stopped
-(Colab), and stale holds settled at their full bound. A second command while one is live stops
-before it touches anything.
+(``sweep.py``): whichever runner trains, Modal's recorded calls are cancelled and, where the Colab
+CLI is installed, Sleep's Colab sessions stopped; then stale holds are settled at their full bound.
+A second command while one is live stops before it touches anything.
 
 This is the composition root. The engine core never imports the app (the import contract), so the
 app's wiring is named here and loaded by name. The trainer is built here, on the runner

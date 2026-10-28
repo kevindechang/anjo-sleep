@@ -3,8 +3,10 @@ Kevin, 2026-10-28: Modal's hackathon credit first) or ``colab`` (the fallback).
 
 The night command, the accelerated runs and the synthetic example all build their runner here, so
 they can't drift: ``build`` gives the runner and its sweep, the step the night command runs under
-its lock before anything else (Modal: cancel the calls a killed run left; Colab: stop its leftover
-sessions). Each sweeps its own runner only, so a night on one never reaches the other's service.
+its lock before it settles the stale holds. Whichever runner trains, the sweep stops what a killed
+run left on either: Modal's recorded calls are cancelled (Modal is reached only if one is recorded),
+and Sleep's Colab sessions are stopped wherever the Colab CLI is installed (without it, nothing here
+can have started a VM), as a delete's stoppers do. So no hold is settled while its job may still run.
 
 MIND's training (Tasks 17 and 17b, ``train/thinker.py``, the APD runner) never comes here and stays
 on Colab whatever the setting says.
@@ -22,6 +24,7 @@ from typing import Final
 from anjo.sleep.budget import Ledger
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.train.lora import AdapterPublisher
+from anjo.sleep.train.runners import colab as colab_runner
 from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
 from anjo.sleep.train.runners.modal import CallRecords, ModalCalls, ModalRunner, cancel_leftover_calls
 
@@ -51,22 +54,39 @@ def runner_name(environ: Mapping[str, str]) -> str:
     return chosen
 
 
+def colab_installed() -> bool:
+    """Whether this machine has the Colab CLI: without it, nothing here can have started a VM."""
+    return Path(colab_runner.COLAB_BIN).is_file()
+
+
+def _sweep(records: CallRecords, calls: ModalCalls, cli: ColabCli | None) -> Callable[[], tuple[int, int]]:
+    """Both runners' leftovers: Modal's recorded calls, and Sleep's Colab sessions when ``cli`` is given.
+    Returns how many were stopped and how many Colab sessions weren't ours."""
+    def sweep() -> tuple[int, int]:
+        stopped, not_ours = stop_leftover_sessions(cli) if cli is not None else (0, 0)
+        cancelled, _ = cancel_leftover_calls(records, calls)
+        return stopped + cancelled, not_ours
+
+    return sweep
+
+
 def build(
     name: str, *, ledger: Ledger, calls_dir: Path, is_synthetic: Callable[[str], bool],
     allow_real: Collection[str] = (), colab_cli: Callable[[], ColabCli], modal_calls: Callable[[], ModalCalls],
 ) -> Chosen:
-    """The runner ``name`` (``runner_name``'s answer). ``allow_real`` names the real people it may train
-    (Kevin's own, §12.1); Colab takes it as a yes or no, as it always has. ``calls_dir`` holds Modal's
-    call records. Only the chosen runner's client is made."""
+    """The runner ``name`` (``runner_name``'s answer) and the sweep of both runners' leftovers.
+    ``allow_real`` names the real people it may train (Kevin's own, §12.1); Colab takes it as a yes or
+    no, as it always has. ``calls_dir`` holds Modal's call records. Colab's CLI is made only where it is
+    installed or chosen, and Modal's client calls Modal only for a recorded call."""
+    records, calls = CallRecords(calls_dir), modal_calls()
     if name == "modal":
-        calls, records = modal_calls(), CallRecords(calls_dir)
         modal = ModalRunner(calls=calls, ledger=ledger, records=records, is_synthetic=is_synthetic,
                             allow_real=allow_real)
-        return Chosen(name, modal, lambda: cancel_leftover_calls(records, calls))
+        return Chosen(name, modal, _sweep(records, calls, colab_cli() if colab_installed() else None))
     if name == "colab":
         cli = colab_cli()
         colab = ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_synthetic, allow_real=bool(allow_real))
-        return Chosen(name, colab, lambda: stop_leftover_sessions(cli))
+        return Chosen(name, colab, _sweep(records, calls, cli))
     raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(RUNNERS)}")
 
 

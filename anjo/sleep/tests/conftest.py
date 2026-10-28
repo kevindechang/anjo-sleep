@@ -50,3 +50,12 @@ def no_aws_identity(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.Te
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     for name in _AWS_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_colab_cli(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """No test finds this machine's Colab CLI, so a night's sweep never runs it; a test that wants an
+    installed CLI points ``COLAB_BIN`` at a file of its own and fakes the CLI."""
+    from anjo.sleep.train.runners import colab
+
+    monkeypatch.setattr(colab, "COLAB_BIN", tmp_path_factory.getbasetemp() / "no-colab" / "colab")

@@ -6,9 +6,9 @@ bound forever, and its Colab VM or Modal call may still run. So ``swept_night``,
 1. takes the night lock (``night.lock`` beside the ledger). The OS frees an ``flock`` when its
    process dies, however it dies, so while the lock is held no other night run is live on this
    host. A second command stops with ``NightBusy`` and touches nothing;
-2. stops every Colab session, or cancels every Modal call, the training runner made (the night
-   command passes that step in, so this module never imports training). A stop that fails raises,
-   and every hold stays open;
+2. stops every Colab session and cancels every Modal call a training run left, whichever runner
+   this night trains on (the night command passes that step in, so this module never imports
+   training). A stop that fails raises, and every hold stays open;
 3. settles every open hold of the night's own kinds at its full bound. Work may have run, so the
    worst case is the honest charge: a release could undercount.
 

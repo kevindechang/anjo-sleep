@@ -31,9 +31,14 @@ class Cli:
 
 
 @pytest.fixture(autouse=True)
-def no_colab(monkeypatch: pytest.MonkeyPatch) -> Cli:
+def no_colab(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Cli:
+    from anjo.sleep.train.runners import colab
+
     cli = Cli()
     monkeypatch.setattr("anjo.sleep.night.__main__._colab_cli", lambda: cli)
+    installed = tmp_path / "colab-cli"
+    installed.write_text("")
+    monkeypatch.setattr(colab, "COLAB_BIN", installed)  # the Colab CLI is installed (this fake answers)
     return cli
 
 
@@ -130,12 +135,23 @@ def test_the_night_command_sweeps_a_killed_run_before_the_wiring(
     with pytest.raises(RuntimeError, match="stop here"):
         main([*BASE, "--user", "u1", "--persona", "founder"])
     assert seen == [0]  # every stale hold settled before the wiring ran, Modal's training holds too
-    if runner == "colab":
-        assert no_colab.calls == [("sessions",), ("stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3")]
-        assert no_modal.cancelled == []  # each night sweeps its own runner only
-    else:
-        assert no_modal.cancelled == ["fc-00000009"] and records.items() == []
-        assert no_colab.calls == []
+    # Whichever runner trains, both runners' leftovers are stopped before their holds are settled.
+    assert no_colab.calls == [("sessions",), ("stop", "-s", "anjo-sleep-p-aaaaaaaaaaaa-n3")]
+    assert no_modal.cancelled == ["fc-00000009"] and records.items() == []
+
+
+def test_a_modal_night_leaves_colab_alone_where_its_cli_isnt_installed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_colab: Cli,
+) -> None:
+    from anjo.sleep.train.runners import colab
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ANJO_SLEEP_TRAIN_RUNNER", raising=False)
+    monkeypatch.setattr(colab, "COLAB_BIN", tmp_path / "no-colab")
+    monkeypatch.setattr("anjo.sleep.tests.test_night_cli.never", lambda *args: (_ for _ in ()).throw(RuntimeError("x")))
+    with pytest.raises(RuntimeError):
+        main([*BASE, "--user", "u1", "--persona", "founder"])
+    assert no_colab.calls == []  # without the CLI, nothing here can have started a VM
 
 
 def test_a_simulated_day_runs_its_night_on_the_virtual_clock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
