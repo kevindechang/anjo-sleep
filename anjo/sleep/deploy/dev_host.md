@@ -589,6 +589,14 @@ below.
   no credit with Sleep, so a MIND night there waits only on other MIND nights. With `baseten`,
   the calls hold `baseten_mind_usd` as before. `--live` prints the provider, the model and the
   pool before anything runs.
+- **The run's ceiling.** `generate`, `run`, `timing` and `judge` take `--max-usd` (default $20).
+  Before each new generation attempt, life-arm run or judge call, the command sums what its own
+  holds have settled (not the pools' totals), and once that reaches the ceiling it starts nothing
+  more and exits with code 5, saying how far it got and what it spent. A unit already running
+  finishes under its own hold, so a run can pass the ceiling by the units in flight (with
+  `--parallel N`, up to N life-arms). After each life and each life-arm it prints what it has
+  settled per life and per arm-day: run `--only 1 generate` first and extrapolate (`--lives`
+  sets only the held-out draw).
 - **One provider per pilot.** The data dir's `serving_pin.json` records `spark_provider` and
   `spark_model` at the first command that calls Spark Open (`generate`, `run`, `timing`,
   `intervene`, `kill-resume`), and refuses a later command on the other provider. It also
