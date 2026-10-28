@@ -63,6 +63,7 @@ Conclusion = tuple[str, str, str]  # (question subject, finding kind, statement)
 MODULE: Final = "anjo.sleep.mind.apd.resume"
 RAN_OUT: Final = 3  # the kill child's exit code when the run ended before the kill index
 CHILD_TIMEOUT: Final = 1800.0  # seconds, per child process
+KILL_RUNS: Final = 3  # per life, one after another: uninterrupted, killed, resumed
 _SAFE_ID: Final = re.compile(r"^[\w.-]+$")
 
 

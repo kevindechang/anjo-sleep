@@ -12,12 +12,15 @@ from pathlib import Path
 
 import pytest
 
+from anjo.sleep.budget import Ledger
+from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import fakes, generate, intervene, judging, live, pilot, timing
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.store import DataDir, StoreError
 from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, HELD_OUT_LIVES_CUT, INTERVENTION_SNAPSHOTS
+from anjo.sleep.mind.sweep import MIND_KINDS
 from anjo.sleep.reports import apd as apd_report
 from anjo.sleep.prereg.ledger import read_entries, register
 from anjo.sleep.serving import config, framing
@@ -80,9 +83,9 @@ def test_heldout_generation_refused_before_freeze(tmp_path: Path) -> None:
     specs = pilot.held_out_specs(good, seed, HELD_OUT_LIVES)  # type: ignore[arg-type]
     assert len(specs) == HELD_OUT_LIVES and {s.split for s in specs} == {"held_out"}
     data = tmp_path / "data"
-    with pytest.raises(pilot.FreezeError):  # through the command: nothing generated, nothing sealed
-        _main(["--fake", "--data", str(data), "generate", "--held-out", "--draw-seed", seed,
-               "--prereg", str(tmp_path / "seed only" / "prereg.jsonl")])
+    code, text = _main(["--fake", "--data", str(data), "generate", "--held-out", "--draw-seed", seed,
+                        "--prereg", str(tmp_path / "seed only" / "prereg.jsonl")])
+    assert code == cli.REFUSED_CODE and "Refused: APD isn't frozen" in text  # through the command, refused cleanly
     assert not (data / "lives").exists() and not (data / "sealed").exists()
 
 
@@ -205,5 +208,11 @@ def test_timing_measures_throughput_and_projects_against_the_cap_and_the_line(tm
                 assert "the 100 CU cap" in line and "the 300-unit line" in line and "baseten_mind_usd cap" in line
     measured = timing.load(DataDir(tmp_path))
     assert measured is not None and measured.parallel == 4 and measured.thinker_calls > 0 and measured.spark_calls > 0
+    ledger = Ledger(tmp_path / "fake-budget.jsonl")
+    jobs = {str(event["job"]) for event in read_records(ledger.path, PLAIN) if event["op"] == "reserve"}
+    starts = {job.rsplit(":spark:", 1)[0] for job in jobs if job.startswith("apd:timing:branches:")}
+    assert len(starts) > 1  # 17b's Spark Open held one start state at a time, never all its branches at once
+    assert all(job.startswith(MIND_KINDS) for job in jobs) and ledger.open_holds() == ()  # MIND's kinds, all settled
+    assert measured.branches_s > 0  # the branches ran: their world query was dated on their start state's night
     plan_text = _main([*LIVE, "--data", str(tmp_path), "run"])[1]
     assert "expected about $" in plan_text and "expected about" in plan_text.split("Colab:")[1].splitlines()[0]

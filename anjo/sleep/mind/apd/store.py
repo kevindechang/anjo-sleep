@@ -10,6 +10,9 @@
     <data>/kill/<life>.result.json    each finished kill-resume (``resume.KillResume``)
     <data>/interventions/<n>.<edit>.json  each finished snapshot-edit of the intervention test
     <data>/timing.json                the last timing's measurements
+    <data>/held_out_draw.json         the held-out draw: its seed's hash and count, checked at each run
+    <data>/serving_pin.json           what every session serves: Glimmer's revision, vLLM's version,
+                                      the precision and the reasoning strength, fixed at first use
     <data>/judging/<judge>.jsonl      each judge's replies, by the hash of the prompt it was sent
     <data>/audit/pending.jsonl        the blind audit's questions (``judging``)
     <data>/audit/answers.jsonl        and Claude's answers, written by hand
@@ -197,9 +200,49 @@ class DataDir:
     def timing(self) -> Path:
         return self.root / "timing.json"
 
+    @property
+    def pin_path(self) -> Path:
+        return self.root / "serving_pin.json"
+
+    def pin_serving(self, pins: Mapping[str, str]) -> None:
+        """Fix what every session of this pilot serves at its first; refuse any session after that
+        would serve another (every arm runs on one model, at one precision and rendering)."""
+        if not self.pin_path.exists():
+            write_text(self.pin_path, json.dumps(dict(pins), sort_keys=True))
+            return
+        found = json.loads(self.pin_path.read_text(encoding="utf-8"))
+        changed = sorted(name for name in {*found, *pins} if found.get(name) != pins.get(name))
+        if changed:
+            raise StoreError(f"this pilot serves another {', '.join(changed)} than its first session did "
+                             f"({self.pin_path.name}); every arm runs on one")
+
+    @property
+    def drawn_path(self) -> Path:
+        return self.root / "held_out_draw.json"
+
+    def save_drawn(self, digest: str, count: int) -> None:
+        """Record the held-out draw (its seed's hash, never the seed, and its count); one per data dir."""
+        found = self.drawn()
+        if found is not None and found != (digest, count):
+            raise StoreError("this data dir's held-out lives were drawn from another seed or count")
+        write_text(self.drawn_path, json.dumps({"draw_seed_sha256": digest, "held_out_lives": count}))
+
+    def drawn(self) -> tuple[str, int] | None:
+        if not self.drawn_path.exists():
+            return None
+        found = json.loads(self.drawn_path.read_text(encoding="utf-8"))
+        return str(found["draw_seed_sha256"]), int(found["held_out_lives"])
+
     def journal(self, name: str) -> Path:
         """A run's Spark Open journal."""
         return self.spend / f"{check_id(name)}.jsonl"
+
+    def journals(self) -> list[Path]:
+        """Every live run's journal: none moved aside, and not the discarded record."""
+        if not self.spend.is_dir():
+            return []
+        return sorted(path for path in self.spend.glob("*.jsonl")
+                      if path.name != "discarded.jsonl" and ".discarded-" not in path.name)
 
     def record_discarded(self, record: Mapping[str, object]) -> None:
         append_records(self.spend / "discarded.jsonl", PLAIN, [record])

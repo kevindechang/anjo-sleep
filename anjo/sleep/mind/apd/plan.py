@@ -14,7 +14,8 @@ from anjo.sleep.mind.apd.backend import gen_holds
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
-from anjo.sleep.mind.apd.timing import KILL_RUNS, Timing, cu
+from anjo.sleep.mind.apd.resume import KILL_RUNS
+from anjo.sleep.mind.apd.timing import Timing, cu
 from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, KILL_RESUME_LIVES, LIFE_DAYS, WORKSPACE_ARMS
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import spark_worst_usd

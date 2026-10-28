@@ -9,31 +9,60 @@ A real run makes paid calls, so it is refused without ``--live``; ``--live`` pri
 plan (its Colab session and hard timeout, and every hold on every pool) and stops, and only
 ``--live --yes`` runs it. Glimmer's pinned revision comes from the serving settings
 (``ServeConfig.from_env``), the ledger from the data dir (``budget.default_ledger``).
+
+A run with a failed model call, or a session that can't carry the next run, stops the command
+with exit code 3: what finished is kept, and a rerun goes on from there. Every command runs under
+MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
+runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
+with exit code 4. SIGTERM and SIGHUP end a command as Ctrl-C does, through its cleanup, so its
+session is stopped and its holds settled. On a Mac, a live command keeps the machine awake
+(``caffeinate -i -w <pid>``) for as long as it runs. A command that serves first checks Glimmer's
+revision, vLLM's version, the precision and the reasoning strength against the pilot's first
+session (``DataDir.pin_serving``), and 17b's adapters before the VM boots.
 """
 from __future__ import annotations
 
 import argparse
 import dataclasses
 import hashlib
+import os
+import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Final
 
 from anjo.sleep.mind.apd import backend as backends
 from anjo.sleep.mind.apd import colab_vllm, fakes, generate, intervene, pilot, plan, timing
-from anjo.sleep.mind.apd.batch import PARALLEL
+from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
+from anjo.sleep.mind.apd.journal import SpendJournal
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
+from anjo.sleep.mind.apd.live import RunFailed
 from anjo.sleep.mind.apd.pilot import Out
-from anjo.sleep.mind.apd.store import DataDir
+from anjo.sleep.mind.apd.store import DataDir, StoreError
 from anjo.sleep.mind.apd.types import HELD_OUT_LIVES, KILL_RESUME_LIVES, ArmName, Life, Split
+from anjo.sleep.mind.sweep import MindBusy, MindSweep, lock_path, swept_mind
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.prereg.ledger import LedgerEntry, read_entries
+from anjo.sleep.prereg.ledger import (
+    LedgerEntry,
+    LedgerError,
+    ledger_path,
+    read_entries,
+    read_pushed_head,
+    verify,
+    verify_entries,
+)
 from anjo.sleep.serving import config, framing
-from anjo.sleep.serving.config import ServeConfig
+from anjo.sleep.serving.config import ServeConfig, ServeConfigError
+from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, stop_leftover_sessions
 from anjo.sleep.types import CheckpointRef
 
 PROG: Final = "python -m anjo.sleep.mind.apd"
@@ -42,6 +71,11 @@ REFUSED: Final = (f"A real APD run calls Glimmer on Colab, Spark Open, Muse Spar
 DEFAULT_HOURS: Final = 6.0
 FAKE_DRAW_SEED: Final = "fake-draw-seed"
 FAKE_KILL_AT: Final = 12
+REFUSED_CODE: Final = 2
+STOPPED: Final = 3
+BUSY: Final = 4
+EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
+SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
 FAKE_PRICES: Final = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
 
 
@@ -62,7 +96,7 @@ def _parser() -> argparse.ArgumentParser:
     made.add_argument("--held-out", action="store_true")
     made.add_argument("--draw-seed", help="the pre-committed draw seed, revealed at the freeze")
     made.add_argument("--lives", type=int, default=HELD_OUT_LIVES)
-    made.add_argument("--prereg", type=Path, help="the prereg ledger (default: the data dir's)")
+    made.add_argument("--prereg", type=Path, help="with --fake only: a stand-in prereg ledger (default: the data dir's)")
     ran = commands.add_parser("run", help="every arm on every life of a split")
     ran.add_argument("--held-out", action="store_true")
     ran.add_argument("--adapters", type=Path, help="17b's adapter cache: runs M+replay and M+shuffled")
@@ -148,22 +182,103 @@ def _adapters(args: argparse.Namespace) -> tuple[pilot.ColabPublisher, dict[ArmN
     return publisher, refs
 
 
+def _recover_journals(data: DataDir, backend: backends.Backend) -> float:
+    return sum(settle_orphans(backend, SpendJournal(path)) for path in data.journals())
+
+
+def _swept(data: DataDir, backend: backends.Backend) -> AbstractContextManager[MindSweep | None]:
+    return swept_mind(lock_path(backend.ledger, data.root), backend.ledger,
+                      partial(stop_leftover_sessions, backend.cli, prefix=MIND_SESSION_PREFIX),
+                      partial(_recover_journals, data, backend))
+
+
+def _say_swept(swept: MindSweep | None, out: Out) -> None:
+    if swept is None or not (swept.sessions_stopped or swept.journals_usd or swept.holds_settled):
+        return
+    out(f"MIND's sweep: stopped {swept.sessions_stopped} leftover MIND session(s) "
+        f"({swept.sessions_not_ours} other session(s) up, not ours, left alone); settled ${swept.journals_usd:.4f} "
+        f"from killed runs' journals and {swept.holds_settled} stale MIND hold(s) at their full bound.")
+
+
+def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend, out: Out) -> int:
+    """One command under MIND's lock, after its sweep; a failed call or a session that can't carry
+    the next run stops it cleanly."""
+    try:
+        with _swept(data, backend) as swept:
+            _say_swept(swept, out)
+            return _step(args, data, backend, out)
+    except MindBusy as error:
+        out(f"{error}.")
+        return BUSY
+    except (pilot.FreezeError, LedgerError, StoreError, ServeConfigError) as error:
+        out(f"Refused: {error}.")
+        return REFUSED_CODE
+    except (RunFailed, colab_vllm.SessionEnding) as error:
+        out(f"Stopped: {error}. What finished is kept, and a rerun goes on from there.")
+        return STOPPED
+
+
+def _exit_on_signal(signum: int, _frame: object) -> None:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def _signals_exit() -> Iterator[None]:
+    """SIGTERM and SIGHUP raise ``SystemExit``, so every ``finally`` runs: the session stops and
+    the holds settle. Only the main thread installs handlers."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    before = {sig: signal.signal(sig, _exit_on_signal) for sig in EXIT_SIGNALS}
+    try:
+        yield
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+
+
+@contextmanager
+def _awake(live: bool, start: Callable[[list[str]], object] = subprocess.Popen) -> Iterator[None]:
+    """On a Mac, ``caffeinate`` keeps a live command's machine from sleeping under its session:
+    tied to this process (``-w``), so it ends with it however it ends, and stopped on the way out."""
+    tool = shutil.which("caffeinate") if live and sys.platform == "darwin" else None
+    keeper = None if tool is None else start([tool, "-i", "-w", str(os.getpid())])
+    try:
+        yield
+    finally:
+        if isinstance(keeper, subprocess.Popen):
+            keeper.terminate()
+
+
+def _pins(settings_: ServeConfig) -> dict[str, str]:
+    return {"glimmer_revision": settings_.pinned_revision(), "vllm_version": settings_.vllm_version,
+            "precision": settings_.precision.name, "reasoning_strength": config.reasoning_strength()}
+
+
 def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, out: Out) -> int:
     settings_, session_s, split = _settings(backend.fake), args.hours * 3600.0, _split(args)
+    run_s = timing.run_s(timing.load(data))
+    if args.command == "kill-resume" or (args.command == "run" and split == "held_out"):  # held-out runs
+        pilot.check_drawn(_entries(args, data, backend.fake), data.drawn())
+    if args.command in SERVING_COMMANDS:
+        data.pin_serving(_pins(settings_))
     if args.command == "generate":
-        specs = generate.development_specs() if split == "development" else pilot.held_out_specs(
-            _entries(args), args.draw_seed or "", args.lives)
+        specs = generate.development_specs()
+        if split == "held_out":
+            specs = pilot.held_out_specs(_entries(args, data, backend.fake), args.draw_seed or "", args.lives)
+            data.save_drawn(pilot.seed_digest(args.draw_seed or ""), args.lives)
         pilot.generate_lives(data, specs if args.only is None else specs[:args.only], backend, out)
     elif args.command == "run":
         arms = pilot.DEV_ARMS if split == "development" else pilot.HELD_OUT_ARMS
+        replay = _adapters(args) if args.adapters is not None and split == "held_out" else None  # before the VM
         with pilot.serving(backend, settings_, session_s, out) as session:
             adapters = None
-            if args.adapters is not None and split == "held_out":
-                publisher, adapters = _adapters(args)
+            if replay is not None:
+                publisher, adapters = replay
                 publisher.upload(session)
                 arms = (*arms, *pilot.REPLAY_ARMS)
             pilot.run_lives(data, _lives(data, split, args.only), arms, session, backend, out, adapters=adapters,
-                            parallel=args.parallel)
+                            parallel=args.parallel, run_s=run_s)
     elif args.command == "timing":
         started = time.monotonic()
         with pilot.serving(backend, settings_, session_s, out) as session:
@@ -173,7 +288,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         out(timing.describe(measured, spark_left=left))
     elif args.command == "intervene":
         with pilot.serving(backend, settings_, session_s, out) as session:
-            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel)
+            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel, run_s=run_s)
         out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
         pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
@@ -183,7 +298,7 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
     elif args.command == "kill-resume":
         with pilot.serving(backend, settings_, session_s, out) as session:
             pilot.kill_lives(data, _lives(data, "held_out", KILL_RESUME_LIVES), session, args.kill_at, backend, out,
-                             parallel=min(args.parallel, KILL_RESUME_LIVES))
+                             parallel=min(args.parallel, KILL_RESUME_LIVES), run_s=run_s)
     return 0
 
 
@@ -196,18 +311,34 @@ def _no_new_calls(backend: backends.Backend) -> backends.Backend:
     return dataclasses.replace(backend, muse=refuse, gemini=refuse, claude=None, ledger=None)
 
 
-def _entries(args: argparse.Namespace) -> list[LedgerEntry]:
-    return read_entries(args.prereg)
+def _entries(args: argparse.Namespace, data: DataDir, fake: bool) -> list[LedgerEntry]:
+    """The prereg ledger, its chain verified. Live, only the real one (``ANJO_DATA_DIR``), and only
+    as far as the head last pushed to the public ``prereg`` branch: an entry never pushed, or a
+    chain re-forged since, is refused. The fakes read the data dir's stand-in (or ``--prereg``)."""
+    if fake:
+        entries = read_entries(getattr(args, "prereg", None) or _fake_prereg(data))
+        verify_entries(entries)
+        return entries
+    path = ledger_path()
+    head = read_pushed_head(path)
+    if head is None:
+        raise LedgerError("the prereg ledger was never pushed; push it before the held-out lives")
+    verify(path, expect_exists=True, remote_head=head)
+    return read_entries(path)
 
 
 # ── The fake chain ────────────────────────────────────────────────────────────
+
+
+def _fake_prereg(data: DataDir) -> Path:
+    return data.root / "prereg" / "ledger.jsonl"
 
 
 def _fake_freeze(data: DataDir, lives: int) -> Path:
     """A local stand-in for the prereg ledger: the draw seed committed, then the freeze."""
     from anjo.sleep.prereg.ledger import register
 
-    path = data.root / "prereg" / "ledger.jsonl"
+    path = _fake_prereg(data)
     register(pilot.DRAW_SEED_KIND, hashlib.sha256(FAKE_DRAW_SEED.encode()).hexdigest(), "fake draw seed", path=path)
     register(pilot.FREEZE_KIND, "0" * 64, f"fake freeze held_out_lives={lives}", path=path)
     return path
@@ -246,11 +377,18 @@ def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out:
         ["judge", "--held-out"], ["report"],
     ):
         out(f"$ {PROG} {' '.join([*base, *argv])}")
-        _step(parser.parse_args([*base, *argv]), data, _fake_backend(data), out)
+        code = _guarded(parser.parse_args([*base, *argv]), data, _fake_backend(data), out)
+        if code:
+            return code
     return 0
 
 
 def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
+    with _signals_exit():
+        return _main(argv, out)
+
+
+def _main(argv: Sequence[str] | None, out: Out) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.fake:
@@ -260,9 +398,11 @@ def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
             base = ["--fake", "--data", str(data.root), "--parallel", str(args.parallel),
                     *([] if args.only is None else ["--only", str(args.only)])]
             return _chain(parser, base, data, out)
-        return _step(args, data, _fake_backend(data), out)
+        return _guarded(args, data, _fake_backend(data), out)
     if args.command in (None, "pilot"):
         parser.error("the whole chain runs only with --fake; live, run each command")
+    if getattr(args, "prereg", None) is not None:
+        parser.error("--prereg is the fakes' stand-in; live, the prereg ledger is the pushed one in ANJO_DATA_DIR")
     if not args.live:
         out(REFUSED)
         return 2
@@ -276,7 +416,8 @@ def main(argv: Sequence[str] | None = None, *, out: Out = print) -> int:
     if not args.yes:
         return 0
     from anjo.sleep.budget import default_ledger
-    return _step(args, data, backends.live_backend(data.root, default_ledger(), Prices(*prices), rates), out)
+    with _awake(live=True):
+        return _guarded(args, data, backends.live_backend(data.root, default_ledger(), Prices(*prices), rates), out)
 
 
 if __name__ == "__main__":

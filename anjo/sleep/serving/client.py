@@ -166,7 +166,9 @@ def check_url(base_url: str) -> str:
 
 
 class HttpPoster:
-    """vLLM's server with the bearer token: Modal's https URL, or a tunnel's loopback end."""
+    """vLLM's server with the bearer token: Modal's https URL, or a tunnel's loopback end. A
+    loopback request never takes a proxy from the environment (``trust_env``), so the token
+    never leaves this machine on its way to the tunnel."""
 
     def __init__(
         self, base_url: str, token: str, *, transport: httpx.BaseTransport | None = None,
@@ -177,7 +179,7 @@ class HttpPoster:
             raise ServingError("the serving token is set")
         self._http = httpx.Client(
             base_url=self.base_url, headers={"Authorization": f"Bearer {token}"},
-            transport=transport, timeout=timeout_s,
+            transport=transport, timeout=timeout_s, trust_env=not is_loopback(httpx.URL(self.base_url).host),
         )
 
     def close(self) -> None:

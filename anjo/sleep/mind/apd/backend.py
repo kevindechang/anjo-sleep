@@ -7,7 +7,10 @@ Live, and only after ``--live --yes``:
   resolver and 17b's labels;
 - **Muse Spark** (Meta's API): the gates' auditor and the APD judge;
 - **Gemini** (Vertex, ``probes.second_judge.MODEL_ID``): the rescoring judge. Its SDK is imported
-  only when a live judge first calls it, with Vertex's own application-default credentials.
+  only when a live judge first calls it, with Vertex's own application-default credentials. Gemini
+  3.x can't turn thinking off, and 3.7 and 3.8 refuse ``minimal``, so it asks for ``low`` and
+  reserves room for the thought tokens on top of the reply's cap; they are billed as output, so
+  they are counted with it.
 
 Every paid call is counted, priced and held through the shared budget ledger. Generation holds
 each attempt's worst case before it starts: ``GEN_SPARK_CALLS`` Spark Open calls on
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import functools
 import importlib
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -47,6 +51,8 @@ GEN_MUSE_CALLS: Final = MAX_PREVALENCE + 1
 JUDGE_TIMEOUT_S: Final = 120.0
 JUDGE_MAX_TOKENS: Final = 400
 GEMINI_LOCATION: Final = "global"
+GEMINI_THINKING: Final = "low"  # the floor 3.7 and 3.8 accept on Vertex
+GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_tokens on 3.x
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,8 @@ class Backend:
     fake: bool = False
     claude: Callable[[str], str] | None = None  # the fakes' stand-in for Claude's hand audit
     vm: fakes.FakeColab | None = field(default=None, compare=False)
+    clock: Callable[[], float] = time.time  # the session's wall clock: its deadline and its CU
+    sleep: Callable[[float], None] = time.sleep
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -86,6 +94,7 @@ def fake_backend() -> Backend:
         spark=fakes.FakeSparkChat(), life_chat=fakes.FakeLifeChat(), reader=fakes.FakeGateReader(),
         auditor=fakes.FakeGateAuditor(), muse=_text(fakes.fake_judge(strict=False)),
         gemini=_text(fakes.fake_judge(strict=True)), fake=True, claude=fakes.fake_judge(strict=False), vm=vm,
+        clock=fakes.Ticks(1.0), sleep=lambda _s: None,
     )
 
 
@@ -113,15 +122,17 @@ def _vertex() -> Any:
 
 
 def _gemini(prompt: str) -> tuple[str, int, int]:
-    model = second_judge.MODEL_ID
-    config = importlib.import_module("google.genai.types").GenerateContentConfig(
-        temperature=0.0, max_output_tokens=JUDGE_MAX_TOKENS)
+    model, types = second_judge.MODEL_ID, importlib.import_module("google.genai.types")
+    config = types.GenerateContentConfig(
+        temperature=0.0, max_output_tokens=JUDGE_MAX_TOKENS + GEMINI_THINKING_RESERVE,
+        thinking_config=types.ThinkingConfig(thinking_level=GEMINI_THINKING))
     try:
         reply = _vertex().models.generate_content(model=model, contents=prompt, config=config)
     except Exception as error:  # noqa: BLE001 - the SDK's errors share no base; each is a failed call
         raise ModelApiError(f"Gemini on Vertex: {type(error).__name__}") from None
     usage = reply.usage_metadata
-    return reply.text or "", int(usage.prompt_token_count or 0), int(usage.candidates_token_count or 0)
+    out = int(usage.candidates_token_count or 0) + int(usage.thoughts_token_count or 0)  # both billed as output
+    return reply.text or "", int(usage.prompt_token_count or 0), out
 
 
 def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str, Rate]) -> Backend:

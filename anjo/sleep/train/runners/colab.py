@@ -20,7 +20,9 @@ A run killed hard runs no ``finally``. Every session is named ``anjo-sleep-<adap
 night command's sweep (``stop_leftover_sessions``) stops any a killed run left before it starts.
 MIND's synthetic jobs (Tasks 17 and 17b) name theirs ``anjo-mind-<...>`` instead (the runner's
 ``session_prefix``, ``MIND_SESSION_PREFIX``), so a Sleep night that starts while one runs never
-stops it, and MIND's own sweep (the APD command's) never stops Sleep's.
+stops it, and MIND's own sweep (the APD command's) never stops Sleep's. Their holds are named
+apart the same way (``HOLD_KINDS``: ``colab_train:`` and ``colab_life:`` for Sleep's,
+``mind_train:`` and ``mind_life:`` for MIND's), so neither sweep settles the other's.
 
 Every CLI call runs under a hard subprocess timeout, because the CLI can hang on a dropped
 connection, and the timeouts of all calls together fit inside the job's own. Nothing else is
@@ -75,6 +77,7 @@ LIST_TIMEOUT_S: Final = 120.0
 SESSION_PREFIX: Final = "anjo-sleep-"
 MIND_SESSION_PREFIX: Final = "anjo-mind-"  # MIND's sessions: APD serving and replay's training
 SESSION_PREFIXES: Final = (SESSION_PREFIX, MIND_SESSION_PREFIX)  # neither starts with the other
+HOLD_KINDS: Final = {SESSION_PREFIX: ("colab_train", "colab_life"), MIND_SESSION_PREFIX: ("mind_train", "mind_life")}
 CLI_NOTE: Final = "[colab] "  # the CLI's own messages, such as an update notice
 NO_SESSIONS: Final = "No active sessions"
 _SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
@@ -114,9 +117,10 @@ class ColabCli:
         return done.stdout
 
 
-def hold_base(night: str, person_id: str) -> str:
-    """The training's hold key before its attempt number: one night, one person."""
-    return f"colab_train:{night}:{person_id}"
+def hold_base(night: str, person_id: str, prefix: str = SESSION_PREFIX) -> str:
+    """The training's hold key before its attempt number: one night, one person; named for the
+    sessions' owner (``prefix``), so each owner's sweep settles only its own."""
+    return f"{HOLD_KINDS[prefix][0]}:{night}:{person_id}"
 
 
 def _live_sessions(cli: ColabCli) -> list[str]:
@@ -224,7 +228,7 @@ class ColabRunner:
         exec_s = timeout_s - _setup_s(len(uploads))
         if exec_s < MIN_EXEC_S:
             raise ColabError("the job's timeout leaves too little time to train")
-        base = hold_base(str(inputs["night"]), str(inputs["person_id"]))
+        base = hold_base(str(inputs["night"]), str(inputs["person_id"]), self.session_prefix)
         reservation = hold(self._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
         session = f"{self.session_prefix}{name}"
         out = Path(str(inputs["workdir"])) / "out"
@@ -394,7 +398,7 @@ class ColabLives:
                 self._stop(person)  # a refused night never leaves the VM idling
             raise ColabError(refusal)
         if life is None:
-            base = f"colab_life:{inputs['night']}:{person}"
+            base = f"{HOLD_KINDS[runner.session_prefix][1]}:{inputs['night']}:{person}"
             reservation = hold(runner._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, self._life_s))
             life = self._lives[person] = _Life(_life_session(person, runner.session_prefix), reservation,
                                                runner._clock())

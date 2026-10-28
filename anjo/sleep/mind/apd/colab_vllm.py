@@ -11,13 +11,19 @@ uses (Tasks 17 and 17b; spec: "APD runs Glimmer on Colab vLLM at one precision f
    (``ServeConfig.vllm_version``), download the pinned Glimmer revision, then start ``vllm serve``
    exactly as ``serving.config.vllm_command`` builds it (the same revision, precision and LoRA
    settings, so the 17b adapters load too), bound to the VM's loopback, under the session's hard
-   timeout. The VM-side steps are ``colab_vllm_start.py``; everything it needs goes in the kernel's
-   environment. The only secret that leaves this machine is the session's own API key, drawn here
-   at random for this session (``new_key``). No ``.env``, and no Baseten, Meta or Google key, is
-   ever uploaded or passed.
+   timeout. The VM-side steps are ``colab_vllm_start.py``; what it needs goes in the kernel's
+   environment, and each step prints ``STEP_OK`` when it finished, which ``_exec`` checks. The only
+   secret that leaves this machine is the session's own API key, drawn here at random for this
+   session (``new_key``). It goes up as a file of its own (``KEY_FILE``, written 0600 here), which
+   the start step reads into vLLM's environment and deletes: never in a command line, where
+   ``ps`` would show it. No ``.env``, and no Baseten, Meta or Google key, is ever uploaded or
+   passed.
 3. **Reached through a tunnel.** ``ssh -N -L 127.0.0.1:<local>:127.0.0.1:8000`` with the Colab CLI as
    its ProxyCommand (``colab ssh --proxy-mode -s <session>``). The tunnel has a hard timeout of its
-   own (a timer kills it at the session's deadline), and every CLI call runs under one.
+   own (a timer kills it at the session's deadline), and every CLI call runs under one. ``ssh``
+   reads no config file and uses no agent: one identity, the one the CLI sends the VM's public key
+   for (``colab_identity``), is passed to both explicitly; nothing is forwarded but the one port,
+   and no shared connection is opened or reused.
 4. **Health-checked** (``ready``): ``/v1/models`` answers with Glimmer through the tunnel, with the
    key, before ``serve`` yields, so no arm starts on a server that isn't up.
 5. **Stopped in a ``finally``**, on success, on failure and when the health check fails: the
@@ -29,18 +35,22 @@ The yielded ``ColabSession`` is the only server replay and the APD arms accept
 (``replay.spend.colab_client``): it is live only inside ``serve``, and its client points at its own
 tunnel's loopback end. Adapters go up to its LoRA directory by ``upload_adapter``, checked first.
 
-A run killed hard runs no ``finally``: the APD command's own startup sweep stops every
-``anjo-mind-`` session left over (``train.runners.colab.stop_leftover_sessions``), and vLLM on the
-VM exits at the session's deadline whatever happens here.
+A run killed hard runs no ``finally``: the next APD command's sweep, under MIND's lock
+(``mind.sweep``), stops every ``anjo-mind-`` session left over, and vLLM on the VM exits at the
+session's deadline whatever happens here. The session's deadline and its compute units are read on
+the wall clock, which runs on while a Mac sleeps, as the VM's bill does. Before each run,
+``check_room`` refuses one the session can't finish (``SessionEnding``).
 """
 from __future__ import annotations
 
 import json
 import math
+import os
 import secrets
 import shlex
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -77,8 +87,11 @@ LOOPBACK: Final = "127.0.0.1"
 ROOT: Final = "/content"
 WEIGHTS_DIR: Final = f"{ROOT}/glimmer"
 ADAPTERS_DIR: Final = f"{ROOT}/adapters"
+KEY_FILE: Final = f"{ROOT}/.vllm_key"  # the start step reads it into vLLM's environment and deletes it
+STEP_OK: Final = "ANJO_STEP_OK"  # what colab_vllm_start.py prints when a step finished
 SSH: Final = "ssh"
 SSH_USER: Final = "root"
+IDENTITIES: Final = ("id_ed25519", "id_ecdsa")  # the Colab CLI's default order (colab ssh --help)
 SESSION_LABEL: Final = "apd-"
 DOWNLOAD_TIMEOUT_S: Final = config.DOWNLOAD_TIMEOUT_S
 START_TIMEOUT_S: Final = 120.0
@@ -86,6 +99,7 @@ MKDIR_TIMEOUT_S: Final = 60.0
 READY_TIMEOUT_S: Final = config.STARTUP_TIMEOUT_S  # the 30B model loads well inside it
 READY_POLL_S: Final = 10.0
 READY_BACKOFF_S: Final = 5.0
+CHECK_TIMEOUT_S: Final = 120.0  # how long a check before each run waits for vLLM to answer
 TUNNEL_CLOSE_S: Final = 10.0
 EXEC_MARGIN_S: Final = 60.0  # the CLI's own wait past the kernel's timeout
 MIN_SERVE_S: Final = 1800.0  # what a session must have left to serve once it is up
@@ -99,6 +113,11 @@ class NotReady(ColabError):
     """vLLM never answered through the tunnel inside ``READY_TIMEOUT_S``."""
 
 
+class SessionEnding(ColabError):
+    """The session can't carry another run: it ended, its tunnel dropped, vLLM stopped answering,
+    or too little of its time is left. The batch stops cleanly; what finished is kept."""
+
+
 class Tunnel(Protocol):
     """An open local forward to the VM's vLLM port. ``transport`` is ``None`` for a real tunnel
     (requests go over the socket); a fake carries the transport its fake server answers on."""
@@ -107,6 +126,8 @@ class Tunnel(Protocol):
     def transport(self) -> httpx.BaseTransport | None: ...
 
     def close(self) -> None: ...
+
+    def alive(self) -> bool: ...
 
 
 TunnelOpener = Callable[[str, int, int, float], Tunnel]  # session, local port, remote port, hard timeout
@@ -132,18 +153,32 @@ def session_name(token: str | None = None) -> str:
 # ── The tunnel ────────────────────────────────────────────────────────────────
 
 
-def ssh_command(session: str, local_port: int, remote_port: int, known_hosts: Path,
+def colab_identity(home: Path | None = None) -> Path:
+    """The SSH key the Colab CLI sends the VM's public key for, by its own documented default
+    (``colab ssh --help``: the first of ``~/.ssh/id_ed25519`` and ``id_ecdsa``), so the tunnel
+    passes the same one to both sides."""
+    folder = (home or Path.home()) / ".ssh"
+    for name in IDENTITIES:
+        if (folder / name).is_file():
+            return folder / name
+    raise ColabError(f"the tunnel needs an SSH key: one of {', '.join(IDENTITIES)} in {folder}")
+
+
+def ssh_command(session: str, local_port: int, remote_port: int, known_hosts: Path, identity: Path,
                 binary: Path = COLAB_BIN) -> list[str]:
-    """``ssh`` holding one local forward to the VM's loopback, through the Colab CLI's proxy.
-    Each session's host key is accepted once into its own file, then held to."""
-    proxy = shlex.join([str(binary), *AUTH, "ssh", "--proxy-mode", "-s", session])
-    return [
-        SSH, "-N", "-L", f"{LOOPBACK}:{local_port}:{LOOPBACK}:{remote_port}",
-        "-o", f"ProxyCommand={proxy}", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
-        "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4",
-        "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={known_hosts}",
-        f"{SSH_USER}@{session}",
-    ]
+    """``ssh`` holding one local forward to the VM's loopback, through the Colab CLI's proxy, with
+    no config file, no agent, and ``identity`` only. Each session's host key is accepted once into
+    its own file, then held to."""
+    proxy = shlex.join([str(binary), *AUTH, "ssh", "--proxy-mode", "-s", session, "-i", str(identity)])
+    options = (
+        f"ProxyCommand={proxy}", "ExitOnForwardFailure=yes", "BatchMode=yes",
+        "ServerAliveInterval=15", "ServerAliveCountMax=4",
+        "IdentitiesOnly=yes", "IdentityAgent=none", "ForwardAgent=no", "ForwardX11=no",
+        "ClearAllForwardings=no", "PermitLocalCommand=no", "ControlMaster=no", "ControlPath=none",
+        "StrictHostKeyChecking=accept-new", f"UserKnownHostsFile={known_hosts}", "GlobalKnownHostsFile=/dev/null",
+    )
+    return [SSH, "-F", "/dev/null", "-N", "-L", f"{LOOPBACK}:{local_port}:{LOOPBACK}:{remote_port}",
+            "-i", str(identity), *(part for option in options for part in ("-o", option)), f"{SSH_USER}@{session}"]
 
 
 class SshTunnel:
@@ -163,6 +198,9 @@ class SshTunnel:
         self._timer.daemon = True
         self._timer.start()
 
+    def alive(self) -> bool:
+        return self._process.poll() is None
+
     def close(self) -> None:
         self._timer.cancel()
         if self._process.poll() is not None:
@@ -180,8 +218,8 @@ def ssh_tunnel(known_hosts_dir: Path) -> TunnelOpener:
 
     def open_tunnel(session: str, local_port: int, remote_port: int, timeout_s: float) -> Tunnel:
         known_hosts_dir.mkdir(parents=True, exist_ok=True)
-        return SshTunnel(ssh_command(session, local_port, remote_port, known_hosts_dir / f"{session}.known_hosts"),
-                         timeout_s)
+        return SshTunnel(ssh_command(session, local_port, remote_port, known_hosts_dir / f"{session}.known_hosts",
+                                     colab_identity()), timeout_s)
 
     return open_tunnel
 
@@ -192,6 +230,10 @@ def ssh_tunnel(known_hosts_dir: Path) -> TunnelOpener:
 @dataclass
 class _Live:
     up: bool = False
+    deadline: float = math.inf  # on ``clock``, when the session must be stopping
+    tunnel: Tunnel | None = None
+    clock: Callable[[], float] = time.time
+    sleep: Callable[[float], None] = time.sleep
 
 
 @dataclass(frozen=True)
@@ -215,6 +257,21 @@ class ColabSession:
     @property
     def live(self) -> bool:
         return self._state.up
+
+    def check_room(self, need_s: float) -> None:
+        """Refuse (``SessionEnding``) a run this session can't finish: it ended, its tunnel is
+        down, vLLM doesn't answer, or less than ``need_s`` is left before its deadline."""
+        state = self._state
+        if not state.up:
+            raise SessionEnding(f"session {self.session} isn't serving")
+        if state.tunnel is not None and not state.tunnel.alive():
+            raise SessionEnding(f"the tunnel to {self.session} dropped")
+        if not ready(self, timeout_s=CHECK_TIMEOUT_S, clock=state.clock, sleep=state.sleep):
+            raise SessionEnding(f"Glimmer on {self.session} stopped answering")
+        left = state.deadline - state.clock()
+        if left < need_s:
+            raise SessionEnding(f"{self.session} has {max(0.0, left) / 60:.0f} min of its time left, less than "
+                                f"the {need_s / 60:.0f} a whole life-arm needs")
 
     def client(self) -> VllmClient:
         """A client of this session's own tunnel; refused once the session has ended."""
@@ -259,12 +316,13 @@ def adapter_rendering(folder: Path) -> object:
 def ready(session: ColabSession, *, timeout_s: float = READY_TIMEOUT_S, clock: Callable[[], float] = time.monotonic,
           sleep: Callable[[float], None] = time.sleep) -> bool:
     """Poll ``/v1/models`` through the tunnel, with the key, until it names Glimmer, for at most
-    ``timeout_s``. A failed poll is ``False`` for that poll, never an exception."""
+    ``timeout_s``. A failed poll is ``False`` for that poll, never an exception. The loopback poll
+    never takes a proxy from the environment."""
     started = clock()
     while clock() - started < timeout_s:
         try:
             with httpx.Client(base_url=session.base_url, headers={"Authorization": f"Bearer {session.key}"},
-                              transport=session.transport, timeout=READY_POLL_S) as http:
+                              transport=session.transport, timeout=READY_POLL_S, trust_env=False) as http:
                 answer = http.get("/v1/models")
             served = [str(model.get("id")) for model in answer.json().get("data", [])] if answer.status_code == 200 else []
         except (httpx.HTTPError, ValueError, AttributeError):
@@ -279,9 +337,22 @@ def ready(session: ColabSession, *, timeout_s: float = READY_TIMEOUT_S, clock: C
 
 
 def _exec(cli: ColabCli, session: str, timeout_s: float, **env: str) -> str:
+    """One step of ``colab_vllm_start.py``; a step that didn't print its ``STEP_OK`` line failed."""
     flags = [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
-    return cli.call("exec", "-s", session, "-f", str(SCRIPT), "--timeout", str(timeout_s), *flags,
-                    timeout_s=timeout_s + EXEC_MARGIN_S)
+    out = cli.call("exec", "-s", session, "-f", str(SCRIPT), "--timeout", str(timeout_s), *flags,
+                   timeout_s=timeout_s + EXEC_MARGIN_S)
+    if f"{STEP_OK} {env['ANJO_COLAB_STEP']}" not in out.splitlines():
+        raise ColabError(f"the {env['ANJO_COLAB_STEP']} step on {session} didn't finish")
+    return out
+
+
+def _send_key(cli: ColabCli, session: str, key: str) -> None:
+    """The session's key up to ``KEY_FILE``, from a file only this user can read, gone after."""
+    with tempfile.TemporaryDirectory(prefix="apd-key-") as folder:
+        path = Path(folder) / "vllm_key"
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as file:
+            file.write(key)
+        cli.call("upload", "-s", session, str(path), KEY_FILE, timeout_s=UPLOAD_TIMEOUT_S)
 
 
 def server_env() -> dict[str, str]:
@@ -308,9 +379,10 @@ def _boot(cli: ColabCli, session: str, settings: ServeConfig, key: str, serve_s:
     revision = settings.pinned_revision()
     _exec(cli, session, DOWNLOAD_TIMEOUT_S, ANJO_COLAB_STEP="download", ANJO_GLIMMER_MODEL=config.MODEL,
           ANJO_GLIMMER_REVISION=revision, ANJO_GLIMMER_DIR=f"{WEIGHTS_DIR}/{revision}")
+    _send_key(cli, session, key)
     _exec(cli, session, START_TIMEOUT_S, ANJO_COLAB_STEP="start",
           ANJO_VLLM_COMMAND=json.dumps(server_command(settings)), ANJO_VLLM_ENV=json.dumps(server_env()),
-          ANJO_VLLM_SECONDS=str(int(serve_s)), VLLM_API_KEY=key)
+          ANJO_VLLM_SECONDS=str(int(serve_s)), ANJO_VLLM_KEY_FILE=KEY_FILE)
 
 
 @dataclass
@@ -345,9 +417,9 @@ def hold_amount(timeout_s: float) -> float:
 @contextmanager
 def serve(
     cli: ColabCli, ledger: Ledger | None, settings: ServeConfig, *, timeout_s: float, tunnels: TunnelOpener,
-    clock: Callable[[], float] = time.monotonic, key: Callable[[], str] = new_key,
+    clock: Callable[[], float] = time.time, key: Callable[[], str] = new_key,
     port: Callable[[], int] = free_port, session: str | None = None,
-    wait: Callable[[ColabSession], bool] = ready,
+    wait: Callable[[ColabSession], bool] = ready, sleep: Callable[[float], None] = time.sleep,
 ) -> Iterator[ColabSession]:
     """One Glimmer server on a Colab A100, held, health-checked, and stopped on the way out."""
     check_timeout(timeout_s)
@@ -365,6 +437,8 @@ def serve(
         handle = ColabSession(name, local, secret, cli, tunnel.transport)
         if not wait(handle):
             raise NotReady(f"Glimmer on {name} didn't answer through the tunnel in time")
+        handle._state.deadline = started + timeout_s - STOP_TIMEOUT_S
+        handle._state.tunnel, handle._state.clock, handle._state.sleep = tunnel, clock, sleep
         handle._state.up = True
         yield handle
     finally:

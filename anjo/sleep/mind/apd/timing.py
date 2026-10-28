@@ -34,9 +34,10 @@ from anjo.sleep.mind.apd import intervene
 from anjo.sleep.mind.apd.arms import date_night, load_brief
 from anjo.sleep.mind.apd.backend import Backend
 from anjo.sleep.mind.apd.batch import Out, run_lives
-from anjo.sleep.mind.apd.colab_vllm import ColabSession
+from anjo.sleep.mind.apd.colab_vllm import MIN_SERVE_S, ColabSession
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.live import Meter, SparkCalls, arm_models, held_run
+from anjo.sleep.mind.apd.resume import KILL_RUNS  # each counted whole
 from anjo.sleep.mind.apd.store import DataDir, write_text
 from anjo.sleep.mind.apd.types import (
     DEVELOPMENT_LIVES,
@@ -59,8 +60,8 @@ from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR
 COLAB_CAP: Final = CAPS["colab_cu"]
 COLAB_LINE: Final = 300.0  # compute units the held-out runs must stay under, or the cut order applies
 SPARK_CAP: Final = CAPS["baseten_mind_usd"]
+RUN_MARGIN: Final = 1.5  # a life-arm's measured wall time, with room for a slower one
 DEV_ARMS: Final[tuple[ArmName, ...]] = ("B", "M")
-KILL_RUNS: Final = 3  # per life, one after another: uninterrupted, killed, resumed (each counted whole)
 
 
 def cu(seconds: float) -> float:
@@ -132,6 +133,12 @@ class Timing:
         return units, spark
 
 
+def run_s(timing: Timing | None) -> float:
+    """The session time a whole life-arm needs before it starts: its measured nights with a
+    margin, or ``MIN_SERVE_S`` when timing hasn't run."""
+    return MIN_SERVE_S if timing is None else LIFE_DAYS * timing.night_wall_s * RUN_MARGIN
+
+
 def describe(timing: Timing, *, spark_left: float | None = None) -> str:
     t = timing
     lines = [
@@ -201,7 +208,7 @@ def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, 
     training planned as a dry run for all the development lives at this life's rows."""
     starts = sample.start_states(life, m_run)
     holds = None if backend.ledger is None or backend.prices is None else Holds(
-        backend.ledger, backend.prices, clock, job="apd-timing", gpu=False)
+        backend.ledger, backend.prices, clock, job="apd:timing", gpu=False)
     metered = SparkCalls(backend.spark, backend.prices, per_night=10**9)  # 17b holds these itself
     labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=metered), holds=holds)
     branches: dict[str, tuple[Branch, ...]] = {}

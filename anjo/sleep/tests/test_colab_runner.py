@@ -327,6 +327,8 @@ def test_a_runner_names_its_sessions_with_its_own_prefix(tmp_path: Path) -> None
     with runner.lives(life_timeout_s=3 * TIMEOUT_S) as lives:
         lives.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert all(args[args.index("-s") + 1].startswith("anjo-mind-") for args, _ in fake.calls if "-s" in args)
+    holds = [str(e["job"]) for e in _events(ledger) if e["op"] == "reserve"]
+    assert [job.split(":")[0] for job in holds] == ["mind_train", "mind_life"]  # MIND's holds, named apart from Sleep's
     with pytest.raises(ValueError, match="prefix"):
         ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger, is_synthetic=bool,
                     session_prefix="voice-")

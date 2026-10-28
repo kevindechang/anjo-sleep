@@ -30,6 +30,7 @@ from anjo.sleep.mind.apd.score import (
     Ruling,
     ScoreSheet,
     judge_prompt,
+    parse_ruling,
     score_life,
     score_sheet,
 )
@@ -74,7 +75,10 @@ class Rate:
 
 @dataclass
 class CachedJudge:
-    """One judge's text model behind its reply cache, each new call held first on its pool."""
+    """One judge's text model behind its reply cache, each new call held first on its pool. Only a
+    reply that holds a ruling is cached: an unparsable one (cut at its cap, say) raises
+    ``score.JudgeError`` after its spend is settled, so a rerun asks again rather than reading it
+    back forever."""
 
     name: str
     model: TextModel
@@ -98,6 +102,7 @@ class CachedJudge:
         else:
             reply = self._held(prompt, key, self.ledger, self.rate)
         self.calls += 1
+        parse_ruling(reply)
         self._cache[key] = reply
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as cache:

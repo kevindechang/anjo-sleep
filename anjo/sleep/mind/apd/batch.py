@@ -11,8 +11,12 @@
   settled from its journal (``journal.recover``, for a night its process never closed), recorded
   in ``spend/discarded.jsonl`` and the journal moved aside (``fresh_journal``), so the ledger stays
   true.
-- **A failure:** the life-arms not started are cancelled, the ones running finish (their spend is
-  real and their runs are kept), and the first failure is raised.
+- **A failure:** a run with any failed model call stops and is never saved (``live.RunFailed``).
+  Before each run starts, the session is checked (``ColabSession.check_room``): its tunnel up,
+  vLLM answering, and ``run_s``, a whole life-arm's time, left before its deadline; if not, the
+  run doesn't start (``colab_vllm.SessionEnding``). Either way the life-arms not started are
+  cancelled, the ones running finish (their spend is real and their runs are kept), and the first
+  failure is raised.
 """
 from __future__ import annotations
 
@@ -23,7 +27,7 @@ from functools import partial
 from typing import Final, TypeVar
 
 from anjo.sleep.mind.apd.backend import Backend
-from anjo.sleep.mind.apd.colab_vllm import ColabSession
+from anjo.sleep.mind.apd.colab_vllm import MIN_SERVE_S, ColabSession
 from anjo.sleep.mind.apd.journal import SpendJournal, recover
 from anjo.sleep.mind.apd.live import Meter, run_live
 from anjo.sleep.mind.apd.store import DataDir
@@ -46,20 +50,44 @@ def serial(out: Out) -> Out:
     return say
 
 
+class _NotStarted(Exception):
+    """An item that never began, since another failed first."""
+
+
 def in_parallel(work: Sequence[Callable[[], T]], parallel: int) -> list[T]:
     """Each item on a thread of its own, ``parallel`` at a time; the results in order. On a failure
-    the items not started are cancelled, the ones running finish, and the first failure is raised."""
+    no further item starts, the ones running finish, and the first failure is raised. When this
+    thread is interrupted (a signal's ``SystemExit``, Ctrl-C), no further item starts and it goes
+    on at once to its own cleanup, which stops the session the running ones need."""
     if parallel < 1:
         raise ValueError("--parallel is at least 1")
+    stop = threading.Event()
+
+    def guarded(item: Callable[[], T]) -> T:
+        if stop.is_set():
+            raise _NotStarted
+        try:
+            return item()
+        except BaseException:
+            stop.set()
+            raise
+
+    pool = ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="apd")
+    futures = [pool.submit(guarded, item) for item in work]
     failed: BaseException | None = None
-    with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="apd") as pool:
-        futures = [pool.submit(item) for item in work]
+    try:
         for future in as_completed(futures):
             error = None if future.cancelled() else future.exception()
-            if error is not None and failed is None:
+            if error is not None and not isinstance(error, _NotStarted) and failed is None:
                 failed = error
+                stop.set()
                 for other in futures:
                     other.cancel()
+    except BaseException:
+        stop.set()
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
     if failed is not None:
         raise failed
     return [future.result() for future in futures]
@@ -90,8 +118,9 @@ def fresh_journal(data: DataDir, name: str, backend: Backend, out: Out, *, life_
 
 def _run_one(
     data: DataDir, life: Life, arm: ArmName, session: ColabSession, backend: Backend, out: Out,
-    adapter: CheckpointRef | None, meter: Meter | None, prefix: str,
+    adapter: CheckpointRef | None, meter: Meter | None, prefix: str, run_s: float,
 ) -> ArmRun:
+    session.check_room(run_s)
     spend = fresh_journal(data, f"{prefix}{life.id}.{arm}", backend, out, life_id=life.id, arm=arm)
     found = run_live(arm, life, session, backend.spark, ledger=backend.ledger, prices=backend.prices,
                      adapter=adapter, key=f"{prefix}run:{life.id}:{arm}", journal=spend, meter=meter)
@@ -104,16 +133,17 @@ def _run_one(
 def run_lives(
     data: DataDir, lives: Sequence[Life], arms: Sequence[ArmName], session: ColabSession, backend: Backend, out: Out,
     *, adapters: Mapping[ArmName, CheckpointRef] | None = None, parallel: int = PARALLEL, meter: Meter | None = None,
-    measure: bool = False,
+    measure: bool = False, run_s: float = MIN_SERVE_S,
 ) -> tuple[ArmRun, ...]:
     """Every arm on every life, ``parallel`` life-arms at a time, each run stored as it ends. A run
     already on disk is kept and not run again, except to ``measure`` (timing), which runs every one
-    under journals of its own and stores only the new."""
+    under journals of its own and stores only the new. Each run starts only when the session can
+    carry ``run_s`` more."""
     say, prefix = serial(out), "timing-" if measure else ""
     todo = [(life, arm) for life in lives for arm in arms if measure or data.run(life.id, arm) is None]
     done = in_parallel([
         partial(_run_one, data, life, arm, session, backend, say, None if adapters is None else adapters.get(arm),
-                meter, prefix)
+                meter, prefix, run_s)
         for life, arm in todo
     ], parallel)
     ran = {(run.life_id, run.arm): run for run in done}

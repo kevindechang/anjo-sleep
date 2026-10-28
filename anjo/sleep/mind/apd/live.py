@@ -12,6 +12,10 @@
   ``baseten_mind_usd`` (no call past it) and priced as it returns.
 - **Provenance:** the model each world answer's and resolver verdict's reply named, as its API
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
+- **No run with a failed call:** a failed Glimmer call (the thinker's or the world query's) or a
+  failed Spark Open call stops its run there (``RunFailed``), and so does any Spark Open call once
+  the session has stopped serving, so a run with a failed call is never saved and never judged.
+  Only the refusal past a night's held calls stays inside the run, as the night's MIND step has it.
 
 ``SparkCalls`` holds each night's Spark Open worst case before that night's first call and settles
 what it priced, as the night's MIND step does, and journals every call before it returns
@@ -22,7 +26,6 @@ itself (``colab_vllm.serve``). ``Meter`` sums what a batch of runs used, for tim
 """
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -39,6 +42,7 @@ from anjo.sleep.mind.apd.types import ArmModels, ArmName, ArmRun, Life, NightClo
 from anjo.sleep.mind.inquiry.types import Budget, ModelReply
 from anjo.sleep.mind.replay.served import ServedThinker, arm_thinker
 from anjo.sleep.mind.replay.spend import SPARK_POOL, colab_client
+from anjo.sleep.mind.replay.types import CallEnd
 from anjo.sleep.mind.screen import SparkScreen
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
@@ -50,17 +54,38 @@ from anjo.sleep.spark_inquiry import WORLD_MAX_TOKENS, WORLD_PROMPT, ChatFn, Spa
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.types import CheckpointRef
 
-logger = logging.getLogger(__name__)
 TEMPERATURE: Final = 0.0
 SEED: Final = 0
 ROOM_POLL_S: Final = 5.0  # how often a night waiting for room looks again
 ROOM_WAIT_S: Final = 3600.0  # and how long it waits before it stops
 
 
+class RunFailed(RuntimeError):
+    """A model call of a run failed, or the session stopped under it: the run stops and is never
+    saved. It is no ``ModelApiError``, so no port absorbs it."""
+
+
+@dataclass(frozen=True)
+class StrictThinker:
+    """The arm's thinker (``ServedThinker``), stopping the run at its first failed call."""
+
+    inner: ServedThinker
+
+    @property
+    def calls(self) -> list[CallEnd]:
+        return self.inner.calls
+
+    def propose(self, rendered: str, max_tokens: int) -> ModelReply:
+        reply = self.inner.propose(rendered, max_tokens)
+        if self.inner.calls and self.inner.calls[-1].failed:
+            raise RunFailed("a Glimmer thinker call failed")
+        return reply
+
+
 @dataclass(frozen=True)
 class GlimmerChat:
     """Base Glimmer as a capped ``ChatFn`` on the session's client, dated on ``clock``. A failed
-    request is a ``ModelApiError``, so the port charges its cap."""
+    request is a ``ModelApiError``, which ``GlimmerWorld`` turns into ``RunFailed``."""
 
     client: VllmClient
     clock: NightClock
@@ -77,8 +102,8 @@ class GlimmerChat:
 
 @dataclass(frozen=True)
 class GlimmerWorld:
-    """``world_query`` on base Glimmer, under ``world_query_v1.md``. A failed call is empty text
-    charged its cap; a reply's model, as reported, goes to ``reported``."""
+    """``world_query`` on base Glimmer, under ``world_query_v1.md``. A failed call stops the run
+    (``RunFailed``); a reply's model, as reported, goes to ``reported``."""
 
     chat: ChatFn
     reported: Reported
@@ -90,8 +115,7 @@ class GlimmerWorld:
         try:
             result = self.chat([{"role": "system", "content": WORLD_PROMPT}, {"role": "user", "content": text}], cap)
         except ModelApiError as error:
-            logger.warning("APD's world query failed, charged its cap of %d tokens: %s", cap, error)
-            return ModelReply(text="", tokens=cap, model=GLIMMER)
+            raise RunFailed(f"a Glimmer world query failed: {error}") from None
         if result.model:
             self.reported.saw("world", result.model)
         return ModelReply(text=result.text, tokens=result.output_tokens, model=result.model or GLIMMER)
@@ -102,9 +126,11 @@ class SparkCalls:
     """Every Spark Open call of one run, held a night at a time as the night's MIND step holds them:
     at a night's first call (``clock``), its worst case of ``per_night`` calls is held on
     ``baseten_mind_usd`` (the night before settled at what it priced), and a call past that count
-    is refused (the port then refuses or says undetermined, as for a failed call). Each call is
-    journaled with its real tokens before it returns. Without a ledger nothing is held; without
-    prices nothing is priced. ``total_calls`` and ``total_usd`` count every night's."""
+    is refused (the port then refuses or says undetermined). Each call is journaled with its real
+    tokens before it returns. A failed call, or any call once ``serving`` has stopped, stops the run
+    (``RunFailed``); a failed call is priced at one call's worst case, since what it cost is
+    unknown. Without a ledger nothing is held; without prices nothing is priced. ``total_calls``
+    and ``total_usd`` count every night's."""
 
     chat: ChatFn
     prices: Prices | None
@@ -114,6 +140,7 @@ class SparkCalls:
     clock: NightClock | None = None
     journal: SpendJournal | None = None
     wait: Callable[[float], None] = time.sleep
+    serving: ColabSession | None = None  # the run's session: no call once it stops
     night: date | None = None
     calls: int = 0  # this night's
     usd: float = 0.0  # this night's
@@ -122,18 +149,27 @@ class SparkCalls:
     _held: Reservation | None = field(default=None, repr=False)
 
     def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        if self.serving is not None and not self.serving.live:
+            raise RunFailed(f"session {self.serving.session} stopped serving; no Spark Open call after it")
         self._turn()
         if self.calls >= self.per_night:
             raise ModelApiError("past the Spark Open calls this night holds")
         self.calls += 1
         self.total_calls += 1
-        result = self.chat(messages, max_tokens)
-        price = 0.0 if self.prices is None else spark_usd(self.prices, result.input_tokens, result.output_tokens)
+        try:
+            result = self.chat(messages, max_tokens)
+        except ModelApiError as error:
+            self._spent(0, 0, 0.0 if self.prices is None else spark_worst_usd(self.prices, 1))
+            raise RunFailed(f"a Spark Open call failed: {error}") from None
+        self._spent(result.input_tokens, result.output_tokens,
+                    0.0 if self.prices is None else spark_usd(self.prices, result.input_tokens, result.output_tokens))
+        return result
+
+    def _spent(self, tokens_in: int, tokens_out: int, price: float) -> None:
         self.usd += price
         self.total_usd += price
         if self.journal is not None and self._held is not None:
-            self.journal.call(self._held.job, result.input_tokens, result.output_tokens, price)
-        return result
+            self.journal.call(self._held.job, tokens_in, tokens_out, price)
 
     def _turn(self) -> None:
         day = None if self.clock is None else self.clock.day
@@ -191,10 +227,11 @@ def arm_models(session: ColabSession, spark: SparkCalls, *, adapter: CheckpointR
     thinker and the world query, Spark Open through ``spark`` as the screen and the resolver, all
     on one night clock."""
     clock, reported = NightClock(), Reported()
-    spark.clock = clock
+    spark.clock, spark.serving = clock, session
     client = colab_client(session)
     return ArmModels(
-        thinker=arm_thinker(session, adapter, clock), world=GlimmerWorld(GlimmerChat(client, clock), reported),
+        thinker=StrictThinker(arm_thinker(session, adapter, clock)),
+        world=GlimmerWorld(GlimmerChat(client, clock), reported),
         screen=SparkScreen(names=(), chat=spark), resolver=SparkResolver(chat=spark.reporting(reported, "resolver")),
         clock=clock, reported=reported,
     )
@@ -221,7 +258,7 @@ class Meter:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add(self, models: ArmModels, spark: SparkCalls, nights: int) -> None:
-        thinker = len(models.thinker.calls) if isinstance(models.thinker, ServedThinker) else 0
+        thinker = len(models.thinker.calls) if isinstance(models.thinker, StrictThinker) else 0
         with self._lock:
             self.thinker_calls += thinker
             self.spark_calls += spark.total_calls

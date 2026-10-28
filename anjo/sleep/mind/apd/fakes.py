@@ -170,6 +170,7 @@ class FakeVllm:
     key: str
     adapters: set[str] = field(default_factory=set)
     healthy: bool = True
+    failing: set[str] = field(default_factory=set)  # completion kinds (think, world) that answer 503
     chats: list[tuple[list[dict[str, Any]], str]] = field(default_factory=list)
     served: list[tuple[str, str, str]] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
@@ -201,6 +202,8 @@ class FakeVllm:
         messages, day = self.chats[body["prompt"][1]]
         system = messages[0]["content"] if messages[0]["role"] == "system" else None
         prompt = str(messages[-1]["content"])
+        if ("world" if system == WORLD_PROMPT else "think") in self.failing:
+            return httpx.Response(503, json={"error": "preempted"})
         self.served.append(("world" if system == WORLD_PROMPT else "think", day, prompt))
         self.models.append(model)
         text = WORLD_ANSWER if system == WORLD_PROMPT else think(prompt)
@@ -230,6 +233,9 @@ class FakeColab:
     adapters: set[str] = field(default_factory=set)
     held_at_new: float | None = None
     closed: list[str] = field(default_factory=list)
+    dropped: set[str] = field(default_factory=set)  # sessions whose tunnel died
+    keys: dict[str, str] = field(default_factory=dict)  # each session's uploaded key, until start reads it
+    key_modes: list[int] = field(default_factory=list)  # the uploaded key files' permissions
     tunnel_closed_before_stop: bool = False
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
@@ -268,10 +274,15 @@ class FakeColab:
     def _exec(self, argv: list[str], session: str) -> str:
         env = dict(flag.split("=", 1) for flag in argv[argv.index("--timeout") + 2:][1::2])
         if env.get("ANJO_COLAB_STEP") == "start":
-            self.live[session].key = env["VLLM_API_KEY"]
-        return ""
+            self.live[session].key = self.keys.pop(session) if env["ANJO_VLLM_KEY_FILE"] == colab_vllm.KEY_FILE else ""
+        return f"{colab_vllm.STEP_OK} {env.get('ANJO_COLAB_STEP')}\n"
 
     def _upload(self, argv: list[str], session: str) -> str:
+        if argv[-1] == colab_vllm.KEY_FILE:
+            local = Path(argv[-2])
+            self.key_modes.append(local.stat().st_mode & 0o777)
+            self.keys[session] = local.read_text(encoding="utf-8")
+            return ""
         self.adapters.add(Path(argv[-1]).parent.name)
         return ""
 
@@ -295,6 +306,9 @@ class FakeTunnel:
 
     def close(self) -> None:
         self.vm.closed.append(self.session)
+
+    def alive(self) -> bool:
+        return self.session not in self.vm.dropped and self.session not in self.vm.closed
 
 
 def fake_tunnels(vm: FakeColab) -> colab_vllm.TunnelOpener:
@@ -339,7 +353,7 @@ def serving(transport: httpx.BaseTransport | None = None, vm: FakeColab | None =
         return tunnel if transport is None else FakeTunnel(machine, session, transport)
 
     with colab_vllm.serve(ColabCli(Path("/fake/colab"), run=machine), ledger, SETTINGS, timeout_s=SERVE_S,
-                          tunnels=tunnels, clock=Ticks(), wait=lambda _session: True) as session:
+                          tunnels=tunnels, clock=Ticks(), wait=lambda _session: True, sleep=lambda _s: None) as session:
         yield session
 
 

@@ -19,7 +19,8 @@
   ``CheckpointRef`` carries it, so the server never serves it under another (``served.py``).
 - **Dry run first:** ``plan`` is pure, and a dry run (the default) prints it (rows, tokens, steps,
   estimated A100 minutes and compute units, and the hold beside what the pool has left) and
-  touches neither the runner nor a hold.
+  touches neither the runner nor a hold. A real one trains under MIND's lock
+  (``mind.sweep.mind_lock``), so no APD command's sweep stops its sessions or settles its holds.
 
 The estimates are the spec's: about 1-2M tokens in 30-60 minutes on one A100-80GB
 (``A100_TOKENS_PER_MINUTE``), plus ``SETUP_MINUTES`` for the VM, the installs and the base
@@ -36,6 +37,7 @@ from typing import Final
 
 from anjo.sleep.budget import TRAINING_TIMEOUT_S, Ledger
 from anjo.sleep.mind.replay.dataset import ReplayData
+from anjo.sleep.mind.sweep import lock_path, mind_lock
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import (
@@ -185,12 +187,13 @@ def train_thinkers(
     used: frozenset[str] = _used(adapter_cache)
     night, steps = render_night(data), shared_steps(data, cfg)
     refs: tuple[CheckpointRef, ...] = ()
-    for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
-        name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
-        ref, _ = train_lora_with_receipt(
-            None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
-            workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
-            timeout_s=timeout_s, steps=steps, keep_every_row=True,
-        )
-        used, refs = used | {name}, (*refs, ref)
+    with mind_lock(lock_path(ledger, workdir)):
+        for label, dataset in zip(LABELS, (data.thinker1, data.shuffled), strict=True):
+            name = fresh_adapter_name(f"{REPLAY_OWNER}:{label}", REPLAY_NIGHT, used)
+            ref, _ = train_lora_with_receipt(
+                None, dataset, cfg, runner, person_id=REPLAY_OWNER, night=night, name=name,
+                workdir=workdir / label, adapter_cache=adapter_cache, publish=publish, revision=revision,
+                timeout_s=timeout_s, steps=steps, keep_every_row=True,
+            )
+            used, refs = used | {name}, (*refs, ref)
     return found, refs

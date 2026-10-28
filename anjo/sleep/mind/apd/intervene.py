@@ -14,7 +14,8 @@ fixed: both twins read the life's evidence as of the snapshot.
   resolver, and the writer's) held first on ``baseten_mind_usd`` at ``EDIT_SPARK_CALLS`` calls'
   worst case and journaled (``SparkCalls``), as the runs are held.
 - **Never twice:** each finished item is stored (``interventions/<n>.<edit>.json``) and skipped on a
-  rerun; items run in parallel against the one server (``batch.in_parallel``).
+  rerun; items run in parallel against the one server (``batch.in_parallel``). An item starts only
+  when the session can carry ``run_s`` more, and one with a failed call is never stored.
 
 The section of the report is ``reports.apd.intervention_section``.
 """
@@ -31,7 +32,7 @@ from anjo.sleep.mind.apd import interventions
 from anjo.sleep.mind.apd.arms import date_night, mind_core
 from anjo.sleep.mind.apd.backend import Backend
 from anjo.sleep.mind.apd.batch import Out, fresh_journal, in_parallel, serial
-from anjo.sleep.mind.apd.colab_vllm import ColabSession
+from anjo.sleep.mind.apd.colab_vllm import MIN_SERVE_S, ColabSession
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS, InterventionResult, Skipped, Snapshot
 from anjo.sleep.mind.apd.live import Meter, SparkCalls, arm_models, held_run
 from anjo.sleep.mind.apd.resume import resume_point
@@ -85,8 +86,9 @@ def item_name(n: int, kind: EditKind) -> str:
 
 def _item(
     data: DataDir, n: int, snap: Snapshot, kind: EditKind, session: ColabSession, backend: Backend, out: Out,
-    meter: Meter | None, keep: bool,
+    meter: Meter | None, keep: bool, run_s: float,
 ) -> Done:
+    session.check_room(run_s)
     life = data.life(snap.life_id)
     name = item_name(n, kind)
     spend = fresh_journal(data, f"{'' if keep else 'timing-'}intervene-{name}", backend, out, life_id=life.id,
@@ -109,6 +111,7 @@ def _item(
 def intervene(
     data: DataDir, session: ColabSession, backend: Backend, out: Out, *, parallel: int,
     snapshots: Sequence[Snapshot] | None = None, keep: bool = True, meter: Meter | None = None,
+    run_s: float = MIN_SERVE_S,
 ) -> Done:
     """Every snapshot-edit not on disk, ``parallel`` at a time; then every one's results and skips.
     ``keep=False`` (timing) runs the given snapshots and stores nothing."""
@@ -116,7 +119,7 @@ def intervene(
     say = serial(out)
     todo = [(n, snap, kind) for n, snap in enumerate(snaps) for kind in EDIT_KINDS
             if not keep or data.intervention(item_name(n, kind)) is None]
-    ran = in_parallel([partial(_item, data, n, snap, kind, session, backend, say, meter, keep)
+    ran = in_parallel([partial(_item, data, n, snap, kind, session, backend, say, meter, keep, run_s)
                        for n, snap, kind in todo], parallel)
     found = ran if not keep else [stored(data, n, kind) for n in range(len(snaps)) for kind in EDIT_KINDS]
     return (tuple(r for results, _ in found for r in results), tuple(s for _, skipped in found for s in skipped))

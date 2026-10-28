@@ -95,14 +95,18 @@ def test_colab_vllm_never_uploads_or_passes_keys(monkeypatch: pytest.MonkeyPatch
             keys.append(session.key)
         argv = [part for args, _ in vm.calls for part in args]
         assert not any(value in part for value in KEYS.values() for part in argv)
-        assert ".env" not in " ".join(argv) and "upload" not in vm.commands()
+        assert not any(session.key in part for part in argv)  # its own key in no command line either
+        uploads = [args for args, _ in vm.calls if args[3] == "upload"]
+        assert [args[-1] for args in uploads] == [colab_vllm.KEY_FILE] and vm.key_modes == [0o600]
+        assert not Path(uploads[0][-2]).exists()  # the local copy is gone
+        assert ".env" not in " ".join(argv)
         execs = [args for args, _ in vm.calls if args[3] == "exec"]
         assert execs and all(args[args.index("-f") + 1] == str(colab_vllm.SCRIPT) for args in execs)
         names = {flag.split("=", 1)[0] for args in execs for flag in args[args.index("--timeout") + 3::2]}
         assert names <= {"ANJO_COLAB_STEP", "ANJO_GLIMMER_MODEL", "ANJO_GLIMMER_REVISION", "ANJO_GLIMMER_DIR",
-                         "ANJO_VLLM_COMMAND", "ANJO_VLLM_ENV", "ANJO_VLLM_SECONDS", "VLLM_API_KEY"}
+                         "ANJO_VLLM_COMMAND", "ANJO_VLLM_ENV", "ANJO_VLLM_SECONDS", "ANJO_VLLM_KEY_FILE"}
         start = vm.env_of("start")
-        assert start["VLLM_API_KEY"] == session.key
+        assert start["ANJO_VLLM_KEY_FILE"] == colab_vllm.KEY_FILE and vm.keys == {}  # the start step took the key
         command = json.loads(start["ANJO_VLLM_COMMAND"])
         assert command == config.vllm_command(SETTINGS, model_path=f"{colab_vllm.WEIGHTS_DIR}/{'a' * 40}",
                                               host="127.0.0.1", port=config.PORT)
@@ -112,10 +116,26 @@ def test_colab_vllm_never_uploads_or_passes_keys(monkeypatch: pytest.MonkeyPatch
 
 
 def test_the_tunnel_is_one_local_forward_through_the_colab_proxy(tmp_path: Path) -> None:
-    argv = colab_vllm.ssh_command("anjo-mind-apd-1a2b3c4d", 41234, 8000, tmp_path / "k")
-    assert argv[:4] == ["ssh", "-N", "-L", "127.0.0.1:41234:127.0.0.1:8000"]
+    identity = tmp_path / "id_ed25519"
+    argv = colab_vllm.ssh_command("anjo-mind-apd-1a2b3c4d", 41234, 8000, tmp_path / "k", identity)
+    assert argv[:6] == ["ssh", "-F", "/dev/null", "-N", "-L", "127.0.0.1:41234:127.0.0.1:8000"]
     proxy = next(opt for opt in argv if opt.startswith("ProxyCommand="))
-    assert "ssh --proxy-mode -s anjo-mind-apd-1a2b3c4d" in proxy and "--rm" not in proxy and "--gpu" not in proxy
+    assert f"ssh --proxy-mode -s anjo-mind-apd-1a2b3c4d -i {identity}" in proxy
+    assert "--rm" not in proxy and "--gpu" not in proxy
+    options = {opt.split("=", 1)[0]: opt.split("=", 1)[1] for opt in argv[argv.index("-o") + 1::2] if "=" in opt}
+    assert argv[argv.index("-i") + 1] == str(identity) and options["IdentitiesOnly"] == "yes"
+    assert {name: options[name] for name in ("IdentityAgent", "ForwardAgent", "ControlMaster", "ControlPath",
+                                             "ClearAllForwardings", "ExitOnForwardFailure", "ServerAliveInterval")} == {
+        "IdentityAgent": "none", "ForwardAgent": "no", "ControlMaster": "no", "ControlPath": "none",
+        "ClearAllForwardings": "no", "ExitOnForwardFailure": "yes", "ServerAliveInterval": "15"}
+    assert argv.count("-L") == 1 and "-R" not in argv and "-D" not in argv  # the one forward, nothing else
+    with pytest.raises(ColabError, match="SSH key"):
+        colab_vllm.colab_identity(tmp_path)
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".ssh" / "id_ecdsa").write_text("key")
+    assert colab_vllm.colab_identity(tmp_path) == tmp_path / ".ssh" / "id_ecdsa"
+    (tmp_path / ".ssh" / "id_ed25519").write_text("key")
+    assert colab_vllm.colab_identity(tmp_path) == tmp_path / ".ssh" / "id_ed25519"  # the CLI's own order
 
     class Proc:
         killed = terminated = 0
@@ -149,7 +169,84 @@ def test_adapters_upload_only_checked_and_under_the_servers_rendering(tmp_path: 
         session.upload_adapter(good, good.name)
         with pytest.raises(ColabError, match="rendering"):
             session.upload_adapter(other, other.name)
-    uploads = [args for args, _ in vm.calls if args[3] == "upload"]
+    uploads = [args for args, _ in vm.calls if args[3] == "upload" and args[-1] != colab_vllm.KEY_FILE]
     assert [Path(args[-1]).name for args in uploads] == list(config.ADAPTER_FILES)
     assert all(args[-1].startswith(f"{colab_vllm.ADAPTERS_DIR}/{good.name}/") for args in uploads)
     assert vm.adapters == {good.name}
+
+
+def test_a_step_that_never_says_it_finished_fails_the_serve() -> None:
+    class Silent(fakes.FakeColab):
+        def _exec(self, argv: list[str], session: str) -> str:
+            super()._exec(argv, session)
+            return "Traceback (most recent call last): ...\n"  # the kernel raised; the CLI exited 0
+
+    vm = Silent()
+    with pytest.raises(ColabError, match="download step"):
+        with _serve(vm, None):
+            raise AssertionError("nothing serves after a failed step")
+    assert vm.commands()[-1] == "stop"
+
+
+def test_the_start_step_takes_the_key_from_its_file_and_deletes_it(tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("colab_vllm_start", colab_vllm.SCRIPT)
+    assert spec is not None and spec.loader is not None
+    start = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(start)
+    key_file = tmp_path / ".vllm_key"
+    key_file.write_text("k" * 40 + "\n")
+    assert start._take_key(str(key_file)) == "k" * 40 and not key_file.exists()
+    assert start.STEP_OK == colab_vllm.STEP_OK
+
+
+def test_loopback_requests_never_take_a_proxy_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real loopback server stands in for the tunnel's end (no custom transport, so httpx would
+    honour the environment's proxies); the proxy named is a dead port."""
+    import http.server
+    import threading
+
+    from anjo.sleep.serving.client import HttpPoster
+
+    class Vllm(http.server.BaseHTTPRequestHandler):
+        def _answer(self) -> None:
+            body = json.dumps({"data": [{"id": config.MODEL}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = _answer
+
+        def log_message(self, *_args: object) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Vllm)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    dead = colab_vllm.free_port()
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, f"http://127.0.0.1:{dead}")  # would carry the bearer token elsewhere
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        port = server.server_address[1]
+        session = ColabSession("anjo-mind-apd-1a2b3c4d", port, "k" * 40, ColabCli(Path("/fake/colab"), run=fakes.FakeColab()))
+        assert colab_vllm.ready(session, timeout_s=5, clock=fakes.Ticks(1.0), sleep=lambda _s: None)
+        assert HttpPoster(f"http://127.0.0.1:{port}", "k" * 40).post("/v1/models", {})["data"]
+    finally:
+        server.shutdown()
+
+
+def test_a_sessions_deadline_and_compute_units_run_on_the_wall_clock() -> None:
+    """A Mac asleep stops ``time.monotonic`` while the VM bills on, so the session's deadline and
+    its settled compute units read wall time."""
+    import dataclasses
+    import inspect
+    import time
+
+    from anjo.sleep.mind.apd import backend as backends
+
+    assert inspect.signature(serve).parameters["clock"].default is time.time
+    assert next(f for f in dataclasses.fields(backends.Backend) if f.name == "clock").default is time.time

@@ -3,10 +3,11 @@
 - **generate:** the 8 development lives now (``generate.development_specs``), through the gates;
   the held-out lives only at the freeze (``held_out_specs``). Each attempt's worst case is held
   first (``backend.held_attempt``). Each life's problem file is sealed (``store``).
-- **run:** every arm on every life of a split, in one Colab session (``serving``: the command's own
-  sweep of ``anjo-mind-`` leftovers first, then ``colab_vllm.serve``), ``parallel`` life-arms at a
-  time (``batch``). A run already on disk is skipped, so a rerun resumes; 17b's adapters go up to
-  the session first (``ColabPublisher``).
+- **run:** every arm on every life of a split, in one Colab session (``serving``, after the
+  command's own sweep of ``anjo-mind-`` leftovers under MIND's lock, ``mind.sweep``), ``parallel``
+  life-arms at a time (``batch``). A run already on disk is skipped, so a rerun resumes; 17b's
+  adapters go up to the session first (``ColabPublisher``). A held-out run, and kill-resume, start
+  only on lives drawn at the freeze (``check_drawn``).
 - **timing** (``timing``) and the **intervention test** (``intervene``), on the same session.
 - **judge** and **report:** ``judging`` and ``reports/apd.py``, with 17b's section when its arms ran
   and the intervention test's when it has.
@@ -53,7 +54,6 @@ from anjo.sleep.reports import apd as apd_report
 from anjo.sleep.reports import replay as replay_report
 from anjo.sleep.serving import config
 from anjo.sleep.serving.config import ServeConfig
-from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, stop_leftover_sessions
 
 __all__ = ["Out", "run_lives"]  # the runs live in ``batch``; the command reaches them here
 
@@ -110,16 +110,31 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     return tuple(made)
 
 
+def seed_digest(draw_seed: str) -> str:
+    return hashlib.sha256(draw_seed.encode("utf-8")).hexdigest()
+
+
 def check_freeze(entries: Sequence[LedgerEntry], draw_seed: str, count: int) -> None:
     """The held-out lives are drawn only at the freeze: the prereg ledger holds an ``apd_freeze``
     entry naming ``held_out_lives=<count>``, after an ``apd_draw_seed`` entry committing this
     seed's hash."""
+    check_frozen(entries, seed_digest(draw_seed), count)
+
+
+def check_drawn(entries: Sequence[LedgerEntry], drawn: tuple[str, int] | None) -> None:
+    """A held-out run's freeze check: the lives on disk were drawn (``DataDir.drawn``) from a seed
+    the ledger committed before its freeze, at the count it froze."""
+    if drawn is None:
+        raise FreezeError("no held-out lives were drawn at the freeze: generate them with --held-out first")
+    check_frozen(entries, *drawn)
+
+
+def check_frozen(entries: Sequence[LedgerEntry], digest: str, count: int) -> None:
     if count not in (HELD_OUT_LIVES, HELD_OUT_LIVES_CUT):
         raise FreezeError(f"the held-out lives number {HELD_OUT_LIVES} or {HELD_OUT_LIVES_CUT}")
     frozen = [entry for entry in entries if entry.kind == FREEZE_KIND]
     if not frozen:
         raise FreezeError("APD isn't frozen: the prereg ledger holds no apd_freeze entry")
-    digest = hashlib.sha256(draw_seed.encode("utf-8")).hexdigest()
     seeded = [entry for entry in entries if entry.kind == DRAW_SEED_KIND and entry.sha256 == digest]
     if not seeded or seeded[0].seq > frozen[-1].seq:
         raise FreezeError("the draw seed wasn't committed to the prereg ledger before the freeze")
@@ -137,12 +152,10 @@ def held_out_specs(entries: Sequence[LedgerEntry], draw_seed: str, count: int) -
 
 @contextmanager
 def serving(backend: Backend, settings_: ServeConfig, timeout_s: float, out: Out) -> Iterator[ColabSession]:
-    """MIND's leftovers stopped, then one Glimmer session, stopped on the way out."""
-    stopped, failed = stop_leftover_sessions(backend.cli, prefix=MIND_SESSION_PREFIX)
-    if stopped or failed:
-        out(f"stopped {stopped} leftover MIND session(s); {failed} failed")
+    """One Glimmer session, stopped on the way out. MIND's leftovers were stopped by the command's
+    sweep (``mind.sweep.swept_mind``), under MIND's lock."""
     with colab_vllm.serve(backend.cli, backend.ledger, settings_, timeout_s=timeout_s, tunnels=backend.tunnels,
-                          wait=backend.wait) as session:
+                          wait=backend.wait, clock=backend.clock, sleep=backend.sleep) as session:
         out(f"serving Glimmer on {session.session}")
         yield session
 
@@ -219,17 +232,21 @@ def report(judged: judging.Judged,
 
 
 def kill_lives(data: DataDir, lives: Sequence[Life], session: ColabSession, kill_at: int, backend: Backend,
-               out: Out, *, parallel: int) -> tuple[resume.KillResume, ...]:
+               out: Out, *, parallel: int, run_s: float = colab_vllm.MIN_SERVE_S) -> tuple[resume.KillResume, ...]:
     """``resume.kill_resume`` on each life, ``parallel`` lives at once, its children attached to
-    ``session``; a life done before is kept."""
+    ``session``; a life done before is kept. A life starts only when the session can carry its
+    three runs, ``run_s`` each."""
     say = serial(out)
     with _attached(data, session, backend):
-        return tuple(in_parallel([partial(_kill_one, data, life, kill_at, backend, say) for life in lives], parallel))
+        return tuple(in_parallel([partial(_kill_one, data, life, kill_at, backend, say, session, run_s)
+                                  for life in lives], parallel))
 
 
-def _kill_one(data: DataDir, life: Life, kill_at: int, backend: Backend, out: Out) -> resume.KillResume:
+def _kill_one(data: DataDir, life: Life, kill_at: int, backend: Backend, out: Out, session: ColabSession,
+              run_s: float) -> resume.KillResume:
     found: resume.KillResume | None = data.kill_result(life.id)
     if found is None:
+        session.check_room(resume.KILL_RUNS * run_s)
         name = f"kill-{life.id}"
         spend = fresh_journal(data, name, backend, out, life_id=life.id, arm="kill-resume")
         log = resume.kill_log(data.kill, life.id, kill_at)
