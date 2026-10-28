@@ -12,10 +12,10 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   make one or two, so accumulation shrinks to ``n // min_optimizer_steps`` (between 1 and 16) and,
   if that still falls short, epochs rise to at most 4 (``plan_steps``);
 - ``max_seq_length`` at least 8,192 with ``packing=False``;
-- ``objective``: ``sft`` (the default), or ``sft_dpo`` (Task 7), which adds a DPO pass on the
+- ``objective``: ``sft`` (the recipe's default), or ``sft_dpo`` (Task 7), which adds a DPO pass on the
   night's (best, worst) practice pairs after SFT, at Meta's TRL settings (beta 0.1, lr 5e-7), with
-  the adapter switched off as the reference so no second model loads. It's a development ablation,
-  registered at the freeze only if it wins.
+  the adapter switched off as the reference so no second model loads. The nights ask for ``sft_dpo``
+  (``objective.py``, Kevin 2026-10-28); a night with no usable pair trains ``sft`` (``objective_used``).
 
 ``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Modal for the
 night by default, or Colab) under the training hard timeout, copies the finished adapter into the local
@@ -27,6 +27,7 @@ the ``CheckpointRef``, which carries the rendering the adapter was trained under
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -195,9 +196,16 @@ class TrainReceipt:
     train_minutes: float
     compute_units: float
     dropped_truncated: int
+    objective: str = "sft"  # what the job trained under: sft_dpo falls back to sft for a night with no pair
+    pairs: int = 0  # the (best, worst) pairs sent when it trained sft_dpo; a count, never the words
 
 
 AdapterPublisher = Callable[[Path, str], None]
+
+
+def objective_used(cfg: LoraCfg, data: Dataset) -> Objective:
+    """``cfg``'s objective, except that ``sft_dpo`` trains ``sft`` for a night with no usable pair."""
+    return "sft_dpo" if cfg.objective == "sft_dpo" and data.pairs else "sft"
 
 
 def _number(outputs: Mapping[str, object], key: str) -> float:
@@ -252,6 +260,7 @@ def train_lora_with_receipt(
         raise TrainError("a training night has at least one example")
     if revision is None or not revision.strip():
         raise TrainError("the training job names Glimmer's revision; refused before any GPU is paid for")
+    cfg = dataclasses.replace(cfg, objective=objective_used(cfg, data))
     warm = prev is not None and cfg.warm_start
     prev_dir = adapter_cache / prev.id if warm and prev is not None else None
     if prev_dir is not None:
@@ -285,6 +294,7 @@ def train_lora_with_receipt(
         gpu_minutes=_number(outputs, "gpu_minutes"), train_minutes=_number(outputs, "train_minutes"),
         compute_units=_number(outputs, "compute_units"),
         dropped_truncated=int(_number(outputs, "dropped_truncated")),
+        objective=cfg.objective, pairs=len(data.pairs) if cfg.objective == "sft_dpo" else 0,
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

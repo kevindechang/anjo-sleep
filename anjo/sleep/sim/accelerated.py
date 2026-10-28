@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from anjo.sleep.night.deps import NightDeps, NightOptions
-from anjo.sleep.night.nightlog import SUMMARY
+from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
@@ -222,6 +222,13 @@ def _normal(summary: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in summary.items() if k != "log_path"}
 
 
+def _trained(result: NightResult) -> dict[str, Any]:
+    """The objective the night trained under and its pair count, from its log's train step."""
+    steps = NightLog(result.log_path.parent).steps()
+    receipt = next((s.get("receipt") or {} for s in steps if s["step"] == "train"), {})
+    return {"objective": receipt.get("objective"), "pairs": receipt.get("pairs")}
+
+
 def _report(
     results: Sequence[NightResult], *, fake: bool, days: int, sha: str, scores: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
@@ -229,7 +236,8 @@ def _report(
     digest = hashlib.sha256(json.dumps([summaries, list(scores)], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
-               "cost_usd": s["cost_usd"]} for s in summaries]
+               "cost_usd": s["cost_usd"], **_trained(r)}
+              for s, r in zip(summaries, results, strict=True)]
     return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
             "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
@@ -281,6 +289,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if len(args.personas) != len(args.users):
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
+    cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
     data_dir = Path(os.environ.get(DATA_DIR_ENV, "").strip() or parser.error(f"{DATA_DIR_ENV} is not set"))
     personas = dict(zip(args.users, args.personas, strict=True))
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
@@ -299,7 +308,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, life_s) as (runner, hooks):
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
                                   publish=night_command._publisher(chosen.name),
-                                  revision=os.environ.get(REVISION_ENV) or None)
+                                  revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
             rig = Rig(deps_for=lambda night: wiring(trainer, NightOptions(night=night, personas=personas,
                                                                           mind_inquiry=args.mind)),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
