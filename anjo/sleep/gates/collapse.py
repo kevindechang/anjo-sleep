@@ -13,24 +13,37 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 
 from anjo.sleep.context.template import render
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE, GateThresholds, in_order, listed, load_thresholds
-from anjo.sleep.probes.clients import ModelClient
+from anjo.sleep.model_api import ChatResult
+from anjo.sleep.serving import config
 from anjo.sleep.sets.loader import CollapsePrompt, collapse_for, load_collapse
 from anjo.sleep.types import CheckpointRef, GateResult
 
 PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "collapse_judge_v1.md"
 JUDGE_TEMPERATURE: Final = 0.0
+# YES or NO, read from its first word: at temperature 0 the first tokens are the same at any cap.
+VERDICT_MAX_TOKENS: Final = 8
+
+
+class CappedClient(Protocol):
+    """``ModelClient`` that caps one reply's tokens (``VllmClient``)."""
+
+    def complete(
+        self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
+        seed: int | None = None, max_tokens: int | None = None,
+    ) -> ChatResult: ...
 
 
 class CollapseGate:
     """``check(ckpt)`` for one person's collapse gate; the base side is kept per run."""
 
     def __init__(
-        self, client: ModelClient, field_domains: Sequence[str], *,
+        self, client: CappedClient, field_domains: Sequence[str], *,
         prompts: Sequence[CollapsePrompt] | None = None, thresholds: GateThresholds | None = None,
+        workers: int = config.CONCURRENT_REQUESTS,
     ) -> None:
         if not field_domains:
             raise ValueError("the collapse gate needs the person's field domains")
@@ -42,6 +55,7 @@ class CollapseGate:
         self._threshold = (thresholds or load_thresholds()).collapse_points
         self._template = PROMPT_PATH.read_text(encoding="utf-8")
         self._base: list[bool] | None = None
+        self._workers = workers
 
     def _dragged(self, adapter: CheckpointRef | None, index: int) -> bool:
         prompt = self._prompts[index]
@@ -51,7 +65,7 @@ class CollapseGate:
         ).text
         verdict = self._client.complete(None, [{"role": "user", "content": render(self._template, {
             "FIELDS": self._fields, "QUESTION": prompt.prompt, "REPLY": reply,
-        })}], temperature=JUDGE_TEMPERATURE, seed=EVAL_SEED).text.strip().upper()
+        })}], temperature=JUDGE_TEMPERATURE, seed=EVAL_SEED, max_tokens=VERDICT_MAX_TOKENS).text.strip().upper()
         return not verdict.startswith("NO")
 
     def _rate(self, flags: list[bool]) -> float:
@@ -60,8 +74,8 @@ class CollapseGate:
     def check(self, ckpt: CheckpointRef) -> GateResult:
         indices = list(range(len(self._prompts)))
         if self._base is None:
-            self._base = in_order(lambda i: self._dragged(None, i), indices)
-        mine = in_order(lambda i: self._dragged(ckpt, i), indices)
+            self._base = in_order(lambda i: self._dragged(None, i), indices, self._workers)
+        mine = in_order(lambda i: self._dragged(ckpt, i), indices, self._workers)
         above = self._rate(mine) - self._rate(self._base)
         passed = above <= self._threshold
         newly = [p.id for p, b, m in zip(self._prompts, self._base, mine, strict=True) if m and not b]

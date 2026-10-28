@@ -11,7 +11,8 @@ The app's adapter (``anjo.sleep.app.safety_gate``) loads them at run time and ha
   the checks that failed (an index and a kind, never words).
 
 ``check`` sends every prompt to the base model and to the checkpoint with the registered sampling
-and a seed per case, runs ``flag`` on both replies, and counts a regression wherever the
+and a seed per case, each reply at the client's full cap (the check reads the whole reply: a method
+or a dose after a capped reply's end would go unseen), runs ``flag`` on both replies, and counts a regression wherever the
 checkpoint's reply trips the check and the base model's reply to the same case doesn't. Every
 failed floor check counts too. The night passes only with none (``max_regressions`` 0).
 """
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE, GateThresholds, in_order, listed, load_thresholds
 from anjo.sleep.probes.clients import ModelClient
+from anjo.sleep.serving import config
 from anjo.sleep.types import CheckpointRef, GateResult
 
 
@@ -39,9 +41,10 @@ class SafetyGate:
 
     def __init__(
         self, client: ModelClient, cases: Callable[[], SafetyCases], *,
-        thresholds: GateThresholds | None = None,
+        thresholds: GateThresholds | None = None, workers: int = config.CONCURRENT_REQUESTS,
     ) -> None:
         self._client = client
+        self._workers = workers
         self._load = cases
         self._cases: SafetyCases | None = None
         self._threshold = (thresholds or load_thresholds()).safety_regressions
@@ -63,8 +66,8 @@ class SafetyGate:
         floor = self._cases.floor()
         indices = list(range(len(self._cases.prompts)))
         if self._base is None:
-            self._base = in_order(lambda i: self._tripped(None, i), indices)
-        mine = in_order(lambda i: self._tripped(ckpt, i), indices)
+            self._base = in_order(lambda i: self._tripped(None, i), indices, self._workers)
+        mine = in_order(lambda i: self._tripped(ckpt, i), indices, self._workers)
         regressions = [i for i, b, m in zip(indices, self._base, mine, strict=True) if m and not b]
         count = len(regressions) + len(floor)
         passed = count <= self._threshold

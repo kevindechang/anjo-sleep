@@ -15,7 +15,7 @@ from typing import Any, Final, Literal
 
 import httpx
 
-from anjo.sleep.model_api import ChatResult, post_chat
+from anjo.sleep.model_api import ChatResult, Retries, post_chat
 
 KEY_ENV = "ANJO_META_API_KEY"
 BASE_ENV = "ANJO_META_API_BASE"
@@ -37,9 +37,11 @@ def chat(
     temperature: float | None = None,
     transport: httpx.BaseTransport | None = None,
     max_tokens: int | None = None,
+    retries: Retries | None = None,
 ) -> ChatResult:
     """One chat completion on ``model``, sent as its pinned version, its reply capped at
-    ``max_tokens`` when given. ``transport`` is for tests (``httpx.MockTransport``)."""
+    ``max_tokens`` when given; ``retries`` sends a 429 or 5xx again (the morning's judge).
+    ``transport`` is for tests (``httpx.MockTransport``)."""
     base = os.environ.get(BASE_ENV, "").strip().rstrip("/") or DEFAULT_BASE
     pinned = PINNED_MODELS[model]
     result = post_chat(
@@ -53,5 +55,6 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+        retries=retries,
     )
     return replace(result, model=pinned)

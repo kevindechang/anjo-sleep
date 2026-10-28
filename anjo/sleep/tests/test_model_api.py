@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from anjo.sleep import baseten_api, meta_api
-from anjo.sleep.model_api import ChatResult, MissingApiKey, ModelApiError
+from anjo.sleep.model_api import BACKOFF_S, RETRY_AFTER_MAX_S, ChatResult, MissingApiKey, ModelApiError, Retries
 
 FAKE_KEY = "sk-fake-0123456789abcdef-never-leaks"
 META_BASE = "https://meta.example.test/v1"
@@ -259,3 +259,35 @@ def test_other_httpx_errors_become_url_free_model_api_errors(error: Exception) -
     with pytest.raises(ModelApiError, match=type(error).__name__) as caught:
         _baseten(httpx.MockTransport(fail))
     _url_free(caught)
+
+
+def test_a_judge_call_sends_429_and_5xx_again_honoring_retry_after() -> None:
+    replies = iter([httpx.Response(429, headers={"Retry-After": "3"}), httpx.Response(503),
+                    httpx.Response(200, json=_ok("muse-spark"))])
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    counted: list[int] = []
+    result = meta_api.chat("muse-spark", MESSAGES, None, 30.0, transport=_recording(seen, lambda r: next(replies)),
+                           retries=Retries(sleep=slept.append, counted=lambda: counted.append(1)))
+    assert result.text == "hi there" and len(seen) == 3
+    assert slept == [3.0, BACKOFF_S[1]] and counted == [1, 1]  # the server's wait, then the backoff
+
+
+@pytest.mark.parametrize("status", [400, 401, 404])
+def test_judge_retries_stop_at_three_and_never_send_another_status_again(status: int) -> None:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    always = _recording(seen, lambda r: httpx.Response(429, headers={"Retry-After": "120"}))
+    with pytest.raises(ModelApiError, match="HTTP 429"):
+        meta_api.chat("muse-spark", MESSAGES, None, 30.0, transport=always, retries=Retries(sleep=slept.append))
+    assert len(seen) == 3 and slept == [RETRY_AFTER_MAX_S] * 2  # a long wait is capped
+
+    seen.clear()
+    with pytest.raises(ModelApiError, match=f"HTTP {status}"):
+        meta_api.chat("muse-spark", MESSAGES, None, 30.0, transport=_recording(seen, lambda r: httpx.Response(status)),
+                      retries=Retries(sleep=slept.append))
+    assert len(seen) == 1
+    seen.clear()
+    with pytest.raises(ModelApiError, match="HTTP 429"):  # without retries, as every other caller
+        meta_api.chat("muse-spark", MESSAGES, None, 30.0, transport=always)
+    assert len(seen) == 1

@@ -30,9 +30,10 @@ demo's pre-generated pairs); a chat turn and the live demo page load once (``loa
 wait, ``with_load_wait(0)``). A later 404 naming a loaded adapter (its container restarted and forgot
 it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
 client has no ``adapters_dir`` and never loads. One client serves many threads at once (the night's
-calls run side by side, ``parallel.Calls``): ``httpx.Client`` may be shared between threads, and the
-loaded set changes only under one lock, which its dated copies share, so threads that first name an
-adapter together load it once.
+calls run side by side, ``parallel.Calls``): ``httpx.Client`` may be shared between threads, the
+loaded set changes only under one lock its copies share, and each adapter loads under a lock of its
+own, so threads that first name an adapter together load it once, and a call to one already loaded
+never waits behind another's load.
 
 **A request lost on the way goes again** (the night of 2026-10-28 failed its safety gate on one
 request Modal's proxy never delivered). The night's client sends a request that got no status back
@@ -429,7 +430,8 @@ class VllmClient:
         self._day: date | None = None
         self._adapters_dir = adapters_dir
         self._loaded: set[str] = set()
-        self._load_lock = threading.Lock()  # shared with every copy ``on``, ``with_load_wait`` and ``once`` make
+        self._loading: dict[str, threading.Lock] = {}  # one lock per adapter, held while it loads
+        self._load_lock = threading.Lock()  # guards both; shared with every copy ``on``, ``with_load_wait`` and ``once`` make
 
     def on(self, day: date) -> VllmClient:
         """This client, its prompts dated ``day``; the poster is shared."""
@@ -514,17 +516,25 @@ class VllmClient:
             self._ensure_loaded(model)
             return call(model)
 
+    def _is_loaded(self, name: str) -> bool:
+        with self._load_lock:
+            return name in self._loaded
+
     def _ensure_loaded(self, name: str) -> None:
         """Load ``name`` unless this client has (``load_adapter``, waiting ``load_wait_s``). A thread
-        that asks while another loads it waits for that load rather than sending its own."""
-        if self._adapters_dir is None:
+        that asks while another loads it waits for that load rather than sending its own; a call to an
+        adapter already loaded never waits on any load."""
+        if self._adapters_dir is None or self._is_loaded(name):
             return
         with self._load_lock:
-            if name in self._loaded:
+            loading = self._loading.setdefault(name, threading.Lock())
+        with loading:
+            if self._is_loaded(name):
                 return
             load_adapter(self._requests, name, self._adapters_dir, wait_s=self._load_wait_s,
                          clock=self._clock, sleep=self._sleep)
-            self._loaded.add(name)
+            with self._load_lock:
+                self._loaded.add(name)
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,

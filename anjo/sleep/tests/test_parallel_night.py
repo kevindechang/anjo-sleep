@@ -7,6 +7,7 @@ its order, the meters stay exact, and a failure stops the rest and settles its h
 little injected latency, so the overlap is real and the tests stay fast and offline."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import threading
@@ -49,7 +50,8 @@ def _digit(text: str, mod: int) -> int:
 
 class Recorder:
     """Every call the fakes answer, in the order they started, with how many ran at once and on
-    which threads. Each call sleeps ``delay`` so calls really overlap."""
+    which threads. Each call sleeps one to four times ``delay``, by its content, so calls really
+    overlap and often end out of the order they began in."""
 
     def __init__(self, delay: float = DELAY_S) -> None:
         self.delay = delay
@@ -67,7 +69,7 @@ class Recorder:
             self.threads.add(threading.get_ident())
             self.log.append(what)
         try:
-            time.sleep(self.delay)
+            time.sleep(self.delay * (1 + _digit(repr(what), 4)))
             yield
         finally:
             with self._lock:
@@ -206,7 +208,9 @@ def test_morning_concurrent_matches_serial_scores(tmp_path: Path) -> None:
     serial_rec, parallel_rec = Recorder(), Recorder()
     serial, serial_judge = _score(tmp_path / "serial", serial_rec, 1)
     together, judge = _score(tmp_path / "parallel", parallel_rec, 8, Ledger(tmp_path / "budget.jsonl"))
-    assert json.loads(together.path.read_text()) == json.loads(serial.path.read_text())  # every score, row and CI
+    serial_record, together_record = json.loads(serial.path.read_text()), json.loads(together.path.read_text())
+    assert serial_record.pop("seconds") > together_record.pop("seconds") > 0  # its wall time, recorded
+    assert together_record == serial_record  # every score, row and CI
     assert (together.replies, together.judge_calls) == (serial.replies, serial.judge_calls) == (
         len(ARM_ORDER) * 11, judge.calls)
     assert sorted(map(repr, parallel_rec.log)) == sorted(map(repr, serial_rec.log))  # 2C and 4 share their contexts
@@ -340,3 +344,61 @@ def test_vllm_client_safe_across_threads() -> None:
     assert all(a == "hello" for i, a in enumerate(answers) if i % 3)
     assert len(fake.loads) == 1  # one load, however many threads first named the adapter at once
     assert LOADED.id in fake.loaded
+
+
+def test_scene_with_all_candidates_cut_skips_teacher() -> None:
+    def cut(seed: int) -> bool:
+        return True  # every Glimmer candidate ends at max tokens: no scene has one to teach against
+
+    for concurrency in (1, 8):
+        rec = Recorder()
+        run = _practice(rec, concurrency, cut=cut).run("p1", NIGHT, _evidence(), None, at=AT)
+        assert run.transcripts == () and run.dropped_cut == 16
+        assert [entry[0] for entry in rec.log if entry[0] in ("teacher", "critic")] == []  # no call it didn't need
+
+
+def test_failing_morning_run_drains_and_settles(tmp_path: Path) -> None:
+    class Failing(SlowModel):
+        def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float, seed: int | None = None) -> ChatResult:
+            if adapter is not None and "Question 4" in json.dumps(messages):
+                with self.rec.calling("reply", "failed"):
+                    raise ServingError("/v1/completions returned HTTP 500")
+            return super().complete(adapter, messages, temperature=temperature, seed=seed)
+
+    rec, ledger = Recorder(), Ledger(tmp_path / "budget.jsonl")
+    morning, judge = _morning(tmp_path, rec, 8, ledger)
+    morning = dataclasses.replace(morning, arms=dataclasses.replace(morning.arms, model=Failing(rec)))
+    with pytest.raises(ServingError):
+        run_morning("p1", MORNING_NIGHT, ckpt("p1", 1), morning=morning)
+    assert _ours() == []  # every thread ended before the run did
+    assert ledger.open_holds() == ()
+    [settled] = [job for job in ledger.settlements() if job.startswith("morning:")]
+    assert ":arms:" in settled  # the GPU time it used; the judge's hold, which spent nothing, was released
+    assert judge.calls == 0 and not list((tmp_path / "results").rglob("*.json"))  # nothing judged, nothing written
+    replies = [entry for entry in rec.log if entry[0] == "reply"]
+    assert len(replies) < len(ARM_ORDER) * 9  # arms not yet begun never start
+
+
+def test_a_slow_load_never_blocks_a_loaded_adapter() -> None:
+    other = dataclasses.replace(LOADED, id="p-bbbbbbbbbbbb-n1")
+    loading = threading.Event()
+
+    class SlowOther(LiveVllm):
+        def _load(self, body: dict[str, Any]) -> httpx.Response:
+            if body["lora_name"] == other.id:
+                loading.set()
+                time.sleep(0.4)  # a folder the warm server is slow to see
+            return super()._load(body)
+
+    fake = SlowOther(on_disk={LOADED.id, other.id})
+    client = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(fake),
+                        adapters_dir=config.ADAPTERS_DIR)
+    client.complete(LOADED, MESSAGES, temperature=1.0, seed=1)  # loaded, and served
+    first = threading.Thread(target=lambda: client.complete(other, MESSAGES, temperature=1.0, seed=2))
+    first.start()
+    assert loading.wait(5)
+    started = time.monotonic()
+    assert client.complete(LOADED, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert time.monotonic() - started < 0.2  # never waits behind another adapter's load
+    first.join()
+    assert [load["lora_name"] for load in fake.loads] == [LOADED.id, other.id]

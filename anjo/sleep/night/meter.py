@@ -56,6 +56,7 @@ class WonderMeter:
 
     def require(self) -> None:
         """Before a call: raise ``WonderSpent`` when none is left (the study records ``budget``)."""
+        # Checked, then debited after the call: no reservation, which is exact while homework calls one at a time.
         if not self.can_call():
             raise WonderSpent("Wonder's calls or dollars for the night are spent")
 

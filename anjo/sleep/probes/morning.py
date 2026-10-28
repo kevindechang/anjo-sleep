@@ -263,7 +263,7 @@ def _run_morning(
         pairs: dict[str, dict[str, dict[str, object]]] = {}
         for name, first, second, found in _judged(probes, replies, judge, calls):
             scored = _stats(score_outcomes(probes, [f.outcome for f in found], bootstrap=config))
-            if second == BASELINE:
+            if second == BASELINE:  # the arms are sorted when written; the pairs keep _comparisons' order
                 stats[first] = scored
             else:
                 pairs[name] = scored
@@ -275,6 +275,7 @@ def _run_morning(
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
     }
+    record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
     if woke is not None:
         record["wake_seconds"] = woke.seconds
     folder.mkdir(parents=True, exist_ok=True)

@@ -20,11 +20,11 @@ The (best, worst) pair is kept when the critic preferred one, for the ``sft_dpo`
 dataset decontaminates both sides. Selecting the teacher's reply doesn't make it on-policy.
 
 **Side by side.** With ``concurrency`` above 1 the scenes run at once, and so do each scene's three
-Glimmer candidates and its teacher; its critic waits for them. At most ``concurrency`` calls are in
-flight (``parallel.Calls``), and every result is gathered by scene and place, never by when it came
-back, so the run is the serial one given the same replies. Every snapshot of C is taken first, on
-the calling thread. ``concurrency`` 1 runs as before: one call at a time, the teacher only after a
-Glimmer candidate survived.
+Glimmer candidates; its teacher runs only once one of them survived, and its critic after that, as in
+series. At most ``concurrency`` calls are in flight (``parallel.Calls``), and every result is gathered
+by scene and place, never by when it came back, so the run is the serial one given the same replies.
+Every snapshot of C is taken first, on the calling thread. ``concurrency`` 1 runs as before: one call
+at a time.
 """
 from __future__ import annotations
 
@@ -214,14 +214,13 @@ class FullPractice:
         return _Candidate("teacher", taught.text.strip(), GLIMMER_CANDIDATES)
 
     def _candidates(self, ctx: _Night, calls: Calls, index: int, prefix: list[dict[str, str]]) -> list[_Candidate]:
-        """The kept candidates by place: Glimmer's, then the teacher's when a Glimmer one survived."""
+        """The kept candidates by place: Glimmer's, side by side, then the teacher's only when a Glimmer
+        one survived. Other scenes keep the server busy while this one waits for its teacher."""
         asks = [partial(self._glimmer, ctx, index, place, prefix) for place in range(GLIMMER_CANDIDATES)]
-        alongside = self._teacher and calls.workers > 1  # in series the teacher waits for a survivor, as before
-        found = calls.map(calls.call, [*asks, partial(self._taught, prefix)] if alongside else asks)
-        glimmer = [c for c in found[:GLIMMER_CANDIDATES] if c is not None]
+        glimmer = [c for c in calls.map(calls.call, asks) if c is not None]
         if not glimmer or not self._teacher:
             return glimmer
-        taught = found[GLIMMER_CANDIDATES] if alongside else calls.call(partial(self._taught, prefix))
+        taught = calls.call(partial(self._taught, prefix))
         return glimmer if taught is None else [*glimmer, taught]
 
     def _judge(self, ctx: _Night, calls: Calls, index: int, message: str, candidates: list[_Candidate]) -> _Verdict:

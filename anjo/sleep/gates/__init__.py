@@ -4,9 +4,11 @@ this package reads and never writes.
 
 Every gate compares the checkpoint with the base model on the same items, sampled on the same
 server at the same precision (``anjo.sleep.serving.client``). The base side of a comparison is
-the same for everyone in a batch, so a gate keeps it once per run. Requests go out in parallel,
-up to the server's concurrency (``config.CONCURRENT_REQUESTS``, not ``ANJO_SLEEP_CONCURRENCY``: the
-gates were never serial), and come back in item order, so a gate's verdict never depends on timing.
+the same for everyone in a batch, so a gate keeps it once per run. Requests go out in parallel and
+come back in item order, so a gate's verdict never depends on timing. The gates that generate
+(collapse's replies and verdicts, safety's replies) run ``ANJO_SLEEP_CONCURRENCY`` at once, as the
+app passes it (``workers``); the general gate only scores log-probabilities (one token each, the
+prompt's cost alone) and keeps the server's concurrency (``config.CONCURRENT_REQUESTS``).
 Reasons name item ids or case indices, never their words.
 """
 from __future__ import annotations

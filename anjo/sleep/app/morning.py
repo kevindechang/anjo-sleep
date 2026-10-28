@@ -10,12 +10,16 @@ stores for one synthetic person.
 - probes: the person's sealed file, ``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``, re-keyed to the
   account that plays the persona;
 - judge: Muse Spark with the persona's judge brief (``MuseJudge``), which only the judge reads;
-- the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default).
+- the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default); a
+  judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and the night log counts
+  those with the requests Glimmer's client sent again.
 """
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import replace
+from functools import partial
 from datetime import date
 from pathlib import Path
 from typing import Final
@@ -27,6 +31,7 @@ from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.night import SEALED_ENV, prices
 from anjo.sleep.app.storage import SLEEP_DIR, brief_store, checkpoint_registry, data_root, evidence_store
 from anjo.sleep.budget import LEDGER_NAME, Ledger
+from anjo.sleep.model_api import Retries
 from anjo.sleep.context.brief_store import ServedBriefs
 from anjo.sleep.probes.arms import ArmDeps
 from anjo.sleep.probes.generate import load_sealed
@@ -51,6 +56,18 @@ def donors() -> dict[str, str]:
     return {user.strip(): donor.strip() for user, donor in pairs}
 
 
+class _Resent:
+    """The judge's calls sent again, counted across its threads."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._lock = threading.Lock()
+
+    def __call__(self) -> None:
+        with self._lock:
+            self.count += 1
+
+
 def build(user_id: str, persona: str, night: date) -> Morning:
     require_sleep_host()
     if not is_synthetic(user_id):
@@ -66,7 +83,8 @@ def build(user_id: str, persona: str, night: date) -> Morning:
         model=client, adapters=checkpoint_registry(), contexts=anjo_context_builder(
             ServedBriefs(brief_store), until=night, settings=RECALL),
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
-    return Morning(arms=arms, sealed=probes, judge=MuseJudge(meta_api.chat, lambda _person: judge_brief(persona)),
-                   prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
+    resent = _Resent()
+    judge = MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona))
+    return Morning(arms=arms, sealed=probes, judge=judge, prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
                    wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ),
-                   retries=client.retries)
+                   retries=lambda: client.retries() + resent.count)
