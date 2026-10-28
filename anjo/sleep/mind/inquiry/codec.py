@@ -79,11 +79,12 @@ def entry_to_json(entry: Entry | None) -> dict[str, Any] | None:
             "seen": [_ref(item) for item in entry.seen],
         }
     if isinstance(entry, RunStart):
+        decided = {} if entry.decider is None else {"decider": entry.decider}  # the controller's logs stay byte for byte
         return {
             "type": "run_start", "night": entry.night.isoformat(), "as_of": entry.as_of.isoformat(),
             "call": entry.call, "control": entry.control, "focus": entry.focus, "wipe": entry.wipe,
             "rules": {"k1": entry.rules.k1, "k2": entry.rules.k2, "k4": entry.rules.k4},
-            "budget": _budget(entry.budget), "denylist": entry.denylist,
+            "budget": _budget(entry.budget), "denylist": entry.denylist, **decided,
         }
     if isinstance(entry, Wake):
         return {"type": "wake", "question_id": entry.question_id, "items": [_ref(item) for item in entry.items]}
@@ -213,7 +214,7 @@ def _run_start(data: Mapping[str, Any]) -> RunStart:
         wipe=_bool(data["wipe"], "wipe"),
         rules=KernelRules(k1=_bool(rules["k1"], "k1"), k2=_bool(rules["k2"], "k2"), k4=_bool(rules["k4"], "k4")),
         budget=Budget(**{name: _int(budget[name], name) for name in _BUDGET_FIELDS}),
-        denylist=_opt_str(data.get("denylist"), "denylist"),
+        denylist=_opt_str(data.get("denylist"), "denylist"), decider=_opt_str(data.get("decider"), "decider"),
     )
 
 

@@ -38,7 +38,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from typing import Final
+from typing import Final, Protocol
 
 from anjo.sleep.mind.inquiry import controller, kernel, parse, render
 from anjo.sleep.mind.inquiry.ports import InquiryPorts
@@ -343,6 +343,28 @@ def _wake(run: _Run, ctx: _Context, arrived: Retrieved) -> _Run:
     return run
 
 
+class Decide(Protocol):
+    """Who picks each cycle's question: ``controller.decide``, or MIND's core in its place
+    (``anjo.sleep.mind.core.bridge.CoreController``)."""
+
+    def __call__(
+        self, ws: Workspace, budget: Budget, *, focus: str | None, targets: Sequence[Target], as_of: datetime,
+        control: ControlMode = "priority",
+    ) -> Decision: ...
+
+
+@dataclass(frozen=True)
+class Decider:
+    """A ``Decide`` under the name its runs' ``RunStart`` records (``None``: the controller), so a
+    resume runs on under the same one, or refuses."""
+
+    name: str | None
+    decide: Decide
+
+
+CONTROLLER: Final = Decider(None, controller.decide)
+
+
 def run_inquiry(
     ws: Workspace,
     ports: InquiryPorts,
@@ -357,13 +379,35 @@ def run_inquiry(
     wipe: bool = False,
 ) -> InquiryRun:
     """Night step 4 (and each APD night): cycles under ``controller.decide`` until it stops."""
+    return run_decided(
+        CONTROLLER, ws, ports, budget, night=night, targets=targets, as_of=as_of, focus=focus, rules=rules,
+        control=control, wipe=wipe,
+    )
+
+
+def run_decided(
+    decider: Decider,
+    ws: Workspace,
+    ports: InquiryPorts,
+    budget: Budget,
+    *,
+    night: date,
+    targets: Sequence[Target],
+    as_of: datetime,
+    focus: str | None = None,
+    rules: KernelRules = FULL_RULES,
+    control: ControlMode = "priority",
+    wipe: bool = False,
+) -> InquiryRun:
+    """``run_inquiry`` with ``decider`` picking each cycle's question; its ``RunStart`` names it."""
     ctx = _context(ports, as_of, targets)
     run = _Run(ws, budget, rules)
-    start = RunStart(night, as_of, "inquiry", rules, control, focus, budget, wipe, kernel.DENYLIST_VERSION)
+    start = RunStart(night, as_of, "inquiry", rules, control, focus, budget, wipe, kernel.DENYLIST_VERSION,
+                     decider.name)
     run = _settle_expired(_log(run, ctx, _step(run, ctx, start)), ctx)
     cycle, current = budget.cycles_used, focus
     while True:
-        decision = controller.decide(run.ws, run.budget, focus=current, targets=targets, as_of=as_of, control=control)
+        decision = decider.decide(run.ws, run.budget, focus=current, targets=targets, as_of=as_of, control=control)
         run = replace(run, decisions=(*run.decisions, decision))
         if decision.question_id is None:
             return _result(run)
@@ -424,14 +468,21 @@ def _complete(events: Sequence[WorkspaceEvent], ports: InquiryPorts, targets: Se
     return (*events, *done.events)
 
 
-def resume_inquiry(events: Sequence[WorkspaceEvent], ports: InquiryPorts, *, targets: Sequence[Target]) -> InquiryRun:
+def resume_inquiry(
+    events: Sequence[WorkspaceEvent], ports: InquiryPorts, *, targets: Sequence[Target], decider: Decider = CONTROLLER,
+) -> InquiryRun:
     """Rebuild a killed inquiry from its log and run it on, with the start's night, ``as_of``,
-    rules and control. ``ports.log`` is the log ``events`` came from. A cut-off ``INVESTIGATE``'s
-    tool runs first; its result is logged before the resumed run's ``RunStart``."""
-    if resume(events).start.call != "inquiry":
+    rules and control, under ``decider``, which must be the one the start names. ``ports.log`` is
+    the log ``events`` came from. A cut-off ``INVESTIGATE``'s tool runs first; its result is logged
+    before the resumed run's ``RunStart``."""
+    start = resume(events).start
+    if start.call != "inquiry":
         raise ValueError("only an inquiry run resumes this way; rerun the notice pass")
+    if start.decider != decider.name:
+        raise ValueError(f"the run was decided by {start.decider or 'the controller'}; resume it under that decider, "
+                         f"not {decider.name or 'the controller'}")
     point = resume(_complete(events, ports, targets))
-    return run_inquiry(
-        point.ws, ports, point.budget, night=point.start.night, targets=targets, as_of=point.start.as_of,
+    return run_decided(
+        decider, point.ws, ports, point.budget, night=point.start.night, targets=targets, as_of=point.start.as_of,
         focus=point.focus, rules=point.start.rules, control=point.start.control,
     )

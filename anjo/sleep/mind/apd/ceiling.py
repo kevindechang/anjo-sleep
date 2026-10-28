@@ -27,10 +27,10 @@ from typing import Final
 from anjo.sleep.budget import CAPS, POOLS, Bound, Ledger, Pool, Reservation
 
 DEFAULT_MAX_USD: Final = 20.0
-COMMANDS: Final = ("generate", "run", "timing", "judge")
+COMMANDS: Final = ("generate", "generate-pairs", "run", "timing", "judge")
 UNITS: Final[Mapping[str, str]] = {  # what the ceiling is checked before, as the plan names it
-    "generate": "generation attempt", "run": "life-arm run", "timing": "life-arm run or timing step",
-    "judge": "judge call",
+    "generate": "generation attempt", "generate-pairs": "pair generation attempt", "run": "life-arm run",
+    "timing": "life-arm run or timing step", "judge": "judge call",
 }
 USD_POOLS: Final = frozenset(pool for pool in POOLS if pool.endswith("_usd"))
 
@@ -106,14 +106,15 @@ class Ceiling:
         with self._lock:
             self.done += 1
 
-    def life_generated(self) -> str:
-        """One more life generated: what this run has settled, and per life."""
+    def life_generated(self, what: str = "life") -> str:
+        """One more life (or pair) generated: what this run has settled, and per one."""
         with self._lock:
             self.done += 1
             lives = self.done
         spent = self.ledger.run_usd()
-        return (f"this run's spend: ${spent:.4f} settled for {lives} {'life' if lives == 1 else 'lives'} generated, "
-                f"${spent / lives:.4f} per life generated (ceiling {dollars(self.max_usd)})")
+        many = "lives" if what == "life" else f"{what}s"
+        return (f"this run's spend: ${spent:.4f} settled for {lives} {what if lives == 1 else many} generated, "
+                f"${spent / lives:.4f} per {what} generated (ceiling {dollars(self.max_usd)})")
 
     def arm_ran(self, days: int) -> str:
         """One more life-arm run of ``days`` nights: what this run has settled, and per arm-day."""

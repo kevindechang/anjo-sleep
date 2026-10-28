@@ -21,11 +21,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 from anjo.sleep import baseten_api, fireworks_api
 from anjo.sleep.budget import Pool
-from anjo.sleep.context.brief import ChatFn as WriteFn
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.spark_inquiry import TIMEOUT_S, ChatFn, spark_open
 
@@ -39,6 +38,13 @@ def fireworks_spark_open(messages: list[dict[str, Any]], max_tokens: int) -> Cha
     ``spark_inquiry.spark_open``'s twin."""
     return fireworks_api.chat(fireworks_api.SPARK_OPEN, messages, None, TIMEOUT_S, temperature=0.0,
                               max_tokens=max_tokens)
+
+
+class WriteFn(Protocol):
+    """A generation call (``context.brief.ChatFn``) whose reply can be capped at ``max_tokens``."""
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+                 timeout_s: float, *, temperature: float | None = None, max_tokens: int | None = None) -> ChatResult: ...
 
 
 @dataclass(frozen=True)

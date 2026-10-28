@@ -205,6 +205,8 @@ class RunStart:
     - ``denylist`` names the version of the kernel's domain denylist the call checked under, so a
       fold checks every operation under the terms it was admitted with. ``None`` is the first
       version (a log written before versions were recorded).
+    - ``decider`` names who picked each cycle's question when it wasn't ``controller.decide``
+      (``None``), so a resume runs on under the same one (``loop.Decider``).
     """
 
     night: date
@@ -216,11 +218,14 @@ class RunStart:
     budget: Budget
     wipe: bool = False
     denylist: str | None = None
+    decider: str | None = None
 
     def __post_init__(self) -> None:
         check_one_of("call", self.call, frozenset(get_args(RunCall)))
         if self.denylist is not None:
             check_text("denylist", self.denylist)
+        if self.decider is not None:
+            check_text("decider", self.decider)
         check_one_of("control", self.control, frozenset(get_args(ControlMode)))
         if not isinstance(self.rules, KernelRules) or not isinstance(self.budget, Budget):
             raise TypeError("a RunStart records its KernelRules and its Budget")
