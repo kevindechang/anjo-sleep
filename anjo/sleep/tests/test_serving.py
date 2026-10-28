@@ -264,10 +264,10 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
 
 
 def test_serve_never_reloads_its_adapters_volume(modal_app: tuple[types.ModuleType, _Recorder]) -> None:
-    """On night 1c (2026-10-28) the server wedged for good while it reloaded the adapters volume and
-    vLLM read a new adapter from the mount. ``Serve`` never reloads it: its mount is the volume as
-    committed when the container started, and an adapter committed later reaches local disk through
-    ``stage``."""
+    """On night 1c (2026-10-28) the server stopped answering before the night had sent any adapter
+    load, and the stall was in the container's Modal process, where the adapters volume reload thread
+    ran. ``Serve`` never reloads the volume: its mount is the volume as committed when the container
+    started, and an adapter committed later reaches local disk through ``stage``."""
     module, recorder = modal_app
     assert [call["target"] for call in recorder.by("enter")] == ["start"]  # no refresher, nothing periodic
     assert ".reload(" not in Path(str(module.__file__)).read_text(encoding="utf-8")

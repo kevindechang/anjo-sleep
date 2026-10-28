@@ -22,12 +22,12 @@ The night's client loads it through vLLM's ``/v1/load_lora_adapter`` before the 
 names it (``client.VllmClient``), so the base and the personal arms share one GPU. vLLM's
 filesystem resolver is not used: on 0.28.0 it never loaded one (seen live, 2026-10-28; it compares
 an adapter's base model with the path the server was started on, not the served name). A running
-Modal container sees the adapters volume as it was when it started and never reloads it: on night 1c
-(2026-10-28) the server wedged for good while it reloaded the volume and vLLM read a new adapter from
-the mount. An
-adapter committed since the container started is copied through the volume's API onto the
-container's own disk, ``STAGED_ADAPTERS_DIR`` (``modal_app.Serve.stage``), and vLLM loads it from
-there. ``check_adapter`` holds a folder to what the server needs before it is uploaded or staged.
+Modal container sees the adapters volume as it was when it started and never reloads it. On night 1c
+(2026-10-28) the server stopped answering, ``/v1/models`` included, before the night had sent any
+adapter load; the stall was in the container's Modal process, where the volume reload thread ran (on
+night 1b the adapter load itself succeeded). An adapter committed since the container started is
+copied through the volume's API onto the container's own disk, ``STAGED_ADAPTERS_DIR``
+(``modal_app.Serve.stage``), and vLLM loads it from there. ``check_adapter`` holds a folder to what the server needs before it is uploaded or staged.
 """
 from __future__ import annotations
 

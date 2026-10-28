@@ -186,6 +186,23 @@ def test_an_adapter_committed_since_the_container_started_is_staged_onto_its_dis
     assert stage.asked == [] and len(mounted.loads) == 1
 
 
+def test_a_client_someone_waits_on_never_stages() -> None:
+    """A stage may take ``backend.STAGE_TIMEOUT_S``, too long for a visitor: ``once()`` loads only from the
+    mount or from where the night staged the adapter into this container, and otherwise fails at once."""
+    fake = LiveVllm(on_disk=set())
+    stage = Stage(fake, committed={ADAPTER.id})
+    night = _client(fake, stage=stage)
+    page = night.with_load_wait(0).once()
+    assert night.stages and not page.stages
+    with pytest.raises(ServingError, match=LOAD_PATH):
+        page.complete(ADAPTER, MESSAGES, temperature=1.0)
+    assert stage.asked == [] and [load["lora_path"] for load in fake.loads] == [
+        f"{config.ADAPTERS_DIR}/{ADAPTER.id}", f"{config.STAGED_ADAPTERS_DIR}/{ADAPTER.id}"]
+
+    fake.staged.add(ADAPTER.id)  # the night staged it into this container; nothing loaded it yet
+    assert page.complete(ADAPTER, MESSAGES, temperature=1.0).text == "hello" and stage.asked == []
+
+
 def test_a_new_adapter_is_waited_for_until_its_commit_lands() -> None:
     fake = LiveVllm(on_disk=set())
     stage = Stage(fake, committed=set())
