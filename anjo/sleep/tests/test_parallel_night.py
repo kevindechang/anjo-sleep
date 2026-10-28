@@ -196,7 +196,13 @@ def _morning(tmp_path: Path, rec: Recorder, concurrency: int, ledger: Ledger | N
                    donors={"p1": "donor"}, until=MORNING_NIGHT)
     probes = _probes()
     return Morning(arms=deps, sealed=lambda uid: probes, judge=judge, prices=PRICES, ledger=ledger,
-                   root=tmp_path / "results", concurrency=concurrency), judge
+                   root=tmp_path / "results", concurrency=concurrency, timer=_stopwatch()), judge
+
+
+def _stopwatch(seconds: float = 42.0) -> Callable[[], float]:
+    """A timer that reads 0 when the run starts and ``seconds`` at every later read."""
+    reads = iter([0.0])
+    return lambda: next(reads, seconds)
 
 
 def _score(tmp_path: Path, rec: Recorder, concurrency: int, ledger: Ledger | None = None) -> tuple[Any, SlowJudge]:
@@ -209,7 +215,7 @@ def test_morning_concurrent_matches_serial_scores(tmp_path: Path) -> None:
     serial, serial_judge = _score(tmp_path / "serial", serial_rec, 1)
     together, judge = _score(tmp_path / "parallel", parallel_rec, 8, Ledger(tmp_path / "budget.jsonl"))
     serial_record, together_record = json.loads(serial.path.read_text()), json.loads(together.path.read_text())
-    assert serial_record.pop("seconds") > together_record.pop("seconds") > 0  # its wall time, recorded
+    assert serial_record.pop("seconds") == together_record.pop("seconds") == 42.0  # its wall time, recorded
     assert together_record == serial_record  # every score, row and CI
     assert (together.replies, together.judge_calls) == (serial.replies, serial.judge_calls) == (
         len(ARM_ORDER) * 11, judge.calls)
@@ -381,13 +387,13 @@ def test_failing_morning_run_drains_and_settles(tmp_path: Path) -> None:
 
 def test_a_slow_load_never_blocks_a_loaded_adapter() -> None:
     other = dataclasses.replace(LOADED, id="p-bbbbbbbbbbbb-n1")
-    loading = threading.Event()
+    loading, release = threading.Event(), threading.Event()
 
     class SlowOther(LiveVllm):
         def _load(self, body: dict[str, Any]) -> httpx.Response:
             if body["lora_name"] == other.id:
                 loading.set()
-                time.sleep(0.4)  # a folder the warm server is slow to see
+                assert release.wait(10)  # a folder the warm server is slow to see: held until the test lets go
             return super()._load(body)
 
     fake = SlowOther(on_disk={LOADED.id, other.id})
@@ -396,9 +402,38 @@ def test_a_slow_load_never_blocks_a_loaded_adapter() -> None:
     client.complete(LOADED, MESSAGES, temperature=1.0, seed=1)  # loaded, and served
     first = threading.Thread(target=lambda: client.complete(other, MESSAGES, temperature=1.0, seed=2))
     first.start()
-    assert loading.wait(5)
-    started = time.monotonic()
-    assert client.complete(LOADED, MESSAGES, temperature=1.0, seed=3).text == "hello"
-    assert time.monotonic() - started < 0.2  # never waits behind another adapter's load
+    assert loading.wait(10)
+    answered: list[str] = []
+    second = threading.Thread(target=lambda: answered.append(client.complete(LOADED, MESSAGES, temperature=1.0, seed=3).text))
+    second.start()
+    second.join(10)
+    loaded_meanwhile = list(answered)  # read while the other adapter's load is still held
+    release.set()
     first.join()
+    second.join()
+    assert loaded_meanwhile == ["hello"]  # it never waited behind another adapter's load
     assert [load["lora_name"] for load in fake.loads] == [LOADED.id, other.id]
+
+
+def test_a_teacher_failure_fails_practice() -> None:
+    from anjo.sleep.model_api import ModelApiError
+
+    broken = _scenes()[3]
+
+    class FailingTeacher(SlowSpark):
+        def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+            if messages[-1]["content"] == broken:  # the teacher answers the scene's message itself
+                with self.rec.calling("teacher", broken):
+                    raise ModelApiError("Baseten chat returned HTTP 500")
+            return super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+
+    for concurrency in (1, 8):
+        rec = Recorder()
+        practice = FullPractice(chat=FailingTeacher(rec), client=SlowGlimmer(rec), adapter=lambda uid: ADAPTER, seed=7,
+                                snapshot=lambda uid, message: (None, None), concurrency=concurrency)
+        with pytest.raises(ModelApiError, match="HTTP 500"):
+            practice.run("p1", NIGHT, _evidence(), None, at=AT)
+        assert _ours() == []  # every thread ended before the step did
+        assert ("teacher", broken) in rec.log
+        if concurrency == 1:  # in series nothing after the failed scene starts
+            assert {entry[1] for entry in rec.log if entry[0] == "glimmer"} == set(_scenes()[:4])
