@@ -59,6 +59,9 @@
       cell.append(element("dt", "", label), element("dd", "", value));
       cells.append(cell);
     }
+    // A gate switched off that night is named under the status: skipped, never passed.
+    const skipped = (card.skipped_gates || []).map((g) => word("gate", g)).join(", ");
+    if (skipped) cells.lastElementChild.append(element("dd", "slate-note", `${skipped}: ${copy.dailies_gate_skipped}`));
     box.append(clapper, cells);
     return box;
   }

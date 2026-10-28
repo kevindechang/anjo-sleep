@@ -109,6 +109,8 @@ class GateResult:
 
     ``value`` is the number the gate compares with ``threshold``: points of general accuracy
     lost, the collapse rate above base, or new safety trips. ``reason`` says why it failed.
+    ``skipped``: the gate was switched off and judged nothing (``reason`` says why). It never
+    counts as passed, and promotion leaves it out.
     """
 
     gate: GateName
@@ -116,6 +118,7 @@ class GateResult:
     value: float
     threshold: float
     reason: str | None = None
+    skipped: bool = False
 
 
 @dataclass(frozen=True)

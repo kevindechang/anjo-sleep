@@ -52,6 +52,7 @@ class NightView:
     steps: tuple[StepView, ...]
     action: str | None  # the chooser's action code, or None
     note: str | None  # the note step's outcome code, or None
+    skipped: tuple[str, ...] = ()  # gates switched off that night: judged nothing, never passed
 
 
 def _json(path: Path) -> Any:
@@ -87,9 +88,11 @@ def _view(folder: Path) -> NightView | None:
         return NightView(
             night=date.fromisoformat(record["night"]), status=str(record["status"]),
             failed_at=record.get("failed_at"), checkpoint=None if checkpoint is None else str(checkpoint["id"]),
-            gates=tuple((str(name), bool(gate["passed"])) for name, gate in (record.get("gates") or {}).items()),
+            gates=tuple((str(name), bool(gate["passed"]) and not gate.get("skipped"))
+                        for name, gate in (record.get("gates") or {}).items()),
             steps=tuple(StepView(str(s["step"]), str(s["status"]), str(s["uses"]), s.get("system")) for s in steps),
             action=action, note=None if note is None else str(note),
+            skipped=tuple(str(name) for name, gate in (record.get("gates") or {}).items() if gate.get("skipped")),
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ChangesError(f"{folder.name}: not a night record") from None
@@ -108,7 +111,7 @@ def _night_lines(view: NightView) -> list[Change]:
     if view.status == "promoted":
         lines.append(Change(view.night, "promoted", f"{when}: she learned from your day, and this new version is the one you talk to."))
     elif view.status == "rejected":
-        failed = ", ".join(name for name, passed in view.gates if not passed)
+        failed = ", ".join(name for name, passed in view.gates if not passed and name not in view.skipped)
         lines.append(Change(view.night, "rejected", f"{when}: she trained overnight but held the update back ({failed or 'a check'} did not pass), so the earlier version still serves."))
     elif view.status == "nothing_new":
         lines.append(Change(view.night, "nothing_new", f"{when}: there was nothing new to learn from, so she changed nothing."))

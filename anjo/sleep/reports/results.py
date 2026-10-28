@@ -161,6 +161,8 @@ def gate_cell(night: Night, gate: str) -> str:
     found = night.gates.get(gate)
     if not found:
         return MISSING
+    if found.get("skipped"):
+        return "skipped"  # switched off: judged nothing, never passed
     return f"{'ok' if found.get('passed') else 'FAIL'} {float(found.get('value', 0.0)):g}"
 
 

@@ -44,6 +44,7 @@ class GateMark:
     passed: bool
     value: float | None
     threshold: float | None
+    skipped: bool = False  # switched off: it judged nothing, and is never shown as passed
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,8 @@ def _candidate(raw: Any) -> Candidate:
 def _gates(raw: Any) -> tuple[GateMark, ...]:
     if not isinstance(raw, dict):
         raise PanelError("a night's gates are not a record")
-    return tuple(GateMark(str(name), bool(gate.get("passed")), _number(gate.get("value")), _number(gate.get("threshold")))
+    return tuple(GateMark(str(name), bool(gate.get("passed")) and not gate.get("skipped"), _number(gate.get("value")),
+                          _number(gate.get("threshold")), bool(gate.get("skipped")))
                  for name, gate in sorted(raw.items()) if isinstance(gate, dict))
 
 
@@ -206,7 +208,8 @@ def _gate_nights(nights: Sequence[NightRecord] | None) -> list[dict[str, Any]] |
     if nights is None:
         return None
     return [{"night": n, "date": r.night.isoformat(), "status": r.status,
-             "gates": [{"gate": g.gate, "passed": g.passed, "value": g.value, "threshold": g.threshold} for g in r.gates]}
+             "gates": [{"gate": g.gate, "passed": g.passed, "value": g.value, "threshold": g.threshold,
+                        "skipped": g.skipped} for g in r.gates]}
             for n, r in numbered(nights)]
 
 

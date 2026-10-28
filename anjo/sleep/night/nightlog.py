@@ -45,9 +45,10 @@ def night_folder(root: Path, night: date) -> Path:
 
 
 def gate_record(result: GateResult) -> dict[str, Any]:
+    """A gate's record; a switched-off gate's says ``skipped`` (a gate that ran writes no such key)."""
     return {
         "gate": result.gate, "passed": result.passed, "value": result.value,
-        "threshold": result.threshold, "reason": result.reason,
+        "threshold": result.threshold, "reason": result.reason, **({"skipped": True} if result.skipped else {}),
     }
 
 

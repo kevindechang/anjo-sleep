@@ -48,9 +48,10 @@ def _strip(nights: Sequence[Night], gate: str, top: float) -> list[str]:
     parts = [f'<text x="4" y="{top + 12:.0f}" font-size="11">{escape(gate)}</text>']
     for i, n in enumerate(nights):
         found = n.gates.get(gate.split()[0])
-        color = "#9ca3af" if not found else ("#16a34a" if found.get("passed") else "#dc2626")
+        skipped = bool(found and found.get("skipped"))  # switched off: amber, never the pass green
+        color = "#9ca3af" if not found else "#d97706" if skipped else ("#16a34a" if found.get("passed") else "#dc2626")
         parts.append(f'<rect x="{_x(i, len(nights)) - 6:.1f}" y="{top:.0f}" width="12" height="{STRIP_H}" fill="{color}">'
-                     f"<title>{escape(n.night)}</title></rect>")
+                     f"<title>{escape(n.night)}{' (skipped)' if skipped else ''}</title></rect>")
     return parts
 
 
