@@ -2,6 +2,7 @@
 
     python -m anjo.sleep.night.daily --phase day                       # 14:00 Taipei: his day
     python -m anjo.sleep.night.daily --phase night                     # 02:00 Taipei: night, then morning
+    python -m anjo.sleep.night.daily --phase night --for-date 2026-10-28   # rerun a missed night
 
 He lives in real time from ``LIFE_START``: one simulated day per real day, the night for that day
 after midnight, and the morning probe run right after the night, in the same process.
@@ -9,9 +10,12 @@ after midnight, and the morning probe run right after the night, in the same pro
 - **day**: plays today's day (or ``--for-date``) through the dev API (``sim_transport.simulate``).
   That wakes Glimmer first and takes the night lock. It then writes a marker under
   ``$ANJO_SLEEP_DATA_DIR/sleep/daily/`` (persona, the date the day was meant for, day index, status
-  ``ok``, ``short`` or ``failed``, the failure code, failed turns) and exits 1 unless the day ran
+  ``ok``, ``short`` or ``failed``, the failure code, failed turns, and for a day that ended short the
+  code of the turn that ended it, ``failure_detail``: a code or an error class name, never message text) and exits 1 unless the day ran
   whole: a server that can't be woken, or one that dies mid-day, is never a quiet short day.
-- **night**: runs the night for yesterday's Taipei calendar day, as its own virtual date (the date
+- **night**: runs the night for yesterday's Taipei calendar day (or, with ``--for-date D``, for day D:
+  its whole Taipei calendar day is the window and D is the night's label; D may be today but not the
+  future, nor before ``LIFE_START``; the night's own clock stays the wall's), as its own virtual date (the date
   the day was lived on), through the night command's ``execute`` (the same lock, sweep, wake,
   training and upload). It reads that day's marker first: a missing, short or failed day fails the
   night at ``simulate`` (``day_missing``, ``short_day`` or the failure code) and nothing is scored.
@@ -20,6 +24,9 @@ after midnight, and the morning probe run right after the night, in the same pro
   Glimmer is still awake: the scene answered by the checkpoint before the night and by the new one.
   Its failure is logged in the night's log and never fails the night. Both steps log how long they
   took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time.
+
+``--mind`` (or ``ANJO_SLEEP_DAILY_MIND=1``) turns MIND's inquiry on in the night phase; it is off by
+default and has no effect on the day phase.
 
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
 for example ``film_founder=<account id>``.
@@ -47,6 +54,7 @@ from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
 USERS_ENV: Final = "ANJO_SLEEP_DAILY_USERS"
+MIND_ENV: Final = "ANJO_SLEEP_DAILY_MIND"  # "1": the scheduled night runs MIND's inquiry, as ``--mind`` does
 TAIPEI: Final = timezone(timedelta(hours=8))  # Taipei keeps no daylight saving time
 LIFE_START: Final = date(2026, 10, 28)
 DEFAULT_PERSONA: Final = "film_founder"  # the demo's hero: the person the real-time nights run for
@@ -104,7 +112,8 @@ def write_marker(folder: Path, persona: str, day: date, index: int, run: DayRun)
     path = _marker_path(folder, persona, day)
     pending = path.with_name(f".{path.name}.tmp")
     pending.write_text(json.dumps({"persona": persona, "date": day.isoformat(), "day_index": index,
-                                   "status": status, "failure": run.failure, "failed_turns": run.failed},
+                                   "status": status, "failure": run.failure, "failed_turns": run.failed,
+                                   **({} if run.failure_detail is None else {"failure_detail": run.failure_detail})},
                                   sort_keys=True), encoding="utf-8")
     os.replace(pending, path)
 
@@ -118,14 +127,22 @@ def missed_day(folder: Path, persona: str, plan: NightPlan) -> DayRun | None:
     if marker["status"] == "ok":
         return None
     code = marker["failure"] or SHORT_DAY
-    return DayRun(plan.window, 0, int(marker["failed_turns"]), (), failure=str(code))
+    detail = marker.get("failure_detail")  # markers from before the field lack it
+    return DayRun(plan.window, 0, int(marker["failed_turns"]), (), failure=str(code),
+                  failure_detail=None if detail is None else str(detail))
 
 
-def night_plan(now: datetime) -> NightPlan:
-    """The night that closes yesterday (Taipei): its window is that whole calendar day."""
-    yesterday = now.astimezone(TAIPEI).date() - timedelta(days=1)
-    start = datetime.combine(yesterday, time.min, tzinfo=TAIPEI)
-    return NightPlan(yesterday, (start.astimezone(timezone.utc), (start + timedelta(days=1)).astimezone(timezone.utc)))
+def night_plan(now: datetime, for_date: date | None = None) -> NightPlan:
+    """The night that closes yesterday (Taipei), or ``for_date`` when given: its window is that whole
+    Taipei calendar day and the night is labeled with it. A day before her life or after today is refused."""
+    today = now.astimezone(TAIPEI).date()
+    closing = today - timedelta(days=1) if for_date is None else for_date
+    if for_date is not None and for_date > today:
+        raise ValueError(f"{for_date.isoformat()} is in the future; today is {today.isoformat()} (Taipei)")
+    if for_date is not None and for_date < LIFE_START:
+        raise ValueError(f"her life starts on {LIFE_START.isoformat()}")
+    start = datetime.combine(closing, time.min, tzinfo=TAIPEI)
+    return NightPlan(closing, (start.astimezone(timezone.utc), (start + timedelta(days=1)).astimezone(timezone.utc)))
 
 
 def run_day_phase(
@@ -143,13 +160,14 @@ def run_night_phase(
     nights: Callable[..., dict[str, NightResult]] = night_command.execute,
     score: Callable[..., object] = run_morning, morning: Callable[..., object] | None = None,
     dailies: Callable[..., object] | None = None, timer: Callable[[], float] = monotonic,
+    for_date: date | None = None, mind: bool = False,
 ) -> NightResult:
-    plan = night_plan(now)
+    plan = night_plan(now, for_date)
     missed = missed_day(markers, persona, plan)
     with phase():  # one phase: Glimmer stays up from the night into the morning, then sleeps once
         result = nights(wiring=WIRING, night=plan.night, users=[user], personas={user: persona},
                         windows={user: plan.window}, days={} if missed is None else {user: missed},
-                        as_of={user: plan.window[1]})[user]  # real time: the night's clock is the wall's
+                        as_of={user: plan.window[1]}, mind=mind)[user]  # real time: the night's clock is the wall's
         if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
             log, started = NightLog(result.log_path.parent), timer()
             ports = (morning or _morning())(user, persona, plan.night)
@@ -186,13 +204,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One phase of a synthetic person's real-time day.")
     parser.add_argument("--phase", choices=("day", "night"), required=True)
     parser.add_argument("--persona", default=DEFAULT_PERSONA, help="default: the demo's hero")
-    parser.add_argument("--for-date", type=date.fromisoformat, help="the day the run is for (default: today, Taipei)")
+    parser.add_argument("--for-date", type=date.fromisoformat,
+                        help="day phase: the day to play (default: today, Taipei). night phase: the day the "
+                             "night closes, as its window and its label (default: yesterday, Taipei); not "
+                             "in the future, not before her life starts")
+    parser.add_argument("--mind", action="store_true",
+                        help=f"night phase: run MIND's inquiry in the night (also on when {MIND_ENV}=1; default off)")
     parser.add_argument("--label", choices=("development", "final"), default="development")
     args = parser.parse_args(argv)
     user = daily_users().get(args.persona)
     if user is None:
         parser.error(f"{USERS_ENV} has no account for {args.persona}")
     now = datetime.now(timezone.utc)
+    if args.phase == "night":
+        try:
+            night = night_plan(now, args.for_date)
+        except ValueError as refusal:
+            parser.error(str(refusal))
     if args.phase == "day":
         plan = day_plan(now, args.for_date)
         day = run_day_phase(user, args.persona, now, simulate=night_command._named(SIMULATE), for_date=args.for_date)
@@ -201,9 +229,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                           "failed_turns": day.failed, "short_day": day.short, "failure": day.failure,
                           "wake_seconds": day.wake_seconds}))
         return 1 if day.failure is not None or day.failed > 0 or day.short else 0
-    result = run_night_phase(user, args.persona, now, markers=marker_dir(), label=args.label)
-    print(json.dumps({"phase": "night", "night": night_plan(now).night.isoformat(), "status": result.status,
-                      "failed_at": result.failed_at, "log": str(result.log_path)}))
+    mind = args.mind or os.environ.get(MIND_ENV, "").strip() == "1"
+    result = run_night_phase(user, args.persona, now, markers=marker_dir(), label=args.label,
+                             for_date=args.for_date, mind=mind)
+    print(json.dumps({"phase": "night", "night": night.night.isoformat(), "status": result.status,
+                      "mind": mind, "failed_at": result.failed_at, "log": str(result.log_path)}))
     return 0 if result.status != "failed" else 1
 
 

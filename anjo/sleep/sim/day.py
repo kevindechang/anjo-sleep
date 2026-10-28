@@ -30,8 +30,18 @@ SIM_TIMEOUT_S: Final = 120.0
 NOT_READY: Final = "glimmer_not_ready"
 
 
+UNKNOWN_REASON: Final = "turn_failed"
+
+
 class TurnFailed(RuntimeError):
-    """A simulated turn the dev API couldn't answer; nothing of it was stored."""
+    """A simulated turn the dev API couldn't answer; nothing of it was stored.
+
+    ``reason`` is a short code (an HTTP refusal's code, ``stale session``, a transport error class
+    name), never the message: it is what a day's marker may carry."""
+
+    def __init__(self, message: str, *, reason: str = UNKNOWN_REASON) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,7 @@ class DayRun:
     turns: tuple[Turn, ...]  # every line, for a day that ran to its end; empty for a short day
     wake_seconds: float | None = None  # how long waking Glimmer took, when the day woke it
     failure: str | None = None  # a code when the day never started (``glimmer_not_ready``)
+    failure_detail: str | None = None  # the code of the turn that ended the day short, when one did
 
     @property
     def short(self) -> bool:
@@ -74,11 +85,11 @@ def run_day(
             return DayRun((start, clock()), 0, 0, (), wake_seconds=woke.seconds, failure=NOT_READY)
         try:
             turns = tuple(simulate_day(person, day_index, seed, model=model, transport=counting, replies=replies))
-            failed = 0
-        except TurnFailed:
-            turns, failed = (), 1
+            failed, detail = 0, None
+        except TurnFailed as error:
+            turns, failed, detail = (), 1, error.reason
         return DayRun((start, clock()), counting.answered, failed, turns,
-                      wake_seconds=None if woke is None else woke.seconds)
+                      wake_seconds=None if woke is None else woke.seconds, failure_detail=detail)
 
 
 class SparkSim:

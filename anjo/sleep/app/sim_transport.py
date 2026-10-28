@@ -49,17 +49,18 @@ def reply_text(stream: str) -> str:
         fields = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
         event = fields.get("event")
         if event == "error":
-            raise TurnFailed("the chat route sent an error event")
+            raise TurnFailed("the chat route sent an error event", reason="error_event")
         if event == "token":
             text.append(str(json.loads(fields.get("data", "{}")).get("text", "")))
     reply = "".join(text).strip()
     if not reply:
-        raise TurnFailed("the chat route sent no reply")
+        raise TurnFailed("the chat route sent no reply", reason="no_reply")
     return reply
 
 
 BUSY: Final = "busy: a response is already in progress"
 STALE: Final = "stale session"
+BUSY_CODE: Final = "busy"  # the reason a turn that stayed busy past its bound carries
 
 
 def _body(response: httpx.Response) -> dict[str, object]:
@@ -105,21 +106,21 @@ class DevApiTransport:
                 break
             refusal = _refusal(response)
             if refusal != BUSY:
-                raise TurnFailed(f"{path} returned HTTP 409 ({refusal})")
+                raise TurnFailed(f"{path} returned HTTP 409 ({refusal})", reason=refusal)
             wait = _retry_after(response)
             if waited + wait > MAX_BUSY_WAIT_S:
-                raise TurnFailed(f"{path} returned HTTP 409 ({BUSY}) for {waited:g}s")
+                raise TurnFailed(f"{path} returned HTTP 409 ({BUSY}) for {waited:g}s", reason=BUSY_CODE)
             self._sleep(wait)
             waited += wait
         if response.is_error:
-            raise TurnFailed(f"{path} returned HTTP {response.status_code}")
+            raise TurnFailed(f"{path} returned HTTP {response.status_code}", reason=f"http_{response.status_code}")
         return response
 
     def _post_once(self, path: str, body: dict[str, object]) -> httpx.Response:
         try:
             return self._http.post(path, json=body)
         except httpx.HTTPError as error:
-            raise TurnFailed(f"{path} failed in transport ({type(error).__name__})") from None
+            raise TurnFailed(f"{path} failed in transport ({type(error).__name__})", reason=type(error).__name__) from None
 
     def send(self, session_id: str, text: str, *, cleared: bool) -> str:
         if not cleared:
