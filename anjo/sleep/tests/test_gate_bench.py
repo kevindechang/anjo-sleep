@@ -77,12 +77,14 @@ def test_gate_bench_plan_prints_hold_and_sends_nothing(capsys: pytest.CaptureFix
     assert "safety: off" in plan  # the night's safety gate is off by default; a slice is optional
     bound_h = (gate_bench.BENCH_MAX_S + gate_bench.WAKE_S + config.SCALEDOWN_S) / 3600
     assert f"${gpus.L40S.usd_per_hour * bound_h:.2f}" in plan and "modal_usd" in plan  # the hold, at the L40S's price
+    assert "$1.95/h (billed, 2026-10-28)" in plan  # each price says where it came from
     assert "5.78 GiB" in plan and "measured" in plan  # the L40S's KV room
     assert "ANJO_SLEEP_SERVE_MAX_INPUTS" in plan  # 32 at once needs the server and this host to take it
 
     assert gate_bench.main(["--gpu", "H100"], environ={}, client=never, wake=never, ledger=never) == 0
     h100 = capsys.readouterr().out
     assert f"${gpus.H100.usd_per_hour * bound_h:.2f}" in h100 and "estimate" in h100 and "FP8 natively" in h100
+    assert "$3.95/h (Modal's list price, unverified)" in h100
     assert gate_bench.main(["--gpu", "A100-80GB"], environ={}, client=never, wake=never, ledger=never) == 0
     assert "weight-only" in capsys.readouterr().out
     with pytest.raises(SystemExit):

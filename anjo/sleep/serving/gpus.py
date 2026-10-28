@@ -1,8 +1,10 @@
 """The serving GPUs a night could wake (``config.SERVE_GPUS``), priced and sized for the cost model
 and the gate bench. Numbers only: nothing here calls anything.
 
-- **Price:** Modal's on-demand list price an hour (the L40S at $1.95 is the rate the 2026-10-28
-  nights were billed at; the H100's and the A100-80GB's are Modal's list rates, to check before quoting).
+- **Price:** Modal's on-demand price an hour, with where it came from (``Gpu.price_note``, printed
+  beside it): the L40S at $1.95 is the rate the 2026-10-28 nights were billed at; the A100-80GB's is
+  Modal's list price checked 2026-10-27; the H100's is Modal's list price, unverified (no night has
+  run on one), to check before quoting.
 - **KV room:** what vLLM keeps for the KV cache at FP8 Glimmer, ``config.GPU_MEMORY_UTILIZATION`` and
   eight rank-32 LoRA slots. Measured on the L40S (5.78 GiB, 2026-10-28: the weights take 31.8 GiB of
   its 45 GiB); on the 80 GB GPUs it is that plus their extra usable memory, an estimate until a deploy
@@ -45,6 +47,7 @@ class Gpu:
     memory_gib: float
     bandwidth_gb_s: float
     native_fp8: bool
+    price_note: str
     kv_measured: bool = False
 
     @property
@@ -69,7 +72,10 @@ def request_bytes(tokens: int) -> int:
     return LAYER_TOKEN_BYTES * (FULL_LAYERS * tokens + WINDOW_LAYERS * min(tokens, WINDOW_TOKENS))
 
 
-L40S: Final = Gpu("L40S", usd_per_hour=1.95, memory_gib=44.99, bandwidth_gb_s=864.0, native_fp8=True, kv_measured=True)
-H100: Final = Gpu("H100", usd_per_hour=3.95, memory_gib=79.65, bandwidth_gb_s=3350.0, native_fp8=True)
-A100_80GB: Final = Gpu("A100-80GB", usd_per_hour=2.50, memory_gib=80.0, bandwidth_gb_s=2039.0, native_fp8=False)
+L40S: Final = Gpu("L40S", usd_per_hour=1.95, memory_gib=44.99, bandwidth_gb_s=864.0, native_fp8=True,
+                  price_note="billed, 2026-10-28", kv_measured=True)
+H100: Final = Gpu("H100", usd_per_hour=3.95, memory_gib=79.65, bandwidth_gb_s=3350.0, native_fp8=True,
+                  price_note="Modal's list price, unverified")
+A100_80GB: Final = Gpu("A100-80GB", usd_per_hour=2.50, memory_gib=80.0, bandwidth_gb_s=2039.0, native_fp8=False,
+                       price_note="Modal's list price, checked 2026-10-27")
 GPUS: Final[Mapping[str, Gpu]] = MappingProxyType({gpu.name: gpu for gpu in (L40S, H100, A100_80GB)})

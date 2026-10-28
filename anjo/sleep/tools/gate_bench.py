@@ -122,6 +122,10 @@ def _kv_line(gpu: gpus.Gpu, kv_gib: float | None) -> str:
             f"candidates (~{gpus.PRACTICE_REQUEST_TOKENS}, before prefix sharing) at once")
 
 
+def _price_note(args: argparse.Namespace, gpu: gpus.Gpu) -> str:
+    return "given with --usd-per-hour" if args.usd_per_hour else gpu.price_note
+
+
 def _fp8(gpu: gpus.Gpu) -> str:
     return "FP8 natively" if gpu.native_fp8 else "FP8 weights, weight-only (Marlin), computed in bf16: not native"
 
@@ -136,7 +140,7 @@ def plan(args: argparse.Namespace, gpu: gpus.Gpu, sliced: Slice | None) -> str:
                          for level in args.concurrency)
     return "\n".join([
         "plan (nothing is sent; add --go to run it):",
-        f"  gpu       {gpu.name}, ${rate:.2f}/h, {_fp8(gpu)}",
+        f"  gpu       {gpu.name}, ${rate:.2f}/h ({_price_note(args, gpu)}), {_fp8(gpu)}",
         f"            {_kv_line(gpu, args.kv_gib)}",
         f"            decode estimate before the bench: {gpu.stream_tokens_s:.0f} tokens/s a stream; {estimate}",
         f"  wake      GET /v1/models until it answers, at most {WAKE_S:.0f} s",

@@ -90,11 +90,14 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     assert batch.trained["serve_overhead"] == pytest.approx(((units.wake_s + 600) / 5 + units.train_idle_s) * serve)
     assert batch.trained["gates"] == one.trained["gates"]  # each person's checkpoint side; the base side cached
 
-    # The anchor night (both sides, safety on) is the 77 measured minutes; the cache halves it, safety off cuts most.
-    anchor, cached, off = (by_name[n].trained["gates"] for n in ("2026-10-28.4", "+ base cache", "+ safety off"))
-    assert anchor == pytest.approx(units.gates_anchor_s * serve) and cached == pytest.approx(anchor / 2)
-    adds = cost.safety_adds(cost.ONE_SYSTEM, units, PRICES, night)
-    assert off < cached / 4 and off + adds == pytest.approx(cached)
+    # The anchor night (both sides, safety on) is the 77 measured minutes; safety off is its own step, and
+    # cuts most of it; the cache then halves what is left.
+    names = ("10-28.4 (safety on)", "+ safety off", "+ base cache")
+    assert [s.name for s in cost.SCENARIOS[:3]] == list(names)
+    anchor, off, cached = (by_name[n].trained["gates"] for n in names)
+    assert anchor == pytest.approx(units.gates_anchor_s * serve) and cached == pytest.approx(off / 2)
+    adds = cost.safety_adds(cost.ONE_SYSTEM, units, PRICES, night)  # one side: the base side is cached
+    assert off < anchor / 4 and off + 2 * adds == pytest.approx(anchor)
 
     # MIND's lines: the encode on its own A100 start, or in the training container; training grows by the joint share.
     a100 = PRICES.train_gpu_per_hour / 3600
@@ -114,6 +117,7 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     assert cost.main(["--from", str(tmp_path / "2026-10-29"), "--prices", "1.25,4.25,2.5,1.8", "--scenarios"]) == 0
     out = capsys.readouterr().out
     assert "batch of 5" in out and "safety on adds" in out and "latent_encode" in out
+    assert "10-28.4 (safety on)" in out and "H100 rows: $3.95/h is Modal's list price, unverified" in out
 
 
 def test_cost_model_projects_a_month_from_a_pressure_trace(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

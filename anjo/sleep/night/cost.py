@@ -28,7 +28,7 @@ events through Glimmer (``latent_encode``, the nap's one GPU cost). A deep sleep
 gates and the morning, on GPU) comes only when MIND's pressure crosses its threshold, and at least
 every 7th night. A month is a pressure trace (``Trace``): an active person deep-sleeps 2 to 3 times a
 week (``ACTIVE``), a quiet one about once (``QUIET``); ``--trace DNNDN...`` costs a real one. The rows:
-the 2026-10-28.4 night as measured, the base cache, the safety gate off, the one system (MIND's latent
+the 2026-10-28.4 night as measured (its safety gate on), the safety gate off, the base cache, the one system (MIND's latent
 encode and the joint training beside the LoRA), then each cost proposal on it alone and all of them
 together, with what turning the safety gate on adds. Every deep night also pays the serving GPU's
 ``serve_overhead``, which the summary never logs: the cold start and Modal's idle window after the last
@@ -145,18 +145,18 @@ CURRENT: Final = Settings("current", practice_concurrency=8, gate_concurrency=8,
                           spark_capped=True, morning=DAILY)
 UNITS: Final = Units()
 # The night the gates are anchored on, and the loop's settings from it to every proposal at once.
-ANCHOR: Final = Settings("2026-10-28.4", practice_concurrency=8, gate_concurrency=8, base_cached=False,
+ANCHOR: Final = Settings("10-28.4 (safety on)", practice_concurrency=8, gate_concurrency=8, base_cached=False,
                          spark_capped=True, morning=DAILY, safety=True)
 ONE_SYSTEM: Final = replace(CURRENT, name="one system", one_system=True)
 ALL: Final = replace(ONE_SYSTEM, name="all", roles=Roles("glimmer", "deepseek", "lazy"), batch=5, idle_tail=False,
                      encode_in_training=True, encode_people=5)
 SCENARIOS: Final[tuple[Settings, ...]] = (
-    ANCHOR, replace(ANCHOR, name="+ base cache", base_cached=True), replace(CURRENT, name="+ safety off"),
+    ANCHOR, replace(ANCHOR, name="+ safety off", safety=False), replace(CURRENT, name="+ base cache"),
     ONE_SYSTEM,
     replace(ONE_SYSTEM, name="critic=deepseek", roles=Roles(critic="deepseek")),
     replace(ONE_SYSTEM, name="person=glimmer", roles=Roles(person="glimmer")),
     replace(ONE_SYSTEM, name="teacher=lazy", roles=Roles(teacher="lazy")),
-    replace(ONE_SYSTEM, name="H100 at 32", gpu="H100", max_inputs=32, gate_concurrency=32, practice_concurrency=16),
+    replace(ONE_SYSTEM, name="H100 at 32 (list)", gpu="H100", max_inputs=32, gate_concurrency=32, practice_concurrency=16),
     replace(ONE_SYSTEM, name="batch of 5", batch=5),
     replace(ONE_SYSTEM, name="retire at end", idle_tail=False),
     replace(ONE_SYSTEM, name="encode in train", encode_in_training=True),
@@ -448,6 +448,9 @@ def _scenario_report(found: Sequence[Projection], traces: Sequence[Trace], safet
         out.append(f"  {p.settings.name:<18}{_usd(deep):>9}{_usd(nap):>9}"
                    + "".join(f"{_usd(trace_month(p, t)):>16}" for t in traces) + f"  {top} {_usd(p.trained[top])}")
     out.append(f"  safety on adds {_usd(safety_on)} a deep night to the one system")
+    for gpu in sorted({gpus.GPUS[p.settings.gpu] for p in found} - {gpus.L40S}, key=lambda g: g.name):
+        out.append(f"  {gpu.name} rows: ${gpu.usd_per_hour:.2f}/h is {gpu.price_note}, scaled from the L40S's"
+                   " billed rate")
     out.append("  measured: the anchor night's gates, practice and training; the rest estimated (night.cost.UNITS);"
                f" the morning's judge is {JUDGE_NOTE.split(' is ', 1)[1]}")
     return out
