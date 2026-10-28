@@ -4,8 +4,10 @@ A 429, a 5xx, a timeout or a dropped connection is tried again, at most ``ATTEMP
 all, ``backoff`` apart (doubling, jittered). Anything else fails at once.
 
 **A 429** (``rate_limited``: the provider was busy, and billed nothing) waits longer: the
-provider's hint (``Retry-After``, Vertex's ``RetryInfo``) or ``RATE_BACKOFF_S`` doubling, jittered,
-never more than ``MAX_WAIT_S`` a wait, at most ``RATE_LIMIT_ATTEMPTS`` tries of the call. In
+provider's hint (``Retry-After``, Vertex's ``RetryInfo``) plus up to ``HINT_JITTER`` of it, so
+calls given the same hint don't all try again together, or ``RATE_BACKOFF_S`` doubling, jittered;
+never more than ``MAX_WAIT_S`` a wait before a hint's jitter, at most ``RATE_LIMIT_ATTEMPTS``
+tries of the call. In
 generation, a call that still fails on any transient failure ends its attempt, not its life, and
 the next attempt starts after ``ATTEMPT_COOL_DOWN_S``.
 
@@ -51,7 +53,8 @@ JITTER: Final = (0.5, 1.5)  # each wait is its backoff times a uniform draw in t
 RETRIED: Final = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)  # timeouts and resets
 RATE_LIMIT_ATTEMPTS: Final = 5  # tries in all of a call answered 429, while the attempt's extra tries last
 RATE_BACKOFF_S: Final = 5.0  # before a 429's second try, without a hint; doubled before each next one
-MAX_WAIT_S: Final = 60.0  # the longest any one wait for a 429 lasts, a hint included
+MAX_WAIT_S: Final = 60.0  # the longest any one wait for a 429 lasts, a hint included (before its jitter)
+HINT_JITTER: Final = 0.2  # a hinted wait is the hint plus up to this share of it
 ATTEMPT_COOL_DOWN_S: Final = 60.0  # before the attempt after one a call ended (rate limits are per minute)
 REPLY_MAX_TOKENS: Final = SPARK_MAX_OUT_TOKENS  # every generation reply's cap: the most one call is held for
 FIRST_TOKEN_S: Final = 60.0  # queueing and reading a long prompt, before the first token
@@ -78,10 +81,11 @@ def rate_limited(error: Exception) -> bool:
 
 
 def rate_limit_wait(attempt: int, hint: float | None, rand: Callable[[], float] = random.random) -> float:
-    """The wait after a 429 on try ``attempt``: the provider's ``hint``, or ``RATE_BACKOFF_S``
-    doubling per try, jittered; never more than ``MAX_WAIT_S``."""
+    """The wait after a 429 on try ``attempt``: the provider's ``hint`` (at most ``MAX_WAIT_S``)
+    plus up to ``HINT_JITTER`` of it, or ``RATE_BACKOFF_S`` doubling per try, jittered, at most
+    ``MAX_WAIT_S``."""
     if hint is not None:
-        return min(hint, MAX_WAIT_S)
+        return min(hint, MAX_WAIT_S) * (1.0 + HINT_JITTER * rand())
     low, high = JITTER
     return min(RATE_BACKOFF_S * 2.0 ** (attempt - 1) * (low + (high - low) * rand()), MAX_WAIT_S)
 
