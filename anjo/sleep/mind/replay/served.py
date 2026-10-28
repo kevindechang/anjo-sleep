@@ -34,6 +34,7 @@ from typing import Any, Final
 from anjo.sleep.mind.apd.arms import MindCore
 from anjo.sleep.mind.inquiry.ports import InquiryPorts
 from anjo.sleep.mind.inquiry.types import Budget, InquiryRun, ModelReply, Workspace
+from anjo.sleep.mind.replay.spend import GlimmerServer, colab_client
 from anjo.sleep.mind.replay.types import BRANCH_TEMPERATURE, CallEnd
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving.client import ServingError, VllmClient
@@ -84,9 +85,11 @@ class ServedThinker:
         return ModelReply(text=result.text, tokens=result.output_tokens, model=model)
 
 
-def branch_thinkers(client: VllmClient) -> Callable[[int, date], ServedThinker]:
-    """Each branch's thinker (``ReplayModels.thinker_for``): base Glimmer at ``BRANCH_TEMPERATURE``
-    with the branch's seed, dated on the branch's night."""
+def branch_thinkers(server: GlimmerServer) -> Callable[[int, date], ServedThinker]:
+    """Each branch's thinker (``ReplayModels.thinker_for``): base Glimmer on Colab
+    (``spend.colab_client``) at ``BRANCH_TEMPERATURE`` with the branch's seed, dated on the
+    branch's night."""
+    client = colab_client(server)
 
     def thinker_for(seed: int, day: date) -> ServedThinker:
         return ServedThinker(client, NightClock(day), BRANCH_TEMPERATURE, seed)
@@ -94,10 +97,12 @@ def branch_thinkers(client: VllmClient) -> Callable[[int, date], ServedThinker]:
     return thinker_for
 
 
-def arm_thinker(client: VllmClient, adapter: CheckpointRef | None, clock: NightClock, *, seed: int = 0) -> ServedThinker:
-    """An arm's thinker for the 17b test: base Glimmer for M, an adapter for M+replay or
-    M+shuffled. An adapter trained under another rendering than the server's is refused here,
-    before any call."""
+def arm_thinker(server: GlimmerServer, adapter: CheckpointRef | None, clock: NightClock, *,
+                seed: int = 0) -> ServedThinker:
+    """An arm's thinker for the 17b test, on Glimmer on Colab: base Glimmer for M, an adapter for
+    M+replay or M+shuffled. An adapter trained under another rendering than the server's is
+    refused here, before any call."""
+    client = colab_client(server)
     if adapter is not None and adapter.rendering != client.rendering:
         raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
                            f"not {client.rendering}; it is never served under another")

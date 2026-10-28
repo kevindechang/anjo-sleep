@@ -1,8 +1,9 @@
 """``python -m anjo.sleep.mind.replay --fake``: replay end to end on offline fakes (Task 17b).
 
 Every step runs on the real kernel, loop and code, with ``replay.fakes`` in each model's place:
-the development lives' M runs, the start states, Spark Open's labels, the branches and their
-scores, both datasets, the training plan (a dry run: no runner, no hold), and the 17b arms on
+the spend plan (priced with ``--prices``), the development lives' M runs, the start states,
+Spark Open's labels, the branches and their scores, both datasets, the training plan (a dry run:
+no runner, no hold), and the 17b arms on
 held-out lives under a fake judge. The fakes' numbers mean nothing; the run shows the whole path
 works with no key and no spend. Nothing is written to disk.
 
@@ -16,10 +17,12 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
-from anjo.sleep.mind.replay import compare, dataset, fakes, resolve, sample, score
+from anjo.sleep.mind.apd.types import Life
+from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, score
 from anjo.sleep.mind.replay.dataset import ReplayData
 from anjo.sleep.mind.replay.types import Branch, LabelBook, StartState
 from anjo.sleep.reports import replay as report
+from anjo.sleep.night.deps import Prices
 from anjo.sleep.train import thinker
 
 DEV_LIVES: Final = 3
@@ -29,9 +32,10 @@ LIVE_STOP: Final = (
 )
 
 
-def _sampled(lives: int, seed: int, brief: str) -> tuple[list[StartState], LabelBook, Mapping[str, tuple[Branch, ...]], ReplayData]:
+def _sampled(
+    developed: Sequence[Life], seed: int, brief: str,
+) -> tuple[list[StartState], LabelBook, Mapping[str, tuple[Branch, ...]], ReplayData]:
     """Every development life's start states, labels and branches, and both datasets."""
-    developed = [fakes.fake_life(n) for n in range(lives)]
     starts: list[StartState] = []
     book = LabelBook()
     branches: dict[str, tuple[Branch, ...]] = {}
@@ -43,6 +47,15 @@ def _sampled(lives: int, seed: int, brief: str) -> tuple[list[StartState], Label
         branches.update(sample.sample_all([(life, found)], fakes.fake_replay_models(), labels, seed=seed, brief=brief))
         starts.extend(found)
     return starts, book, branches, dataset.build(developed, starts, branches, book, brief=brief, seed=seed)
+
+
+def _prices(text: str | None) -> Prices | None:
+    if text is None:
+        return None
+    parts = [float(part) for part in text.split(",")]
+    if len(parts) != 4:
+        raise SystemExit("--prices holds four list prices: spark_in,spark_out,train_gpu_hour,serve_gpu_hour")
+    return Prices(*parts)
 
 
 def _summary(starts: Sequence[StartState], book: LabelBook, branches: Mapping[str, tuple[Branch, ...]], data: ReplayData) -> str:
@@ -59,9 +72,8 @@ def _summary(starts: Sequence[StartState], book: LabelBook, branches: Mapping[st
     ))
 
 
-def _arms(held_out: int, brief: str) -> str:
+def _arms(lives: Sequence[Life], brief: str) -> str:
     """The 17b arms on held-out fake lives; the two adapters are stand-in thinkers."""
-    lives = [fakes.fake_life(100 + n, split="held_out") for n in range(held_out)]
     thinkers = compare.ArmThinkers(
         m=fakes.FakeGlimmer(), replay=fakes.FakeGlimmer(seed=1, temperature=0.4),
         shuffled=fakes.FakeGlimmer(seed=2, temperature=0.4),
@@ -80,15 +92,19 @@ def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = prin
     parser.add_argument("--lives", type=int, default=DEV_LIVES, help="development lives to replay")
     parser.add_argument("--held-out", type=int, default=HELD_OUT_LIVES, help="held-out lives for the arms")
     parser.add_argument("--seed", type=int, default=0, help="the branches' and the shuffle's seed")
+    parser.add_argument("--prices", help="list prices to price the spend plan, as ANJO_SLEEP_PRICES holds them")
     args = parser.parse_args(argv)
     if not args.fake:
         out(LIVE_STOP)
         return 2
     brief = load_brief()
     out(f"Replay on fakes: {args.lives} development lives, {args.held_out} held-out lives. The numbers mean nothing.")
-    starts, book, branches, data = _sampled(args.lives, args.seed, brief)
+    developed = [fakes.fake_life(n) for n in range(args.lives)]
+    held_out = [fakes.fake_life(100 + n, split="held_out") for n in range(args.held_out)]
+    starts, book, branches, data = _sampled(developed, args.seed, brief)
+    out(estimate.describe(estimate.estimate(starts, developed, held_out, _prices(args.prices))))
     out(_summary(starts, book, branches, data))
     if data.thinker1.examples:
         out(thinker.describe(thinker.plan(data)))
-    out(_arms(args.held_out, brief))
+    out(_arms(held_out, brief))
     return 0

@@ -87,10 +87,20 @@ def test_an_adapter_is_refused_before_any_call_unless_it_matches_the_servers_ren
     poster = _NoCalls()
     client = VllmClient.over(poster)
     ref = CheckpointRef("p-0-n0", "apd-replay", date(2026, 9, 17), "volume://p-0-n0", None, rendering="other/low")
+    colab = _Colab(client)
     for adapter in (ref, dataclasses.replace(ref, rendering=None)):
         with pytest.raises(ServingError, match="rendering"):
-            served.arm_thinker(client, adapter, NightClock())
+            served.arm_thinker(colab, adapter, NightClock())
     assert not poster.paths
+
+
+@dataclasses.dataclass(frozen=True)
+class _Colab:
+    vllm: VllmClient
+    name: str = "colab"
+
+    def client(self) -> VllmClient:
+        return self.vllm
 
 
 class _NoCalls:

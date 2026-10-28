@@ -10,7 +10,7 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -20,10 +20,12 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger, Pool
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.apd.arms import load_brief, run_arm
-from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, served
+from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, served, spend
 from anjo.sleep.mind.replay.dataset import ReplayData
-from anjo.sleep.mind.replay.types import Branch, CallEnd, StartState
+from anjo.sleep.mind.replay.types import Branch, CallEnd, ReplayRefused, StartState
+from anjo.sleep.night.deps import Prices
 from anjo.sleep.serving import config, framing
+from anjo.sleep.serving.backend import ModalServing
 from anjo.sleep.serving.client import ServingError, VllmClient
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train, thinker
@@ -97,6 +99,17 @@ class _Server:
         return None
 
 
+@dataclass(frozen=True)
+class _Colab:
+    """Glimmer on Colab vLLM, as replay's ``GlimmerServer``: the fake server's client."""
+
+    vllm: VllmClient
+    name: str = "colab"
+
+    def client(self) -> VllmClient:
+        return self.vllm
+
+
 def _replay(models: sample.ReplayModels | None = None, seeds: Sequence[int] = (0,)) -> ReplayData:
     lives: list[Life] = []
     starts: list[StartState] = []
@@ -118,7 +131,7 @@ def test_thinker_rows_match_the_served_rendering_token_for_token() -> None:
     tokenizer = _Glimmer()
     server = _Server(tokenizer)
     client = VllmClient.over(server)
-    models = replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(client))
+    models = replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(_Colab(client)))
     data = _replay(models)
     night = thinker.render_night(data)
     cfg = training_config(LoraCfg(), len(data.thinker1.examples), warm=False, revision="a" * 40, night=night)
@@ -151,16 +164,16 @@ def test_branch_and_arm_thinkers_are_served_as_the_night_serves_mind() -> None:
     server = _Server(_Glimmer())
     client = VllmClient.over(server)
     day = date(2026, 9, 9)
-    branch = served.branch_thinkers(client)(7, day)
+    branch = served.branch_thinkers(_Colab(client))(7, day)
     assert (branch.temperature, branch.seed, branch.adapter, branch.clock.day) == (0.8, 7, None, day)
-    base = served.arm_thinker(client, None, served.NightClock())
+    base = served.arm_thinker(_Colab(client), None, served.NightClock())
     assert (base.temperature, base.adapter) == (0.0, None)
     with pytest.raises(ValueError, match="night"):  # an arm's call before its night is set
         base.propose("anything", 50)
     reply = branch.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
     assert reply.model == "meta-models/Muse-Glimmer-30B" and branch.calls == [CallEnd("stop")]
     assert branch.propose("anything", 0).tokens == 0 and not server.served.get("anything")
-    broken = served.branch_thinkers(VllmClient.over(_Failing(_Glimmer())))(7, day)
+    broken = served.branch_thinkers(_Colab(VllmClient.over(_Failing(_Glimmer()))))(7, day)
     failed = broken.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
     assert (failed.text, failed.tokens, broken.calls) == ("", 50, [CallEnd(None, failed=True)])
 
@@ -290,3 +303,70 @@ def test_a_typical_development_set_plans_inside_the_spec() -> None:
     for adapter in found.adapters:
         assert (adapter.examples, adapter.steps, adapter.accumulation, adapter.epochs) == (560, 35, 16, 1)
         assert 30 <= adapter.minutes - thinker.SETUP_MINUTES <= 60  # the spec's 30-60 A100 minutes
+
+
+PRICES = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5, serve_gpu_per_hour=2.61)
+
+
+def test_replay_serves_glimmer_on_colab_only() -> None:
+    client = VllmClient.over(_Server(_Glimmer()))
+    for server in (ModalServing("https://anjo--glimmer.modal.run", "t"), replace(_Colab(client), name="sagemaker")):
+        with pytest.raises(ReplayRefused, match="Colab"):
+            served.branch_thinkers(server)
+        with pytest.raises(ReplayRefused, match="Colab"):
+            served.arm_thinker(server, None, served.NightClock())
+    assert served.branch_thinkers(_Colab(client))(1, date(2026, 9, 9)).client is client
+
+
+def test_labels_branches_and_arms_hold_their_worst_case_before_they_run(tmp_path: Path) -> None:
+    life = fakes.fake_life(0)
+    starts = sample.start_states(life, run_arm("M", life, fakes.fake_models()))
+    ledger = Ledger(tmp_path / "ledger.jsonl", caps=CAPS)
+    holds = spend.Holds(ledger, PRICES, Clock())
+    chat = fakes.FakeLabelChat()
+    book = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=chat), holds=holds)
+    assert chat.sent and ledger.open_holds() == () and ledger.used("baseten_mind_usd") > 0
+    sample.sample_all([(life, starts)], fakes.fake_replay_models(), book, brief=BRIEF, holds=holds)
+    branched = ledger.used("colab_cu")
+    assert branched > 0 and ledger.open_holds() == ()
+    held_out = fakes.fake_life(100, split="held_out")
+    thinkers = compare.ArmThinkers(fakes.FakeGlimmer(), fakes.FakeGlimmer(), fakes.FakeGlimmer())
+    compare.run_replay_arms([held_out], fakes.fake_models(), thinkers, brief=BRIEF, holds=holds)
+    assert ledger.used("colab_cu") > branched and ledger.open_holds() == ()
+
+
+def test_a_pool_without_room_stops_replay_before_any_call(tmp_path: Path) -> None:
+    life = fakes.fake_life(0)
+    starts = sample.start_states(life, run_arm("M", life, fakes.fake_models()))
+    for pool in ("baseten_mind_usd", "colab_cu"):
+        ledger = Ledger(tmp_path / f"{pool}.jsonl", caps={**CAPS, pool: 0.01})
+        holds = spend.Holds(ledger, PRICES, Clock())
+        chat = fakes.FakeLabelChat()
+        book = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=chat), holds=None)
+        called: list[int] = []
+
+        def thinker_for(seed: int, night: date) -> fakes.FakeGlimmer:
+            called.append(seed)
+            return fakes.FakeGlimmer(seed, 0.8)
+
+        with pytest.raises(BudgetStop):
+            if pool == "baseten_mind_usd":
+                resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=chat), holds=holds)
+            else:
+                sample.sample_all([(life, starts)], replace(fakes.fake_replay_models(), thinker_for=thinker_for), book,
+                                  brief=BRIEF, holds=holds)
+        assert len(chat.sent) == len([s for s in starts if resolve.later_evidence(s, life)]) and not called
+
+
+def test_the_dry_run_prices_the_labels_and_bounds_the_gpu_time() -> None:
+    life = fakes.fake_life(0)
+    starts = sample.start_states(life, run_arm("M", life, fakes.fake_models()))
+    held_out = [fakes.fake_life(100, split="held_out")]
+    found = estimate.estimate(starts, [life], held_out, PRICES)
+    assert found.label_calls == len([s for s in starts if resolve.later_evidence(s, life)]) and found.label_tokens > 0
+    assert found.label_usd is not None and 0 < found.label_usd < (found.label_hold_usd or 0)
+    assert found.branch_runs == len(starts) * 4 and found.arm_runs == 3
+    assert found.gpu_minutes == pytest.approx((found.branch_runs + 3 * len(held_out[0].days)) * 26 * 300 / 60)
+    text = estimate.describe(found)
+    assert "A100 minutes" in text and "$" in text and "colab_cu" in text and "baseten_mind_usd" in text
+    assert "unpriced" in estimate.describe(estimate.estimate(starts, [life], held_out, None))

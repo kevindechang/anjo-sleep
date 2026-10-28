@@ -27,6 +27,7 @@ from anjo.sleep.mind.apd.types import ArmModels, ArmName, ArmRun, Life, LifeScor
 from anjo.sleep.mind.inquiry.types import Budget
 from anjo.sleep.mind.replay.sample import RecordingThinker
 from anjo.sleep.mind.replay.served import NightClock, dated_core, failed_calls
+from anjo.sleep.mind.replay.spend import Holds, held_gpu
 
 REPLAY_ARMS: Final[tuple[ArmName, ...]] = ("M", "M+replay", "M+shuffled")
 
@@ -70,17 +71,20 @@ class ArmScores:
 
 def run_replay_arms(
     lives: Sequence[Life], models: ArmModels, thinkers: ArmThinkers, *, budget: Budget = Budget(),
-    core: MindCore | None = None, brief: str | None = None,
+    core: MindCore | None = None, brief: str | None = None, holds: Holds | None = None,
 ) -> ArmRuns:
-    """Each held-out life under each of the three arms; ``models.thinker`` is replaced per arm."""
+    """Each held-out life under each of the three arms; ``models.thinker`` is replaced per arm.
+    With ``holds``, each run holds its Glimmer time first (``spend``)."""
     if any(life.split != "held_out" for life in lives):
         raise ValueError("the 17b test runs on held-out lives only")
     dated = dated_core(core or mind_core(), thinkers.clock)
-    runs = tuple(
-        run_arm(arm, life, dataclasses.replace(models, thinker=thinkers.of(arm)), budget=budget, core=dated, brief=brief)
-        for life in lives for arm in REPLAY_ARMS
-    )
-    return ArmRuns(runs, {arm: failed_calls(thinkers.of(arm).calls) for arm in REPLAY_ARMS})
+    runs: list[ArmRun] = []
+    for life in lives:
+        for arm in REPLAY_ARMS:
+            with held_gpu(holds, f"arm:{life.id}:{arm}", len(life.days)):
+                runs.append(run_arm(arm, life, dataclasses.replace(models, thinker=thinkers.of(arm)), budget=budget,
+                                    core=dated, brief=brief))
+    return ArmRuns(tuple(runs), {arm: failed_calls(thinkers.of(arm).calls) for arm in REPLAY_ARMS})
 
 
 def score_replay_arms(

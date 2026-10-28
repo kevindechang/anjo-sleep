@@ -56,7 +56,9 @@ from anjo.sleep.mind.replay.types import (
     StartState,
     check_synthetic,
 )
+from anjo.sleep.mind.replay.spend import Holds, SparkMeter, held_gpu, held_spark
 from anjo.sleep.model_api import ChatResult
+from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.provenance import union
 from anjo.sleep.spark_inquiry import ChatFn, SparkResolver
 
@@ -261,13 +263,21 @@ def run_branches(
 def sample_all(
     pairs: Sequence[tuple[Life, Sequence[StartState]]], models: ReplayModels, labels: LabelBook, *,
     k: int = REPLAY_K, seed: int = 0, budget: Budget = Budget(), core: MindCore | None = None,
-    brief: str | None = None,
+    brief: str | None = None, holds: Holds | None = None,
 ) -> Mapping[str, tuple[Branch, ...]]:
-    """The branches of every start state with a usable label; no other is ever sampled."""
+    """The branches of every start state with a usable label; no other is ever sampled. With
+    ``holds``, each start state's branches hold their Glimmer time and their resolver's Spark Open
+    calls first (``spend``)."""
     out: dict[str, tuple[Branch, ...]] = {}
     for life, starts in pairs:
         for start in starts:
             labels.holds(start.id)  # every start state is labelled before any branches
-            if labels.labels[start.id].usable:
-                out[start.id] = run_branches(start, life, models, k=k, seed=seed, budget=budget, core=core, brief=brief)
+            if not labels.labels[start.id].usable:
+                continue
+            meter = None if holds is None else SparkMeter(holds.prices)
+            metered = models if meter is None else dataclasses.replace(
+                models, resolver_chat=meter.wrap(models.resolver_chat))
+            with held_gpu(holds, f"branches:{start.id}", k), \
+                    held_spark(holds, f"branches:{start.id}:spark", k * MIND_SPARK_CALLS, meter):
+                out[start.id] = run_branches(start, life, metered, k=k, seed=seed, budget=budget, core=core, brief=brief)
     return out

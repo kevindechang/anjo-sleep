@@ -26,6 +26,7 @@ from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.replay.types import UNDETERMINED, Label, StartState, check_synthetic
 from anjo.sleep.mind.replay.types import LabelBook as LabelBook
 from anjo.sleep.mind.replay.types import LabelRewrite as LabelRewrite
+from anjo.sleep.mind.replay.spend import Holds, SparkMeter, held_spark
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.types import Evidence
@@ -88,12 +89,18 @@ class SparkLabeler:
         return Label(start.id, holds, result.model, tokens=result.output_tokens, failed=failed)
 
 
-def label_all(starts: Sequence[StartState], lives: Mapping[str, Life], labeler: SparkLabeler) -> LabelBook:
-    """One label per start state, each written once."""
-    book = LabelBook()
+def label_all(
+    starts: Sequence[StartState], lives: Mapping[str, Life], labeler: SparkLabeler, *, holds: Holds | None = None,
+) -> LabelBook:
+    """One label per start state, each written once; with ``holds``, every call held on Spark
+    Open's pool first and settled at what it cost."""
     for start in starts:
-        life = lives[start.life_id]
-        check_synthetic(life)
-        book = book.with_label(labeler.label(start, life))
+        check_synthetic(lives[start.life_id])
+    book = LabelBook()
+    meter = None if holds is None else SparkMeter(holds.prices)
+    labeled = labeler if meter is None else SparkLabeler(chat=meter.wrap(labeler.chat))
+    with held_spark(holds, "labels", len(starts), meter):
+        for start in starts:
+            book = book.with_label(labeled.label(start, lives[start.life_id]))
     return book
 
