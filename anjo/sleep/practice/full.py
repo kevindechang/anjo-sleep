@@ -288,6 +288,14 @@ def _pick(candidates: Sequence[_Candidate], scores: dict[_Candidate, float], mis
                     flagged=len(misses))
 
 
+def spark_calls(scenes: int, *, teacher: bool = True, glimmer_person: bool = False, lazy_teacher: bool = False) -> int:
+    """The most Spark Open calls a night's practice makes: the scenes (unless Glimmer writes them), then
+    per scene the teacher (when on) and the critic, twice with a lazy teacher. A third-party critic
+    still counts: a real person's is Spark Open."""
+    lazy = lazy_teacher and teacher
+    return (0 if glimmer_person else 1) + scenes * ((1 if teacher else 0) + (2 if lazy else 1))
+
+
 class FullPractice:
     """Task 7's practice, the night's ``PracticeRunner``. ``adapter`` names her personal Glimmer
     for a person (the serving checkpoint; None before her first night, so the base model)."""
@@ -321,10 +329,8 @@ class FullPractice:
 
     @property
     def max_spark_calls(self) -> int:
-        """The scenes (unless Glimmer writes them), then per scene the teacher (when on) and the critic,
-        twice for a lazy teacher. A third-party critic still counts: a real person's is Spark Open."""
-        person = 0 if self._glimmer_person else 1
-        return person + self._count * ((1 if self._teacher else 0) + (2 if self._lazy else 1))
+        return spark_calls(self._count, teacher=self._teacher, glimmer_person=self._glimmer_person,
+                           lazy_teacher=self._lazy)
 
     def _roles(self, third: _ThirdParty | None) -> dict[str, str]:
         teacher = ("spark-lazy" if self._lazy else "spark") if self._teacher else "off"

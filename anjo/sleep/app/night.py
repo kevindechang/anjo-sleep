@@ -232,10 +232,9 @@ def _vertex_judge() -> TextModel:
     return ask
 
 
-def _critic(gemini: bool, night: date, ledger: Ledger) -> ThirdPartyCritic | None:
-    """Gemini as the critic of a synthetic person's practice, each call held on ``vertex_usd``."""
-    if not gemini:
-        return None
+def gemini_practice_critic(night: date, ledger: Ledger | None) -> ThirdPartyCritic:
+    """Gemini as the critic of a synthetic person's practice, each call held on ``vertex_usd``; also
+    ``tools.practice_ab``'s, by name."""
     return held_critic(gemini_critic(_vertex_judge()), ledger, f"night:practice:{night.isoformat()}")
 
 
@@ -263,15 +262,16 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
-    roles = practice_roles(os.environ)  # and so does a role practice doesn't have
+    roles = options.practice_roles or practice_roles(os.environ)  # and so does a role practice doesn't have
     gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
     def practice(chat: CappedChat, night: date) -> FullPractice:
+        critic = gemini_practice_critic(night, ledger) if roles.critic == "gemini" else None
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
                             teacher=night_settings.practice_teacher, concurrency=calls,
-                            glimmer_person=roles.person == "glimmer", critic=_critic(roles.critic == "gemini", night, ledger),
-                            third_party=is_synthetic, lazy_teacher=roles.teacher == "lazy")
+                            glimmer_person=roles.person == "glimmer", critic=critic, third_party=is_synthetic,
+                            lazy_teacher=roles.teacher == "lazy")
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)

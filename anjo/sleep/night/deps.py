@@ -45,6 +45,7 @@ from anjo.sleep.ports import (
     TargetStore,
 )
 from anjo.sleep.practice.full import CappedChat
+from anjo.sleep.practice.roles import Roles
 from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.serving.client import WakeResult
@@ -343,7 +344,8 @@ class NightOptions:
     trainer: the batch's night, and each synthetic person's persona (their sealed probes and the
     collapse gate's fields). A person without a persona is real, and runs only with ``allow_real``.
     ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7);
-    ``mind_inquiry`` turns on MIND's inquiry (Task 17)."""
+    ``mind_inquiry`` turns on MIND's inquiry (Task 17); ``practice_roles`` who plays practice's roles
+    (``practice.roles``; None reads ``ANJO_SLEEP_PRACTICE_ROLES``, as the night does)."""
 
     night: date
     personas: Mapping[str, str]
@@ -351,6 +353,7 @@ class NightOptions:
     practice_scenes: int = 16
     practice_teacher: bool = True
     mind_inquiry: bool = False
+    practice_roles: Roles | None = None
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]
