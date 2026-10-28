@@ -13,7 +13,7 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   if that still falls short, epochs rise to at most 4 (``plan_steps``);
 - ``max_seq_length`` at least 8,192 with ``packing=False``;
 - ``objective``: ``sft`` (the recipe's default), or ``sft_dpo`` (Task 7), which adds a DPO pass on the
-  night's (best, worst) practice pairs after SFT, at Meta's TRL settings (beta 0.1, lr 5e-7), with
+  night's (best, worst) practice pairs after SFT, at Meta's TRL settings (beta 0.1, lr 5e-6: the LoRA scale), with
   the adapter switched off as the reference so no second model loads. The nights ask for ``sft_dpo``
   (``objective.py``, Kevin 2026-10-28); a night with no usable pair trains ``sft`` (``objective_used``).
 
@@ -58,7 +58,7 @@ VOLUME_URI: Final = f"modal-volume://{config.ADAPTERS_VOLUME}"
 Objective = Literal["sft", "sft_dpo"]
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft", "sft_dpo")
 DPO_BETA: Final = 0.1
-DPO_LR: Final = 5e-7
+DPO_LR: Final = 5e-6  # 10x the spec's full-fine-tune 5e-7: on LoRA weights over a few dozen steps that is inert (alignment-handbook QLoRA DPO scale)
 MAX_DPO_LR: Final = 1e-5
 
 
@@ -215,6 +215,15 @@ def _number(outputs: Mapping[str, object], key: str) -> float:
     return float(value)
 
 
+def _pairs_trained(outputs: Mapping[str, object], data: Dataset) -> int:
+    """The pairs the DPO pass trained: the job's own count, else those sent less those it dropped as too long."""
+    reported = outputs.get("pairs")
+    if isinstance(reported, int) and not isinstance(reported, bool):
+        return max(0, reported)
+    dropped = outputs.get("pairs_dropped_truncated")
+    return max(0, len(data.pairs) - (dropped if isinstance(dropped, int) and not isinstance(dropped, bool) else 0))
+
+
 def _rendering(folder: Path) -> object:
     """The rendering an adapter folder records in its ``adapter_config.json``, or None."""
     try:
@@ -287,6 +296,8 @@ def train_lora_with_receipt(
     _copy_adapter(Path(returned), cached)
     publish(cached, name)
     plan = steps or plan_steps(len(data.examples), cfg)
+    trained_pairs = _pairs_trained(outputs, data) if cfg.objective == "sft_dpo" else 0
+    trained_objective: Objective = "sft_dpo" if trained_pairs else "sft"  # all pairs dropped: only SFT ran
     receipt = TrainReceipt(
         adapter=name, warm_start=warm, examples=len(data.examples), planned_steps=plan.steps,
         steps=int(_number(outputs, "steps")), epochs=int(_number(outputs, "epochs")),
@@ -294,7 +305,7 @@ def train_lora_with_receipt(
         gpu_minutes=_number(outputs, "gpu_minutes"), train_minutes=_number(outputs, "train_minutes"),
         compute_units=_number(outputs, "compute_units"),
         dropped_truncated=int(_number(outputs, "dropped_truncated")),
-        objective=cfg.objective, pairs=len(data.pairs) if cfg.objective == "sft_dpo" else 0,
+        objective=trained_objective, pairs=trained_pairs,
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

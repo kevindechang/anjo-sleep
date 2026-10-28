@@ -18,7 +18,7 @@ import pytest
 from anjo.sleep.serving import config
 from anjo.sleep.tests.test_lora import REVISION, _examples, _Runner, _with_pairs
 from anjo.sleep.train import colab_train, objective, thinker
-from anjo.sleep.train.lora import LoraCfg, adapter_name, train_lora_with_receipt
+from anjo.sleep.train.lora import LoraCfg, adapter_name, plan_steps, train_lora_with_receipt
 from anjo.sleep.train.trainer import LoraTrainer
 from anjo.sleep.types import CheckpointRef
 
@@ -143,15 +143,45 @@ def test_warm_start_sft_dpo_job_is_valid(tmp_path: Path) -> None:
     _, inputs, _ = runner.calls[0]
     sent: Any = inputs["config"]
     assert sent["warm_start"] is True and inputs["prev_adapter_dir"] == str(folder)
-    assert (sent["objective"], sent["learning_rate"], sent["dpo_learning_rate"]) == ("sft_dpo", 5e-5, 5e-7)
+    assert (sent["objective"], sent["learning_rate"], sent["dpo_learning_rate"]) == ("sft_dpo", 5e-5, 5e-6)
     loaded = colab_train.load_config(json.dumps(sent))  # the VM's own validation takes the warm job
     settings = colab_train.build_settings(loaded)
-    assert settings["dpo"]["learning_rate"] == 5e-7 and settings["sft"]["learning_rate"] == 5e-5
+    dpo = settings["dpo"]  # what the script hands TRL's DPOConfig for this warm job
+    assert (dpo["learning_rate"], dpo["beta"]) == (5e-6, 0.1) and settings["sft"]["learning_rate"] == 5e-5
+    assert dpo["learning_rate"] <= colab_train.MAX_DPO_LR and dpo["num_train_epochs"] == 1
+    assert dpo["gradient_accumulation_steps"] == loaded["accumulation"] and dpo["precompute_ref_log_probs"] is False
+    assert colab_train.dpo_plan(4, loaded) == (plan_steps(4, LoraCfg(objective="sft_dpo")).accumulation,
+                                               plan_steps(4, LoraCfg(objective="sft_dpo")).epochs)
     assert (receipt.objective, receipt.pairs, receipt.warm_start) == ("sft_dpo", 4, True)
-    # The script loads the previous adapter as trainable, then runs the same DPO pass on that model.
-    source = inspect.getsource(colab_train.main)
-    assert "PeftModel.from_pretrained(model, prev, is_trainable=True)" in source
-    assert "_dpo(trainer.model" in source and "if pairs:" in source and "if prev" in source
+
+
+class Counting(Seen):
+    """A runner whose job reports the pairs it trained and dropped, as ``colab_train``'s receipt does."""
+
+    def __init__(self, trained: int, dropped: int) -> None:
+        super().__init__()
+        self._extra = {"pairs": trained, "pairs_dropped_truncated": dropped}
+
+    def run(self, job: str, inputs: Any, *, timeout_s: float) -> Any:
+        return {**super().run(job, inputs, timeout_s=timeout_s), **self._extra}
+
+
+def _receipt(tmp_path: Path, data: Any, runner: Seen) -> Any:
+    _, receipt = train_lora_with_receipt(
+        None, data, LoraCfg(objective="sft_dpo"), runner, person_id="p1", night=NIGHT,
+        name=adapter_name("p1", 2, 0), workdir=tmp_path / "w", adapter_cache=tmp_path / "a",
+        publish=lambda folder, n: None, revision=REVISION)
+    return receipt
+
+
+def test_receipt_counts_pairs_trained_not_sent(tmp_path: Path) -> None:
+    receipt = _receipt(tmp_path, _with_pairs(5), Counting(trained=3, dropped=2))
+    assert (receipt.objective, receipt.pairs) == ("sft_dpo", 3)
+
+
+def test_all_pairs_dropped_records_sft(tmp_path: Path) -> None:
+    receipt = _receipt(tmp_path, _with_pairs(2), Counting(trained=0, dropped=2))
+    assert (receipt.objective, receipt.pairs) == ("sft", 0)
 
 
 def test_thinker_objective_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:

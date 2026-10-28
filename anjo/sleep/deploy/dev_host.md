@@ -214,7 +214,7 @@ its next start, and the L40S costs about $2 an hour while up. `Serve` runs one c
 command, the accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
 17b: replay's thinker and the APD runner) stays on Colab and never reads it.
 
-Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting.
+Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
 
 | Setting | Value |
 |---|---|
