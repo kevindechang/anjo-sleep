@@ -6,6 +6,7 @@ are ``replay.fakes``; the kernel and the loop are the real ones."""
 from __future__ import annotations
 
 import dataclasses
+import json
 import random
 from collections.abc import Sequence
 from datetime import timedelta
@@ -28,7 +29,7 @@ from anjo.sleep.mind.replay.types import (
     StartState,
 )
 from anjo.sleep.mind.inquiry.ports import Thinker
-from anjo.sleep.model_api import ChatResult
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.provenance import GLIMMER, HOSTED
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import Evidence
@@ -129,6 +130,62 @@ def test_replay_tools_time_masked() -> None:
     models = dataclasses.replace(fakes.fake_replay_models(), thinker_for=lambda seed: Spy())
     _branches(start, life, models)
     assert seen and all(not any(item.text in text for item in later) for text in seen)
+
+
+class _Predicts:
+    """The M thinker, but its first search becomes a prediction on the kitchen."""
+
+    def __init__(self) -> None:
+        self.inner, self.done = fakes.FakeGlimmer(), False
+
+    def propose(self, rendered: str, max_tokens: int) -> it.ModelReply:
+        reply = self.inner.propose(rendered, max_tokens)
+        if self.done or '"INVESTIGATE"' not in reply.text:
+            return reply
+        self.done = True
+        return dataclasses.replace(reply, text=json.dumps({
+            "op": "PREDICT", "question_id": "q1", "claim": "She shoots scene 4 in the kitchen",
+            "p_true_given": {"q1.h2a": 0.9, "q1.h2b": 0.2, "q1.else": 0.5}, "horizon_days": 3}))
+
+
+class _FailingResolver:
+    """The M run's resolver, failing every call: nothing is marked seen, so a branch asks again."""
+
+    def resolve(self, claim: str, evidence: Sequence[Evidence]) -> it.ResolverReply:
+        return it.ResolverReply(verdict="undetermined", tokens=0, failed=True)
+
+
+def test_the_resolver_in_a_branch_is_masked_to_its_night_and_named_by_its_reply() -> None:
+    life = fakes.fake_life(0)
+    run = run_arm("M", life, dataclasses.replace(fakes.fake_models(), thinker=_Predicts(), resolver=_FailingResolver()))
+    start = sample.start_states(life, run)[1]  # the prediction was made the night before, and is unseen
+    chat = fakes.FakeResolverChat()
+    branches = _branches(start, life, dataclasses.replace(fakes.fake_replay_models(), resolver_chat=chat))
+    sent = [str(messages[-1]["content"]) for messages in chat.sent]
+    assert sent and any(item.text in text for text in sent for item in life.evidence if item.day == start.night)
+    assert not any(item.text in text for text in sent for item in _later(life, start))
+    assert all(branch.ancestry is not None and SPARK_OPEN in branch.ancestry for branch in branches)
+    for named in (sorted(HOSTED)[0], ""):  # the model the reply names, not one declared beside it
+        other = fakes.FakeResolverChat(model=named)
+        tainted = _branches(start, life, dataclasses.replace(fakes.fake_replay_models(), resolver_chat=other))
+        assert all(named in (branch.ancestry or ()) for branch in tainted)
+        assert not dataset.cleared(start, tainted)
+
+
+def test_a_world_answer_or_verdict_the_m_run_never_attributed_never_trains() -> None:
+    life = fakes.fake_life(0)
+    world_run = run_arm("M", life, dataclasses.replace(
+        fakes.fake_models(), thinker=fakes.FakeGlimmer(seed=3, temperature=0.8)))
+    verdict_run = run_arm("M", life, dataclasses.replace(fakes.fake_models(), thinker=_Predicts()))
+    for run, entry in ((world_run, it.Answered), (verdict_run, it.Resolved)):
+        starts = sample.start_states(life, run)
+        holding = [s for s in starts if any(isinstance(e.step.entry, entry) for e in s.events)]
+        assert holding and all(start.ancestry is None for start in holding)
+        assert all(start.ancestry is not None for start in starts if start not in holding)
+        book = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeLabelChat()))
+        branches = {start.id: _branches(start, life) for start in starts}
+        built = dataset.build([life], starts, branches, book, brief=BRIEF)
+        assert not (_ids(built.thinker1) | _ids(built.shuffled)) & {start.id for start in holding}
 
 
 def test_branches_differ_by_seed_and_repeat_exactly() -> None:
@@ -279,6 +336,29 @@ def test_replay_dataset_refuses_uncleared_provenance() -> None:
     assert dataset.build([life], tainted, branches, book, brief=BRIEF).dropped["provenance"] == 1
     world = dataclasses.replace(fakes.fake_replay_models(), world=fakes.FakeWorld(model=hosted))
     assert any(hosted in (b.ancestry or ()) for b in _branches(first, life, world))  # a world answer's model
+
+
+def test_a_label_trains_only_when_spark_opens_reply_names_it() -> None:
+    life, starts, branches, book = _labelled()
+    kept = [start for start in starts if book.labels[start.id].usable]
+    first = kept[0]
+    for named in (sorted(HOSTED)[0], ""):
+        def answer(messages: list[dict[str, Any]], max_tokens: int, model: str = named) -> ChatResult:
+            return dataclasses.replace(fakes.FakeLabelChat()(messages, max_tokens), model=model)
+
+        label = resolve.SparkLabeler(chat=answer).label(first, life)
+        assert label.holds is not None and label.model == named and not label.usable
+        relabelled = resolve.LabelBook({**book.labels, first.id: label})
+        built = dataset.build([life], kept, branches, relabelled, brief=BRIEF)
+        assert built.dropped["provenance"] == 1
+        assert first.id not in _ids(built.thinker1) | _ids(built.shuffled)
+        assert first.id not in sample.sample_all([(life, kept)], fakes.fake_replay_models(), relabelled, brief=BRIEF)
+
+    def broken(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        raise ModelApiError("Baseten chat: HTTP 500")
+
+    failed = resolve.SparkLabeler(chat=broken).label(first, life)
+    assert (failed.holds, failed.model, failed.failed, failed.tokens) == (None, "", True, resolve.LABEL_MAX_TOKENS)
 
 
 def test_dataset_rows_are_glimmers_own_turns_behind_the_brief() -> None:

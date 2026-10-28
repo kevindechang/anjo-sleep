@@ -7,22 +7,30 @@ letter that holds or ``undetermined``. Its prompt is built from the start state 
 so it never sees a branch. A start state with no later evidence is undetermined without a call.
 A call that fails or answers out of form is undetermined too, marked ``failed``. Every label is
 written once into a ``LabelBook``, which every branch of the start state is scored against.
+
+**The label's model is the API's report.** The labeller calls its ``ChatFn`` itself, not through
+``spark_inquiry.call``, which records an unreported model as Spark Open: a label keeps the model
+the reply named, as named, and a failed call names none (``""``). Only a label Spark Open's reply
+names may branch or train (``Label.usable``); any other is dropped as ``provenance``.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.mind.apd.arms import json_values, night_as_of
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.replay.types import UNDETERMINED, Label, StartState, check_synthetic
 from anjo.sleep.mind.replay.types import LabelBook as LabelBook
 from anjo.sleep.mind.replay.types import LabelRewrite as LabelRewrite
-from anjo.sleep.spark_inquiry import ChatFn, call
+from anjo.sleep.model_api import ModelApiError
+from anjo.sleep.spark_inquiry import ChatFn
 from anjo.sleep.types import Evidence
+
+logger = logging.getLogger(__name__)
 
 RESOLVE_PROMPT: Final = (Path(__file__).parent / "prompts" / "resolve_v1.md").read_text(encoding="utf-8")
 LABEL_MAX_TOKENS: Final = 200
@@ -68,11 +76,16 @@ class SparkLabeler:
     chat: ChatFn
 
     def label(self, start: StartState, life: Life) -> Label:
+        """No later evidence is undetermined with no call; a failed call is charged its cap."""
         if not later_evidence(start, life):
-            return Label(start.id, None, SPARK_OPEN)
-        reply = call(self.chat, label_messages(start, life), LABEL_MAX_TOKENS)
-        holds, failed = parse_label(reply.text, start)
-        return Label(start.id, holds, reply.model, tokens=reply.tokens, failed=failed)
+            return Label(start.id, None, "")
+        try:
+            result = self.chat(label_messages(start, life), LABEL_MAX_TOKENS)
+        except ModelApiError as error:
+            logger.warning("replay's label call failed, charged its cap of %d tokens: %s", LABEL_MAX_TOKENS, error)
+            return Label(start.id, None, "", tokens=LABEL_MAX_TOKENS, failed=True)
+        holds, failed = parse_label(result.text, start)
+        return Label(start.id, holds, result.model, tokens=result.output_tokens, failed=failed)
 
 
 def label_all(starts: Sequence[StartState], lives: Mapping[str, Life], labeler: SparkLabeler) -> LabelBook:

@@ -15,9 +15,9 @@
 - **Same size and settings:** the dataset with more rows is cut to the other's count by a seeded
   draw (``over_cap``), so both train with the same step plan.
 - **Provenance:** every text in a row comes from Spark Open or deterministic code, and Glimmer's
-  own replies are the targets. A start state whose workspace or any branch holds text of another
-  model (or of unknown ancestry), or a turn any other model wrote, is refused for both datasets
-  (``provenance``). No hosted output trains anything (``may_train`` with hosted output off).
+  own replies are the targets. A start state whose label isn't Spark Open's by the API's report,
+  whose workspace or any branch holds text of another model (or of unknown ancestry), or with a
+  turn any other model wrote, is refused for both datasets (``provenance``). No hosted output trains anything (``may_train`` with hosted output off).
 - **Synthetic lives only:** every start state must come from one of the lives given, each a
   synthetic development life (``check_synthetic``); anything else is ``ReplayRefused``.
 """
@@ -147,7 +147,7 @@ def _winners(
     """Why the start state is dropped, or its two winners."""
     if labels.holds(start.id) is None:
         return "undetermined", None, None
-    if not cleared(start, branches):
+    if not labels.labels[start.id].usable or not cleared(start, branches):
         return "provenance", None, None
     scored = score_start(branches, start, labels.labels[start.id], penalty=penalty)
     first, shuffled = best(scored), pick_shuffled(scored, random.Random(f"{seed}:{start.id}"))

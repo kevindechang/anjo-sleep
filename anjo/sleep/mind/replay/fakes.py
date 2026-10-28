@@ -256,12 +256,24 @@ def _branch_thinker(seed: int) -> FakeGlimmer:
     return FakeGlimmer(seed, BRANCH_TEMPERATURE)
 
 
+@dataclass
+class FakeResolverChat:
+    """Spark Open as the resolver's ``ChatFn``: always undetermined, under ``model``. It keeps
+    every prompt it was sent."""
+
+    model: str = SPARK_OPEN
+    sent: list[list[dict[str, Any]]] = field(default_factory=list)
+
+    def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        self.sent.append(messages)
+        return ChatResult(text='{"verdict": "undetermined"}', tool_calls=(), model=self.model,
+                          input_tokens=len(str(messages[-1]["content"])) // 4, output_tokens=8, finish_reason="stop")
+
+
 def fake_replay_models() -> ReplayModels:
     """The branches' models: the thinker at ``BRANCH_TEMPERATURE`` with each branch's seed."""
-    return ReplayModels(
-        thinker_for=_branch_thinker, world=FakeWorld(), screen=FakeScreen(), resolver=FakeResolver(),
-        resolver_model=SPARK_OPEN,
-    )
+    return ReplayModels(thinker_for=_branch_thinker, world=FakeWorld(), screen=FakeScreen(),
+                        resolver_chat=FakeResolverChat())
 
 
 @dataclass

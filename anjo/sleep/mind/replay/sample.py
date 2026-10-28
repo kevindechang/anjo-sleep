@@ -13,10 +13,14 @@
   there is no notice pass. Each branch ends with its credence vector over the frozen set, a
   hypothesis it added counted in the catch-all (``frozen_credences``).
 - **Provenance:** a start state's ancestry is every model whose text its workspace holds: the
-  life's evidence and the M run's thinker turns (``world_query`` runs on the thinker's model). A
-  branch adds its own thinker turns, its world answers and the resolver's model.
+  life's evidence and the M run's thinker turns. The M run records no model for a ``world_query``
+  answer (``Answered``) or a resolver's verdict (``Resolved``), so a workspace holding either (a
+  failed call's empty answer and a censored prediction aside) has unknown ancestry and never
+  trains. A branch adds its own thinker turns, the model each world answer names, and the model
+  each resolver reply named, as Spark Open's API reported it (``ReplayModels.resolver_chat``).
 
-Only a start state with a label branches (``sample_all``): an undetermined one is never sampled.
+Only a start state with a usable label branches (``sample_all``): an undetermined one, or one whose
+label isn't Spark Open's by the API's report, is never sampled.
 """
 from __future__ import annotations
 
@@ -24,21 +28,26 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from anjo.sleep.mind.apd.arms import BriefedThinker, LifeSearch, MemoryLog, MindCore, load_brief, mind_core, seen_by
 from anjo.sleep.mind.apd.types import ArmRun, Life
-from anjo.sleep.mind.inquiry.ports import InquiryPorts, PredictionResolver, ScreenPort, Thinker, WorldQuery
+from anjo.sleep.mind.inquiry.ports import InquiryPorts, ScreenPort, Thinker, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
     LIVE_STATUSES,
+    Answered,
     Budget,
     Hypothesis,
     ModelReply,
+    Resolved,
     RunStart,
     WorkspaceEvent,
     catch_all_id,
 )
 from anjo.sleep.mind.replay.types import REPLAY_K, Branch, LabelBook, ReplayRefused, StartState, check_synthetic
+from anjo.sleep.model_api import ChatResult
 from anjo.sleep.provenance import union
+from anjo.sleep.spark_inquiry import ChatFn, SparkResolver
 
 ThinkerFactory = Callable[[int], Thinker]
 
@@ -46,15 +55,14 @@ ThinkerFactory = Callable[[int], Thinker]
 @dataclass(frozen=True)
 class ReplayModels:
     """The branches' models. ``thinker_for(seed)`` is the thinker for one branch (Glimmer at
-    ``BRANCH_TEMPERATURE`` with that seed, ``served.branch_thinkers``); the world query, screen and
-    resolver are the M arm's. ``resolver_model`` names the resolver's model, which its port
-    doesn't report."""
+    ``BRANCH_TEMPERATURE`` with that seed, ``served.branch_thinkers``); the world query and screen
+    are the M arm's. The resolver is the M arm's too, ``SparkResolver`` over ``resolver_chat``
+    (Spark Open), built per branch on a chat that keeps the model each reply names."""
 
     thinker_for: ThinkerFactory
     world: WorldQuery
     screen: ScreenPort
-    resolver: PredictionResolver
-    resolver_model: str
+    resolver_chat: ChatFn
 
 
 # ── Start states ──────────────────────────────────────────────────────────────
@@ -81,6 +89,15 @@ def _as_of(events: Sequence[WorkspaceEvent]) -> datetime:
     return starts[-1].as_of
 
 
+def _unrecorded(events: Sequence[WorkspaceEvent]) -> bool:
+    """Whether the log holds model output whose model the M run didn't record: a world answer
+    with text, or a resolver's verdict (a censored prediction is the code's)."""
+    return any(
+        (isinstance(entry, Answered) and entry.answer) or (isinstance(entry, Resolved) and entry.outcome != "censored")
+        for entry in (event.step.entry for event in events)
+    )
+
+
 def _evidence_ancestry(life: Life, as_of: datetime) -> frozenset[str] | None:
     return union(
         None if item.ancestry is None else item.ancestry | ({item.model} if item.model else frozenset())
@@ -91,7 +108,8 @@ def _evidence_ancestry(life: Life, as_of: datetime) -> frozenset[str] | None:
 def _of_night(life: Life, run: ArmRun, night: date, events: tuple[WorkspaceEvent, ...], core: MindCore) -> list[StartState]:
     ws, as_of = core.fold(events), _as_of(events)
     end = events[-1].step.seq
-    ancestry = union([_evidence_ancestry(life, as_of), frozenset(t.reply.model for t in run.turns if t.seq <= end)])
+    turns = frozenset(t.reply.model for t in run.turns if t.seq <= end)
+    ancestry = None if _unrecorded(events) else union([_evidence_ancestry(life, as_of), turns])
     found: list[StartState] = []
     for question in ws.questions:
         held = ws.hypotheses_of(question.id)
@@ -146,6 +164,19 @@ def branch_seed(start_id: str, index: int, seed: int) -> int:
 
 
 @dataclass
+class _SeenChat:
+    """A ``ChatFn`` keeping the model each reply named, as named: the resolver's provenance."""
+
+    inner: ChatFn
+    models: list[str] = field(default_factory=list)
+
+    def __call__(self, messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+        result = self.inner(messages, max_tokens)
+        self.models.append(result.model)
+        return result
+
+
+@dataclass
 class _SeenWorld:
     """The world query, keeping the model of every answer the branch's prompts may show."""
 
@@ -160,10 +191,11 @@ class _SeenWorld:
 
 def _branch(start: StartState, life: Life, models: ReplayModels, index: int, seed: int, budget: Budget,
             core: MindCore, brief: str) -> Branch:
-    world = _SeenWorld(models.world)
+    world, resolver = _SeenWorld(models.world), _SeenChat(models.resolver_chat)
     ports = InquiryPorts(
         thinker=BriefedThinker(models.thinker_for(seed), brief), screen=models.screen,
-        search=LifeSearch(life.evidence), world=world, resolver=models.resolver, log=MemoryLog(start.events),
+        search=LifeSearch(life.evidence), world=world, resolver=SparkResolver(chat=resolver),
+        log=MemoryLog(start.events),
     )
     begun = core.fold(start.events)
     run = core.run_inquiry(
@@ -177,7 +209,7 @@ def _branch(start: StartState, life: Life, models: ReplayModels, index: int, see
     credences = ended or frozen_credences(begun.hypotheses_of(start.question_id), start) or {}
     ancestry = union([
         start.ancestry, frozenset(turn.reply.model for turn in run.turns), frozenset(world.models),
-        frozenset({models.resolver_model}),
+        frozenset(resolver.models),
     ])
     return Branch(start.id, index, seed, credences, run.budget.tokens_used, turns, complete, ancestry)
 
@@ -203,10 +235,11 @@ def sample_all(
     k: int = REPLAY_K, seed: int = 0, budget: Budget = Budget(), core: MindCore | None = None,
     brief: str | None = None,
 ) -> Mapping[str, tuple[Branch, ...]]:
-    """The branches of every labelled start state; an undetermined one is never sampled."""
+    """The branches of every start state with a usable label; no other is ever sampled."""
     out: dict[str, tuple[Branch, ...]] = {}
     for life, starts in pairs:
         for start in starts:
-            if labels.holds(start.id) is not None:
+            labels.holds(start.id)  # every start state is labelled before any branches
+            if labels.labels[start.id].usable:
                 out[start.id] = run_branches(start, life, models, k=k, seed=seed, budget=budget, core=core, brief=brief)
     return out

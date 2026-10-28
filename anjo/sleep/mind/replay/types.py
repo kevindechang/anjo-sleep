@@ -79,13 +79,20 @@ class StartState:
 @dataclass(frozen=True)
 class Label:
     """Spark Open's label for one start state: the frozen hypothesis that holds, or ``None``
-    (undetermined). ``failed`` is a call that failed or answered out of form, read as undetermined."""
+    (undetermined). ``model`` is the model the API reported writing it, as reported (``""`` when no
+    call answered). ``failed`` is a call that failed or answered out of form, read as undetermined."""
 
     start_id: str
     holds: str | None
     model: str
     tokens: int = 0
     failed: bool = False
+
+    @property
+    def usable(self) -> bool:
+        """Whether its start state may branch and train: determined, and written by Spark Open by
+        the API's own report. Any other model, or none reported, isn't cleared."""
+        return self.holds is not None and self.model == SPARK_OPEN
 
 
 @dataclass(frozen=True)
