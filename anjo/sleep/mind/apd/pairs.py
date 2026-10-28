@@ -278,38 +278,59 @@ def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
     return _Outcome(spec, made, tuple(log.failures))
 
 
-def pairs_keep_off(data: DataDir) -> tuple[bool, str]:
-    """Whether the pairs' writer is given their topics, and why: as most ``core-test`` lives on disk
-    were (the pairs are core-test's; the other splits' lives don't count), or without, the default,
-    when they tie or none is on disk."""
-    found = kept_off(data, "core-test")
-    if found.majority is not None:
-        return found.majority, f"as most core-test lives were ({found})"
-    if found.without == 0:
-        return False, "the default, as no core-test life is on disk to follow"
-    return False, f"the default, as the core-test lives tie ({found})"
+@dataclass(frozen=True)
+class PairsKeepOff:
+    """Whether new pairs' writer is given their topics (``on``), following what (``source``: the
+    pairs on disk, the core-test majority or the default) and its counts (``detail``); ``mixed``
+    when the pairs on disk disagree, and what the plan warns of."""
+
+    on: bool
+    source: str
+    detail: str
+    mixed: bool = False
+    warnings: tuple[str, ...] = ()
+
+
+def pairs_keep_off(data: DataDir) -> PairsKeepOff:
+    """New pairs follow the pairs on disk (a record with no ``keep_off`` reads as off), so pairs
+    never mix; with none on disk, most ``core-test`` lives on disk (the pairs are core-test's; the
+    other splits' lives don't count); with neither, or a tie, they are written without it."""
+    flags = [bool((data.made(pair.id) or {}).get("keep_off")) for pair in data.pairs()]
+    lives = kept_off(data, "core-test")
+    if not flags:
+        if lives.majority is not None:
+            return PairsKeepOff(lives.majority, "the core-test majority", str(lives))
+        return PairsKeepOff(False, "the default", "no pairs or core-test lives on disk" if lives.without == 0
+                            else f"no pairs on disk, and a tie: {lives}")
+    with_ = sum(flags)
+    detail = f"pairs on disk: {len(flags) - with_} without keep_off, {with_} with"
+    if 0 < with_ < len(flags):
+        return PairsKeepOff(False, "the pairs on disk", detail, mixed=True, warnings=(
+            f"the pairs on disk are mixed on keep_off ({detail}): a run with pairs to write refuses",))
+    on = with_ > 0
+    lean = () if lives.majority in (None, on) else (
+        f"new pairs follow the pairs on disk, {'with' if on else 'without'} keep_off, though most core-test lives "
+        f"were written {'without' if on else 'with'} it ({lives})",)
+    return PairsKeepOff(on, "the pairs on disk", detail, warnings=lean)
 
 
 def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, out: Out, *,
                    parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
     """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
     a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end. A pair's
-    writer is given its topics (``keep_off``) as ``pairs_keep_off`` says, its made record saying so,
-    and pairs on disk written otherwise refuse the run, as another writer's or reader's do."""
+    writer is given its topics (``keep_off``) as ``pairs_keep_off`` says, its made record saying so;
+    pairs on disk that disagree on it refuse a run with pairs to write."""
     check("core-test", backend.generator, backend.provider)
-    keep_off, why = pairs_keep_off(data)
-    backend = dataclasses.replace(backend, keep_off=keep_off)
+    keep_off = pairs_keep_off(data)
+    backend = dataclasses.replace(backend, keep_off=keep_off.on)
     readers.check("core-test", backend.read_by)
     on_disk = data.pairs()
     refuse_mixed((life for pair in on_disk for life in (pair.failed, pair.kept)), backend, "the pairs", data,
                  [pair.id for pair in on_disk])
-    other = [pair.id for pair in on_disk if bool((data.made(pair.id) or {}).get("keep_off")) != keep_off]
-    if other:
-        raise StoreError(f"the pairs hold {len(other)} written {'without' if keep_off else 'with'} keep_off "
-                         f"({', '.join(other[:3])}{', ...' if len(other) > 3 else ''}), and this run would write "
-                         f"them {'with' if keep_off else 'without'} it, {why}; one never mixes them: go on with "
-                         "theirs, or start a new data dir")
     todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
+    if todo and keep_off.mixed:
+        raise StoreError(f"the pairs on disk are mixed on keep_off ({keep_off.detail}), and a new pair would mix "
+                         "them further; move the pairs written otherwise out of the data dir, or start a new one")
     if backend.ceiling is not None:
         backend.ceiling.begin("pair(s) generated", len(todo))
     made: list[str] = []

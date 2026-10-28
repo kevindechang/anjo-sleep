@@ -167,7 +167,7 @@ def _pair_plan(data: Path) -> str:
 def test_pairs_follow_core_test_alone_and_the_plan_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange: no core-test life yet; the plan says the pairs take the default, and why
     data = DataDir(tmp_path / "pilot")
-    assert "without keep_off" in _pair_plan(data.root) and "no core-test life is on disk" in _pair_plan(data.root)
+    assert "without keep_off, following the default (no pairs or core-test lives on disk)" in _pair_plan(data.root)
     # two core-train lives written with it outvote nothing: one core-test life written without it decides
     _generate(data.root, "--only", "2", "generate", "--split", "core-train", "--keep-off")
     _generate(data.root, "--only", "1", "generate", "--split", "core-test")
@@ -179,24 +179,59 @@ def test_pairs_follow_core_test_alone_and_the_plan_says_why(tmp_path: Path, monk
     _generate(data.root, "generate-pairs", "--n", "1")
 
     # Assert
-    assert "without keep_off" in note and "core-test lives on disk: 1 without keep_off, 0 with" in note
+    assert "without keep_off, following the core-test majority (core-test lives on disk: 1 without keep_off, 0 with)" in note
     (pair,) = data.pairs()
     assert writes.seen and all("keep_off" not in payload for _, payload in writes.seen)
     assert "keep_off" not in (data.made(pair.id) or {})
 
 
-def test_pairs_on_disk_with_another_keep_off_refuse_the_run(tmp_path: Path) -> None:
-    # Arrange: a pair written with it, then core-test turns to most lives written without it
+def _plan_lines(data: Path, n: int) -> list[str]:
+    lines: list[str] = []
+    assert cli.main([*LIVE, "--data", str(data), "generate-pairs", "--n", str(n)], out=lines.append) == 0
+    return [line for line in "\n".join(lines).splitlines() if "keep_off" in line]
+
+
+def test_new_pairs_follow_the_pairs_on_disk_over_core_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange: a pair written with no keep_off field, then core-test turns to most lives written with it
     data = DataDir(tmp_path / "pilot")
-    _generate(data.root, "--only", "1", "generate", "--split", "core-test", "--keep-off")
     _generate(data.root, "generate-pairs", "--n", "1")
-    _generate(data.root, "--only", "3", "generate", "--split", "core-test")
+    (first,) = data.pairs()
+    assert "keep_off" not in (data.made(first.id) or {})
+    _generate(data.root, "--only", "2", "generate", "--split", "core-test", "--keep-off")
+    writes, lines = Writes(), list[str]()
+    monkeypatch.setattr(fakes, "FakeLifeChat", lambda: writes)
+
+    # Act
+    note, warned = _plan_lines(data.root, 2)
+    code = cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "2"], out=lines.append)
+
+    # Assert: the plan and the run agree: without it, as the pair on disk was; core-test's lean is a warning
+    assert note.startswith("Note: the pairs are written without keep_off, following the pairs on disk")
+    assert warned.startswith("Warning:") and "core-test lives on disk: 0 without keep_off, 2 with" in warned
+    assert code == 0 and not any(line.startswith("Refused:") for line in lines) and len(data.pairs()) == 2
+    assert writes.seen and all("keep_off" not in payload for _, payload in writes.seen)
+    assert all("keep_off" not in (data.made(pair.id) or {}) for pair in data.pairs())
+    # a rerun with nothing left to write goes through
+    lines.clear()
+    assert cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "2"], out=lines.append) == 0
+    assert not any(line.startswith("Refused:") for line in lines)
+
+
+def test_pairs_on_disk_that_disagree_refuse_a_run_with_pairs_to_write(tmp_path: Path) -> None:
+    # Arrange: two pairs on disk, one of them recorded as written with keep_off
+    data = DataDir(tmp_path / "pilot")
+    _generate(data.root, "generate-pairs", "--n", "2")
+    first = data.pairs()[0]
+    data.save_made(first.id, {**(data.made(first.id) or {}), "keep_off": True})
     lines: list[str] = []
 
     # Act
-    code = cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "2"], out=lines.append)
+    warned = _plan_lines(data.root, 3)[-1]
+    code = cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "3"], out=lines.append)
 
-    # Assert: refused before anything is written, naming the pair and the setting
+    # Assert: the plan warns, the run refuses before writing, a rerun with nothing to write does not
+    assert warned.startswith("Warning:") and "mixed" in warned and "1 without keep_off, 1 with" in warned
     (refused,) = [line for line in lines if line.startswith("Refused:")]
-    assert code == cli.REFUSED_CODE and "1 written with keep_off" in refused and "without it" in refused
-    assert len(data.pairs()) == 1
+    assert code == cli.REFUSED_CODE and "pairs on disk: 1 without keep_off, 1 with" in refused
+    assert "go on with theirs" not in refused and len(data.pairs()) == 2
+    assert cli.main(["--fake", "--data", str(data.root), "generate-pairs", "--n", "2"], out=lambda line: None) == 0

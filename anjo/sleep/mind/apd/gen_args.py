@@ -181,7 +181,10 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
 
 def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
     """A warning when a core split's ``generate`` differs on ``--keep-off`` from most core lives on
-    disk (a tie warns neither way): it goes on every core split or none, so the splits compare."""
+    disk (a tie warns neither way): it goes on every core split or none, so the splits compare.
+    For ``generate-pairs``, what ``pairs.pairs_keep_off`` warns of."""
+    if args.command == "generate-pairs":
+        return pairs.pairs_keep_off(data).warnings
     split = split_of(args)
     if args.command != "generate" or split not in CORE_SPLITS:
         return ()
@@ -193,12 +196,12 @@ def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]
 
 
 def pairs_keep_off_note(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
-    """The plan's note on the pairs' ``keep_off`` (``pairs.pairs_keep_off``): which, and why."""
+    """The plan's note on the pairs' ``keep_off`` (``pairs.pairs_keep_off``): which, and from what."""
     if args.command != "generate-pairs":
         return ()
-    on, why = pairs.pairs_keep_off(data)
-    return (f"the pairs are written {'with' if on else 'without'} keep_off (their writer is "
-            f"{'' if on else 'not '}given their topics), {why}",)
+    found = pairs.pairs_keep_off(data)
+    return (f"the pairs are written {'with' if found.on else 'without'} keep_off, following {found.source} "
+            f"({found.detail})",)
 
 
 def pace_note(args: argparse.Namespace) -> str:
