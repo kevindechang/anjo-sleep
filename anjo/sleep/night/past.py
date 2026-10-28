@@ -13,6 +13,7 @@ It prints her spend this month through that night, by kind, and the room left un
 from __future__ import annotations
 
 import argparse
+import calendar
 import importlib
 import json
 import math
@@ -27,10 +28,12 @@ from typing import Any, Final
 from anjo.sleep.budget import default_ledger
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.nightlog import summaries
-from anjo.sleep.night.sleep_pressure import SleepPolicy, read_policy
+from anjo.sleep.night.sleep_pressure import MEASURED_REUSED_USD, SleepPolicy, read_policy
 
 Summary = Mapping[str, Any]
-DATED_FIRST: Final = ("morning", "dailies", "modal_train", "colab_train", "colab_life")  # <kind>:<date>:<person>:...
+# <kind>:<date>:<person>:...; a live night's latent encode settles under ``modal_latents:<date>:<person>`` (the
+# research runner's ``modal_latents:<job>`` names no person or date, so it is no one's night)
+DATED_FIRST: Final = ("morning", "dailies", "modal_train", "colab_train", "colab_life", "modal_latents")
 # Colab's list price, 100 compute units for $9.99, rounded up: a night trained on Colab (the train
 # runner ``colab``) settles compute units (``colab_train:``, a life's ``colab_life:``), not dollars.
 COLAB_USD_PER_CU: Final = 0.10
@@ -196,11 +199,13 @@ def month_report(
         kinds[kind] = kinds.get(kind, 0.0) + amount
     spent = math.fsum(spend.values())
     left = max(0.0, policy.month_usd - spent)
+    nights_left = calendar.monthrange(night.year, night.month)[1] - night.day
     return {
         "month": f"{night:%Y-%m}", "through": night.isoformat(), "spent_usd": round(spent, 6),
         "by_kind": {kind: round(amount, 6) for kind, amount in sorted(kinds.items())},
-        "cap_usd": policy.month_usd, "left_usd": round(left, 6), "deep_night_usd": policy.deep_usd,
-        "deep_nights_left": int(left // policy.deep_usd) if policy.deep_usd > 0 else None,
+        "cap_usd": policy.month_usd, "left_usd": round(left, 6),
+        "deep_night_usd": {"modelled fresh night": policy.deep_usd, "measured, practice reused": MEASURED_REUSED_USD},
+        "deep_nights_left": int(max(0.0, left - nights_left * policy.nap_usd) // policy.deep_usd),  # the naps held back
     }
 
 

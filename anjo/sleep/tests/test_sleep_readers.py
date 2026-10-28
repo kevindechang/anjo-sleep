@@ -6,7 +6,6 @@ month from a pressure trace by the same decision."""
 from __future__ import annotations
 
 import json
-import math
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -105,13 +104,17 @@ def test_the_cost_model_projects_a_month_from_a_pressure_trace() -> None:
     assert calm.deep == 4 and calm.naps == 26  # the seventh day without a deep sleep forces one
     assert [n.reason for n in calm.nights if n.kind == "deep"] == ["max_days"] * 4
     hectic = cost.month_from_trace([busy] * 30, SleepPolicy(), projected)
-    last = max(i for i, n in enumerate(hectic.nights) if n.kind == "deep")
-    # the threshold rises, then the cap holds every deep sleep (naps after it still pay their own lines)
-    assert math.fsum(n.usd for n in hectic.nights[:last + 1]) <= SleepPolicy().month_usd and hectic.deep < 30
-    assert any(n.reason == "month_cap" or n.reason == "below_threshold" for n in hectic.nights)
+    # the threshold rises, then the cap holds back the month's later nights and Wonder's room
+    assert any(n.reason == "month_cap" or n.reason == "below_threshold" for n in hectic.nights) and hectic.deep < 30
     assert [n.pressure for n in hectic.nights][:1] == [pytest.approx(0.75)]
-    deep_usd = sum(projected.trained.values()) + projected.morning
-    assert hectic.usd == pytest.approx(hectic.deep * deep_usd + hectic.naps * sum(projected.quiet.values()))
+    wonder = cost.WONDER_MONTH_USD  # a study every night until Wonder's month is spent: the worst case
+    assert hectic.usd == pytest.approx(hectic.deep * projected.deep + hectic.naps * sum(projected.quiet.values()) + wonder)
+    # The whole month stays at or under the cap, with MIND's core off and on, busy, active or quiet.
+    for setting in (cost.CURRENT, cost.ONE_SYSTEM):
+        at = cost.project(setting, cost.UNITS, cost.DEFAULT_PRICES, measured)
+        for days in ([busy] * 30, cost.ACTIVE.days, cost.QUIET.days):
+            month = cost.month_from_trace(days, SleepPolicy(), at)
+            assert month.usd <= SleepPolicy().month_usd and month.deep >= 3, (setting.name, month.usd)
     with pytest.raises(cost.CostError):
         cost.read_trace('[{"turns": -1, "evidence": 0}]')
     assert cost.read_trace('[{"turns": 3, "evidence": 2, "high_risk": 1}]') == [cost.DayLoad(3, 2, 1)]

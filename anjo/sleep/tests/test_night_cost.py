@@ -69,7 +69,7 @@ def test_cost_model_sums_a_night_log(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert before.trained["training"] == current.trained["training"] == pytest.approx(2.88 / 60 * 2.5)  # measured
     assert current.trained["gates"] < before.trained["gates"]  # the base's side is read back, not recomputed
     assert current.morning < before.morning / 10  # the light daily morning
-    assert set(current.quiet) == {"extract", "brief", "mind", "latent_encode"} and current.quiet["latent_encode"] == 0.0
+    assert set(current.quiet) == {"extract", "brief"} and current.nap_encode == 0.0
     # The morning: today's measured arms (165 s for the daily subset) scaled to the subset, its judge calls
     # estimated at the hold's per-call bound (no night's tokens yet), and the dailies.
     assert current.morning == pytest.approx(22 * JUDGE_USD_PER_CALL + 165.0 / 3600 * PRICES.serve_gpu_per_hour + 0.005)
@@ -126,7 +126,7 @@ def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.Capt
     a100 = PRICES.train_gpu_per_hour / 3600
     assert one.trained["latent_encode"] == pytest.approx((units.encode_s + units.encode_load_s) * a100)
     assert by_name["encode in train"].trained["latent_encode"] == pytest.approx(units.encode_s * a100)
-    assert one.quiet["latent_encode"] == one.trained["latent_encode"]  # a nap has no training container
+    assert one.nap_encode == one.trained["latent_encode"]  # a nap has no training container
     assert one.trained["training"] == pytest.approx(2.88 / 60 * 2.5 * (1 + units.joint_training_share))
 
     # Practice by role: a third-party critic is priced apart; Glimmer as the person moves its call to the GPU.
@@ -152,22 +152,25 @@ def test_cost_model_projects_a_month_from_a_pressure_trace(tmp_path: Path, capsy
     summary, steps = cost.read_night(folder)
     night = cost.measured(summary, steps, PRICES)
     current, one = (cost.project(s, cost.UNITS, PRICES, night) for s in (cost.CURRENT, cost.ONE_SYSTEM))
-    assert set(one.quiet) == {"extract", "brief", "mind", "latent_encode"}  # no practice, training or gates on a nap
-    assert current.quiet["latent_encode"] == 0.0 < one.quiet["latent_encode"]  # the encode only with the core on
+    assert set(one.quiet) == {"extract", "brief"}  # what a nap's ledger counts: no GPU step, MIND waits for deep sleep
+    assert current.nap_encode == 0.0 < one.nap_encode  # the encode only with the core on: planned, not live
     policy = SleepPolicy()
     active, quiet = (cost.month_from_trace(u.days, policy, current) for u in (cost.ACTIVE, cost.QUIET))
     assert len(active.nights) == len(quiet.nights) == 30
     assert [n.reason for n in quiet.nights if n.kind == "deep"] == ["max_days"] * quiet.deep  # too little for pressure
-    assert any(n.reason == "pressure" for n in active.nights) and active.deep > quiet.deep
-    assert quiet.usd < active.usd
+    # her pressure, not the seventh day, wakes the active one; the cap, with Wonder's room held back, gives
+    # neither more than it holds
+    assert any(n.reason == "pressure" for n in active.nights) and active.deep >= quiet.deep
+    assert quiet.usd <= active.usd
     deep, nap = math.fsum(current.trained.values()) + current.morning, math.fsum(current.quiet.values())
-    assert quiet.usd == pytest.approx(quiet.deep * deep + quiet.naps * nap)
+    assert quiet.usd == pytest.approx(quiet.deep * deep + quiet.naps * nap + cost.WONDER_MONTH_USD)  # Wonder spent
+    assert active.usd <= policy.month_usd and quiet.usd <= policy.month_usd  # the cap holds the whole month
 
     # The nap's encode: one A100 start a person, shared by five, restored from a snapshot, or deferred.
     a100, units = PRICES.train_gpu_per_hour / 3600, cost.UNITS
 
     def nap_encode(**kw: Any) -> float:
-        return cost.project(replace(cost.ONE_SYSTEM, **kw), units, PRICES, night).quiet["latent_encode"]
+        return cost.project(replace(cost.ONE_SYSTEM, **kw), units, PRICES, night).nap_encode
 
     assert nap_encode() == pytest.approx((units.encode_load_s + units.encode_s) * a100)
     assert nap_encode(encode_people=5) == pytest.approx((units.encode_load_s / 5 + units.encode_s) * a100)

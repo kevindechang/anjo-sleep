@@ -68,7 +68,7 @@ from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.night.past import paid_within, spent_within
-from anjo.sleep.night.sleep_night import DEFER_WHY, deferred_note, mind_on, put_off, sleep_step, unnoticed
+from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, deferred_note, mind_on, put_off, sleep_step, unnoticed
 from anjo.sleep.night.state import GPU_STEPS as GPU_STEPS
 from anjo.sleep.night.state import PersonNight, checkpoint_id, note_error, safe_error, study_outcome
 from anjo.sleep.night.state import Window as Window
@@ -391,7 +391,7 @@ class NightRunner:
 
     def _offered(self, p: PersonNight) -> frozenset[str]:
         offered = set(ALL_ACTIONS)
-        if not self.deps.homework.available:
+        if not self.deps.homework.available or p.capped:  # a capped nap pays for no study
             offered -= STUDY_ACTIONS
         if not self._mind() or p.napped:  # a nap's question stays live for her next deep sleep
             offered.discard("inquire")
@@ -413,6 +413,8 @@ class NightRunner:
         homework = "available" if deps.homework.available else "no-op: no study offered"
         if deps.homework.available and month["left_usd"] <= 0:
             homework = f"capped: the monthly Wonder cap of ${cap:.2f} is spent, so no study runs"
+        elif deps.homework.available and p.capped:
+            homework = CAPPED_WHY
         done: dict[str, Any] = {
             "action": action, "target_id": choice.target_id, "offered": sorted(offered),
             "allowance": {"actions_left": p.actions_left, "calls_left": p.wonder.calls_left, "usd_left": p.wonder.usd_left},

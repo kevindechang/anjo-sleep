@@ -40,6 +40,7 @@ class PersonNight:
     as_of: datetime  # the night's clock: the virtual night end, which the window's end is in real time
     failed_at: str | None = None
     status: NightStatus | None = None
+    capped: bool = False  # a nap at the month's cap: its paid steps wait (``sleep_night.CAPPED_WHY``)
     due: bool = False
     gated: bool = False
     notice_from: date | None = None  # with a sleep policy: the first day tonight's notice pass reads

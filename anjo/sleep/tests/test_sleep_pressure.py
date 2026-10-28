@@ -5,6 +5,8 @@ night's own fakes. A nap runs the CPU steps, wakes no Glimmer and defers MIND's 
 the next deep sleep; the month's cap always wins."""
 from __future__ import annotations
 
+import itertools
+import math
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -17,25 +19,31 @@ from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night import cost, past
-from anjo.sleep.night.deps import NightSettings
+from anjo.sleep.night.deps import STUDY_ACTIONS, NightSettings
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.holds import usd
 from anjo.sleep.night.past import COLAB_USD_PER_CU, days_since_deep, gpu_batches, last_deep, month_spent, notice_from, turns_since
 from anjo.sleep.night.run import GPU_STEPS, run_night_batch_with
-from anjo.sleep.night.sleep_night import DEFER_WHY
+from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY
 from anjo.sleep.night.sleep_pressure import (
-    DEEP_NIGHT_USD,
+    CORE_ENV,
+    FRESH_NIGHT_USD,
+    GPU_ENV,
+    MEASURED_REUSED_USD,
+    NAP_USD,
+    PRACTICE_REUSED_SAVES_USD,
     SleepPolicy,
     SleepPolicyError,
     SleepState,
     decide,
+    deep_night_usd,
     high_risk,
     policy_from,
     sleep_pressure,
 )
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.tests.mind_night_fakes import LifeThinker, mind_night
-from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps, summary, thread
+from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, step, steps, summary, thread
 from anjo.sleep.tests.test_night_mind import NIGHT_END, ON, _commitment, _world
 from anjo.sleep.types import NightResult, Target
 
@@ -193,6 +201,47 @@ def test_force_deep_overrides(tmp_path: Path) -> None:
     assert (capped.kind, capped.reason, capped.forced) == ("nap", "month_cap", True)  # the cap still wins
 
 
+def test_a_capped_nap_makes_no_paid_hold(tmp_path: Path) -> None:
+    """A nap with no room under the month's cap skips its paid steps (the study and the brief), says so,
+    and holds nothing after its decision; the same nap with room folds the day and may study."""
+    def nap(folder: Path, spent: float) -> tuple[NightResult, Ledger]:
+        world = World(folder)
+        world.plan(UID, NIGHT, count=1)
+        world.targets(UID).upsert(thread(UID))
+        ledger = Ledger(folder / "budget.jsonl", caps={**CAPS, "modal_usd": 1000.0})
+        _settle(ledger, f"night:practice:{UID}:{(NIGHT - timedelta(days=1)).isoformat()}:a1", spent)
+        return _night(world, turns=_turns(4), ledger=ledger, homework=Homework(world)), ledger
+
+    roomy, roomy_ledger = nap(tmp_path / "room", 1.0)
+    assert step(roomy.log_path, "sleep")["capped"] is False and step(roomy.log_path, "brief")["folded"] >= 1
+    assert any(job.startswith(f"night:brief:{UID}") for job in _holds_on(roomy_ledger, "baseten_sleep_usd"))
+    capped, ledger = nap(tmp_path / "capped", POLICY.month_usd - 0.5)  # 3 nights left and Wonder's $3: no room
+    sleep = step(capped.log_path, "sleep")
+    assert (sleep["kind"], sleep["capped"], capped.status) == ("nap", True, "napped")
+    assert (step(capped.log_path, "brief")["status"], step(capped.log_path, "brief")["why"]) == ("skipped", CAPPED_WHY)
+    choose = step(capped.log_path, "choose")
+    assert choose["action"] not in STUDY_ACTIONS and not set(choose["offered"]) & STUDY_ACTIONS
+    assert choose["ports"]["homework"] == CAPPED_WHY and summary(capped.log_path)["wonder_usd"] == 0.0
+    # Its only holds came before the decision (extract's): nothing paid after it.
+    held = [e["job"] for e in read_records(ledger.path, PLAIN) if e["op"] == "reserve" and e["job"].startswith("night:")]
+    assert held and all(job.startswith((f"night:extract:{UID}", f"night:practice:{UID}")) for job in held)
+
+
+def test_the_cap_holds_back_the_months_later_nights_and_wonder() -> None:
+    deep = deep_night_usd()
+    room = POLICY.month_usd - deep - 10 * POLICY.nap_usd - 1.0  # tonight's deep night, 10 naps and $1 of Wonder
+    state = _state(new_turns=60, new_evidence=12, open_high_risk=3, month_spent_usd=room, nights_left=10,
+                   wonder_left_usd=1.0)
+    made = decide(state, POLICY, pressure=1.0)
+    assert (made.kind, made.deep_usd) == ("deep", deep)
+    tight = decide(replace(state, nights_left=11), POLICY, pressure=1.0)  # one more nap to hold back: no room
+    assert (tight.kind, tight.reason, tight.capped) == ("nap", "month_cap", False)
+    rerun = decide(replace(state, nights_left=11, practice_fresh=False), POLICY, pressure=1.0)
+    assert rerun.kind == "deep" and rerun.deep_usd == pytest.approx(deep - PRACTICE_REUSED_SAVES_USD)
+    full = decide(replace(state, month_spent_usd=POLICY.month_usd - 0.5), POLICY, pressure=0.0)
+    assert (full.kind, full.capped) == ("nap", True) and full.record()["capped"] is True
+
+
 def test_without_a_policy_the_night_is_unchanged(tmp_path: Path) -> None:
     world = World(tmp_path)
     world.plan(UID, NIGHT, count=1)
@@ -240,16 +289,35 @@ def test_policy_from_the_environment() -> None:
     assert policy_from({}) == SleepPolicy(month_usd=15.0, max_days=7) == policy_from({"ANJO_SLEEP_PRESSURE": "1"})
     assert policy_from({"ANJO_SLEEP_MONTH_USD": "10", "ANJO_SLEEP_MAX_DAYS": "3"}) == SleepPolicy(10.0, 3)
     assert policy_from({"ANJO_SLEEP_PRESSURE": "0", "ANJO_SLEEP_MAX_DAYS": "never"}) is None  # off: every night deep
+    assert policy_from({CORE_ENV: "1", GPU_ENV: "H100"}) == SleepPolicy(gpu="H100", core=True)  # sized by its settings
+    assert SleepPolicy(gpu="H100", core=True).deep_usd == deep_night_usd(gpu="H100", core=True) > POLICY.deep_usd
+    from anjo.sleep.mind.core.bridge import CORE_ENV as BRIDGE_CORE_ENV
+    from anjo.sleep.serving.config import SERVE_GPU_ENV, SERVE_GPUS
+
+    assert (CORE_ENV, GPU_ENV, set(FRESH_NIGHT_USD)) == (BRIDGE_CORE_ENV, SERVE_GPU_ENV, set(SERVE_GPUS))
     for bad in ({"ANJO_SLEEP_MONTH_USD": "ten"}, {"ANJO_SLEEP_MONTH_USD": "0"}, {"ANJO_SLEEP_MAX_DAYS": "0"},
-                {"ANJO_SLEEP_MAX_DAYS": "2.5"}, {"ANJO_SLEEP_MONTH_USD": "nan"}, {"ANJO_SLEEP_PRESSURE": "off"}):
+                {"ANJO_SLEEP_MAX_DAYS": "2.5"}, {"ANJO_SLEEP_MONTH_USD": "nan"}, {"ANJO_SLEEP_PRESSURE": "off"},
+                {GPU_ENV: "T4"}):
         with pytest.raises(SleepPolicyError):
             policy_from(bad)
 
 
-def test_deep_night_usd_covers_the_cost_models_deep_night() -> None:
-    measured = cost.Measured(extract=0.02, brief=0.06, training=None)  # the live night's own numbers, rounded up
-    projected = cost.project(cost.CURRENT, cost.UNITS, cost.DEFAULT_PRICES, measured)
-    assert DEEP_NIGHT_USD >= sum(projected.trained.values()) + projected.morning
+def test_the_deep_night_estimate_covers_the_cost_model_at_every_setting() -> None:
+    """At every setting the cost model projects, on every serving GPU, the core on or off, the base cache
+    hit or missed and practice fresh or reused, the decision's deep night is at or above the model's."""
+    from anjo.sleep.serving.config import SERVE_GPUS
+
+    settings = [cost.CURRENT, *cost.SCENARIOS, *(replace(cost.ONE_SYSTEM, name=gpu, gpu=gpu) for gpu in SERVE_GPUS)]
+    for measured in (cost.Measured(extract=0.02, brief=0.06, training=None),  # the live night's own numbers, rounded up
+                     cost.Measured(extract=0.001, brief=0.022, training=0.107)):  # 2026-10-29's
+        for setting, core, hit in itertools.product(settings, (False, True), (False, True)):
+            p = cost.project(replace(setting, mind_core=core, base_cached=hit), cost.UNITS, cost.DEFAULT_PRICES, measured)
+            practice = math.fsum(usd for line, usd in p.trained.items() if line.startswith("practice"))
+            assert deep_night_usd(gpu=setting.gpu, core=core, cache_hit=hit) >= p.deep, (setting.name, core, hit)
+            assert deep_night_usd(gpu=setting.gpu, core=core, cache_hit=hit, practice_fresh=False) >= p.deep - practice
+            assert NAP_USD >= math.fsum(p.quiet.values())
+    assert deep_night_usd() >= 2.42 and deep_night_usd(core=True) >= 2.63  # a cache miss and the core's night, as reviewed
+    assert deep_night_usd(practice_fresh=False) >= MEASURED_REUSED_USD  # 2026-10-29's night as measured, practice reused
 
 
 # ── her past and her month ───────────────────────────────────────────────────
@@ -291,8 +359,10 @@ def test_month_spent_counts_only_her_keys_this_month() -> None:
         f"night:extract:p2:{on}:a1": 9.0, f"night:extract:{UID}:{other}:a1": 9.0,  # another person, last month
         f"night:extract:{UID}:2026-10-29:a1": 9.0,  # after the night
         f"sim:{UID}:d0:s1:a1": 9.0, "colab_train:x": 9.0,  # the simulated day; not a dollar key of hers
+        f"modal_latents:{on}:{UID}:a1": 0.07,  # a live night's latent encode, once one runs it
+        "modal_latents:0123abcd:a1": 9.0,  # the research runner's job: no one's night
     }
-    assert month_spent(settled, UID, NIGHT) == pytest.approx(0.02 + 0.03 + 0.25 + 0.05 + 0.12 + 0.10)
+    assert month_spent(settled, UID, NIGHT) == pytest.approx(0.02 + 0.03 + 0.25 + 0.05 + 0.12 + 0.10 + 0.07)
 
 
 def test_a_rerun_counts_once_a_shared_session_splits_and_colab_units_are_priced() -> None:
@@ -342,5 +412,7 @@ def test_the_month_command_prints_her_spend_and_the_room_left(tmp_path: Path, mo
     assert report["spent_usd"] == pytest.approx(spent) and report["cap_usd"] == POLICY.month_usd
     assert report["left_usd"] == pytest.approx(POLICY.month_usd - spent) and report["month"] == on[:7]
     assert report["by_kind"] == pytest.approx({"night": 0.5, "morning": 1.0, "night_gpu": 1.5, "colab_train": 1.0})
-    assert report["deep_nights_left"] == int((POLICY.month_usd - spent) // DEEP_NIGHT_USD)
+    assert report["deep_night_usd"] == {"modelled fresh night": POLICY.deep_usd, "measured, practice reused": 1.19}
+    nights_left = 31 - NIGHT.day  # October's nights after this one, held back as naps
+    assert report["deep_nights_left"] == int((POLICY.month_usd - spent - nights_left * NAP_USD) // POLICY.deep_usd)
     assert UID not in json.dumps(report)  # numbers only

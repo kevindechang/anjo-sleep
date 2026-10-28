@@ -16,14 +16,16 @@ and seconds; no conversation text) and prints a line a step, the biggest first:
 
 **The month** is one projection, from pressure traces: a month of days, each the day's new turns, new
 trainable items and open high-risk targets (``DayLoad``), run through the nights' own nap-or-deep
-decision (``night/sleep_pressure.py``). Turns and items build up from one deep sleep to the next, and
-the month's spend raises the threshold and holds the cap (``--month-usd``, ``--max-days``). A deep night
-costs the setting's trained night and its morning. A nap wakes no Glimmer, so it costs what the live
-ledger counts on one: extract, the brief, MIND on the CPU and, with MIND's core on
-(``ANJO_SLEEP_MIND_CORE``), its share of one batched latent encode. The headline is a person-month at
-``ACTIVE`` and ``QUIET`` usage; ``--pressure-trace FILE`` (a JSON list of days, ``{"turns": 40,
-"evidence": 8, "high_risk": 1}``) adds one, printed night by night with its pressure, threshold, kind
-and reason. Wonder's homework sits outside: at most its $3 a month (``NightSettings.wonder_usd_month``).
+decision (``night/sleep_pressure.py``): its deep night sized by the setting (``deep_night_usd``), the
+month's later nights held back as naps and Wonder's room held back, so the month stays under the cap
+(``--month-usd``, ``--max-days``). A deep night costs the setting's trained night and its morning. A nap
+wakes no Glimmer, so it costs what the live ledger counts on one: extract and the brief (MIND waits for
+her next deep sleep); a capped nap, extract alone. Wonder's homework (``night:homework:``) is a study a
+night at ``UNITS.homework_usd`` until its $3 a month (``NightSettings.wonder_usd_month``) is spent, the
+worst case. With MIND's core on (``ANJO_SLEEP_MIND_CORE``) a nap's share of one batched latent encode is
+shown apart, planned, not live, until a live night runs it. The headline is a person-month at ``ACTIVE``
+and ``QUIET`` usage; ``--pressure-trace FILE`` (a JSON list of days, ``{"turns": 40, "evidence": 8,
+"high_risk": 1}``) adds one, printed night by night with its pressure, threshold, kind and reason.
 The night and the month are projected at two settings:
 
 - ``BEFORE``, the first live nights (2026-10-28): practice's scenes one at a time, the generation
@@ -64,7 +66,16 @@ from typing import Any, Final
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
 from anjo.sleep.gates.safety import SKIPPED_REASON
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.night.sleep_pressure import Kind, Reason, SleepPolicy, SleepPolicyError, SleepState, decide, sleep_pressure
+from anjo.sleep.night.sleep_pressure import (
+    MEASURED_REUSED_USD,
+    Kind,
+    Reason,
+    SleepPolicy,
+    SleepPolicyError,
+    SleepState,
+    decide,
+    sleep_pressure,
+)
 from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
 from anjo.sleep.practice.full import SPARK_CAPS
 from anjo.sleep.practice.roles import Roles
@@ -80,7 +91,8 @@ DEFAULT_PRICES: Final = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_
 SUMMARY_LINES: Final = ("extract", "brief", "practice_spark", "practice_gpu", "training", "gates", "mind")
 TRAINED_LINES: Final = ("extract", "brief", "mind", "practice_spark", "practice_critic", "practice_gpu", "training",
                         "latent_encode", "gates", "serve_overhead")
-QUIET_LINES: Final = ("extract", "brief", "mind", "latent_encode")
+QUIET_LINES: Final = ("extract", "brief")  # a nap's own lines; MIND waits for her next deep sleep
+PLANNED: Final = "planned, not live"  # the nap's latent encode, until a live night runs it
 WONDER_MONTH_USD: Final = 3.0  # NightSettings.wonder_usd_month, Wonder's rolling cap (a test keeps them equal)
 JUDGE_NOTE: Final = (f"the morning judge is estimated at ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL, the hold's"
                      " per-call bound) until a night's log carries its tokens: 2026-10-29's $0.44 is 22 calls at it")
@@ -200,9 +212,19 @@ class Measured:
 class Projection:
     settings: Settings
     trained: Mapping[str, float]
-    quiet: Mapping[str, float]
+    quiet: Mapping[str, float]  # a nap's own lines (``QUIET_LINES``)
     morning: float  # outside the ceiling
     spark_bound: float | None  # practice's Spark Open at its worst under the caps
+    nap_encode: float = 0.0  # a nap's share of the latent encode with the core on: planned, not live
+
+    @property
+    def deep(self) -> float:
+        """A deep night: the trained night and its morning."""
+        return math.fsum(self.trained.values()) + self.morning
+
+    def policy(self, policy: SleepPolicy) -> SleepPolicy:
+        """``policy`` with its deep night sized by this setting's GPU and MIND's core."""
+        return replace(policy, gpu=self.settings.gpu, core=self.settings.mind_core)
 
 
 # ── the night as logged ──────────────────────────────────────────────────────
@@ -368,10 +390,9 @@ def project(settings: Settings, units: Units, prices: Prices, night: Measured) -
     model_s = replies * units.morning_reply_tokens / _rate(settings.practice_concurrency, settings)
     anchor_s = _morning_calls(ANCHOR.morning)[0] * units.morning_reply_tokens / _rate(ANCHOR.practice_concurrency, ANCHOR)
     morning_s = units.morning_arms_s * model_s / anchor_s  # today's measured arms, scaled by the estimate
-    return Projection(settings, trained, {"extract": night.extract, "brief": night.brief, "mind": night.mind,
-                                          "latent_encode": encode},
+    return Projection(settings, trained, {"extract": night.extract, "brief": night.brief},
                       judge * JUDGE_USD_PER_CALL + morning_s * serve + units.dailies_usd,
-                      _spark_bound(units, prices) if settings.spark_capped else None)
+                      _spark_bound(units, prices) if settings.spark_capped else None, encode)
 
 
 def _nap_encode_s(settings: Settings, units: Units) -> float:
@@ -408,6 +429,7 @@ class TracedNight:
     pressure: float
     threshold: float
     usd: float
+    capped: bool = False  # a nap with no room under the cap: extract alone
 
 
 @dataclass(frozen=True)
@@ -458,21 +480,27 @@ ACTIVE: Final = Usage("active", (DayLoad(turns=30, evidence=5),) * MONTH_NIGHTS)
 QUIET: Final = Usage("quiet", (DayLoad(turns=4, evidence=1),) * MONTH_NIGHTS)
 
 
-def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: Projection) -> MonthTrace:
-    """Each day's night, decided as the nights decide it, at the projection's deep and quiet costs."""
-    deep_usd = math.fsum(projection.trained.values()) + projection.morning
+def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: Projection, *,
+                     study_usd: float = UNITS.homework_usd) -> MonthTrace:
+    """Each day's night, decided as the live nights decide it (the deep night sized by the projection's
+    settings, the base cache unknown before the wake, the month's later nights and Wonder's room held
+    back), at the projection's costs: a deep night, a nap's own lines (a capped nap's extract alone), and
+    a Wonder study a night (``study_usd``) until its month's dollars are spent, never on a capped nap."""
+    policy = projection.policy(policy)
     nap_usd = math.fsum(projection.quiet.values())
-    spent, turns, evidence, last_deep = 0.0, 0, 0, None
+    spent, wonder, turns, evidence, last_deep = 0.0, 0.0, 0, 0, None
     nights: list[TracedNight] = []
     for i, day in enumerate(trace):
         turns, evidence = turns + day.turns, evidence + day.evidence
         since = None if i == 0 else i - (0 if last_deep is None else last_deep)
         state = SleepState(new_turns=turns, new_evidence=evidence, open_high_risk=day.high_risk,
-                           days_since_deep=since, month_spent_usd=spent)
+                           days_since_deep=since, month_spent_usd=spent, nights_left=len(trace) - i - 1,
+                           wonder_left_usd=WONDER_MONTH_USD - wonder)
         made = decide(state, policy, pressure=sleep_pressure(state))
-        usd = deep_usd if made.kind == "deep" else nap_usd
-        nights.append(TracedNight(made.kind, made.reason, made.pressure, made.threshold, usd))
-        spent += usd
+        study = 0.0 if made.capped else min(study_usd, WONDER_MONTH_USD - wonder)
+        own = projection.deep if made.kind == "deep" else projection.quiet["extract"] if made.capped else nap_usd
+        nights.append(TracedNight(made.kind, made.reason, made.pressure, made.threshold, own + study, made.capped))
+        spent, wonder = spent + own + study, wonder + study
         if made.kind == "deep":
             turns, evidence, last_deep = 0, 0, i
     return MonthTrace(tuple(nights))
@@ -481,7 +509,8 @@ def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: 
 def _trace_report(found: MonthTrace, policy: SleepPolicy, name: str) -> list[str]:
     out = [f"a month from the pressure trace, at {name}", f"  {'night':<7}{'pressure':>9}{'threshold':>10}  {'kind':<6}reason"]
     for n, night in enumerate(found.nights, start=1):
-        out.append(f"  {n:<7}{night.pressure:>9.2f}{night.threshold:>10.2f}  {night.kind:<6}{night.reason}")
+        out.append(f"  {n:<7}{night.pressure:>9.2f}{night.threshold:>10.2f}  {night.kind:<6}{night.reason}"
+                   + (" (capped)" if night.capped else ""))
     out.append(f"  {found.deep} deep, {found.naps} naps: {_usd(found.usd)} of the month's ${policy.month_usd:g} cap"
                f" (deep sleep after at most {policy.max_days} days)")
     return out
@@ -526,7 +555,9 @@ def _projection_report(found: Sequence[Projection], usages: Sequence[Usage], pol
         return f"  {label:<16}" + "".join(f"{_usd(value(p)):>14}" for p in found)
 
     out.append(row("trained night", lambda p: math.fsum(p.trained.values())))
+    out.append(row("deep estimate", lambda p: p.policy(policy).deep_usd))
     out.append(row("quiet night", lambda p: math.fsum(p.quiet.values())))
+    out.append(row("nap encode", lambda p: p.nap_encode))
     months = {p.settings.name: _months(p, usages, policy) for p in found}
     for i, usage in enumerate(usages):
         out.append(row(f"month, {usage.name}", lambda p, i=i: months[p.settings.name][i].usd))
@@ -535,14 +566,25 @@ def _projection_report(found: Sequence[Projection], usages: Sequence[Usage], pol
     out.append(row("morning (out)", lambda p: p.morning))
     out.append(row("spark cap bound", lambda p: p.spark_bound))
     out.append(f"  a month: its days through the nap-or-deep decision (a deep night with its morning, a nap its "
-               f"quiet night), under the ${policy.month_usd:g} cap; worst case: every night trained, no cap "
-               f"(ceiling ${CEILING_USD:g}). The morning run and MIND are outside the ceiling; Wonder's homework adds "
-               f"at most ${WONDER_MONTH_USD:g} a month (${UNITS.homework_usd:g} a study on 2026-10-29).")
+               f"quiet night, Wonder a ${UNITS.homework_usd:g} study a night until its ${WONDER_MONTH_USD:g} is spent), "
+               f"under the ${policy.month_usd:g} cap with the month's later nights held back; worst case: every "
+               f"night trained, no cap (ceiling ${CEILING_USD:g}). The morning run and MIND are outside the ceiling.")
+    out.extend(_estimate_notes(found, policy))
     out.append("  measured: extract, brief, training (this night); gates, the morning's arms and the cold start "
                "anchored on 2026-10-29, practice on 2026-10-28; the rest estimated (night.cost.UNITS)")
     out.append(f"  morning (out): {JUDGE_NOTE}")
     if off := [p.settings.name for p in found if not p.settings.safety_gate]:
         out.append(f"  safety gate: skipped in {', '.join(off)} ({SKIPPED_REASON}); no case sent, never counted as passed")
+    return out
+
+
+def _estimate_notes(found: Sequence[Projection], policy: SleepPolicy) -> list[str]:
+    """What the decision sizes a deep night at, beside a measured one; and any setting it can't hold."""
+    out = [f"  deep estimate: the modelled fresh night the decision holds back, at the setting's GPU and MIND's core (base"
+           f" cache missed, practice fresh); measured, practice reused: ${MEASURED_REUSED_USD:.2f} (2026-10-29); nap"
+           f" encode: {PLANNED}"]
+    if over := [p.settings.name for p in found if p.deep > p.policy(policy).deep_usd + 1e-9]:
+        out.append(f"  over the estimate, so the cap can't hold its month: {', '.join(over)}")
     return out
 
 
@@ -553,12 +595,13 @@ def _scenario_report(found: Sequence[Projection], usages: Sequence[Usage], polic
            f"  {'setting':<18}{'deep':>9}{'nap':>9}" + "".join(f"{u.name + ' month':>22}" for u in usages)
            + "  biggest deep line"]
     for p in found:
-        deep, nap = math.fsum(p.trained.values()) + p.morning, math.fsum(p.quiet.values())
+        deep, nap = p.deep, math.fsum(p.quiet.values())
         lines = {**p.trained, "morning": p.morning}
         top = max(lines, key=lambda step: lines[step])
         cells = "".join(f"{_usd(m.usd) + f' ({m.deep} deep)':>22}" for m in _months(p, usages, policy))
         out.append(f"  {p.settings.name:<18}{_usd(deep):>9}{_usd(nap):>9}{cells}  {top} {_usd(lines[top])}")
     out.append(f"  safety on adds {_usd(safety_on)} a deep night to the one system")
+    out.extend(_estimate_notes(found, policy))
     if off := [p.settings.name for p in found if not p.settings.safety_gate]:
         out.append(f"  safety gate: skipped in {len(off)} of {len(found)} rows ({SKIPPED_REASON}): no case sent, never"
                    " counted as passed; its floor still runs, with no model and no GPU")
@@ -567,8 +610,8 @@ def _scenario_report(found: Sequence[Projection], usages: Sequence[Usage], polic
                    " billed rate")
     out.append("  measured: today's (2026-10-29) gates, training, morning arms and cold start; practice 2026-10-28's"
                f" (night 1 reused its practice); the rest estimated (night.cost.UNITS); {JUDGE_NOTE}")
-    out.append(f"  a month at the ${policy.month_usd:g} cap: a deep sleep that would pass it naps (month_cap); naps"
-               " still pay their own lines")
+    out.append(f"  a month at the ${policy.month_usd:g} cap: a deep sleep that wouldn't leave room for the month's later"
+               " nights and Wonder naps (month_cap); a nap with no room skips its paid steps (capped)")
     return out
 
 

@@ -13,6 +13,11 @@ since the last deep sleep (``min_new_evidence``), or when the days since the las
 those rules. The month's budget comes last and always wins: the threshold rises from
 ``base_threshold`` to 1 as the person's settled spend this month nears ``month_usd``, and a deep
 sleep that would pass the cap becomes a nap whose reason says so (``month_cap``), never a silent one.
+The cap bounds the whole month: tonight fits only with every later night of the calendar month held
+back as a nap (``nap_usd``) and Wonder's room left this month held back too, and a deep night is sized
+by its own settings (``deep_night_usd``: the serving GPU, MIND's core, the gates' base cache, practice
+fresh or a rerun's). A nap that doesn't fit is ``capped``: it skips its paid steps (the study and the
+brief; the latent encode once a live night runs one), which her next night with room catches up.
 ``ANJO_SLEEP_PRESSURE=0`` turns all of it off (``policy_from`` gives no policy): every night is deep,
 as before naps.
 
@@ -29,6 +34,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 from anjo.sleep.types import Target
@@ -41,14 +47,27 @@ REASONS: Final[tuple[Reason, ...]] = ("forced", "max_days", "pressure", "below_t
 PRESSURE_ENV: Final = "ANJO_SLEEP_PRESSURE"  # "0": off, every night deep; "1" or unset: on
 MONTH_USD_ENV: Final = "ANJO_SLEEP_MONTH_USD"
 MAX_DAYS_ENV: Final = "ANJO_SLEEP_MAX_DAYS"
+CORE_ENV: Final = "ANJO_SLEEP_MIND_CORE"  # mind.core.bridge.CORE_ENV: "1" is MIND's core on (a test keeps them equal)
+GPU_ENV: Final = "ANJO_SLEEP_SERVE_GPU"  # serving.config.SERVE_GPU_ENV (a test keeps them equal)
+DEFAULT_GPU: Final = "L40S"
 DEFAULT_MONTH_USD: Final = 15.0
 DEFAULT_MAX_DAYS: Final = 7
 BASE_THRESHOLD: Final = 0.5
 MIN_NEW_EVIDENCE: Final = 3  # trainable items since the last deep sleep: less is not worth a GPU night
-# A deep night at list prices: the cost model's current trained night ($1.78, the serving GPU's cold
-# start and idle window included) and daily morning ($0.54) (``night.cost``, anchored on 2026-10-29),
-# rounded up. A test keeps it at or above the cost model's estimate.
-DEEP_NIGHT_USD: Final = 2.35
+# A deep night at list prices, by its settings (``deep_night_usd``): the cost model's trained night,
+# the serving GPU's cold start and idle window included, and its daily morning (``night.cost``, anchored
+# on 2026-10-29, the safety gate off), rounded up. The modelled fresh night is MIND's core off, the gates'
+# base side asked (the cache missed) and practice run fresh, on each serving GPU; the rest adjust it. A
+# test keeps every combination at or above the cost model at every setting it projects.
+FRESH_NIGHT_USD: Final[Mapping[str, float]] = MappingProxyType({"L40S": 2.45, "A100-80GB": 2.45, "H100": 2.90})
+CACHE_HIT_SAVES_USD: Final[Mapping[str, float]] = MappingProxyType({"L40S": 0.10, "A100-80GB": 0.05, "H100": 0.05})
+CORE_ADDS_USD: Final = 0.32  # MIND's core: the joint training and the day's latent encode
+PRACTICE_REUSED_SAVES_USD: Final = 0.85  # a rerun's practice, already paid for
+MEASURED_REUSED_USD: Final = 1.19  # measured: Teo's night 1 (2026-10-29), practice reused; shown beside the estimate
+# A nap's own paid steps at list prices: extract and the brief ($0.023 for one day's items on 2026-10-29;
+# a busy day's brief folds more), rounded up. Wonder's study is held back apart (``SleepState.wonder_left_usd``);
+# the nap's latent encode is planned, not live.
+NAP_USD: Final = 0.10
 
 # The stand-in's saturation counts and weights (estimates). The live night of 2026-10-28 extracted
 # 10 items from one simulated day, so about one full day of evidence saturates its term.
@@ -78,6 +97,10 @@ class SleepState:
     open_high_risk: int  # open targets she is most at risk on (``high_risk``)
     days_since_deep: int | None
     month_spent_usd: float  # the person's settled dollars this calendar month (``past.month_spent``)
+    nights_left: int = 0  # the calendar month's nights after tonight, each held back as a nap
+    wonder_left_usd: float = 0.0  # what Wonder's studies may still spend (its rolling cap's room), held back
+    practice_fresh: bool = True  # False: a rerun of the night, its practice already paid for
+    base_cached: bool = False  # the gates' base side known to be cached (a live night can't know before the wake)
 
 
 @dataclass(frozen=True)
@@ -86,15 +109,24 @@ class SleepPolicy:
     max_days: int = DEFAULT_MAX_DAYS
     base_threshold: float = BASE_THRESHOLD
     min_new_evidence: int = MIN_NEW_EVIDENCE
-    deep_usd: float = DEEP_NIGHT_USD
+    gpu: str = DEFAULT_GPU  # the serving GPU (ANJO_SLEEP_SERVE_GPU)
+    core: bool = False  # MIND's core on (ANJO_SLEEP_MIND_CORE=1)
+    nap_usd: float = NAP_USD
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.month_usd) and self.month_usd > 0):
             raise SleepPolicyError("the month's cap is a positive number of dollars")
         if self.max_days < 1 or self.min_new_evidence < 0:
             raise SleepPolicyError("max_days is at least 1 and min_new_evidence at least 0")
-        if not 0.0 <= self.base_threshold <= 1.0 or not (math.isfinite(self.deep_usd) and self.deep_usd >= 0):
-            raise SleepPolicyError("the base threshold is from 0 to 1 and a deep night's cost at least 0")
+        if not 0.0 <= self.base_threshold <= 1.0 or not (math.isfinite(self.nap_usd) and self.nap_usd >= 0):
+            raise SleepPolicyError("the base threshold is from 0 to 1 and a nap's cost at least 0")
+        if self.gpu not in FRESH_NIGHT_USD:
+            raise SleepPolicyError(f"{GPU_ENV} is one of {', '.join(FRESH_NIGHT_USD)}")
+
+    @property
+    def deep_usd(self) -> float:
+        """The modelled fresh night at the policy's settings."""
+        return deep_night_usd(gpu=self.gpu, core=self.core)
 
     def threshold(self, spent: float) -> float:
         """From ``base_threshold`` with nothing spent to 1 at the cap, in a straight line."""
@@ -111,12 +143,32 @@ class SleepDecision:
     forced: bool
     state: SleepState
     month_usd: float
+    deep_usd: float = 0.0  # tonight's deep night as estimated (``deep_night_usd``)
+    capped: bool = False  # a nap with no room for its paid steps: they wait for a night with room
 
     def record(self) -> dict[str, Any]:
         """The night log's ``sleep`` record: codes and numbers only."""
         return {"kind": self.kind, "reason": self.reason, "pressure": round(self.pressure, 4),
                 "threshold": round(self.threshold, 4), "forced": self.forced, "month_usd": self.month_usd,
-                **asdict(self.state), "month_spent_usd": round(self.state.month_spent_usd, 6)}
+                **asdict(self.state), "month_spent_usd": round(self.state.month_spent_usd, 6),
+                "wonder_left_usd": round(self.state.wonder_left_usd, 6), "deep_usd": self.deep_usd,
+                "capped": self.capped}
+
+
+def deep_night_usd(*, gpu: str = DEFAULT_GPU, core: bool = False, cache_hit: bool = False,
+                   practice_fresh: bool = True) -> float:
+    """A deep night's estimate at its settings (``FRESH_NIGHT_USD`` and what each setting adds or saves)."""
+    if gpu not in FRESH_NIGHT_USD:
+        raise SleepPolicyError(f"no deep night estimate for the {gpu}")
+    return round(FRESH_NIGHT_USD[gpu] + (CORE_ADDS_USD if core else 0.0) - (CACHE_HIT_SAVES_USD[gpu] if cache_hit else 0.0)
+                 - (0.0 if practice_fresh else PRACTICE_REUSED_SAVES_USD), 6)
+
+
+def fits(state: SleepState, policy: SleepPolicy, tonight_usd: float) -> bool:
+    """Tonight's cost fits under the month's cap with every later night of the month held back as a nap
+    and Wonder's room left held back too, so the month as a whole stays under it."""
+    held_back = max(0, state.nights_left) * policy.nap_usd + max(0.0, state.wonder_left_usd)
+    return state.month_spent_usd + tonight_usd + held_back <= policy.month_usd + 1e-9
 
 
 def _share(count: int, full: int) -> float:
@@ -164,21 +216,26 @@ def decide(state: SleepState, policy: SleepPolicy, *, pressure: float, force_dee
         raise SleepPolicyError("sleep pressure is a number from 0 to 1")
     threshold = policy.threshold(state.month_spent_usd)
     kind, reason = _wanted(state, policy, pressure, threshold, force_deep)
-    if kind == "deep" and state.month_spent_usd + policy.deep_usd > policy.month_usd:
+    deep_usd = deep_night_usd(gpu=policy.gpu, core=policy.core, cache_hit=state.base_cached,
+                              practice_fresh=state.practice_fresh)
+    if kind == "deep" and not fits(state, policy, deep_usd):
         kind, reason = "nap", "month_cap"  # the budget wins, even over --force-deep
-    return SleepDecision(kind, reason, pressure, threshold, force_deep, state, policy.month_usd)
+    capped = kind == "nap" and not fits(state, policy, policy.nap_usd)
+    return SleepDecision(kind, reason, pressure, threshold, force_deep, state, policy.month_usd, deep_usd, capped)
 
 
 def read_policy(environ: Mapping[str, str]) -> SleepPolicy:
     """The policy ``ANJO_SLEEP_MONTH_USD`` (dollars, default 15) and ``ANJO_SLEEP_MAX_DAYS`` (default 7)
-    set; a value that isn't one stops the night before it starts."""
+    set, its deep night sized by ``ANJO_SLEEP_SERVE_GPU`` and ``ANJO_SLEEP_MIND_CORE``; a value that
+    isn't one stops the night before it starts."""
     raw_usd, raw_days = environ.get(MONTH_USD_ENV, "").strip(), environ.get(MAX_DAYS_ENV, "").strip()
     try:
         month_usd = float(raw_usd) if raw_usd else DEFAULT_MONTH_USD
         max_days = int(raw_days) if raw_days else DEFAULT_MAX_DAYS
     except ValueError:
         raise SleepPolicyError(f"{MONTH_USD_ENV} is dollars and {MAX_DAYS_ENV} a whole number of days") from None
-    return SleepPolicy(month_usd=month_usd, max_days=max_days)
+    gpu = environ.get(GPU_ENV, "").strip() or DEFAULT_GPU
+    return SleepPolicy(month_usd=month_usd, max_days=max_days, gpu=gpu, core=environ.get(CORE_ENV, "").strip() == "1")
 
 
 def policy_from(environ: Mapping[str, str]) -> SleepPolicy | None:
