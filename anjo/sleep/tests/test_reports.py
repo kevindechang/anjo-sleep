@@ -17,7 +17,7 @@ ARMS = ("1", "2C", "2F", "3", "3x", "4")
 
 
 def _night(root: Path, person: str, date: str, number: int, *, label: str | None = "development",
-           safety: bool = True, scored: bool = True) -> None:
+           safety: bool = True, scored: bool = True, subset: str | None = None) -> None:
     folder = root / person / "nights" / date
     folder.mkdir(parents=True)
     summary: dict[str, Any] = {
@@ -33,7 +33,8 @@ def _night(root: Path, person: str, date: str, number: int, *, label: str | None
         scores = root / person / "scores"
         scores.mkdir(exist_ok=True)
         arms = {arm: {"knowledge": 0.4 + 0.02 * number + 0.01 * i, "style": 0.5} for i, arm in enumerate(ARMS)}
-        (scores / f"night-{number:02d}.json").write_text(json.dumps({"night": date, "label": label, "arms": arms}))
+        (scores / f"night-{number:02d}.json").write_text(json.dumps(
+            {"night": date, "label": label, "arms": arms, **({} if subset is None else {"subset": subset})}))
 
 
 def test_table_shows_every_arm_per_night_with_general_and_safety(tmp_path: Path) -> None:
@@ -81,6 +82,18 @@ def test_chart_draws_every_arm_in_labeled_panels(tmp_path: Path) -> None:
         assert f"arm {arm}" in svg
     assert "general skills" in svg and "safety" in svg
     assert svg == chart.render(["dev", "fin"], root=tmp_path, out=tmp_path / "again.svg").read_text(encoding="utf-8")
+
+
+def test_daily_and_full_scores_stay_separate_series(tmp_path: Path) -> None:
+    _night(tmp_path, "p1", "2026-11-03", 1)  # the full set
+    _night(tmp_path, "p1", "2026-11-04", 2, subset="daily-v1")
+    _night(tmp_path, "p1", "2026-11-05", 3, subset="daily-v1")
+    assert [n.probes for n in results.load("p1", tmp_path)] == ["full", "daily-v1", "daily-v1"]
+    rows = {line.split("|")[0].strip(): line for line in results.table(["p1"], root=tmp_path).splitlines() if "|" in line}
+    assert "| full |" in rows["2026-11-03"] and "| daily-v1 |" in rows["2026-11-04"]
+    svg = chart.render(["p1"], root=tmp_path, out=tmp_path / "c.svg").read_text(encoding="utf-8")
+    assert svg.count("<title>arm 3 knowledge (full)</title>") == 1  # one line a probe set, never one across both
+    assert svg.count("<title>arm 3 knowledge (daily-v1)</title>") == 1 and "stroke-dasharray" in svg
 
 
 def test_chart_escapes_person_ids(tmp_path: Path) -> None:

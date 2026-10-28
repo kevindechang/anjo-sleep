@@ -25,23 +25,46 @@ series. At most ``concurrency`` calls are in flight (``parallel.Calls``), and ev
 by scene and place, never by when it came back, so the run is the serial one given the same replies.
 Every snapshot of C is taken first, on the calling thread. ``concurrency`` 1 runs as before: one call
 at a time.
+
+**Capped by role (§5.5).** Every Spark Open call is capped (``max_tokens``) at what its role writes
+plus ``REASONING_ROOM``, the room the model takes to reason before it answers: on the hero's first
+live night two brief folds cost $0.056, about 5.6k output tokens a call against a visible brief of
+2,000 tokens at most, and the longest call wrote about 8.5k, so about 6.5k of reasoning. The room is
+twice that: a cap bounds a runaway call and doesn't bite a call like those measured (it lowers no
+measured night's cost). What each role writes (``VISIBLE_TOKENS``):
+
+- the person: ``SCENES_ASKED`` messages of one to three sentences as JSON; twenty three-sentence
+  messages of 25-word sentences estimate under 1,900 tokens, so 2,048;
+- the critic: a score and a miss for each of at most four letters as JSON, under 30 tokens, so 256;
+- the teacher: a reply, held to the bound its Glimmer rivals have (``serving.client.MAX_TOKENS``):
+  one cut at its cap, or longer than that bound by ``estimate_tokens`` (conservative, so it never
+  lets a longer reply through), is no candidate, as a cut Glimmer reply never is.
+
+A cap never changes training data silently. A cut critic is no verdict, and its scene is dropped:
+it never trains on its first candidate without a pair (as an unreadable reply that stopped on its
+own does). A cut list of scenes keeps its whole messages and drops the one the cut fell in.
+``PracticeRun.spark`` counts each role's calls, tokens and cut replies (the teacher's past the
+bound among them) and ``capped_scenes`` the scenes a cap dropped; the night log carries both.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Any, Final, Literal, Protocol
 
 from anjo.sleep.baseten_api import SPARK_OPEN
-from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import union
+from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.context.template import render
 from anjo.sleep.parallel import Calls
+from anjo.sleep.model_api import ChatResult
 from anjo.sleep.practice.run import (
     NORMAL_STOPS,
     PRACTICE_F_CAP,
@@ -59,6 +82,7 @@ from anjo.sleep.practice.run import (
 from anjo.sleep.practice.transcripts import Candidate, PracticeTranscript
 from anjo.sleep.probes.clients import ModelClient
 from anjo.sleep.provenance import GLIMMER
+from anjo.sleep.serving.client import MAX_TOKENS as GLIMMER_REPLY_CAP
 from anjo.sleep.types import CheckpointRef, Evidence
 
 CRITIC_PATH: Final = Path(__file__).parent / "prompts" / "critic_v1.md"
@@ -71,6 +95,72 @@ CRITIC_TEMPERATURE: Final = 0.0
 LABELS: Final = "ABCD"
 TEACHER_ALARM_SHARE: Final = 0.5  # a night whose targets are more often the teacher's is flagged
 Adapter = Callable[[str], CheckpointRef | None]
+SparkRole = Literal["person", "teacher", "critic"]
+ROLES: Final[tuple[SparkRole, ...]] = ("person", "teacher", "critic")
+CUT: Final = "length"  # the finish reason of a reply that reached its max_tokens
+OBSERVED_REASONING: Final = 8_500 - 2_000  # the longest live call's output less its visible brief
+REASONING_ROOM: Final = 2 * OBSERVED_REASONING
+VISIBLE_TOKENS: Final[Mapping[str, int]] = MappingProxyType(
+    {"person": 2_048, "teacher": GLIMMER_REPLY_CAP, "critic": 256})
+SPARK_CAPS: Final[Mapping[str, int]] = MappingProxyType(
+    {role: visible + REASONING_ROOM for role, visible in VISIBLE_TOKENS.items()})
+
+
+class CappedChat(Protocol):
+    """``baseten_api.chat``, capped per call (``max_tokens``)."""
+
+    def __call__(
+        self, model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, timeout_s: float, *,
+        temperature: float | None = None, max_tokens: int | None = None,
+    ) -> ChatResult: ...
+
+
+class _Spark:
+    """One run's Spark Open calls, each capped by its role and counted, from any thread."""
+
+    def __init__(self, chat: CappedChat, caps: Mapping[str, int]) -> None:
+        self._chat, self._caps = chat, caps
+        self._counts = {role: {"calls": 0, "in": 0, "out": 0, "cut": 0} for role in ROLES}
+        self._lock = threading.Lock()
+
+    def ask(self, role: SparkRole, messages: list[dict[str, Any]], temperature: float) -> ChatResult:
+        result = self._chat(SPARK_OPEN, messages, None, SCENE_TIMEOUT_S, temperature=temperature,
+                            max_tokens=self._caps[role])
+        with self._lock:
+            counts = self._counts[role]
+            counts["calls"] += 1
+            counts["in"] += result.input_tokens
+            counts["out"] += result.output_tokens
+            counts["cut"] += result.finish_reason == CUT
+        return result
+
+    def over_bound(self, role: SparkRole) -> None:
+        """A reply that stopped on its own past its role's bound: counted with the cut ones."""
+        with self._lock:
+            self._counts[role]["cut"] += 1
+
+    def counts(self) -> dict[str, dict[str, int]]:
+        with self._lock:
+            return {role: dict(found) for role, found in self._counts.items()}
+
+
+def _salvaged(raw: str) -> list[str]:
+    """The whole messages of a list of scenes cut at its cap: each complete string in ``scenes``,
+    up to the one the cut fell in."""
+    named = raw.find('"scenes"')
+    at = raw.find("[", named) + 1 if named >= 0 else 0
+    found: list[str] = []
+    decoder = json.JSONDecoder()
+    while at:
+        while at < len(raw) and raw[at] in " \t\r\n,":
+            at += 1
+        try:
+            value, at = decoder.raw_decode(raw, at)
+        except ValueError:
+            break
+        if isinstance(value, str) and value.strip():
+            found.append(value.strip())
+    return found
 
 
 @dataclass(frozen=True)
@@ -105,6 +195,7 @@ class _Night:
     f_ancestry: frozenset[str] | None
     adapter: CheckpointRef | None
     at: datetime
+    spark: _Spark
 
 
 def _marks(text: str, labels: dict[str, _Candidate]) -> tuple[dict[_Candidate, float], set[_Candidate]] | None:
@@ -144,9 +235,9 @@ class FullPractice:
     for a person (the serving checkpoint; None before her first night, so the base model)."""
 
     def __init__(
-        self, *, chat: ChatFn, client: ModelClient, adapter: Adapter, snapshot: Snapshot, seed: int,
+        self, *, chat: CappedChat, client: ModelClient, adapter: Adapter, snapshot: Snapshot, seed: int,
         scenes: int = MIN_SCENES, teacher: bool = True, hosted_in_training: bool = False,
-        f_cap: int = PRACTICE_F_CAP, concurrency: int = 1,
+        f_cap: int = PRACTICE_F_CAP, concurrency: int = 1, spark_caps: Mapping[str, int] = SPARK_CAPS,
     ) -> None:
         if not MIN_SCENES <= scenes <= MAX_SCENES:
             raise ValueError(f"full practice runs {MIN_SCENES} to {MAX_SCENES} scenes a night, not {scenes}")
@@ -162,6 +253,7 @@ class FullPractice:
         self._hosted = hosted_in_training
         self._f_cap = f_cap
         self._workers = concurrency
+        self._caps = spark_caps
 
     @property
     def max_spark_calls(self) -> int:
@@ -180,22 +272,25 @@ class FullPractice:
         if not f:
             return PracticeRun((), (), 0)
         prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": _known(f), "COUNT": str(SCENES_ASKED)})
-        written = self._chat(SPARK_OPEN, [{"role": "user", "content": prompt}], None, SCENE_TIMEOUT_S,
-                             temperature=SCENE_TEMPERATURE)
-        messages = _scenes(written.text, SCENES_ASKED)
+        spark = _Spark(self._chat, self._caps)
+        written = spark.ask("person", [{"role": "user", "content": prompt}], SCENE_TEMPERATURE)
+        cut = written.finish_reason == CUT  # the scene it was writing is dropped, the whole ones kept
+        messages = _salvaged(written.text)[:SCENES_ASKED] if cut else _scenes(written.text, SCENES_ASKED)
         cue_free = [message for message in messages if not has_cue(message)]
         ctx = _Night(user_id, night, _known(f), "## What you know about this person\n" + _known(f),
-                     tuple(item.id for item in f), union(item.ancestry for item in f), self._adapter(user_id), at)
+                     tuple(item.id for item in f), union(item.ancestry for item in f), self._adapter(user_id), at,
+                     spark)
         scenes = [_Scene(index, message, *self._snapshot(user_id, message))  # C before any candidate
                   for index, message in enumerate(cue_free[: self._count])]
         calls = Calls(self._workers)
         done = calls.map(partial(self._scene, ctx, calls), scenes)
-        kept = [(t, v) for t, v in done if t is not None and v is not None]
+        kept = [(t, v) for t, v, _ in done if t is not None and v is not None]
+        capped = sum(c for _, _, c in done)
         return PracticeRun(
             tuple(t for t, _ in kept), ctx.f_ids, len(messages) - len(cue_free),
-            dropped_cut=len(done) - len(kept), pairs=sum(v.worst is not None for _, v in kept),
+            dropped_cut=len(done) - len(kept) - capped, pairs=sum(v.worst is not None for _, v in kept),
             teacher_targets=sum(v.best.source == "teacher" for _, v in kept),
-            critic_unreadable=sum(v.unreadable for _, v in kept),
+            critic_unreadable=sum(v.unreadable for _, v in kept), capped_scenes=capped + cut, spark=spark.counts(),
         )
 
     def _glimmer(self, ctx: _Night, index: int, place: int, prefix: list[dict[str, str]]) -> _Candidate | None:
@@ -207,11 +302,15 @@ class FullPractice:
             return None
         return _Candidate("glimmer", answer.text.strip(), place)
 
-    def _taught(self, prefix: list[dict[str, str]]) -> _Candidate | None:
-        taught = self._chat(SPARK_OPEN, prefix, None, SCENE_TIMEOUT_S, temperature=CANDIDATE_TEMPERATURE)
-        if taught.finish_reason not in NORMAL_STOPS:
+    def _taught(self, ctx: _Night, prefix: list[dict[str, str]]) -> _Candidate | None:
+        taught = ctx.spark.ask("teacher", list(prefix), CANDIDATE_TEMPERATURE)
+        if taught.finish_reason not in NORMAL_STOPS:  # cut at its cap: kept whole or not at all
             return None
-        return _Candidate("teacher", taught.text.strip(), GLIMMER_CANDIDATES)
+        text = taught.text.strip()
+        if estimate_tokens(text) > GLIMMER_REPLY_CAP:  # longer than any Glimmer rival can be
+            ctx.spark.over_bound("teacher")
+            return None
+        return _Candidate("teacher", text, GLIMMER_CANDIDATES)
 
     def _candidates(self, ctx: _Night, calls: Calls, index: int, prefix: list[dict[str, str]]) -> list[_Candidate]:
         """The kept candidates by place: Glimmer's, side by side, then the teacher's only when a Glimmer
@@ -220,10 +319,13 @@ class FullPractice:
         glimmer = [c for c in calls.map(calls.call, asks) if c is not None]
         if not glimmer or not self._teacher:
             return glimmer
-        taught = calls.call(partial(self._taught, prefix))
+        taught = calls.call(partial(self._taught, ctx, prefix))
         return glimmer if taught is None else [*glimmer, taught]
 
-    def _judge(self, ctx: _Night, calls: Calls, index: int, message: str, candidates: list[_Candidate]) -> _Verdict:
+    def _judge(
+        self, ctx: _Night, calls: Calls, index: int, message: str, candidates: list[_Candidate],
+    ) -> _Verdict | None:
+        """The verdict; None when the critic's reply was cut at its cap (the scene is dropped)."""
         if len(candidates) == 1:
             return _Verdict(candidates[0], None)
         order = sorted(candidates, key=lambda c: _seed(self._seed, ctx.user_id, ctx.night.isoformat(), index, "critic", c.place))
@@ -231,20 +333,26 @@ class FullPractice:
         block = "\n".join(f"[{label}]\n{candidate.text}" for label, candidate in labels.items())
         prompt = render(CRITIC_PATH.read_text(encoding="utf-8"), {
             "COUNT": str(len(labels)), "KNOWN": ctx.known, "MESSAGE": message, "CANDIDATES": block})
-        reply = calls.call(partial(self._chat, SPARK_OPEN, [{"role": "user", "content": prompt}], None,
-                                   SCENE_TIMEOUT_S, temperature=CRITIC_TEMPERATURE))
+        reply = calls.call(partial(ctx.spark.ask, "critic", [{"role": "user", "content": prompt}], CRITIC_TEMPERATURE))
+        if reply.finish_reason == CUT:  # a cut verdict is never read, and its scene never trains
+            return None
         marks = _marks(reply.text, labels)
         if marks is None:
             return _Verdict(candidates[0], None, unreadable=True)
         return _pick(candidates, *marks)
 
-    def _scene(self, ctx: _Night, calls: Calls, scene: _Scene) -> tuple[PracticeTranscript | None, _Verdict | None]:
+    def _scene(
+        self, ctx: _Night, calls: Calls, scene: _Scene,
+    ) -> tuple[PracticeTranscript | None, _Verdict | None, bool]:
+        """The scene's transcript and verdict, or Nones, and whether a cap dropped it."""
         index, message = scene.index, scene.message
         prefix = [{"role": "system", "content": ctx.f_text}, {"role": "user", "content": message}]
         candidates = self._candidates(ctx, calls, index, prefix)
         if not any(c.source == "glimmer" for c in candidates):
-            return None, None
+            return None, None, False
         verdict = self._judge(ctx, calls, index, message, candidates)
+        if verdict is None:
+            return None, None, True
         digest = hashlib.sha256(f"{ctx.user_id}\x1f{ctx.night.isoformat()}\x1f{index}".encode()).hexdigest()[:16]
         return PracticeTranscript(
             id=f"pr-{digest}", person_id=ctx.user_id, night=ctx.night, scene=index, message=message,
@@ -253,4 +361,4 @@ class FullPractice:
             created_at=ctx.at + timedelta(seconds=index), target=verdict.best.source,
             rejected=verdict.worst.text if verdict.worst else None,
             rejected_from=verdict.worst.source if verdict.worst else None,
-        ), verdict
+        ), verdict, False

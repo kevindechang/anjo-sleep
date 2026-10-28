@@ -97,9 +97,9 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     gates: Any = deps.gates
     note: Any = deps.note_writer
     practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
-    clients = {gates._client, note._client, practice._client}
-    assert len(clients) == 1  # practice, the gates and the note share one server
-    assert next(iter(clients)).precision == served == config.SERVING.name
+    clients = (gates._client, note._client, practice._client)
+    assert len({c._poster for c in clients}) == 1  # practice, the gates and the note share one server
+    assert {c.precision for c in clients} == {served} == {config.SERVING.name}
     assert set(gates.for_person("synthetic-founder")) == {"general", "collapse", "safety"}
     from anjo.sleep.app.delivery import passes_reply_check
     from anjo.sleep.budget import LEDGER_NAME
@@ -107,6 +107,94 @@ def test_every_arm_serves_at_same_precision(monkeypatch: pytest.MonkeyPatch, tmp
     gpu: Any = deps.gpu
     assert deps.note_check is passes_reply_check  # the final note text, sources included
     assert deps.ledger is not None and deps.ledger.path.name == LEDGER_NAME and gpu._ledger is deps.ledger
+
+
+class ModelsServer:
+    """``/v1/models`` through a poster, as SageMaker's shim sends it on: Glimmer at ``root``, or a
+    failure; every other path is refused, so nothing else is asked."""
+
+    def __init__(self, root: str | None) -> None:
+        self.root, self.asked = root, 0
+
+    def post(self, path: str, body: Any) -> dict[str, Any]:
+        assert path == "/v1/models" and body == {}
+        self.asked += 1
+        if self.root is None:
+            from anjo.sleep.serving.client import TransportFailed
+
+            raise TransportFailed("/v1/models failed in transport (ReadTimeout)")
+        return {"data": [{"id": config.MODEL, "root": self.root}]}
+
+    def close(self) -> None:
+        pass
+
+
+class Backend:
+    name = "modal"
+
+
+def _base(night_module: Any, server: ModelsServer, calls: list[int]) -> list[int]:
+    """One night's base side of one gate through the app's cache: computed (and counted) or read back."""
+    from anjo.sleep.serving.client import VllmClient
+
+    def asked(answers: list[Any]) -> list[Any]:
+        calls.append(1)
+        return answers
+
+    cache = night_module.gate_cache(Backend(), VllmClient.over(server, max_tokens=1024))
+    first = cache.answers("general", {"items": [1, 2]}, lambda: asked([0, 1]), lambda kept: len(kept) == 2)
+    again = cache.answers("collapse", {"items": [1]}, lambda: asked([True]), lambda kept: len(kept) == 1)
+    assert server.asked == 1  # the server is asked once a run, at the first gate
+    return [*first, *again]
+
+
+def test_cache_misses_when_the_server_revision_changes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                       caplog: pytest.LogCaptureFixture) -> None:
+    from anjo.sleep.app import night
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv(config.REVISION_ENV, "a" * 40)  # the host's pin: never the key
+    calls: list[int] = []
+    served = f"/weights/{config.MODEL}/{'a' * 40}"
+    assert _base(night, ModelsServer(served), calls) == [0, 1, True] and len(calls) == 2  # asked, then kept
+    assert _base(night, ModelsServer(served), calls) == [0, 1, True] and len(calls) == 2  # read back
+    redeployed = ModelsServer(f"/weights/{config.MODEL}/{'b' * 40}")  # the host's env still says "a"
+    _base(night, redeployed, calls)
+    assert len(calls) == 4  # the server's new revision is a new key: asked again, never the old answers
+    assert "revision bbbbbbbbbbbb" in caplog.text and "aaaaaaaaaaaa" in caplog.text
+    _base(night, ModelsServer("/opt/ml/model"), calls)  # a root that names no revision: asked, never kept
+    _base(night, ModelsServer("/opt/ml/model"), calls)
+    assert len(calls) == 8
+
+
+def test_unreachable_models_endpoint_is_a_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.app import night
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    calls: list[int] = []
+    _base(night, ModelsServer(f"/weights/{config.MODEL}/{'a' * 40}"), calls)
+    assert len(calls) == 2
+    for _ in range(2):  # the server can't say what it serves: every base answer is asked, none read back
+        _base(night, ModelsServer(None), calls)
+    assert len(calls) == 6
+
+
+def test_the_gates_share_one_cache_dated_on_the_eval_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                         offline_embedder: Any) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.gates import EVAL_DAY
+    from anjo.sleep.gates.base_cache import FILE_NAME
+    from anjo.sleep.night.deps import NightOptions
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    deps: Any = night.build(NoTrainer(), NightOptions(night=date(2026, 10, 30), personas={"synthetic-founder": "founder"}))
+    gates = deps.gates
+    assert gates._client._day == EVAL_DAY and deps.note_writer._client._day == date(2026, 10, 30)
+    assert gates._cache.store.path == tmp_path / "sleep" / FILE_NAME
+    collapse = gates.for_person("synthetic-founder")["collapse"].__self__
+    assert gates._general._cache is gates._cache and gates._safety._cache is gates._cache and collapse._cache is gates._cache
 
 
 def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice(

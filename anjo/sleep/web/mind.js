@@ -213,16 +213,18 @@
       svg.append(svgNode("text", { class: "axis", x: CHART.left - 6, y: y(v) + 3, "text-anchor": "end" }, v.toFixed(2)));
     }
     nights.forEach((night, n) => svg.append(svgNode("text", { class: "axis", x: x(n), y: CHART.height - 8, "text-anchor": "middle" }, String(night.night))));
-    for (const arm of arms) {
-      const points = nights.map((night, n) => [n, night.scores[arm] && night.scores[arm][dimension]]).filter(([, v]) => typeof v === "number");
+    const sets = [...new Set(nights.map((night) => night.probes || "full"))];  // one line a probe set
+    for (const arm of arms) for (const set of sets) {
+      const points = nights.map((night, n) => [n, (night.probes || "full") === set && night.scores[arm] && night.scores[arm][dimension]]).filter(([, v]) => typeof v === "number");
       if (!points.length) continue;
+      const daily = set === "full" ? "" : ` (${copy.chart_probes_subset})`;
       const group = svgNode("g", { class: `series arm-${arm}` });
-      group.append(svgNode("polyline", { points: points.map(([n, v]) => `${x(n)},${y(v)}`).join(" ") }));
+      group.append(svgNode("polyline", { points: points.map(([n, v]) => `${x(n)},${y(v)}`).join(" "), ...(daily ? { "stroke-dasharray": "5 3" } : {}) }));
       points.forEach(([n, v]) => group.append(svgNode("circle", { cx: x(n), cy: y(v), r: 2.6 })));
       const [endN, endV] = points[points.length - 1];
-      ends.push({ group, x: x(endN) + 6, y: y(endV) + 3, text: copy[`chart_arm_short_${arm}`] || arm });
+      ends.push({ group, x: x(endN) + 6, y: y(endV) + 3, text: (copy[`chart_arm_short_${arm}`] || arm) + daily });
       svg.append(group);
-      lines.push(fill(copy.chart_series_desc, { arm: copy[`chart_arm_${arm}`] || arm, first: points[0][1].toFixed(2), last: endV.toFixed(2), nights: points.length }));
+      lines.push(fill(copy.chart_series_desc, { arm: (copy[`chart_arm_${arm}`] || arm) + daily, first: points[0][1].toFixed(2), last: endV.toFixed(2), nights: points.length }));
     }
     for (const end of spread(ends)) end.group.append(svgNode("text", { class: "series-label", x: end.x, y: end.y }, end.text));
     desc.textContent = lines.join(" ");

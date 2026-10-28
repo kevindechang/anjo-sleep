@@ -89,7 +89,8 @@ class Spark:
         self.raw_critic = raw_critic
         self.calls: list[dict[str, Any]] = []
 
-    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None) -> ChatResult:
         assert model == SPARK_OPEN and tools is None
         self.calls.append({"messages": messages, "temperature": temperature})
         content = messages[-1]["content"]
@@ -358,11 +359,12 @@ def _full_night(tmp_path: Path, critic: Spark) -> tuple[Any, Any, Any]:
     world.plan("p1", NIGHT_DATE)
     world.spark.scenes = SCENES_ASKED
 
-    def spark(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def spark(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+              max_tokens: int | None = None) -> ChatResult:
         content = messages[-1]["content"]
         if content.startswith(("# brief_v1", "# scenes_v1")):
-            return world.spark(model, messages, tools, timeout_s, temperature=temperature)
-        return critic(model, messages, tools, timeout_s, temperature=temperature)
+            return world.spark(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
+        return critic(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
 
     def practice(chat: Any, night: date) -> FullPractice:
         recall = Bm25Recall(world.evidence, until=night)

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -63,6 +63,10 @@ class PracticeRun:
     pairs: int = 0  # full practice: scenes that kept a (best, worst) pair
     teacher_targets: int = 0  # full practice: scenes whose target is the teacher's
     critic_unreadable: int = 0  # full practice: scenes whose critic reply couldn't be read
+    capped_scenes: int = 0  # full practice: scenes dropped because a Spark Open reply reached its cap
+    # full practice: Spark Open's calls by role (person, teacher, critic), the provider's tokens in
+    # and out, and the replies cut at the role's cap; counts only, for the night log and the cost model
+    spark: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
 
 
 def has_cue(message: str) -> bool:

@@ -24,7 +24,9 @@ after midnight, and the morning probe run right after the night, in the same pro
   Glimmer is still awake: the scene answered by the checkpoint before the night and by the new one.
   Its failure is logged in the night's log and never fails the night. Both steps log how long they
   took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time, and the
-  morning how many requests it sent again (``retries``), when any.
+  morning how many requests it sent again (``retries``), when any. A development night's morning
+  runs the committed daily subset (``probes.morning.DAILY``: arms 1 and 3, 14 probes) and logs its
+  name, replies and judge calls; ``--label final`` runs the full set.
 
 ``--mind`` (or ``ANJO_SLEEP_DAILY_MIND=1``) turns MIND's inquiry on in the night phase; it is off by
 default and has no effect on the day phase.
@@ -49,7 +51,7 @@ from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
-from anjo.sleep.probes.morning import run_morning
+from anjo.sleep.probes.morning import DAILY, MorningResult, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
@@ -173,8 +175,14 @@ def run_night_phase(
             log, started = NightLog(result.log_path.parent), timer()
             ports = (morning or _morning())(user, persona, plan.night)
             sent_again = _retries(ports)
-            score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")
+            subset = DAILY if label == "development" else None  # the final runs ask every probe and arm
+            done = score(user, plan.night, result.checkpoint, morning=ports, label=label,
+                         promoted=result.status == "promoted", subset=subset)
             receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
+            if isinstance(done, MorningResult):  # what the run asked: the cost model's morning lines
+                receipt.update(replies=done.replies, judge_calls=done.judge_calls)
+            if subset is not None:
+                receipt["subset"] = subset.name
             if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
                 receipt["retries"] = retries
             log.step("morning", "ok", uses="new", system=None, **receipt)

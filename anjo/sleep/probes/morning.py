@@ -24,9 +24,15 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
   came back, so the score file is the serial run's given the same replies. The holds' bounds still
   cover the worst case: the judge's counts calls, and the GPU bills wall time, which calls in
   parallel only shorten.
+- A daily morning may run a ``ProbeSubset`` (``DAILY``, the daily runner's development nights):
+  fewer arms, and a fixed number of each kind of probe, picked by id alone (``subset_probes``), so
+  every daily morning asks the same probes whatever came back before. Its file says ``subset`` and
+  leaves out the comparisons whose arms didn't answer; the holds scale to what it asks. A final run
+  never takes a subset (refused before any call), and a run without one is the full run, unchanged.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -37,6 +43,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from anjo.sleep.budget import Bound, Ledger
@@ -72,7 +79,45 @@ DONOR_UNAVAILABLE: Final = "donor_unavailable"
 
 
 class MorningError(RuntimeError):
-    """The morning run was refused: a rerun, a stale checkpoint, or a probe of another person."""
+    """The morning run was refused: a rerun, a stale checkpoint, a probe of another person, or a
+    final run given a subset."""
+
+
+@dataclass(frozen=True)
+class ProbeSubset:
+    """A share of the morning run, committed before any result: the arms that answer (arm 1 among
+    them) and how many probes of each kind are asked. Its numbers change only under a new name."""
+
+    name: str
+    arms: tuple[Arm, ...]
+    per_kind: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        if BASELINE not in self.arms or len(self.arms) < 2 or not set(self.arms) <= set(ARM_ORDER):
+            raise ValueError("a subset keeps arm 1 and at least one more of the six arms")
+        if any(n < 0 for n in self.per_kind.values()):
+            raise ValueError("a subset asks no negative count of a kind")
+
+
+# Committed 2026-10-28, before any daily result: arm 3 against arm 1 is the question a daily night
+# answers (did tonight's weights help); 14 of the 80 probes, every kind with a judge or a log-prob,
+# pushback left to the full runs. 22 judge calls and 28 replies, against the full run's 910 and 480.
+DAILY: Final = ProbeSubset(name="daily-v1", arms=("1", "3"), per_kind=MappingProxyType(
+    {"new_work": 5, "vocab": 3, "tone_hold": 3, "taste_ab": 3, "pushback": 0}))
+
+
+def _rank(subset: ProbeSubset, probe: Probe) -> str:
+    return hashlib.sha256(f"{subset.name}:{probe.id}".encode()).hexdigest()
+
+
+def subset_probes(probes: Sequence[Probe], subset: ProbeSubset) -> list[Probe]:
+    """Each kind's first ``per_kind`` probes by the hash of the subset's name and the probe's id, in
+    the subset's kind order: the same probes whatever order they come in. A kind with fewer probes
+    gives all it has."""
+    chosen: list[Probe] = []
+    for kind, count in subset.per_kind.items():
+        chosen.extend(sorted((p for p in probes if p.kind == kind), key=partial(_rank, subset))[:count])
+    return chosen
 
 
 @dataclass(frozen=True)
@@ -161,12 +206,12 @@ def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome]) -> 
 
 
 def _answer(
-    user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls,
+    user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls, arms: Sequence[Arm] = ARM_ORDER,
 ) -> tuple[dict[Arm, list[ArmReply]], dict[str, str]]:
     """Every arm's questions prepared here, in arm and probe order, then asked side by side."""
     questions: dict[Arm, list[Question]] = {}
     unavailable: dict[str, str] = {}
-    for arm in ARM_ORDER:
+    for arm in arms:
         try:
             questions[arm] = [prepare(arm, user_id, p, deps=deps) for p in probes]
         except DonorError:
@@ -199,23 +244,24 @@ def _judged(
     return [(name, a, b, found[n * size:(n + 1) * size]) for n, (name, a, b) in enumerate(comparisons)]
 
 
-def _worst_judge_calls(probes: Sequence[Probe]) -> int:
+def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER) -> int:
     judged = sum(1 for p in probes if p.kind != "taste_ab")
-    return (len(ARM_ORDER) - 1 + len(PAIRS)) * judged * 2
+    pairs = sum(1 for a, b in PAIRS.values() if a in arms and b in arms)
+    return (len(arms) - 1 + pairs) * judged * 2
 
 
 def run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
 ) -> MorningResult:
     """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends."""
     with phase(morning.sleep):
-        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted)
+        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset)
 
 
 def _run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
 ) -> MorningResult:
     """Score every arm on ``user_id``'s sealed probes, on the checkpoint serving after ``night``.
 
@@ -224,6 +270,8 @@ def _run_morning(
     that was serving is scored, and the file says ``not_promoted``."""
     if label not in results.LABELS:
         raise ValueError(f"label is one of {', '.join(results.LABELS)}, got {label!r}")
+    if subset is not None and label == "final":
+        raise MorningError("a final run asks the full set of probes and arms, never a subset")
     folder = results.results_root(morning.root) / user_id / SCORES
     target = _next_file(folder, night)
     serving = morning.arms.adapters.last_promoted(user_id)
@@ -235,6 +283,9 @@ def _run_morning(
     else:
         checkpoint = serving
     probes = list(morning.sealed(user_id))
+    if subset is not None:
+        probes = subset_probes(probes, subset)
+    arms = ARM_ORDER if subset is None else tuple(a for a in ARM_ORDER if a in subset.arms)
     if not probes:
         raise MorningError(f"{user_id} has no sealed probes")
     if any(p.person_id != user_id for p in probes):
@@ -246,17 +297,17 @@ def _run_morning(
                    context_cache={})
     judge = _Counting(morning.judge)
     key = f"morning:{night.isoformat()}:{user_id}"
-    arm_s = len(probes) * len(ARM_ORDER) * ARM_CALL_S
+    arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
         holds.enter_context(held(morning.ledger, f"{key}:judge", JUDGE_POOLS,
-                                 usd(_worst_judge_calls(probes) * JUDGE_USD_PER_CALL),
+                                 usd(_worst_judge_calls(probes, arms) * JUDGE_USD_PER_CALL),
                                  lambda: judge.calls * JUDGE_USD_PER_CALL))
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
                                  lambda: morning.prices.serve_gpu_per_hour * max(0.0, morning.timer() - started) / 3600.0))
         calls = Calls(morning.concurrency)
-        replies, unavailable = _answer(user_id, probes, deps, calls)
+        replies, unavailable = _answer(user_id, probes, deps, calls, arms)
         config = BootstrapConfig.from_thresholds()
         rows: list[dict[str, object]] = []
         stats: dict[str, dict[str, dict[str, object]]] = {}
@@ -276,6 +327,8 @@ def _run_morning(
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
     }
     record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
+    if subset is not None:
+        record["subset"] = subset.name
     if woke is not None:
         record["wake_seconds"] = woke.seconds
     folder.mkdir(parents=True, exist_ok=True)
@@ -285,4 +338,4 @@ def _run_morning(
     return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls)
 
 
-__all__ = ["ARMS", "Morning", "MorningError", "MorningResult", "run_morning"]
+__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "run_morning", "subset_probes"]

@@ -8,15 +8,21 @@ judges each reply with ``collapse_judge_v1.md`` at temperature 0: YES when the r
 into the field. An answer that is neither YES nor NO counts as dragged, so an unclear judge errs
 toward rejecting. The night is rejected when the checkpoint's dragged rate is more than 5.0
 points above the base model's.
+
+The base side (the base model's replies and its verdicts on them) is kept across nights when the
+app passes a ``cache`` (``base_cache``), keyed on the prompts, the person's fields, the judge
+prompt, the seeds, both temperatures and the verdict's cap; the checkpoint's replies, and the
+verdicts on them, are asked every night.
 """
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 from anjo.sleep.context.template import render
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE, GateThresholds, in_order, listed, load_thresholds
+from anjo.sleep.gates.base_cache import BaseCache, base_side, digest
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.serving import config
 from anjo.sleep.sets.loader import CollapsePrompt, collapse_for, load_collapse
@@ -26,6 +32,7 @@ PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "collapse_judge_v1.md"
 JUDGE_TEMPERATURE: Final = 0.0
 # YES or NO, read from its first word: at temperature 0 the first tokens are the same at any cap.
 VERDICT_MAX_TOKENS: Final = 8
+RULE: Final = "dragged unless the verdict's first word is NO"
 
 
 class CappedClient(Protocol):
@@ -43,7 +50,7 @@ class CollapseGate:
     def __init__(
         self, client: CappedClient, field_domains: Sequence[str], *,
         prompts: Sequence[CollapsePrompt] | None = None, thresholds: GateThresholds | None = None,
-        workers: int = config.CONCURRENT_REQUESTS,
+        workers: int = config.CONCURRENT_REQUESTS, cache: BaseCache | None = None,
     ) -> None:
         if not field_domains:
             raise ValueError("the collapse gate needs the person's field domains")
@@ -56,6 +63,7 @@ class CollapseGate:
         self._template = PROMPT_PATH.read_text(encoding="utf-8")
         self._base: list[bool] | None = None
         self._workers = workers
+        self._cache = cache
 
     def _dragged(self, adapter: CheckpointRef | None, index: int) -> bool:
         prompt = self._prompts[index]
@@ -68,13 +76,22 @@ class CollapseGate:
         })}], temperature=JUDGE_TEMPERATURE, seed=EVAL_SEED, max_tokens=VERDICT_MAX_TOKENS).text.strip().upper()
         return not verdict.startswith("NO")
 
+    def _key(self) -> dict[str, Any]:
+        return {"prompts": [[p.id, p.prompt] for p in self._prompts], "fields": self._fields,
+                "judge": digest(self._template), "seed": EVAL_SEED, "temperature": TEMPERATURE,
+                "judge_temperature": JUDGE_TEMPERATURE, "verdict_max_tokens": VERDICT_MAX_TOKENS, "rule": RULE}
+
+    def _valid(self, kept: list[Any]) -> bool:
+        return len(kept) == len(self._prompts) and all(isinstance(flag, bool) for flag in kept)
+
     def _rate(self, flags: list[bool]) -> float:
         return 100.0 * sum(flags) / len(flags)
 
     def check(self, ckpt: CheckpointRef) -> GateResult:
         indices = list(range(len(self._prompts)))
         if self._base is None:
-            self._base = in_order(lambda i: self._dragged(None, i), indices, self._workers)
+            self._base = base_side(self._cache, "collapse", self._key,
+                                   lambda: in_order(lambda i: self._dragged(None, i), indices, self._workers), self._valid)
         mine = in_order(lambda i: self._dragged(ckpt, i), indices, self._workers)
         above = self._rate(mine) - self._rate(self._base)
         passed = above <= self._threshold

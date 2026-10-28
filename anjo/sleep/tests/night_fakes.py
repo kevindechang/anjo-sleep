@@ -78,7 +78,8 @@ class SparkChat:
         self.scenes = scenes
         self.prompts: list[str] = []
 
-    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None) -> ChatResult:
         content = messages[-1]["content"]
         self.prompts.append(content)
         if content.startswith("# brief_v1"):

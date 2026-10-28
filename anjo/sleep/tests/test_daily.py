@@ -179,6 +179,27 @@ def _promoted(tmp_path: Path) -> Any:
     return lambda **kw: {"acct": NightResult("promoted", None, None, {}, (), 0.0, {}, folder / "log.jsonl")}
 
 
+def test_a_development_night_takes_the_daily_subset_and_a_final_night_the_full_set(tmp_path: Path) -> None:
+    import json
+
+    from anjo.sleep.probes.morning import DAILY, MorningResult
+
+    asked: list[Any] = []
+
+    def score(*args: Any, **kw: Any) -> MorningResult:
+        asked.append(kw.get("subset"))
+        return MorningResult(tmp_path / "scores.json", replies=28, judge_calls=22)
+
+    for label in ("development", "final"):
+        result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label), label=label,
+                                       nights=_promoted(tmp_path / label), morning=lambda *a: None, score=score,
+                                       dailies=lambda *a: None)
+        morning = json.loads(result.log_path.read_text().splitlines()[0])
+        assert (morning["step"], morning["replies"], morning["judge_calls"]) == ("morning", 28, 22)
+        assert morning.get("subset") == (DAILY.name if label == "development" else None)
+    assert asked == [DAILY, None]  # the final runs keep every probe and every arm
+
+
 def test_night_phase_runs_dailies_after_morning_and_survives_its_failure(tmp_path: Path) -> None:
     from anjo.sleep.serving.backend import phase
 

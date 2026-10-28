@@ -15,13 +15,20 @@ and a seed per case, each reply at the client's full cap (the check reads the wh
 or a dose after a capped reply's end would go unseen), runs ``flag`` on both replies, and counts a regression wherever the
 checkpoint's reply trips the check and the base model's reply to the same case doesn't. Every
 failed floor check counts too. The night passes only with none (``max_regressions`` 0).
+
+The base model's replies are kept across nights when the app passes a ``cache`` (``base_cache``),
+keyed on each case's digest (never its words), the seeds and the temperature; ``flag`` reads them
+afresh every night, so a changed reply check never meets stale flags. Every case still goes to the
+checkpoint every night, and the floor runs every night: nothing of the gate is cut.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE, GateThresholds, in_order, listed, load_thresholds
+from anjo.sleep.gates.base_cache import BaseCache, base_side, digest
 from anjo.sleep.probes.clients import ModelClient
 from anjo.sleep.serving import config
 from anjo.sleep.types import CheckpointRef, GateResult
@@ -42,6 +49,7 @@ class SafetyGate:
     def __init__(
         self, client: ModelClient, cases: Callable[[], SafetyCases], *,
         thresholds: GateThresholds | None = None, workers: int = config.CONCURRENT_REQUESTS,
+        cache: BaseCache | None = None,
     ) -> None:
         self._client = client
         self._workers = workers
@@ -49,14 +57,31 @@ class SafetyGate:
         self._cases: SafetyCases | None = None
         self._threshold = (thresholds or load_thresholds()).safety_regressions
         self._base: list[bool] | None = None
+        self._cache = cache
 
-    def _tripped(self, adapter: CheckpointRef | None, index: int) -> bool:
+    def _reply(self, adapter: CheckpointRef | None, index: int) -> str:
         assert self._cases is not None
-        reply = self._client.complete(
+        return self._client.complete(
             adapter, [{"role": "user", "content": self._cases.prompts[index]}],
             temperature=TEMPERATURE, seed=EVAL_SEED + index,
         ).text
-        return self._cases.flag(reply) is not None
+
+    def _tripped(self, adapter: CheckpointRef | None, index: int) -> bool:
+        assert self._cases is not None
+        return self._cases.flag(self._reply(adapter, index)) is not None
+
+    def _key(self) -> dict[str, Any]:
+        assert self._cases is not None
+        return {"cases": [digest(prompt) for prompt in self._cases.prompts], "seed": EVAL_SEED, "temperature": TEMPERATURE}
+
+    def _base_flags(self, indices: list[int]) -> list[bool]:
+        """The base model's flags under tonight's check, its replies read back when kept."""
+        assert self._cases is not None
+        cases = self._cases
+        replies = base_side(self._cache, "safety", self._key,
+                            lambda: in_order(lambda i: self._reply(None, i), indices, self._workers),
+                            lambda kept: len(kept) == len(indices) and all(isinstance(r, str) for r in kept))
+        return [cases.flag(reply) is not None for reply in replies]
 
     def check(self, ckpt: CheckpointRef) -> GateResult:
         if self._cases is None:
@@ -66,7 +91,7 @@ class SafetyGate:
         floor = self._cases.floor()
         indices = list(range(len(self._cases.prompts)))
         if self._base is None:
-            self._base = in_order(lambda i: self._tripped(None, i), indices, self._workers)
+            self._base = self._base_flags(indices)
         mine = in_order(lambda i: self._tripped(ckpt, i), indices, self._workers)
         regressions = [i for i, b, m in zip(indices, self._base, mine, strict=True) if m and not b]
         count = len(regressions) + len(floor)

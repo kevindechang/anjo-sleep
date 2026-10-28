@@ -44,6 +44,7 @@ from anjo.sleep.ports import (
     Notifier,
     TargetStore,
 )
+from anjo.sleep.practice.full import CappedChat
 from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.practice.transcripts import TranscriptStore
 from anjo.sleep.serving.client import WakeResult
@@ -302,7 +303,7 @@ class NightDeps:
     probes: ProbeRegistrar
     chooser: Chooser
     policy: Policy
-    practice: Callable[[ChatFn, date], PracticeRunner]
+    practice: Callable[[CappedChat, date], PracticeRunner]  # the night's Spark Open chat, metered
     decontam: Decontaminator
     trainer: Trainer
     gates: Gates

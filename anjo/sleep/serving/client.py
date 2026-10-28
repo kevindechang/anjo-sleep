@@ -290,6 +290,16 @@ class HttpPoster:
         except httpx.HTTPError:
             return False  # no answer within the bound: the caller decides what that means
 
+    def get(self, path: str) -> dict[str, Any]:
+        """One GET of ``path`` as a JSON object; ``ServingError`` names the path and the status."""
+        try:
+            response = self._http.get(path)
+        except httpx.HTTPError as error:
+            raise TransportFailed(f"{path} failed in transport ({type(error).__name__})") from None
+        if response.is_error:
+            raise ServingError(f"{path} returned HTTP {response.status_code}")
+        return json_object(path, response.content)
+
     def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
@@ -574,6 +584,20 @@ class VllmClient:
     @property
     def rendering(self) -> str:
         return framing.rendering(self._strength)
+
+    @property
+    def max_tokens(self) -> int:
+        """The cap on a reply whose call names none."""
+        return self._max_tokens
+
+    def models(self) -> dict[str, Any]:
+        """``GET /v1/models``, what the server serves, in one of this client's slots and sent once:
+        a failure is ``ServingError``, never sent again."""
+        poster = self._requests.poster
+        with self._requests.sent.slots:
+            if isinstance(poster, HttpPoster):
+                return poster.get(WAKE_PATH)
+            return poster.post(WAKE_PATH, {})  # SageMaker's shim sends it on as a GET
 
     @property
     def adapters_dir(self) -> str | None:
