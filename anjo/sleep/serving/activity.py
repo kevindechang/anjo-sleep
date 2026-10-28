@@ -9,10 +9,16 @@ request they send, from its start to its end (``turn``), in ``<data dir>/sleep/s
   so no instant shows neither;
 - ``tracked``: written when the host registers its chat route (``track``). A host that never wrote
   it (an app from before this, another data dir) has turns the stop can't see, so it never stops.
+  A turn whose marker can't be written (a full disk) runs unmarked and removes it: no stop follows
+  until the host registers again.
+- ``stopping``: the stop's own mark (``stopping``), written before its last look at ``in_flight/``.
+  A turn writes its marker before it looks for this one, so whichever comes second sees the other:
+  the stop skips, or the turn never reaches Glimmer (``GlimmerStopping``) and the chat route's
+  fallback answers it before any word is shown.
 
-A file older than ``STALE_S`` is a process that died mid-request: none runs that long (the chat
-route's first token is due within 20 s). Marking never stops a request: a write that fails is
-logged and the request runs unmarked.
+A marker older than ``STALE_S`` is a process that died mid-request: none runs that long (the chat
+route's first token is due within 20 s). A ``stopping`` mark older than ``STOPPING_STALE_S`` is a stop
+that died: the stop refreshes it before each container, each CLI call bounded well under it.
 """
 from __future__ import annotations
 
@@ -27,13 +33,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from anjo.sleep.serving.client import ServingError
+
 TURNS_DIR: Final = "glimmer_turns"
 IN_FLIGHT: Final = "in_flight"
 LAST: Final = "last.json"
 TRACKED: Final = "tracked"
+STOPPING: Final = "stopping"
 STALE_S: Final = 3600.0
+STOPPING_STALE_S: Final = 300.0
 
 logger = logging.getLogger(__name__)
+
+
+class GlimmerStopping(ServingError):
+    """The night is stopping Glimmer's container: this request never reached it."""
 
 
 def turns_dir(data_dir: Path) -> Path:
@@ -53,18 +67,45 @@ def _last(folder: Path, at: float) -> None:
     os.replace(staged, folder / LAST)
 
 
+def _stopping(folder: Path, now: float) -> bool:
+    try:
+        return now - (folder / STOPPING).stat().st_mtime < STOPPING_STALE_S
+    except FileNotFoundError:
+        return False
+
+
+def _untrack(folder: Path, error: OSError) -> None:
+    logger.warning("a Glimmer turn runs unmarked (%s): the host stops counting as tracked, so no GPU stop "
+                   "follows until it registers again", type(error).__name__)
+    try:
+        (folder / TRACKED).unlink(missing_ok=True)
+    except OSError as failed:
+        logger.error("the host's turns stay marked tracked (%s) though one ran unmarked", type(failed).__name__)
+
+
 @contextmanager
 def turn(folder: Path | None, *, clock: Callable[[], float] = time.time) -> Iterator[None]:
-    """One Glimmer request in flight from its start to its end (None: no data dir, nothing marked)."""
+    """One Glimmer request in flight from its start to its end (None: no data dir, nothing marked).
+    Raises ``GlimmerStopping``, before the request is sent, while the night stops the container."""
     marker = None
+    refused = False
     if folder is not None:
         try:
             (folder / IN_FLIGHT).mkdir(parents=True, exist_ok=True)
             marker = folder / IN_FLIGHT / f"{os.getpid()}-{uuid.uuid4().hex}"
             marker.touch(exist_ok=False)
-            _last(folder, clock())
+            refused = _stopping(folder, clock())  # after the marker: a stop that looks later sees it
+            if not refused:
+                _last(folder, clock())
         except OSError as error:
-            logger.warning("a Glimmer turn runs unmarked (%s): the night's GPU stop can't see it", type(error).__name__)
+            marker = None
+            _untrack(folder, error)
+    if refused and marker is not None:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError as error:  # left behind, it holds off stops until it goes stale: never a cut
+            logger.warning("a refused Glimmer turn's marker stays (%s)", type(error).__name__)
+        raise GlimmerStopping("the night is stopping Glimmer's container")
     try:
         yield
     finally:
@@ -74,6 +115,21 @@ def turn(folder: Path | None, *, clock: Callable[[], float] = time.time) -> Iter
                 marker.unlink(missing_ok=True)
             except OSError as error:
                 logger.warning("a Glimmer turn's end went unmarked (%s)", type(error).__name__)
+
+
+@contextmanager
+def stopping(folder: Path) -> Iterator[Callable[[], None]]:
+    """The stop's mark, written by the refresh it yields (called before each container's last look,
+    so a long stop's mark never goes stale) and removed after the stop however it ends."""
+    mark = folder / STOPPING
+
+    def refresh() -> None:
+        mark.touch()
+
+    try:
+        yield refresh
+    finally:
+        mark.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)

@@ -5,15 +5,20 @@ GPU's containers stop instead of idling through Modal's window, unless a live Gl
 (``serving.activity``) could be cut. Fakes only: no Modal call, no subprocess."""
 from __future__ import annotations
 
+import fcntl
 import json
+import logging
 import os
+import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from anjo.sleep.budget import Ledger
+from anjo.sleep.night.sweep import held_elsewhere, night_lock
 from anjo.sleep.serving import activity
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.config import SCALEDOWN_S
@@ -29,9 +34,10 @@ UID = "p1"
 class Containers:
     """Modal's containers as the stop sees them: ``found`` running for the app until stopped."""
 
-    def __init__(self, *found: str, fail: Exception | None = None, before_stop: object = None) -> None:
+    def __init__(self, *found: str, fail: Exception | None = None,
+                 during_stop: Callable[[], None] = lambda: None) -> None:
         self.found, self.stopped, self.listed = list(found), list[str](), 0
-        self.fail, self.before_stop = fail, before_stop
+        self.fail, self.during_stop = fail, during_stop
 
     def running(self, app: str) -> list[str]:
         assert app == APP
@@ -41,6 +47,7 @@ class Containers:
     def stop(self, container: str) -> None:
         if self.fail is not None:
             raise self.fail
+        self.during_stop()
         self.stopped.append(container)
 
 
@@ -52,9 +59,9 @@ def _host(tmp_path: Path) -> Path:
 
 
 def _stop(folder: Path | None, containers: Containers, window: Path | None = None,
-          ) -> tuple[GpuStop, list[tuple[str, dict[str, Any]]]]:
+          night_running: Callable[[], bool] = lambda: False) -> tuple[GpuStop, list[tuple[str, dict[str, Any]]]]:
     reports: list[tuple[str, dict[str, Any]]] = []
-    stop = GpuStop(containers, APP, turns=folder, window=window)
+    stop = GpuStop(containers, APP, turns=folder, window=window, night_running=night_running)
     stop.watch(lambda status, fields: reports.append((status, dict(fields))))
     return stop, reports
 
@@ -100,7 +107,7 @@ def test_a_quiet_host_stops_its_containers_and_reports_the_idle_window_saved(tmp
     assert containers.stopped == ["c1"]
     [(status, fields)] = reports
     assert status == "ok" and fields["containers"] == 1 and fields["seconds_saved"] == SCALEDOWN_S
-    assert fields["graceful"] is True and fields["turn_during_stop"] is False and fields["since_last_turn_s"] > QUIET_S
+    assert fields["graceful"] is True and fields["since_last_turn_s"] > QUIET_S
 
 
 @pytest.mark.parametrize("why", ["in_flight", "recent_turn", "keep_warm", "untracked", "no_data_dir", "unreadable"])
@@ -123,7 +130,7 @@ def test_a_stop_that_could_cut_a_live_request_is_skipped_and_the_idle_window_lef
     containers = Containers("c1")
     stop, reports = _stop(folder, containers, window)
     if why == "in_flight":
-        with activity.turn(folder):  # Kevin's turn streams while the night ends
+        with activity.turn(folder):  # a chat turn streams while the night ends
             stop()
     else:
         stop()
@@ -174,15 +181,92 @@ def test_modal_cli_lists_the_apps_containers_and_stops_one_gracefully() -> None:
 
     def run(args: Sequence[str], timeout_s: float) -> str:
         calls.append((list(args), timeout_s))
-        return json.dumps(listed) if args[1:3] == ["container", "list"] else ""
+        return json.dumps(listed) if "list" in args else ""
 
     cli = ModalCli(run=run)
     assert cli.running(APP) == ["ta-1"]  # another app's container is never touched
     cli.stop("ta-1")
-    assert [args for args, _ in calls] == [["modal", "container", "list", "--json"],
-                                           ["modal", "container", "stop", "ta-1", "--yes", "--graceful"]]
+    modal = [sys.executable, "-m", "modal"]  # the night's own venv: a service's PATH may not reach its bin
+    assert [args for args, _ in calls] == [[*modal, "container", "list", "--json"],
+                                           [*modal, "container", "stop", "ta-1", "--yes", "--graceful"]]
     with pytest.raises(ValueError):
         ModalCli(run=lambda args, timeout_s: "{not a list").running(APP)
+
+
+def test_a_turn_that_cant_be_marked_untracks_the_host_so_no_stop_follows(tmp_path: Path) -> None:
+    """A full disk: the turn runs unmarked, so the host stops counting as tracked and the stop skips."""
+    folder = _host(tmp_path)
+    (folder / activity.IN_FLIGHT).rmdir()
+    (folder / activity.IN_FLIGHT).write_text("in the way")  # its marker can't be made
+    containers = Containers("c1")
+    stop, reports = _stop(folder, containers)
+    with activity.turn(folder):  # still runs: marking never stops a request
+        stop()
+    assert containers.stopped == [] and reports[0][1]["why"] == "untracked"
+
+
+def test_a_turn_that_starts_while_the_gpu_stops_never_reaches_glimmer(tmp_path: Path) -> None:
+    """The stop marks itself stopping before its last look; a turn marks itself before it looks for
+    that mark. Whichever comes second sees the other: here the turn, which goes to the fallback."""
+    folder = _host(tmp_path)
+    refused: list[str] = []
+
+    def chat_turn() -> None:
+        try:
+            with activity.turn(folder):
+                raise AssertionError("a turn reached Glimmer while its container stopped")
+        except activity.GlimmerStopping:
+            refused.append("fallback")
+
+    containers = Containers("c1", during_stop=chat_turn)
+    stop, reports = _stop(folder, containers)
+    stop()
+    assert refused == ["fallback"] and containers.stopped == ["c1"] and reports[0][0] == "ok"
+    assert activity.seen(folder, time.time()).in_flight == 0  # the refused turn left no marker
+    with activity.turn(folder):  # once the stop is done, turns go to Glimmer again (a cold start)
+        pass
+
+
+def test_a_stopping_mark_a_dead_stop_left_is_stale(tmp_path: Path) -> None:
+    folder = _host(tmp_path)
+    (folder / activity.STOPPING).touch()
+    long_ago = time.time() - activity.STOPPING_STALE_S - 1
+    os.utime(folder / activity.STOPPING, (long_ago, long_ago))
+    with activity.turn(folder):  # the process that stopped died mid-stop: chats aren't refused forever
+        pass
+
+
+def test_a_stop_is_skipped_while_another_night_holds_the_lock(tmp_path: Path) -> None:
+    """The daily's stop waits for its morning, after its own night let the lock go: a night or a
+    simulated day started in that gap holds it, and its Glimmer is not ours to stop."""
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    folder = _host(tmp_path)
+    lock = tmp_path / "night.lock"
+    with open(lock, "a+b") as other:  # another process's run (flock is per open file)
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        containers = Containers("c1")
+        stop, reports = _stop(folder, containers, night_running=lambda: held_elsewhere(ledger))
+        stop()
+        assert containers.stopped == [] and reports[0][1]["why"] == "night_running"
+        fcntl.flock(other, fcntl.LOCK_UN)
+    with night_lock(ledger):  # this run's own lock is no other night
+        assert held_elsewhere(ledger) is False
+    assert held_elsewhere(ledger) is False  # nobody holds it
+
+
+def test_an_unreadable_keep_warm_window_skips_and_a_failed_stop_reaches_the_hosts_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    folder, window = _host(tmp_path), tmp_path / "warm_window.json"
+    window.write_text("{half a window")
+    containers = Containers("c1")
+    stop, reports = _stop(folder, containers, window)
+    stop()
+    assert containers.stopped == [] and reports[0][1]["why"] == "unreadable"
+    unwatched = GpuStop(Containers("c1", fail=RuntimeError("modal said no")), APP, turns=folder, window=None)
+    with caplog.at_level(logging.WARNING, logger="anjo.sleep.serving.stop"):
+        unwatched()  # no night watching: the host's log still says so
+    assert any("RuntimeError" in record.getMessage() for record in caplog.records)
 
 
 # ── the night ────────────────────────────────────────────────────────────────

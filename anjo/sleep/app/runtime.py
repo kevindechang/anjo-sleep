@@ -40,6 +40,7 @@ import os
 import re
 import threading
 from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
@@ -306,7 +307,13 @@ class SleepRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
             yield Finish("error", "rejected")
             return
         recorded = False
-        with activity.turn(glimmer_turns()):  # in flight until it ends: the night's GPU stop never cuts it
+        with ExitStack() as in_flight:  # in flight until it ends: the night's GPU stop never cuts it
+            try:
+                in_flight.enter_context(activity.turn(glimmer_turns()))
+            except activity.GlimmerStopping:  # her container is stopping: the fallback answers, before any word
+                logger.info("%s sends nothing: the night is stopping Glimmer's container", HOST)
+                yield Finish("error", "transient")
+                return
             for event in self._generate(request, cancel):
                 if not recorded and isinstance(event, TextDelta) and event.text.strip():
                     recorded = True

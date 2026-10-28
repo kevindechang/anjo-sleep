@@ -49,6 +49,24 @@ def test_a_chat_turn_is_in_flight_while_glimmer_streams_it(monkeypatch: pytest.M
     assert activity.seen(glimmer_turns(), time.time()).since_last is not None  # its end, for the quiet window
 
 
+def test_a_chat_turn_while_the_gpu_stops_goes_to_the_fallback_before_any_word(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The night's stop marks itself stopping: a turn that sees it never reaches Glimmer, so nothing
+    it shows is cut; it ends as a transient error, which the chat route's fallback answers."""
+    from anjo.core.model_io import Finish, Message, ModelRequest, TextPart, ToolChoice
+
+    monkeypatch.setenv(runtime.URL_ENV, URL)
+    monkeypatch.setenv(runtime.TOKEN_ENV, TOKEN)
+    activity.track(glimmer_turns())
+    (glimmer_turns() / activity.STOPPING).touch()
+    modal = Modal(_chunks("Hi there"))
+    settings = config.ServeConfig.from_env({config.REVISION_ENV: REVISION})
+    sleep = runtime.SleepRuntime(runtime.glimmer_pin("u-1", None, settings), transport=modal, poster=modal)
+    request = ModelRequest(turn_id="t1", system=(), messages=(Message("user", (TextPart("hey"),)),),
+                           max_output_tokens=64, round_index=0, tools=(), tool_choice=ToolChoice("auto"))
+    assert list(sleep.stream(request, threading.Event())) == [Finish("error", "transient")]
+    assert modal.opened == [] and _in_flight() == 0
+
+
 def test_a_live_page_answer_and_its_wake_are_in_flight_while_they_run(monkeypatch: pytest.MonkeyPatch) -> None:
     during: list[int] = []
 
