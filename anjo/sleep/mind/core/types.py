@@ -97,7 +97,8 @@ class ThreadLabel:
     ``origin_ids`` are the ids an intervention must cite to catch it (APD's match rule). A failing
     thread (``failed``) is a problem: knowable from ``knowable_at`` and raised by the person at
     ``outcome_at``. A thread that doesn't fail (a decoy, a reversal, a benign plan) is never worth
-    an intervention. ``missing`` marks a missing prerequisite (a gap).
+    an intervention. ``missing`` marks a missing prerequisite (a gap). ``template`` is the planted
+    item's template, when it has one: training holds lives back by it.
     """
 
     id: str
@@ -108,6 +109,7 @@ class ThreadLabel:
     outcome_at: datetime
     failed: bool
     missing: bool = False
+    template: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id or not self.event_ids or not self.origin_ids:

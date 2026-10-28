@@ -2,6 +2,7 @@
 streams, turning the core's calls into APD finding records, and the deterministic pre-score."""
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -119,14 +120,21 @@ def test_core_calls_become_finding_records() -> None:
         findings.Raised(_day(1), 0.70, ("e-d0-1", "e-d1-1"), "speak"),
         findings.Raised(_day(2), 0.80, ("e-d1-1",), "speak"),  # the same thread: updates its finding
         findings.Raised(_day(2), 0.90, ("e-d2-1",), "risk"),  # an ignition, a new thread
+        findings.Raised(_day(2), 0.70, ("e-d3-1",), "missing"),  # an ignition under the dream's own line
     ]
-    out = findings.reports(calls, threshold=0.5, topic=lambda cites: f"about {len(cites)} events")
+    out = findings.reports(calls, threshold=0.5, ignite=0.85, topic=lambda cites: f"about {len(cites)} events")
     assert [(r.finding_id, r.day, r.seq, r.p, r.cites) for r in out] == [
         ("core-1", _day(1), 0, 0.70, ("e-d0-1", "e-d1-1")),
         ("core-1", _day(2), 1, 0.80, ("e-d1-1",)),
         ("core-2", _day(2), 2, 0.90, ("e-d2-1",)),
     ]
     assert all(r.kind == "suspicion" and r.problem.startswith("about") for r in out)
+    assert [r.cites for r in findings.reports(calls, threshold=0.5)] == [("e-d0-1", "e-d1-1"), ("e-d1-1",)]  # no dream line
+
+    theirs = dataclasses.replace(out[0], finding_id="b-3", problem="B's own prose", conclusion="B's own words", kind="retraction")
+    mine = findings.in_core_form(theirs, lambda cites: "quoted " + " / ".join(cites))
+    assert (mine.problem, mine.conclusion) == ("quoted e-d0-1 / e-d1-1", findings.CONCLUSIONS["speak"])
+    assert (mine.finding_id, mine.day, mine.p, mine.cites, mine.kind) == ("b-3", _day(1), 0.70, theirs.cites, "retraction")
 
 
 def test_prescore_counts_cited_overlap_inside_each_items_window() -> None:
@@ -143,6 +151,6 @@ def test_prescore_counts_cited_overlap_inside_each_items_window() -> None:
     early = findings.reports([findings.Raised(_day(0), 0.9, ("e-d0-1",), "speak")], threshold=0.5)  # before knowable
     assert findings.prescore(early, (item,)).caught == 0
     alarm = findings.reports([findings.Raised(_day(5), 0.9, ("e-d4-1",), "speak"),
-                              findings.Raised(_day(5), 0.9, ("e-x",), "risk")], threshold=0.5)
+                              findings.Raised(_day(5), 0.9, ("e-x",), "risk")], threshold=0.5, ignite=0.5)
     scored = findings.prescore(alarm, (item, decoy))
     assert (scored.flagged, scored.unmatched, scored.findings) == (1, 1, 2)

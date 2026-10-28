@@ -7,7 +7,13 @@ that reach the threshold into ``FindingReport`` rows, the shape the APD judge sc
 (N) and the notebook baseline (B) share one blind judge. A call whose cites overlap an earlier
 finding's latest cites is that thread again: it updates the finding in place (same id, a later
 ``seq``), as an arm's ``report_finding`` does. Every report is a suspicion. Its ``problem`` comes
-from ``topic`` (the CLI quotes the cited evidence, which the judge sees anyway).
+from ``topic`` (the CLI quotes the cited evidence, which the judge sees anyway). A night's speak
+decision is kept at the speak threshold, a dream's ignition at the dream's own (``ignite``).
+
+**Another arm in the core's form** (``in_core_form``): for one blind judge pass, another arm's
+findings (the notebook baseline B's) are rewritten the way the core writes its own, the cited
+evidence quoted as the problem and a fixed conclusion, so the judge can't tell the arms apart by
+their prose. Day, id, probability, cites and kind stay as reported.
 
 **The pre-score** costs nothing and needs no judge: a planted item is caught when a report cites
 one of its origin or disambiguating ids on a day from its knowable day to its cutoff (the day
@@ -19,7 +25,7 @@ test lives.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Final, Literal
 
@@ -49,12 +55,16 @@ def default_topic(cites: tuple[str, ...]) -> str:
     return "The thread of events " + ", ".join(cites)
 
 
-def reports(raised: Sequence[Raised], *, threshold: float, topic: Topic = default_topic) -> tuple[FindingReport, ...]:
-    """The calls at or above ``threshold``, in order, as finding reports."""
+def reports(
+    raised: Sequence[Raised], *, threshold: float, ignite: float | None = None, topic: Topic = default_topic,
+) -> tuple[FindingReport, ...]:
+    """The speak calls at or above ``threshold`` and the ignitions at or above ``ignite`` (none
+    when it is ``None``), in order, as finding reports."""
     out: list[FindingReport] = []
     latest: dict[str, frozenset[str]] = {}
     for call in raised:
-        if call.p < threshold or not call.cites:
+        line = threshold if call.source == "speak" else ignite
+        if line is None or call.p < line or not call.cites:
             continue
         cited = frozenset(call.cites)
         finding_id = next((fid for fid, held in latest.items() if held & cited), f"core-{len(latest) + 1}")
@@ -65,6 +75,11 @@ def reports(raised: Sequence[Raised], *, threshold: float, topic: Topic = defaul
             kind="suspicion",
         ))
     return tuple(out)
+
+
+def in_core_form(report: FindingReport, topic: Topic) -> FindingReport:
+    """Another arm's finding as the core writes its own (see the module docstring)."""
+    return replace(report, problem=topic(report.cites), conclusion=CONCLUSIONS["speak"])
 
 
 # ── The pre-score ─────────────────────────────────────────────────────────────

@@ -87,7 +87,7 @@ def label_of(record: Mapping[str, Any], times: Mapping[str, datetime]) -> Thread
         id=str(record["item_id"]), family=family, event_ids=tuple(dict.fromkeys((*origin, *settles))),
         origin_ids=origin, knowable_at=times[str(record["knowable_event_id"])],
         outcome_at=datetime.combine(surface, time(0), tzinfo=timezone.utc), failed=bool(record["actionable"]),
-        missing=family == "gap",
+        missing=family == "gap", template=str(record["template"]) if record.get("template") else None,
     )
 
 
