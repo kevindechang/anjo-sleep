@@ -22,9 +22,12 @@ The night's client loads it through vLLM's ``/v1/load_lora_adapter`` before the 
 names it (``client.VllmClient``), so the base and the personal arms share one GPU. vLLM's
 filesystem resolver is not used: on 0.28.0 it never loaded one (seen live, 2026-10-28; it compares
 an adapter's base model with the path the server was started on, not the served name). A running
-Modal container sees the adapters volume as it was when it started, so it reloads the volume every
-``ADAPTER_REFRESH_S``. ``check_adapter`` holds a folder to what the server needs before it is
-uploaded.
+Modal container sees the adapters volume as it was when it started and never reloads it: on night 1c
+(2026-10-28) the server wedged for good while it reloaded the volume and vLLM read a new adapter from
+the mount. An
+adapter committed since the container started is copied through the volume's API onto the
+container's own disk, ``STAGED_ADAPTERS_DIR`` (``modal_app.Serve.stage``), and vLLM loads it from
+there. ``check_adapter`` holds a folder to what the server needs before it is uploaded or staged.
 """
 from __future__ import annotations
 
@@ -46,6 +49,7 @@ SECRET_NAME: Final = "anjo-sleep-serve"
 HF_SECRET_ENV: Final = "ANJO_SLEEP_HF_SECRET"
 WEIGHTS_DIR: Final = "/weights"
 ADAPTERS_DIR: Final = "/adapters"
+STAGED_ADAPTERS_DIR: Final = "/tmp/anjo-staged-adapters"  # the container's own disk, never a volume
 PORT: Final = 8000
 
 MODEL: Final = "meta-models/Muse-Glimmer-30B"
@@ -100,7 +104,6 @@ CONCURRENT_REQUESTS: Final = 16
 # Every arm (the base and each person's adapter) shares one GPU by design, so a wake never starts a
 # second container: on 2026-10-28 one wake started two L40S containers before this was set.
 MAX_CONTAINERS: Final = 1
-ADAPTER_REFRESH_S: Final = 20.0  # a warm container reloads the adapters volume this often
 
 MAX_MODEL_LEN: Final = 32_768
 MAX_OUTPUT_TOKENS: Final = 4096

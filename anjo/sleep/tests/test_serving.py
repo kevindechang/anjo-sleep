@@ -6,9 +6,7 @@ from __future__ import annotations
 
 import importlib
 import json
-import logging
 import sys
-import threading
 import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -139,6 +137,8 @@ class _Recorder:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.uploads: list[tuple[str, str]] = []
         self.on_volume: set[str] = set()
+        self.files: dict[str, bytes] = {}  # what the adapters volume's API reads back, by path
+        self.reads: list[str] = []
 
     def decorator(self, name: str) -> Callable[..., Callable[[Any], Any]]:
         def make(*_args: Any, **kwargs: Any) -> Callable[[Any], Any]:
@@ -198,6 +198,13 @@ def _fake_modal(recorder: _Recorder) -> types.ModuleType:
             recorder.calls.append(("batch_upload", {"force": force}))
             return Batch()
 
+        def read_file(self, path: str) -> Iterator[bytes]:
+            recorder.reads.append(path)
+            if path not in recorder.files:
+                raise FileNotFoundError(path)
+            data = recorder.files[path]
+            yield from (data[:7], data[7:])  # in chunks, as the API streams it
+
     class App:
         def __init__(self, name: str, **_kwargs: Any) -> None:
             recorder.calls.append(("app", {"name": name}))
@@ -213,6 +220,7 @@ def _fake_modal(recorder: _Recorder) -> types.ModuleType:
     module.enter = recorder.decorator("enter")  # type: ignore[attr-defined]
     module.exit = recorder.decorator("exit")  # type: ignore[attr-defined]
     module.web_server = recorder.decorator("web_server")  # type: ignore[attr-defined]
+    module.method = recorder.decorator("method")  # type: ignore[attr-defined]
     return module
 
 
@@ -255,60 +263,55 @@ def test_the_modal_app_serves_on_the_configured_gpu_and_scales_to_zero(
     }
 
 
-def test_a_warm_server_refreshes_its_adapters_volume(
-    modal_app: tuple[types.ModuleType, _Recorder], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A running container sees only the volume as committed when it started, so ``Serve`` reloads the
-    adapters volume every ``ADAPTER_REFRESH_S`` while it runs (after a snapshot's restore too). A reload
-    that fails (here an ``OSError``) doesn't end it: the next one tries again. ``stop`` ends it."""
+def test_serve_never_reloads_its_adapters_volume(modal_app: tuple[types.ModuleType, _Recorder]) -> None:
+    """On night 1c (2026-10-28) the server wedged for good while it reloaded the adapters volume and
+    vLLM read a new adapter from the mount. ``Serve`` never reloads it: its mount is the volume as
+    committed when the container started, and an adapter committed later reaches local disk through
+    ``stage``."""
     module, recorder = modal_app
-    assert {"snap": False, "target": "watch_adapters"} in recorder.by("enter")
-    refreshed = threading.Semaphore(0)
-    tries: list[int] = []
-
-    def reload() -> None:
-        tries.append(1)
-        if len(tries) == 1:
-            raise OSError("the volume's mount went away")
-        refreshed.release()
-
-    monkeypatch.setattr(module.adapters, "reload", reload, raising=False)
-    monkeypatch.setattr(config, "ADAPTER_REFRESH_S", 0.01)
-    serve = module.Serve()
-    serve.process = types.SimpleNamespace(terminate=lambda: None)
-    serve.watch_adapters()
-    assert refreshed.acquire(timeout=10) and refreshed.acquire(timeout=10)  # failed once, then on and on
-    serve.stop()
-    serve.refresher.join(timeout=10)
-    assert not serve.refresher.is_alive() and serve.refresher.daemon
+    assert [call["target"] for call in recorder.by("enter")] == ["start"]  # no refresher, nothing periodic
+    assert ".reload(" not in Path(str(module.__file__)).read_text(encoding="utf-8")
+    assert [call["target"] for call in recorder.by("method")] == ["stage"]
 
 
-def test_a_refused_or_failed_reload_is_counted_logged_and_tried_again(
-    modal_app: tuple[types.ModuleType, _Recorder], caplog: pytest.LogCaptureFixture,
+def _on_volume(recorder: _Recorder, folder: Path) -> None:
+    for file in config.ADAPTER_FILES:
+        recorder.files[f"/{folder.name}/{file}"] = (folder / file).read_bytes()
+
+
+def test_a_new_adapter_is_staged_from_the_volume_onto_local_disk(
+    modal_app: tuple[types.ModuleType, _Recorder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A reload the volume refuses while a file is open is a skip; any other error a failure. Each
-    is logged with the counts so far and the error's type only, and the loop goes on."""
-    module, _recorder = modal_app
-    stop = threading.Event()
-    outcomes: list[BaseException | None] = [OSError("/adapters/p-aaaaaaaaaaaa-n1 is gone"),
-                                            RuntimeError("there are open files preventing the operation"), None]
+    """``stage`` reads the adapter through the volume's API, never its mount, checks it as an upload
+    is checked, and moves it into place whole, so vLLM loads it from local disk."""
+    module, recorder = modal_app
+    _on_volume(recorder, _adapter(tmp_path))
+    monkeypatch.setattr(config, "STAGED_ADAPTERS_DIR", str(tmp_path / "staged"))
 
-    def reload() -> None:
-        outcome = outcomes.pop(0)
-        if not outcomes:
-            stop.set()
-        if outcome is not None:
-            raise outcome
+    assert module.Serve().stage(ADAPTER) is True
+    staged = tmp_path / "staged" / ADAPTER
+    assert sorted(path.name for path in staged.iterdir()) == sorted(config.ADAPTER_FILES)
+    assert (staged / "adapter_model.safetensors").read_bytes() == recorder.files[f"/{ADAPTER}/adapter_model.safetensors"]
+    read = len(recorder.reads)
+    assert module.Serve().stage(ADAPTER) is True and len(recorder.reads) == read  # staged already: not read again
 
-    with caplog.at_level(logging.WARNING):
-        refreshes = module.refresh_adapters(reload, stop, every_s=0.0, busy=(RuntimeError,))
+    assert module.Serve().stage("p-bbbbbbbbbbbb-n2") is False  # not on the volume
+    assert sorted(path.name for path in (tmp_path / "staged").iterdir()) == [ADAPTER]  # nothing half-written left
 
-    assert refreshes == module.Refreshes(done=1, skipped=1, failed=1)
-    logged = [record.getMessage() for record in caplog.records]
-    assert len(logged) == 2
-    assert "OSError" in logged[0] and "0 skipped, 1 failed" in logged[0]
-    assert "1 skipped, 1 failed" in logged[1]
-    assert not any("/adapters" in line or "open files" in line for line in logged)  # never what the error said
+
+def test_staging_refuses_a_bad_name_or_an_adapter_the_server_cant_load(
+    modal_app: tuple[types.ModuleType, _Recorder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, recorder = modal_app
+    _on_volume(recorder, _adapter(tmp_path, r=128))
+    monkeypatch.setattr(config, "STAGED_ADAPTERS_DIR", str(tmp_path / "staged"))
+
+    with pytest.raises(ServeConfigError, match="named"):
+        module.Serve().stage("../weights")
+    with pytest.raises(ServeConfigError, match="rank"):
+        module.Serve().stage(ADAPTER)
+    assert not (tmp_path / "staged").exists() or list((tmp_path / "staged").iterdir()) == []
+    assert recorder.reads == [f"/{ADAPTER}/{file}" for file in config.ADAPTER_FILES]  # the bad name read nothing
 
 
 def test_the_gpu_snapshot_is_tried_only_when_its_flag_is_set(
