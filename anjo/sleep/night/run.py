@@ -540,6 +540,7 @@ class NightRunner:
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
             run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.stamp)
+        p.spend.add("practice", run.critic_usd)  # a third-party critic's, held per call on its own pool
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
@@ -549,7 +550,10 @@ class NightRunner:
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}), **self._serving(p, "practice", started)}
+                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}),
+                **({"roles": dict(run.roles), "flagged": run.flagged} if run.roles else {}),
+                **({"critic": dict(run.third_party), "critic_usd": run.critic_usd} if run.third_party else {}),
+                **self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:
         settings = self.deps.settings

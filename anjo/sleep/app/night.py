@@ -24,12 +24,17 @@ it off the serving path). Everything else is here:
   what the server reports at the first gate (``gate_cache``: the root it serves Glimmer from and the
   revision that root names), never on this host's settings alone.
 
+Who plays practice's roles is ``ANJO_SLEEP_PRACTICE_ROLES`` (``practice.roles``; unset, Spark Open plays
+all three). ``critic=gemini`` scores a synthetic person's candidates with Gemini 3.8 Flash through the APD
+judge's Vertex call, each call held on ``vertex_usd``; a real person's critic stays Spark Open.
+
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -87,7 +92,9 @@ from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
+from anjo.sleep.practice.critics import ThirdPartyCritic, TextModel, gemini_critic, held_critic
 from anjo.sleep.practice.full import CappedChat, FullPractice
+from anjo.sleep.practice.roles import practice_roles
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
 from anjo.sleep.serving import backend, config
@@ -215,6 +222,23 @@ def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
                      serving=_Served(serving.name, client))
 
 
+APD_BACKEND: Final = "anjo.sleep.mind.apd.backend"  # loaded by name: it carries the Colab runner, which the
+# import contract keeps off the app's import graph; the night that asks for a Gemini critic has it loaded anyway
+
+
+def _vertex_judge() -> TextModel:
+    """The APD judge's Gemini call on Vertex (thinking low, its reply cap): no second Vertex client."""
+    ask: TextModel = importlib.import_module(APD_BACKEND)._gemini
+    return ask
+
+
+def _critic(gemini: bool, night: date, ledger: Ledger) -> ThirdPartyCritic | None:
+    """Gemini as the critic of a synthetic person's practice, each call held on ``vertex_usd``."""
+    if not gemini:
+        return None
+    return held_critic(gemini_critic(_vertex_judge()), ledger, f"night:practice:{night.isoformat()}")
+
+
 def field_domains(personas: Mapping[str, str]) -> Callable[[str], tuple[str, ...]]:
     """Each synthetic person's fields from their persona file; anyone else's from ``$ANJO_SLEEP_FIELDS``."""
     known = {uid: load_person_file(PERSONAS / f"{name}.json").visible.field_domains for uid, name in personas.items()}
@@ -239,12 +263,15 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
+    roles = practice_roles(os.environ)  # and so does a role practice doesn't have
     gate_client = client.on(EVAL_DAY)  # one date in every gate prompt, so the base model's answers keep
 
     def practice(chat: CappedChat, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
-                            teacher=night_settings.practice_teacher, concurrency=calls)
+                            teacher=night_settings.practice_teacher, concurrency=calls,
+                            glimmer_person=roles.person == "glimmer", critic=_critic(roles.critic == "gemini", night, ledger),
+                            third_party=is_synthetic, lazy_teacher=roles.teacher == "lazy")
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)

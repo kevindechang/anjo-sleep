@@ -45,6 +45,22 @@ it never trains on its first candidate without a pair (as an unreadable reply th
 own does). A cut list of scenes keeps its whole messages and drops the one the cut fell in.
 ``PracticeRun.spark`` counts each role's calls, tokens and cut replies (the teacher's past the
 bound among them) and ``capped_scenes`` the scenes a cap dropped; the night log carries both.
+
+**Who plays the roles** (``roles``, ``ANJO_SLEEP_PRACTICE_ROLES``; all Spark Open unless set):
+
+- ``glimmer_person``: Glimmer's base model (no adapter) writes the scenes on the serving GPU, seeded per
+  night, at the person's visible cap (it answers directly, with no reasoning to make room for).
+- ``critic``: a third-party critic (``critics.ThirdPartyCritic``) scores the candidates of a person
+  ``third_party`` allows (synthetic people only); anyone else's critic is Spark Open. Its reply is read
+  for scores and letters only, as Spark Open's is, and priced into ``PracticeRun.critic_usd``. It can't
+  say it was cut, so a reply cut at its cap is an unreadable one: the first Glimmer candidate, no pair.
+- ``lazy_teacher``: the teacher is asked only where the critic found every Glimmer candidate missing a
+  constraint, the only scene where it can become the target; the critic then judges the four again.
+  Neither the teacher nor anything that trains ever reads a verdict: the teacher's prompt is F and the
+  message, as before.
+
+Glimmer's candidates are asked exactly as before, whoever plays the other roles, so whatever they read
+(F, and MIND's soft tokens where the client carries them) is unchanged.
 """
 from __future__ import annotations
 
@@ -65,6 +81,7 @@ from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.context.template import render
 from anjo.sleep.parallel import Calls
 from anjo.sleep.model_api import ChatResult
+from anjo.sleep.practice.critics import ThirdPartyCritic
 from anjo.sleep.practice.run import (
     NORMAL_STOPS,
     PRACTICE_F_CAP,
@@ -104,6 +121,42 @@ VISIBLE_TOKENS: Final[Mapping[str, int]] = MappingProxyType(
     {"person": 2_048, "teacher": GLIMMER_REPLY_CAP, "critic": 256})
 SPARK_CAPS: Final[Mapping[str, int]] = MappingProxyType(
     {role: visible + REASONING_ROOM for role, visible in VISIBLE_TOKENS.items()})
+
+
+class _CappedClient(Protocol):
+    """Glimmer's client, capped per call (``VllmClient``): the person's scenes when Glimmer plays it."""
+
+    def complete(
+        self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
+        seed: int | None = None, max_tokens: int | None = None,
+    ) -> ChatResult: ...
+
+
+@dataclass(frozen=True)
+class _Said:
+    """A critic's reply as practice reads it: its text, and whether it reached its cap."""
+
+    text: str
+    cut: bool
+
+
+class _ThirdParty:
+    """One run's third-party critic calls, counted and priced from any thread."""
+
+    def __init__(self, critic: ThirdPartyCritic) -> None:
+        self.critic = critic
+        self.counts = {"calls": 0, "in": 0, "out": 0}
+        self.usd = 0.0
+        self._lock = threading.Lock()
+
+    def ask(self, prompt: str) -> _Said:
+        text, tokens_in, tokens_out = self.critic.ask(prompt)
+        with self._lock:
+            self.counts["calls"] += 1
+            self.counts["in"] += tokens_in
+            self.counts["out"] += tokens_out
+            self.usd += self.critic.usd(tokens_in, tokens_out)
+        return _Said(text, False)
 
 
 class CappedChat(Protocol):
@@ -175,6 +228,8 @@ class _Verdict:
     best: _Candidate
     worst: _Candidate | None  # None: no preference, so no pair
     unreadable: bool = False
+    glimmer_all_miss: bool = False  # all three Glimmer candidates miss a constraint: the teacher may win
+    flagged: int = 0  # candidates the critic listed as missing a constraint
 
 
 @dataclass(frozen=True)
@@ -196,6 +251,7 @@ class _Night:
     adapter: CheckpointRef | None
     at: datetime
     spark: _Spark
+    critic: Callable[[str], _Said]
 
 
 def _marks(text: str, labels: dict[str, _Candidate]) -> tuple[dict[_Candidate, float], set[_Candidate]] | None:
@@ -227,7 +283,9 @@ def _pick(candidates: Sequence[_Candidate], scores: dict[_Candidate, float], mis
     if teacher is not None and teacher_may_win and scores[teacher] > scores[best]:
         best = teacher
     worst = min(candidates, key=lambda c: (scores[c], c.source != "teacher", -c.place))
-    return _Verdict(best, worst if scores[best] > scores[worst] else None)
+    all_miss = len(glimmer) == GLIMMER_CANDIDATES and all(c in misses for c in glimmer)
+    return _Verdict(best, worst if scores[best] > scores[worst] else None, glimmer_all_miss=all_miss,
+                    flagged=len(misses))
 
 
 class FullPractice:
@@ -238,6 +296,8 @@ class FullPractice:
         self, *, chat: CappedChat, client: ModelClient, adapter: Adapter, snapshot: Snapshot, seed: int,
         scenes: int = MIN_SCENES, teacher: bool = True, hosted_in_training: bool = False,
         f_cap: int = PRACTICE_F_CAP, concurrency: int = 1, spark_caps: Mapping[str, int] = SPARK_CAPS,
+        glimmer_person: bool = False, critic: ThirdPartyCritic | None = None,
+        third_party: Callable[[str], bool] = lambda user_id: False, lazy_teacher: bool = False,
     ) -> None:
         if not MIN_SCENES <= scenes <= MAX_SCENES:
             raise ValueError(f"full practice runs {MIN_SCENES} to {MAX_SCENES} scenes a night, not {scenes}")
@@ -254,11 +314,32 @@ class FullPractice:
         self._f_cap = f_cap
         self._workers = concurrency
         self._caps = spark_caps
+        self._glimmer_person = glimmer_person
+        self._critic = critic
+        self._third_party = third_party
+        self._lazy = lazy_teacher and teacher
 
     @property
     def max_spark_calls(self) -> int:
-        """The scenes, then per scene the teacher (when on) and the critic."""
-        return 1 + self._count * (2 if self._teacher else 1)
+        """The scenes (unless Glimmer writes them), then per scene the teacher (when on) and the critic,
+        twice for a lazy teacher. A third-party critic still counts: a real person's is Spark Open."""
+        person = 0 if self._glimmer_person else 1
+        return person + self._count * ((1 if self._teacher else 0) + (2 if self._lazy else 1))
+
+    def _roles(self, third: _ThirdParty | None) -> dict[str, str]:
+        teacher = ("spark-lazy" if self._lazy else "spark") if self._teacher else "off"
+        return {"person": "glimmer" if self._glimmer_person else "spark", "teacher": teacher,
+                "critic": third.critic.model if third is not None else "spark"}
+
+    def _write_scenes(self, spark: _Spark, user_id: str, night: date, prompt: str) -> ChatResult:
+        messages = [{"role": "user", "content": prompt}]
+        if not self._glimmer_person:
+            return spark.ask("person", messages, SCENE_TEMPERATURE)
+        glimmer: Any = self._client  # VllmClient: the base model, capped for this call alone
+        written: ChatResult = glimmer.complete(
+            None, messages, temperature=SCENE_TEMPERATURE, seed=_seed(self._seed, user_id, night.isoformat(), "person"),
+            max_tokens=VISIBLE_TOKENS["person"])
+        return written
 
     def practice(self, user_id: str, night: date, evidence: list[Evidence], hw: object | None) -> list[PracticeTranscript]:
         return list(self.run(user_id, night, evidence, hw, at=datetime.combine(night, datetime.min.time())).transcripts)
@@ -273,13 +354,21 @@ class FullPractice:
             return PracticeRun((), (), 0)
         prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": _known(f), "COUNT": str(SCENES_ASKED)})
         spark = _Spark(self._chat, self._caps)
-        written = spark.ask("person", [{"role": "user", "content": prompt}], SCENE_TEMPERATURE)
+        written = self._write_scenes(spark, user_id, night, prompt)
         cut = written.finish_reason == CUT  # the scene it was writing is dropped, the whole ones kept
         messages = _salvaged(written.text)[:SCENES_ASKED] if cut else _scenes(written.text, SCENES_ASKED)
         cue_free = [message for message in messages if not has_cue(message)]
+        third = _ThirdParty(self._critic) if self._critic is not None and self._third_party(user_id) else None
+
+        def critic(text: str) -> _Said:
+            if third is not None:
+                return third.ask(text)
+            reply = spark.ask("critic", [{"role": "user", "content": text}], CRITIC_TEMPERATURE)
+            return _Said(reply.text, reply.finish_reason == CUT)
+
         ctx = _Night(user_id, night, _known(f), "## What you know about this person\n" + _known(f),
                      tuple(item.id for item in f), union(item.ancestry for item in f), self._adapter(user_id), at,
-                     spark)
+                     spark, critic)
         scenes = [_Scene(index, message, *self._snapshot(user_id, message))  # C before any candidate
                   for index, message in enumerate(cue_free[: self._count])]
         calls = Calls(self._workers)
@@ -291,6 +380,9 @@ class FullPractice:
             dropped_cut=len(done) - len(kept) - capped, pairs=sum(v.worst is not None for _, v in kept),
             teacher_targets=sum(v.best.source == "teacher" for _, v in kept),
             critic_unreadable=sum(v.unreadable for _, v in kept), capped_scenes=capped + cut, spark=spark.counts(),
+            critic_usd=third.usd if third is not None else 0.0, roles=self._roles(third),
+            flagged=sum(v.flagged for _, v in kept),
+            third_party=dict(third.counts) if third is not None else {},
         )
 
     def _glimmer(self, ctx: _Night, index: int, place: int, prefix: list[dict[str, str]]) -> _Candidate | None:
@@ -314,10 +406,11 @@ class FullPractice:
 
     def _candidates(self, ctx: _Night, calls: Calls, index: int, prefix: list[dict[str, str]]) -> list[_Candidate]:
         """The kept candidates by place: Glimmer's, side by side, then the teacher's only when a Glimmer
-        one survived. Other scenes keep the server busy while this one waits for its teacher."""
+        one survived (a lazy teacher waits for the verdict). Other scenes keep the server busy while this
+        one waits for its teacher."""
         asks = [partial(self._glimmer, ctx, index, place, prefix) for place in range(GLIMMER_CANDIDATES)]
         glimmer = [c for c in calls.map(calls.call, asks) if c is not None]
-        if not glimmer or not self._teacher:
+        if not glimmer or not self._teacher or self._lazy:
             return glimmer
         taught = calls.call(partial(self._taught, ctx, prefix))
         return glimmer if taught is None else [*glimmer, taught]
@@ -333,8 +426,8 @@ class FullPractice:
         block = "\n".join(f"[{label}]\n{candidate.text}" for label, candidate in labels.items())
         prompt = render(CRITIC_PATH.read_text(encoding="utf-8"), {
             "COUNT": str(len(labels)), "KNOWN": ctx.known, "MESSAGE": message, "CANDIDATES": block})
-        reply = calls.call(partial(ctx.spark.ask, "critic", [{"role": "user", "content": prompt}], CRITIC_TEMPERATURE))
-        if reply.finish_reason == CUT:  # a cut verdict is never read, and its scene never trains
+        reply = calls.call(partial(ctx.critic, prompt))
+        if reply.cut:  # a cut verdict is never read, and its scene never trains
             return None
         marks = _marks(reply.text, labels)
         if marks is None:
@@ -351,6 +444,10 @@ class FullPractice:
         if not any(c.source == "glimmer" for c in candidates):
             return None, None, False
         verdict = self._judge(ctx, calls, index, message, candidates)
+        if verdict is not None and self._lazy and verdict.glimmer_all_miss:  # only here can the teacher win
+            taught = calls.call(partial(self._taught, ctx, prefix))  # F and the message: never the verdict
+            if taught is not None:
+                verdict = self._judge(ctx, calls, index, message, [*candidates, taught])
         if verdict is None:
             return None, None, True
         digest = hashlib.sha256(f"{ctx.user_id}\x1f{ctx.night.isoformat()}\x1f{index}".encode()).hexdigest()[:16]

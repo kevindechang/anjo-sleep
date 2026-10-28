@@ -345,7 +345,7 @@ def test_only_tonights_pairs_are_kept(tmp_path: Path) -> None:
 # ── in the night ──────────────────────────────────────────────────────────────
 
 
-def _full_night(tmp_path: Path, critic: Spark) -> tuple[Any, Any, Any]:
+def _full_night(tmp_path: Path, critic: Spark, practice_kw: dict[str, Any] | None = None) -> tuple[Any, Any, Any]:
     from anjo.sleep.budget import Ledger
     from anjo.sleep.context.brief_store import TrainingBriefs
     from anjo.sleep.context.builder import RecallSettings
@@ -370,7 +370,7 @@ def _full_night(tmp_path: Path, critic: Spark) -> tuple[Any, Any, Any]:
         recall = Bm25Recall(world.evidence, until=night)
         context = TrainingContext(TrainingBriefs(world.briefs), recall, RecallSettings(k=6, budget_tokens=1200))
         return FullPractice(chat=chat, client=Glimmer(), snapshot=context.snapshot, adapter=world.registry.last_promoted,
-                            seed=7)
+                            seed=7, **(practice_kw or {}))
 
     ledger = Ledger(tmp_path / "budget.jsonl")
     deps = world.deps(spark_chat=spark, practice=practice, ledger=ledger)
