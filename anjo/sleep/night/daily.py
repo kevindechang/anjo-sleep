@@ -62,6 +62,7 @@ from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
 from anjo.sleep.night.sleep_night import NAP_WHY
 from anjo.sleep.night.state import safe_error
+from anjo.sleep.night.story import MORNING_FAILED
 from anjo.sleep.probes.morning import DAILY, MorningResult, TooManyNoVerdicts, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
@@ -80,7 +81,6 @@ DAILIES: Final = "anjo.sleep.app.demo_pairs:after_night"
 MARKERS: Final = "daily"  # under $ANJO_SLEEP_DATA_DIR/sleep/
 DAY_MISSING: Final = "day_missing"
 SHORT_DAY: Final = "short_day"
-MORNING_FAILED: Final = "morning failed: "  # the failed morning step's ``why`` starts with this
 UNSCORED_EXIT: Final = 3  # the night promoted and its morning failed: new weights serve unscored
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,8 @@ def run_night_phase(
                            timer=timer)
             if result.status == "promoted":  # new weights: the line he'd now say differently
                 _pregenerate(log, dailies, timer, user, persona, plan.night, result)
+        if result.status != "failed":  # the story told again, its wake now the morning's (``story.py``)
+            NightLog(result.log_path.parent).tell(plan.night, result.status)
     return result
 
 

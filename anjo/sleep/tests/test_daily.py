@@ -432,3 +432,22 @@ def test_the_night_line_says_how_the_morning_went_and_a_failed_morning_after_a_p
 ) -> None:
     exit_code, line = _night_main(monkeypatch, tmp_path, capsys, status, score)
     assert (line["status"], line["morning"], exit_code) == (status, morning, code)
+
+
+def test_the_morning_tells_the_nights_story_again_with_its_wake(tmp_path: Path) -> None:
+    import json
+
+    from anjo.sleep.night import story as st
+    from anjo.sleep.night.nightlog import STORY
+    from anjo.sleep.probes.morning import MorningResult
+
+    told = {}
+    for label, score in (("ok", lambda *a, **kw: MorningResult(tmp_path, 28, 14, 1)), ("unread", _unreadable)):
+        result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label),
+                                       nights=_promoted(tmp_path / label), morning=lambda *a: None, score=score,
+                                       dailies=lambda *a: None)
+        told[label] = st.story_from(json.loads((result.log_path.parent / STORY).read_text()))
+    assert told["ok"].wake == st.Wake(st.Morning(28, 1), st.NotRun(st.SELF_MODEL_NOT_YET))
+    assert told["unread"].wake.morning == st.Failed(  # type: ignore[union-attr]
+        "morning", "TooManyNoVerdicts: the judge gave no readable verdict on 3 of 3 probes")
+    assert told["ok"].night == date(2026, 10, 29)

@@ -35,7 +35,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
     records this offer's decision point too, before the note settles its target, offered or not: a
     night with no second offer records one that allows nothing. A nap writes none: nothing shares, and
     the note is ``deferred``, its target unsettled.
-11. ``finish``: the ``NightResult`` and every receipt.
+11. ``finish``: the ``NightResult``, every receipt, and the night told as one loop (``story.py``).
 
 A failure, a budget stop or a cancel stops that person's night at that step: the previous
 checkpoint keeps serving, no note is held, and the rest of the batch goes on (RF1). Every date is
@@ -685,7 +685,7 @@ class NightRunner:
             "steps": [record["step"] for record in p.log.steps()],
             **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
             **({} if p.gpu_batch is None else {"gpu_batch": {"digest": p.gpu_batch[0], "people": p.gpu_batch[1]}}),
-        })
+        }, night=p.night)
         return result
 
 
