@@ -9,6 +9,8 @@ import it.
 - ``Homework``: Task 7's ``WonderHomework`` (``anjo.sleep.homework.agent``) in the app.
   ``NoHomework`` stays for tests and the public example: its ``available`` is False, so the night
   offers no study action (the chooser records ``action_not_offered``).
+- ``MindCore`` (MIND's core: the dream and the night's unit): ``NoCore``; the app builds
+  ``anjo.sleep.mind.core.night.CoreNight`` under ``ANJO_SLEEP_MIND_CORE=1``.
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
   ``NoNotice``. ``anjo.sleep.night.mind.MindNight`` is both, and the night calls it only while
   ``NightSettings.mind_inquiry`` is on; off, the night is Task 7a's as specced.
@@ -25,7 +27,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
@@ -58,6 +60,10 @@ from anjo.sleep.types import (
     Result,
     Target,
 )
+
+if TYPE_CHECKING:  # both are torch-free, but the night needs only their types
+    from anjo.sleep.mind.core.bridge import CoreView
+    from anjo.sleep.mind.core.state import CoreState
 
 STUDY_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread"})
 ALL_ACTIONS: Final = frozenset({"prepare_commitment", "revisit_thread", "inquire", "hold_note"})
@@ -127,6 +133,7 @@ class MindCall:
     actions_left: int
     job: str
     cancelled: Callable[[], bool]
+    core_view: CoreView | None = None  # tonight's dream, for the inquiry's decider (MIND's core on)
 
 
 class Inquiry(Protocol):
@@ -172,6 +179,51 @@ class NoInquiry:
 
     def facts(self, call: MindCall, target_id: str) -> list[Fact]:
         return []
+
+
+@dataclass(frozen=True)
+class Dreamt:
+    """What the night's dream (step 2c) left for the steps after it: her core state after every
+    event so far, consolidated (``state``: what practice reads and the night's rows are made under;
+    ``state_id``, its id in her store and the thought channel's ``state_sha``), the evidence
+    practice is seeded on (empty: today's newest), the day's surprise weights by evidence id, the
+    core's view for the inquiry (``view.predictions`` is ``Core.predict(state)``), and the dream's
+    receipt (ids and numbers, for the night log)."""
+
+    state_id: str | None = None
+    state: CoreState | None = None
+    rehearse: tuple[str, ...] = ()
+    weights: Mapping[str, float] = field(default_factory=dict)
+    view: CoreView | None = None
+    receipt: Mapping[str, object] = field(default_factory=dict)
+
+
+class MindCore(Protocol):
+    """MIND's core in the night (the one system): ``dream`` observes the day's evidence, dreams,
+    picks what practice rehearses and consolidates; ``keep`` saves the night's unit (her state, the
+    thought channel's projector version and her adapter). Ids only cross: no row's words."""
+
+    available: bool
+
+    def dream(self, call: MindCall, day: Sequence[Evidence]) -> Dreamt: ...
+
+    def keep(
+        self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
+    ) -> Mapping[str, object]: ...
+
+
+class NoCore:
+    """MIND's core off: no dream, practice seeds on the newest evidence, rows are unweighted."""
+
+    available: bool = False
+
+    def dream(self, call: MindCall, day: Sequence[Evidence]) -> Dreamt:
+        return Dreamt()
+
+    def keep(
+        self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None,
+    ) -> Mapping[str, object]:
+        return {}
 
 
 class Notice(Protocol):
@@ -318,6 +370,7 @@ class NightDeps:
     homework: Homework = field(default_factory=NoHomework)
     inquiry: Inquiry = field(default_factory=NoInquiry)
     notice: Notice = field(default_factory=NoNotice)
+    core: MindCore = field(default_factory=NoCore)  # MIND's core (ANJO_SLEEP_MIND_CORE=1); off, the night is today's
     estimator: Coefficients | None = None  # Task 16's registered estimator
     intentions: IntentionSource = field(default_factory=NoIntentions)
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)

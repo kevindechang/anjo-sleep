@@ -41,7 +41,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from types import MappingProxyType
 from typing import Final, Literal
@@ -88,6 +88,7 @@ class Example:
     new: bool
     teacher: bool = False  # the target is the Spark Open teacher's candidate (full practice)
     current_date: date | None = None  # the date its prompt was served on, when not the run's (Task 17b)
+    weight: float = 1.0  # its loss weight: MIND's surprise at the evidence it was made from (the Sleep link)
 
 
 @dataclass(frozen=True)
@@ -137,11 +138,13 @@ class Dataset:
         """The rows the training script reads: conversational prompt/completion, so TRL puts the
         loss on the completion only, then with ``pairs`` the preference rows (prompt, chosen,
         rejected) for the DPO pass. Every text is cleaned as the server's prompt is. A row with its
-        own ``current_date`` carries it, and is rendered on it."""
+        own ``current_date`` carries it, and is rendered on it. A row MIND weighted carries its loss
+        ``weight`` (1.0, the trainer's default, is left out)."""
         rows = [
             {"id": example.id, "provenance": "teacher" if example.teacher else "glimmer",
              "prompt": _messages(example.prompt), "completion": _reply(example.completion),
-             **({} if example.current_date is None else {"current_date": example.current_date.isoformat()})}
+             **({} if example.current_date is None else {"current_date": example.current_date.isoformat()}),
+             **({} if example.weight == 1.0 else {"weight": example.weight})}
             for example in self.examples
         ]
         if pairs:
@@ -151,6 +154,12 @@ class Dataset:
                 for pair in self.pairs
             ]
         return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+
+    def weighted(self, weights: Mapping[str, float]) -> Dataset:
+        """A copy with each example in ``weights`` carrying its loss weight (MIND's Sleep link)."""
+        if any(not w > 0 for w in weights.values()):
+            raise ValueError("a row's loss weight is positive")
+        return replace(self, examples=tuple(replace(e, weight=weights.get(e.id, e.weight)) for e in self.examples))
 
 
 def quotes_url_or_date(text: str) -> bool:

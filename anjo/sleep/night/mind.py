@@ -13,7 +13,10 @@ folder), folded on every read, so it is exported, erased and replayed with her o
   ``continues`` while it is live, its next step is ready and tonight's budget lasts.
 - **Step 4, inquire:** ``loop.run_inquiry`` on the chosen question under the night's one budget
   (12 cycles and 20k tokens, shared with the notice pass), or ``loop.resume_inquiry`` when a kill
-  cut tonight's run off inside an ``INVESTIGATE``. ``research`` (Wonder) is offered only while
+  cut tonight's run off inside an ``INVESTIGATE``. With a dream tonight (MIND's core on), the
+  core's view picks each cycle's question; a resumed run keeps the decider its start names
+  (``bridge.resume_decider``), and a core-decided one fails rather than run on under the
+  controller. ``research`` (Wonder) is offered only while
   Wonder's calls and dollars and the night's paid actions last. A question tonight's runs closed
   owes its close marks (``snapshot.close_marks``), read from her log: they are applied after the
   run however it ended, and again before each snapshot, so a kill or a failure loses none and a
@@ -48,6 +51,7 @@ from typing import Any, Final, Protocol
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.budget import Ledger
 from anjo.sleep.mind import snapshot
+from anjo.sleep.mind.core import bridge
 from anjo.sleep.mind.inquiry import controller, findings, kernel, loop
 from anjo.sleep.mind.inquiry.ports import (
     InquiryPorts,
@@ -413,9 +417,11 @@ class MindNight:
         run: InquiryRun | None = None
         stopped, said = None, {}
         try:
-            run = self._held(call, step, lambda: loop.resume_inquiry(events, step.ports, targets=targets) if resumed
-                             else loop.run_inquiry(before, step.ports, tonight(events, call.night), night=call.night,
-                                                   targets=targets, as_of=call.as_of, focus=question_id))
+            run = self._held(call, step, lambda: loop.resume_inquiry(
+                events, step.ports, targets=targets,
+                decider=bridge.resume_decider(loop.resume(events).start.decider, call.core_view)) if resumed
+                else loop.run_decided(bridge.decider_for(call.core_view), before, step.ports, tonight(events, call.night),
+                                      night=call.night, targets=targets, as_of=call.as_of, focus=question_id))
         except BudgetStop:
             stopped, said = "budget", step.meters.counts()
         except MIND_FAILURES as error:

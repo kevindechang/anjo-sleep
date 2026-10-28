@@ -5,6 +5,7 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 1. ``close_day``: the night's window (the calendar day, or an accelerated run's simulated day).
 2. ``extract``: the day's evidence and targets (Task 3). ``notice`` (2b, Task 17): with ``mind_inquiry``
    on, one thinker pass over the person's new items may open questions (``night/mind.py``); else a no-op.
+   ``dream`` (2c, MIND's core on): she dreams and picks what practice rehearses (``core_steps.py``).
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
 4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
@@ -50,12 +51,13 @@ from anjo.sleep.night.deps import (
     ALL_ACTIONS,
     STUDY_ACTIONS,
     InquiryOutcome,
-    MindCall,
+    Dreamt, MindCall,
     NightDeps,
     StudyOutcome,
 )
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady
+from anjo.sleep.night.core_steps import CoreSteps
 from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
@@ -64,8 +66,7 @@ from anjo.sleep.mind import expect, points, receipt
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
-from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
-from anjo.sleep.note.hold import Fact, write_note
+from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE, Fact, write_note
 from anjo.sleep.ports import EvidenceStore, TargetStore
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.train.dataset import Dataset, build_night_dataset
@@ -88,7 +89,7 @@ from anjo.sleep.types import (
 Window = tuple[datetime, datetime]
 PERSON_KINDS: Final = frozenset({"lesson", "correction", "preference", "tone_request"})
 USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
-    "sweep": ("new", None), "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
+    "sweep": ("new", None), "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None), "dream": ("new", None),
     "probes": ("new", None), "choose": ("new", None), "brief": ("new", None),
     "practice": ("new", None), "dataset": ("new", None), "train": ("new", None),
     "gates": ("existing", "crisis check"), "promote": ("new", None), "note": ("existing", "outreach"),
@@ -135,6 +136,7 @@ class _Night:
     study: StudyOutcome | None = None
     inquiry: InquiryOutcome | None = None
     shared: tuple[str, ...] = ()  # results MIND's findings shared at step 10 (Task 17)
+    dreamt: Dreamt = field(default_factory=Dreamt)  # MIND's core: tonight's dream (step 2c)
     data: Dataset | None = None
     checkpoint: CheckpointRef | None = None
     gates: dict[str, GateResult] = field(default_factory=dict)
@@ -162,7 +164,7 @@ def _safe_error(error: BaseException) -> str:
     return f"{name}: {error}" if type(error).__module__.startswith("anjo.sleep") else name
 
 
-class NightRunner:
+class NightRunner(CoreSteps):
     """Runs a batch of nights over one set of ports."""
 
     def __init__(self, deps: NightDeps) -> None:
@@ -205,7 +207,7 @@ class NightRunner:
                 p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
                            failed_turns=day.failed, short_day=day.short, **extra)
             for step, fn in (("close_day", self._close_day), ("extract", self._extract), ("notice", self._notice),
-                             ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
+                             *self._dreams(), ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
                 self._do(p, step, fn)
         due = [p for p in people if p.due and p.failed_at is None]
         if due:
@@ -370,7 +372,7 @@ class NightRunner:
     def _call(self, p: _Night, step: str) -> MindCall:
         return MindCall(user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, targets=p.targets,
                         spend=p.spend, wonder=p.wonder, actions_left=p.actions_left, job=self._job(p, step),
-                        cancelled=lambda: self.deps.cancel(p.uid))
+                        cancelled=lambda: self.deps.cancel(p.uid), core_view=p.dreamt.view)
 
     def _notice(self, p: _Night) -> Mapping[str, Any]:
         notice = self.deps.notice
@@ -539,7 +541,7 @@ class NightRunner:
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
-            run = runner.run(p.uid, p.night, p.store.trainable(p.night), None, at=p.stamp)
+            run = runner.run(p.uid, p.night, self._seeded(p), None, at=p.stamp)
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
@@ -560,10 +562,11 @@ class NightRunner:
         )
         if not data.examples:
             raise ValueError("no training example survived the dataset's checks")
-        p.data = data
+        p.data = data = self._weighted(p, data)
         return {"examples": len(data.examples), "tokens": data.tokens, "token_cap": settings.token_cap,
                 "new": sum(e.new for e in data.examples), "replay": sum(not e.new for e in data.examples),
                 "context_dropped": sum(e.context_dropped for e in data.examples),
+                **({"mind_weighted": sum(e.weight != 1.0 for e in data.examples)} if self.deps.core.available else {}),
                 "dropped": dict(data.dropped), "probe_dropped": probe_dropped,
                 "context_paraphrase_kept": data.context_paraphrase_kept, "sealed": len(p.sealed)}
 
@@ -716,7 +719,7 @@ class NightRunner:
             **({} if p.wake_seconds is None else {"wake_seconds": p.wake_seconds}),
             **({} if p.gates_wake_seconds is None else {"gates_wake_seconds": p.gates_wake_seconds}),
             "paid_actions": p.paid_actions, "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd,
-            "steps": [record["step"] for record in p.log.steps()],
+            "steps": [record["step"] for record in p.log.steps()], **self._kept(p),
         })
         return result
 

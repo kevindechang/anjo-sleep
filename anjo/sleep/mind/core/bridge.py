@@ -19,7 +19,8 @@ app passes ``os.environ``). Off, ``night_decide`` is the controller (``loop.CONT
   which question the next cycle investigates. Questions the core attends to (their origin
   evidence is cited by a core slot) go first, by that slot's risk; the rest follow in the
   controller's priority order. Its runs' ``RunStart`` names it (``CORE_DECIDER``), so a killed run
-  resumes under it, never under the controller.
+  resumes under it, never under the controller. In the night, a dream's view picks it
+  (``decider_for``) and a resume takes the one its run names (``resume_decider``).
 - ``CoreChooser`` lets the core decide whether to speak: a held note (``hold_note``) keeps its
   weight only when the core decides to speak, and only on the targets of the slot it raises.
   Every other want is the inner chooser's, unchanged.
@@ -197,7 +198,24 @@ class CoreController:
 
 def night_decide(env: Mapping[str, str], view: CoreView) -> Decider:
     """The inquiry's decider for tonight: the controller, or the core's when its switch is on."""
-    return Decider(CORE_DECIDER, CoreController(view)) if core_on(env) else CONTROLLER
+    return decider_for(view if core_on(env) else None)
+
+
+def decider_for(view: CoreView | None) -> Decider:
+    """The decider of a night that dreamt (``view``, its core's view): the core's; else the controller."""
+    return CONTROLLER if view is None else Decider(CORE_DECIDER, CoreController(view))
+
+
+def resume_decider(name: str | None, view: CoreView | None) -> Decider:
+    """The decider a killed run resumes under: the one its ``RunStart`` names (``name``). A
+    core-decided run runs on only under tonight's view, never under the controller in its place."""
+    if name is None:
+        return CONTROLLER
+    if name != CORE_DECIDER:
+        raise ValueError(f"a run decided by the unknown {name!r} can't be resumed")
+    if view is None:
+        raise ValueError("the run was decided by MIND's core; resuming it needs the core's view (ANJO_SLEEP_MIND_CORE)")
+    return decider_for(view)
 
 
 @dataclass(frozen=True)

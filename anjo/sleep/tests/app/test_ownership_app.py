@@ -397,3 +397,17 @@ def test_delete_succeeds_for_any_valid_account_id(auth_client: Any, monkeypatch:
         delete_all(uid)
         assert not any(path.exists() for path in theirs) and all(path.exists() for path in kept)
     delete_all("person-with-no-latents")  # nothing kept: nothing to remove, and no failure
+
+
+def test_a_delete_removes_the_persons_mind_state_and_only_hers(auth_client: Any) -> None:
+    from anjo.sleep.app.ownership import delete_all
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.mind.core import store
+
+    root = data_root() / SLEEP_DIR / store.STORE_DIR
+    for uid in ("_lead", "x_y-9", "a" * 64):  # account ids at their edges
+        kept, theirs = store.MindStore(root, BOB), store.MindStore(root, uid)
+        for held in (kept, theirs):
+            held.keep(date(2026, 10, 28), held.put_state(b"state"), model="m", projector=None, lora=None)
+        delete_all(uid)
+        assert not theirs.folder.exists() and kept.head() is not None

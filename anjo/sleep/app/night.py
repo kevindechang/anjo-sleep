@@ -25,7 +25,8 @@ it off the serving path). Everything else is here:
   revision that root names), never on this host's settings alone.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
-(``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
+(``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). MIND's core
+dreams in the night only under ``ANJO_SLEEP_MIND_CORE=1`` (``app/mind_core.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 """
 from __future__ import annotations
@@ -47,6 +48,7 @@ from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.history_source import HistorySource
+from anjo.sleep.app.mind_core import build_core
 from anjo.sleep.app.mind_night import build_mind
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
 from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
@@ -267,6 +269,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
-        inquiry=mind or NoInquiry(), notice=mind or NoNotice(),
+        inquiry=mind or NoInquiry(), notice=mind or NoNotice(), core=build_core(os.environ, data_root() / SLEEP_DIR),
     )
 

@@ -115,6 +115,19 @@ def test_resume_keeps_the_core_decider() -> None:
                             decider=core)
 
 
+def test_a_night_decides_by_its_dream_and_resumes_under_the_decider_its_run_names() -> None:
+    view = _view(True)
+    assert bridge.decider_for(None) is loop.CONTROLLER
+    core = bridge.decider_for(view)
+    assert core.name == bridge.CORE_DECIDER and core.decide == bridge.CoreController(view)
+    assert bridge.resume_decider(None, view) is loop.CONTROLLER  # a controller's run runs on under it
+    assert bridge.resume_decider(bridge.CORE_DECIDER, view).decide == bridge.CoreController(view)
+    with pytest.raises(ValueError, match="core's view"):
+        bridge.resume_decider(bridge.CORE_DECIDER, None)  # never under the controller in its place
+    with pytest.raises(ValueError, match="unknown"):
+        bridge.resume_decider("someone-else", view)
+
+
 def test_core_controller_investigates_what_the_core_attends_to_first() -> None:
     w, _ = _held()
     other = "t-budget"

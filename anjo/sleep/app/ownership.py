@@ -7,8 +7,8 @@ over Anjo's own stores.
   and cancels their running Modal training call, removes their adapters from the SageMaker bucket and
   the Modal volume when those are configured (the volume also whenever this host has trained on Modal,
   since the training job lands adapters there), and then removes the local files: the training copies,
-  night logs and scores, sealed probes, registry, a pending note, the forced-id entry, the encrypted
-  sleep folder, and last MIND's workspace log.
+  night logs and scores, sealed probes, MIND's latents and core state, registry, a pending note, the
+  forced-id entry, the encrypted sleep folder, and last MIND's workspace log.
 - ``remote_cleanup`` is account erasure's hook (``anjo.core.erasure``). Erasure already removes the
   person's folder under its own locks, so the hook does everything else and leaves that folder alone.
   It writes the cleanup inventory first (``<data dir>/sleep/cleanup/<id>.json``, adapter names only,
@@ -45,6 +45,7 @@ from anjo.sleep.app.storage import (
     sleep_dir,
     writer_guard,
 )
+from anjo.sleep.mind.core.store import STORE_DIR
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.ownership import changes as _changes
 from anjo.sleep.ownership import undo as _undo
@@ -197,6 +198,11 @@ def _latents(user_id: str, adapters: Names) -> list[Path]:
     return list(latents.erase_paths(data_root() / SLEEP_DIR / latents.LATENTS_DIR, _plain(user_id)))
 
 
+def _mind_state(user_id: str, adapters: Names) -> list[Path]:
+    """MIND's core state of the person: every night's unit and state (``mind.core.store``)."""
+    return [data_root() / SLEEP_DIR / STORE_DIR / _plain(user_id)]
+
+
 class _PendingNote:
     """A held note still waiting for the person's next open: it was written from what is deleted."""
 
@@ -312,7 +318,8 @@ def local_erasers(*, under_erasure: bool = False) -> Sequence[Any]:
     """In order: the registry that names the adapters goes last of all."""
     files = [
         PathEraser("training copies", _training), PathEraser("night logs and scores", _results),
-        PathEraser("sealed probes", _sealed), PathEraser("mind latents", _latents), _PendingNote(), _ForcedId(),
+        PathEraser("sealed probes", _sealed), PathEraser("mind latents", _latents),
+        PathEraser("mind state", _mind_state), _PendingNote(), _ForcedId(),
     ]
     registry = PathEraser("checkpoint registry", _registry)
     return [*files, *([] if under_erasure else [_SleepFiles(), _MindWorkspace()]), registry]
