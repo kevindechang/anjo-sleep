@@ -31,7 +31,8 @@ def _life(nights: Sequence[Night], dims: Sequence[str], name: str | None) -> dic
     dated = sorted(nights, key=lambda n: n.night)
     return {"name": name, "nights": [
         {"night": number, "date": n.night, "status": n.status, "probes": n.probes,
-         "scores": {arm: {d: n.arms[arm][d].score for d in dims if d in n.arms[arm]} for arm in ARMS if arm in n.arms}}
+         "scores": {arm: {d: n.arms[arm][d].score for d in dims if d in n.arms[arm]} for arm in ARMS if arm in n.arms},
+         "no_verdict": {arm: k for arm in ARMS if (k := n.no_verdict.get(f"{arm}_vs_1"))}}  # shown beside the score
         for number, n in enumerate(dated, start=1)]}
 
 

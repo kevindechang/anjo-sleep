@@ -157,6 +157,13 @@ def _numbered(nights: Sequence[NightFiles]) -> list[tuple[int, NightRecord, Nigh
     return [(n, *last[day]) for n, day in enumerate(sorted(last), start=1)]
 
 
+def _no_verdict(files: NightFiles) -> int:
+    """How many of the morning's judged probes the judge gave no readable verdict on (its receipt's count)."""
+    morning = next((s for s in reversed(files.steps) if s.get("step") == "morning"), {})
+    count = morning.get("no_verdict")
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
+
+
 def _section(state: str, **body: Any) -> dict[str, Any]:
     return {"state": state, **body}
 
@@ -356,7 +363,7 @@ def _cost(files: NightFiles, upto: Sequence[NightFiles], sources: DailySources, 
 
 def _empty(state: str) -> dict[str, Any]:
     return {"state": state, "night": None, "date": None, "morning": None, "status": None, "as_of": None, "nights": [],
-            "skipped_gates": [],
+            "skipped_gates": [], "no_verdict": 0,
             "learned": _learned_empty(state), "line": _line_empty(state),
             "cost": _section(state, source=None, parts=[], usd=None, gpu_minutes=None, projection=None)}
 
@@ -391,6 +398,7 @@ def dailies_view(
         "state": "ok", "night": number, "date": on.isoformat(), "morning": (on + timedelta(days=1)).isoformat(),
         "status": record.status, "as_of": datetime.combine(on + timedelta(days=1), time.min, timezone.utc).isoformat(),
         "skipped_gates": [g.gate for g in record.gates if g.skipped],  # switched off: shown skipped, never passed
+        "no_verdict": _no_verdict(files),
         "nights": [{"night": n, "date": r.night.isoformat(), "status": r.status} for n, r, _ in reversed(numbered)],
         "learned": _learned(on, record, sources, held),
         "line": _line(on, record.status, numbers, sources, held, passes),

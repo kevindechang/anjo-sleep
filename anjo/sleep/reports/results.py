@@ -12,7 +12,9 @@ It reads a person's results tree, ``<root>/<person>/``:
   shape; the table lists each under its night with its score, CI and decisive share. A file run on a
   subset of the probes names it (``subset``, ``probes.morning.DAILY``); each night carries its probe
   set (``probes``: the subset's name, or ``full``), and the table and the chart keep the sets apart,
-  never one line across two sets.
+  never one line across two sets. A file's ``no_verdict`` counts, per comparison, the probes the judge
+  gave no readable verdict on; the table prints the count beside that comparison's score. A stat with
+  no probe behind it (``n`` 0) is read as missing, never as a 0.50 tie.
 
 Development and final results are printed in separate sections and never mixed. A night whose
 summary carries no label is refused: an unlabeled result could be read as the other kind. The root
@@ -23,7 +25,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
@@ -75,6 +77,7 @@ class Night:
     arms: Mapping[str, Mapping[str, Stat]]
     pairs: Mapping[str, Mapping[str, Stat]]
     probes: str = FULL_SET  # the probe set its scores come from: ``full`` or a subset's name
+    no_verdict: Mapping[str, int] = field(default_factory=dict)  # per comparison (``3_vs_1``, ``4_vs_2C``)
 
 
 def results_root(root: Path | None = None) -> Path:
@@ -94,10 +97,18 @@ def _json(path: Path) -> dict[str, Any]:
 
 
 def _stats(raw: Any) -> dict[str, dict[str, Stat]]:
-    return {str(name): {str(d): _stat(v) for d, v in dims.items()} for name, dims in raw.items()}
+    """Each arm's or pair's stats; one with no probe behind it (``n`` 0) is left out: missing, not a tie."""
+    found = {str(name): {str(d): s for d, v in dims.items() if (s := _stat(v)).n != 0} for name, dims in raw.items()}
+    return {name: dims for name, dims in found.items() if dims}
 
 
-Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str]
+def _counts(raw: Any) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0}
+
+
+Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str, dict[str, int]]
 
 
 def _scores(folder: Path) -> dict[str, Scored]:
@@ -110,7 +121,7 @@ def _scores(folder: Path) -> dict[str, Scored]:
         if "night" not in record or not isinstance(record.get("arms"), dict):
             raise ResultsError(f"{path.name} lacks a night and its arms")
         found[str(record["night"])] = (_stats(record["arms"]), _stats(record.get("pairs") or {}),
-                                       str(record.get("subset") or FULL_SET))
+                                       str(record.get("subset") or FULL_SET), _counts(record.get("no_verdict")))
     return found
 
 
@@ -125,11 +136,11 @@ def load(person: str, root: Path | None = None) -> list[Night]:
         if label not in LABELS:
             raise ResultsError(f"{person} {summary.parent.name}: the night has no development or final label")
         night = str(record.get("night", summary.parent.name))
-        arms, pairs, probes = scores.get(night, ({}, {}, FULL_SET))
+        arms, pairs, probes, no_verdict = scores.get(night, ({}, {}, FULL_SET, {}))
         nights.append(Night(
             person=person, night=night, label=str(label), status=str(record.get("status", "?")),
             cost_usd=float(record.get("cost_usd", 0.0)), gates=record.get("gates") or {},
-            arms=arms, pairs=pairs, probes=probes,
+            arms=arms, pairs=pairs, probes=probes, no_verdict=no_verdict,
         ))
     return sorted(nights, key=lambda n: n.night)
 
@@ -139,11 +150,17 @@ def dimensions(nights: Sequence[Night]) -> tuple[str, ...]:
     return (*(d for d in DIMENSIONS if d in seen), *sorted(seen - set(DIMENSIONS)))
 
 
+def unjudged(night: Night, comparison: str) -> str:
+    """`` (k no verdict)`` beside a comparison's score when the judge left ``k`` of its probes unread."""
+    count = night.no_verdict.get(comparison)
+    return f" ({count} no verdict)" if count else ""
+
+
 def cell(night: Night, arm: str, dims: Sequence[str]) -> str:
     scored = night.arms.get(arm)
     if not scored:
-        return MISSING
-    return "/".join(_shown(scored[d]) if d in scored else MISSING for d in dims) or MISSING
+        return MISSING + unjudged(night, f"{arm}_vs_1")
+    return ("/".join(_shown(scored[d]) if d in scored else MISSING for d in dims) or MISSING) + unjudged(night, f"{arm}_vs_1")
 
 
 def pair_cell(stat: Stat) -> str:
@@ -182,7 +199,7 @@ def _section(label: str, people: Sequence[str], loaded: Mapping[str, list[Night]
         for n in nights:
             for name, stats in sorted(n.pairs.items()):
                 shown = "; ".join(f"{d}: {pair_cell(stats[d])}" for d in (*dims, OVERALL) if d in stats)
-                lines.append(f"{n.night} | pair {name} | {shown}")
+                lines.append(f"{n.night} | pair {name} | {shown}{unjudged(n, name)}")
     return lines
 
 

@@ -259,7 +259,9 @@
       label.setAttribute("scope", "row");
       row.append(label, ...arms.flatMap((arm) => dims.map((d) => {
         const v = night.scores[arm] && night.scores[arm][d];
-        return element("td", "num", typeof v === "number" ? v.toFixed(2) : "–");
+        const unread = night.no_verdict && night.no_verdict[arm]; // probes the judge gave no verdict on
+        const shown = typeof v === "number" ? v.toFixed(2) : "–";
+        return element("td", "num", unread ? `${shown} (${fill(copy.chart_no_verdict, { n: unread })})` : shown);
       })));
       tbody.append(row);
     }

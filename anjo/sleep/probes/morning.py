@@ -33,7 +33,10 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
   ``JUDGE_RETRY_SHARE`` of the run's judge calls, which the judge's hold covers. A probe still without a
   verdict is ``no verdict``: left out of its comparison's score, given an outcome row ``no_verdict``,
   counted per comparison under ``no_verdict`` (written only when there is one) and in
-  ``MorningResult.no_verdict``. The morning never stops on it (Teo's night 1 did, on 2026-10-28).
+  ``MorningResult.no_verdict``. One unreadable answer no longer stops the morning (Teo's night 1 did,
+  on 2026-10-28), but a judge that can't be read does, loudly: past ``NO_VERDICT_MAX_SHARE`` of a
+  comparison's judged probes the run raises ``TooManyNoVerdicts`` and writes no score, so a rerun may
+  score the night. A comparison with no verdict at all is never written as a 0.50 tie: it is missing.
 """
 from __future__ import annotations
 
@@ -86,11 +89,21 @@ ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 JUDGE_USD_PER_CALL: Final = 0.02  # a Muse Spark judge call, until the Oct 30 timing measures it
 JUDGE_RETRY_SHARE: Final = 0.1  # retries of unreadable answers a run may send, as a share of its judge calls (1 in 257 seen)
 NO_VERDICT: Final = "no_verdict"
+# Past this share of a comparison's judged probes without a verdict, the morning stops. One answer in
+# 257 was unreadable on Teo's night 1, and a probe goes without a verdict only when an answer and its
+# retry both fail, so chance leaves a comparison far below a quarter; a judge whose format changed
+# fails most of them. Under it, a comparison's score still rests on three quarters of its probes.
+NO_VERDICT_MAX_SHARE: Final = 0.25
 ARM_POOLS: Final = ("modal_usd", "baseten_sleep_usd")
 JUDGE_POOLS: Final = ("meta_usd",)
 SCORES: Final = "scores"
 DONOR_UNAVAILABLE: Final = "donor_unavailable"
 logger = logging.getLogger(__name__)
+
+
+class TooManyNoVerdicts(RuntimeError):
+    """The judge gave no readable verdict on more than ``NO_VERDICT_MAX_SHARE`` of a comparison's
+    probes: its answers can't be read, so the morning stops and scores nothing."""
 
 
 class MorningError(RuntimeError):
@@ -362,17 +375,26 @@ def _run_morning(
         stats: dict[str, dict[str, dict[str, object]]] = {}
         pairs: dict[str, dict[str, dict[str, object]]] = {}
         no_verdict: dict[str, int] = {}
+        judged = sum(1 for p in probes if p.kind != "taste_ab")
         for name, first, second, found in _judged(probes, replies, judge, calls):
             kept = [(p, f) for p, f in zip(probes, found, strict=True) if f is not None]
             if missing := len(found) - len(kept):
                 no_verdict[name] = missing
+                if missing > NO_VERDICT_MAX_SHARE * judged:
+                    raise TooManyNoVerdicts(
+                        f"the judge gave no readable verdict on {missing} of {judged} probes in {name}, more than "
+                        f"{NO_VERDICT_MAX_SHARE:.0%}: its answers can't be read (has their format changed?), so "
+                        "nothing was scored")
+            if not kept:
+                continue  # no probe has a verdict: the comparison is missing, never a 0.50 tie
             scored = _stats(score_outcomes([p for p, _ in kept], [f.outcome for _, f in kept], bootstrap=config))
             if second == BASELINE:  # the arms are sorted when written; the pairs keep _comparisons' order
                 stats[first] = scored
             else:
                 pairs[name] = scored
             rows.extend(_rows(name, probes, found))
-    stats[BASELINE] = _all_ties(next(iter(stats.values())))
+    if stats:  # arm 1 against itself takes the shape of an arm that was scored
+        stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
         "night": night.isoformat(), "label": label, "probes": len(probes),
         "checkpoint": None if checkpoint is None else checkpoint.id,
@@ -393,4 +415,5 @@ def _run_morning(
     return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()))
 
 
-__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "run_morning", "subset_probes"]
+__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",
+           "subset_probes"]

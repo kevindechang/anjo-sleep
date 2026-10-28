@@ -144,8 +144,8 @@ def _scores(person_dir: Path) -> list[tuple[date, str | None, Mapping[str, tuple
         record = _json(path)
         try:
             arm = record["arms"].get(PERSONAL_ARM) or {}
-            found.append((date.fromisoformat(record["night"]), record.get("subset"),
-                          {name: _score(stat) for name, stat in arm.items()}))
+            found.append((date.fromisoformat(record["night"]), record.get("subset"),  # n 0: missing, never a tie
+                          {name: s for name, stat in arm.items() if (s := _score(stat))[1] != 0}))
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ChangesError(f"{path.name}: not a score record") from None
     return sorted(found, key=lambda item: item[0])

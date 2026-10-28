@@ -50,18 +50,20 @@
     const clapper = element("div", "clapper");
     clapper.setAttribute("aria-hidden", "true");
     const cells = element("dl", "slate-cells");
-    for (const [label, value, kind] of [
-      [copy.dailies_slate_night, String(card.night), "night"],
-      [copy.dailies_slate_morning, day(card.morning), "morning"],
-      [copy.dailies_slate_status, word("night_status", card.status), `status status-${card.status}`],
+    // Notes under a cell: the morning's probes with no verdict, and a gate switched off (skipped, never passed).
+    const skipped = (card.skipped_gates || []).map((g) => word("gate", g)).join(", ");
+    for (const [label, value, kind, note] of [
+      [copy.dailies_slate_night, String(card.night), "night", ""],
+      [copy.dailies_slate_morning, day(card.morning), "morning",
+        card.no_verdict ? fill(copy.dailies_no_verdict, { n: card.no_verdict }) : ""],
+      [copy.dailies_slate_status, word("night_status", card.status), `status status-${card.status}`,
+        skipped ? `${skipped}: ${copy.dailies_gate_skipped}` : ""],
     ]) {
       const cell = element("div", `slate-cell slate-${kind}`);
       cell.append(element("dt", "", label), element("dd", "", value));
+      if (note) cell.append(element("dd", "slate-note", note));
       cells.append(cell);
     }
-    // A gate switched off that night is named under the status: skipped, never passed.
-    const skipped = (card.skipped_gates || []).map((g) => word("gate", g)).join(", ");
-    if (skipped) cells.lastElementChild.append(element("dd", "slate-note", `${skipped}: ${copy.dailies_gate_skipped}`));
     box.append(clapper, cells);
     return box;
   }
