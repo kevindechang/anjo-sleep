@@ -12,13 +12,14 @@ rebuilds the workspace. An ignition with nothing real, no target, or a live ques
 the same targets and kind, is dropped with that reason and logs nothing.
 
 **The switch.** ``ANJO_SLEEP_MIND_CORE=1`` turns the core on for a live night (``core_on``; the
-app passes ``os.environ``). Off, ``night_decide`` is ``controller.decide`` and ``night_chooser``
-the chooser it was given, so the night is today's. On:
+app passes ``os.environ``). Off, ``night_decide`` is the controller (``loop.CONTROLLER``) and
+``night_chooser`` the chooser it was given, so the night is today's. On:
 
 - ``CoreController`` keeps the controller's caps, floor, K5 and receipt, and changes one thing:
   which question the next cycle investigates. Questions the core attends to (their origin
   evidence is cited by a core slot) go first, by that slot's risk; the rest follow in the
-  controller's priority order.
+  controller's priority order. Its runs' ``RunStart`` names it (``CORE_DECIDER``), so a killed run
+  resumes under it, never under the controller.
 - ``CoreChooser`` lets the core decide whether to speak: a held note (``hold_note``) keeps its
   weight only when the core decides to speak, and only on the targets of the slot it raises.
   Every other want is the inner chooser's, unchanged.
@@ -33,7 +34,7 @@ from typing import Final, Literal
 from anjo.sleep.mind.choose import NOTE_ACTION
 from anjo.sleep.mind.core.types import Decision, Ignition, IgnitionKind, Predictions
 from anjo.sleep.mind.inquiry import controller, kernel
-from anjo.sleep.mind.inquiry.loop import Decide
+from anjo.sleep.mind.inquiry.loop import CONTROLLER, Decider
 from anjo.sleep.mind.inquiry.ports import ScreenPort, WorkspaceLog
 from anjo.sleep.mind.inquiry.types import (
     LIVE_STATUSES,
@@ -54,6 +55,7 @@ from anjo.sleep.ports import Chooser
 from anjo.sleep.types import Choice, ChoiceContext, Opportunity, Target, Want, WantSnapshot
 
 CORE_ENV: Final = "ANJO_SLEEP_MIND_CORE"
+CORE_DECIDER: Final = "mind-core"  # the name a core-decided run's RunStart records
 SCREEN_TOKENS: Final = 256  # the screen's allowance for one ignition's subject
 QUESTION_OF: Final[Mapping[IgnitionKind, QuestionKind]] = {
     "risk": "anomaly", "missing": "gap", "collision": "contradiction",
@@ -193,9 +195,9 @@ class CoreController:
         return base if best is None else replace(base, question_id=best.question_id)
 
 
-def night_decide(env: Mapping[str, str], view: CoreView) -> Decide:
-    """The inquiry's controller for tonight: today's, or the core's when its switch is on."""
-    return CoreController(view) if core_on(env) else controller.decide
+def night_decide(env: Mapping[str, str], view: CoreView) -> Decider:
+    """The inquiry's decider for tonight: the controller, or the core's when its switch is on."""
+    return Decider(CORE_DECIDER, CoreController(view)) if core_on(env) else CONTROLLER
 
 
 @dataclass(frozen=True)

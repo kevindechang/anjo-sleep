@@ -8,10 +8,12 @@ import subprocess
 import sys
 from typing import Any
 
+import pytest
+
 from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.mind.core import bridge
 from anjo.sleep.mind.core.types import Decision, Ignition, Predictions, SlotPrediction
-from anjo.sleep.mind.inquiry import controller, kernel, loop
+from anjo.sleep.mind.inquiry import codec, controller, kernel, loop
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.inquiry.log import MemoryWorkspaceLog
 from anjo.sleep.tests.inquiry_fakes import FakeScreen, Ws, commitment, day, ev, night, noon, ports
@@ -57,14 +59,14 @@ def _script() -> list[Any]:
     ]
 
 
-def _inquire(decide: loop.Decide | None) -> it.InquiryRun:
+def _inquire(decider: loop.Decider | None) -> tuple[it.InquiryRun, MemoryWorkspaceLog]:
     w, _ = _held()
     w.ok(it.NoticeOp("anomaly", "Whether Thursday's camera booking holds", (SHOOT,), (CAMERA.id, CANCELLED.id)))
     log = MemoryWorkspaceLog(tuple(w.events))
     run_ports = ports((CAMERA, CANCELLED), _script(), log=log)
-    if decide is None:
-        return loop.run_inquiry(w.ws, run_ports, it.Budget(), night=day(5), targets=TARGETS, as_of=night(5))
-    return loop.run_decided(decide, w.ws, run_ports, it.Budget(), night=day(5), targets=TARGETS, as_of=night(5))
+    if decider is None:
+        return loop.run_inquiry(w.ws, run_ports, it.Budget(), night=day(5), targets=TARGETS, as_of=night(5)), log
+    return loop.run_decided(decider, w.ws, run_ports, it.Budget(), night=day(5), targets=TARGETS, as_of=night(5)), log
 
 
 def test_core_switch_off_is_todays_behavior() -> None:
@@ -80,12 +82,37 @@ def test_core_switch_off_is_todays_behavior() -> None:
     )
     inner = StateChooser()
     assert bridge.night_chooser({}, inner, lambda snapshot: view) is inner
-    assert bridge.night_decide({}, view) is controller.decide
+    assert bridge.night_decide({}, view) is loop.CONTROLLER and loop.CONTROLLER.decide is controller.decide
     assert isinstance(bridge.night_chooser({bridge.CORE_ENV: "1"}, inner, lambda snapshot: view), bridge.CoreChooser)
 
-    today = _inquire(None)
-    off = _inquire(bridge.night_decide({}, view))
+    today, _ = _inquire(None)
+    off, _ = _inquire(bridge.night_decide({}, view))
     assert off.events == today.events and off.decisions == today.decisions and off.ws == today.ws
+
+
+def _starts(run: it.InquiryRun) -> list[it.RunStart]:
+    return [e.step.entry for e in run.events if isinstance(e.step.entry, it.RunStart)]
+
+
+def test_resume_keeps_the_core_decider() -> None:
+    core = bridge.night_decide({bridge.CORE_ENV: "1"}, _view(True))
+    assert core.name == bridge.CORE_DECIDER and isinstance(core.decide, bridge.CoreController)
+    first, log = _inquire(core)
+    assert [s.decider for s in _starts(first)] == [bridge.CORE_DECIDER]
+    step = first.events[0].step
+    assert codec.step_from_json(codec.step_to_json(step)) == step
+    assert "decider" not in codec.step_to_json(_inquire(None)[0].events[0].step)["entry"]  # old logs, byte for byte
+    with pytest.raises(ValueError, match="decider"):
+        loop.resume_inquiry(log.events(), ports((CAMERA, CANCELLED), [], log=log), targets=TARGETS)
+    resumed = loop.resume_inquiry(log.events(), ports((CAMERA, CANCELLED), [], log=log), targets=TARGETS, decider=core)
+    assert [s.decider for s in _starts(resumed)] == [bridge.CORE_DECIDER]
+    assert kernel.fold(log.events()) == resumed.ws
+
+    today, today_log = _inquire(None)
+    assert [s.decider for s in _starts(today)] == [None]  # the controller's logs read as they always did
+    with pytest.raises(ValueError, match="decider"):
+        loop.resume_inquiry(today_log.events(), ports((CAMERA, CANCELLED), [], log=today_log), targets=TARGETS,
+                            decider=core)
 
 
 def test_core_controller_investigates_what_the_core_attends_to_first() -> None:
