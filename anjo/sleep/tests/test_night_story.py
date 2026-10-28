@@ -178,6 +178,8 @@ def test_a_log_missing_what_a_stage_needs_cannot_be_told() -> None:
     broken = [r if r["step"] != "dataset" else {"step": "dataset", "status": "ok"} for r in PROMOTED]
     with pytest.raises(st.StoryError, match="dataset"):
         st.tell(NIGHT, "promoted", broken)
+    with pytest.raises(st.StoryError, match="no night ends 'dozing'"):
+        st.tell(NIGHT, "dozing", PROMOTED)
 
 
 # ── the night writes it ──────────────────────────────────────────────────────

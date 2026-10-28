@@ -25,11 +25,12 @@ import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date
-from typing import Any, Final, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Any, Final, Literal, Union, cast, get_args, get_origin, get_type_hints
 
 from anjo.sleep.types import NightStatus
 
 STORY_VERSION: Final = 1
+STATUSES: Final = frozenset(get_args(NightStatus))
 STAGES: Final = ("dream", "rehearse", "learn", "check", "wake")
 STAGE_STEPS: Final[Mapping[str, tuple[str, ...]]] = {  # the night log's steps each stage is told from
     "dream": ("notice",), "rehearse": ("practice",), "learn": ("dataset", "train"), "check": ("gates", "promote"),
@@ -441,11 +442,14 @@ def _wake(by: Steps, status: str, stopped: str | None) -> Wake | NotRun:
     return Wake(_morning(by.get("morning")), NotRun(SELF_MODEL_NOT_YET))
 
 
-def tell(night: date, status: NightStatus, steps: Sequence[Mapping[str, Any]]) -> Story:
+def tell(night: date, status: str, steps: Sequence[Mapping[str, Any]]) -> Story:
     """The night's story from its log records (``NightLog.steps()``), the latest record of each step."""
+    if status not in STATUSES:
+        raise StoryError(f"no night ends {status!r}")
     by = {str(record.get("step")): record for record in steps}
     stopped = next((str(r["step"]) for r in steps if r.get("status") == "failed" and r.get("step") != "morning"), None)
     builders: Mapping[str, Callable[[Steps], Any]] = {
         "dream": _dream, "rehearse": _rehearse, "learn": _learn, "check": _check}
     stages = {name: _stage(name, by, status, stopped, build) for name, build in builders.items()}
-    return Story(night=night, status=status, sleep=_sleep(by), wake=_wake(by, status, stopped), **stages)
+    return Story(night=night, status=cast(NightStatus, status), sleep=_sleep(by), wake=_wake(by, status, stopped),
+                 **stages)

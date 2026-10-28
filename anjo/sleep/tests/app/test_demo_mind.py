@@ -207,6 +207,30 @@ def test_mind_panel_shows_no_held_out_text() -> None:
     assert body["chart"]["development"]["label"] == "development" and body["chart"]["final"] is None
 
 
+def test_the_panel_carries_last_nights_loop_from_its_story_file() -> None:
+    from anjo.sleep.app.ownership import night_logs
+    from anjo.sleep.night import story as st
+    from anjo.sleep.night.nightlog import STORY
+
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _seed_mind(_held_out())
+    told = st.Story(
+        night=_day(5), status="promoted", sleep=st.Sleep("deep", 0.7, 0.5, "pressure"),
+        dream=st.Dream(2, (st.Ignition("risk", 0.8, ("e-0a1b2c",)),), st.NotRun(st.DREAM_NOT_YET), st.NotRun(st.DREAM_NOT_YET)),
+        rehearse=st.Rehearse(16, st.NotRun(st.CURRICULUM_NOT_YET), 6, 2),
+        learn=st.Learn(8, *(st.NotRun("not yet"),) * 6),
+        check=st.Check((st.Gate("safety", True, False, 0.0, 0.0),), promoted=True),
+        wake=st.Wake(st.Morning(28, 0), st.NotRun(st.SELF_MODEL_NOT_YET)))
+    (night_logs(ACCOUNT) / _day(5).isoformat() / STORY).write_text(json.dumps(told.record()))
+    client = _client(_service())
+    story = client.get(f"{API}/mind", headers=_visit(client)).json()["story"]
+    assert (story["state"], story["night"], story["status"], story["napped"]) == ("ok", 5, "promoted", False)
+    assert [(s["stage"], s["state"], s["key"]) for s in story["stages"]] == [
+        ("dream", "ran", 2), ("rehearse", "ran", 16), ("learn", "ran", 8), ("check", "ran", 1), ("wake", "ran", 28)]
+    assert story["stages"][0]["cites"] == ["e-0a1b2c"]  # read from the night's story file, not told again
+    assert "MARKER" not in json.dumps(story)  # no held-out text, no gate's reason
+
+
 def test_the_panel_fails_closed_when_the_filter_cannot_be_built(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app import demo_mind
 
@@ -214,7 +238,7 @@ def test_the_panel_fails_closed_when_the_filter_cannot_be_built(monkeypatch: pyt
     monkeypatch.setattr(demo_mind, "DEMO_PERSONA", "no-such-persona")
     client = _client(_service())
     body = client.get(f"{API}/mind", headers=_visit(client)).json()
-    for section in ("questions", "targets", "wants", "choices", "expectations", "gates", "task16", "ledger"):
+    for section in ("questions", "targets", "wants", "choices", "expectations", "gates", "task16", "ledger", "story"):
         assert body[section]["state"] == "unavailable", section
     assert "85 mm" not in json.dumps(body)
 
