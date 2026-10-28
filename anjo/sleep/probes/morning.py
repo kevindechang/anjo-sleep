@@ -10,8 +10,11 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
 
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
   before any call, and the score file records ``wake_seconds``.
-- A night that already has a score file is refused before any call: the first score stands.
-- The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run.
+- A night that already has a score file is refused before any call: the first score stands. A pinned
+  backfill is refused only by one on its own probe set (``subset``), so a full score can follow a daily one.
+- The checkpoint given must be the one serving; arms 3 and 4 are pinned to it for the whole run. A
+  backfill (``tools.morning_backfill``) passes ``pinned``: a past checkpoint its night promoted is scored
+  though a later one serves, and its file says ``pinned``; what serves never changes.
 - Arm 3x needs the registered donor's promoted adapter. Without one, 3x is left out and recorded
   under ``unavailable`` (specificity is then inconclusive); it is never filled in.
 - Every paid call is held first, the way ``night/holds.py`` does it: the arms on ``modal_usd`` and
@@ -142,6 +145,22 @@ class ProbeSubset:
 # pushback left to the full runs. 22 judge calls and 28 replies, against the full run's 910 and 480.
 DAILY: Final = ProbeSubset(name="daily-v1", arms=("1", "3"), per_kind=MappingProxyType(
     {"new_work": 5, "vocab": 3, "tone_hold": 3, "taste_ab": 3, "pushback": 0}))
+SUBSETS: Final = MappingProxyType({DAILY.name: DAILY})
+MORNING_SUBSET_ENV: Final = "ANJO_SLEEP_MORNING_SUBSET"  # unset: the full morning; a subset's name: that subset
+MORNING_PROBES: Final = "morning_probes"  # an accelerated night's summary: the set its morning asks (``probe_set``)
+
+
+def probe_set(subset: ProbeSubset | None) -> str:
+    """A probe set's name as the results name it: the subset's, or ``full``."""
+    return results.FULL_SET if subset is None else subset.name
+
+
+def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
+    """The subset ``ANJO_SLEEP_MORNING_SUBSET`` names (unset or empty: the full set); any other value is an error."""
+    name = environ.get(MORNING_SUBSET_ENV, "").strip()
+    if name and name not in SUBSETS:
+        raise ValueError(f"{MORNING_SUBSET_ENV} is unset (the full morning) or {', '.join(SUBSETS)}, got {name!r}")
+    return SUBSETS[name] if name else None
 
 
 def _rank(subset: ProbeSubset, probe: Probe) -> str:
@@ -185,6 +204,7 @@ class MorningResult:
     no_verdict: int = 0  # (comparison, probe) pairs the judge gave no readable verdict on
     judge_usd: float = 0.0  # what the judge's hold settled at
     judge_estimated: int = 0  # judge calls in it at the per-call bound, with no usage reported
+    subset: str | None = None  # the subset asked (``ProbeSubset.name``); None: the full set
 
 
 class _Pinned:
@@ -250,12 +270,13 @@ def _judge_spend(judge: _Counting, morning: Morning, before: tuple[int, int, int
     return tokens + estimated * JUDGE_USD_PER_CALL, estimated
 
 
-def _next_file(folder: Path, night: date) -> Path:
-    """The score file for ``night``, refusing a night that is already scored."""
+def _next_file(folder: Path, night: date, subset: str | None = None, *, any_set: bool = True) -> Path:
+    """The score file for ``night``, refusing a night that is already scored: on any probe set, or with
+    ``any_set=False`` (a pinned backfill) on ``subset`` only (a name; None: the full set)."""
     taken = 0
     for path in folder.glob("night-*.json") if folder.is_dir() else ():
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("night") == night.isoformat():
+        if record.get("night") == night.isoformat() and (any_set or record.get("subset") == subset):
             raise MorningError(f"{night.isoformat()} is already scored ({path.name}); the first score stands")
         taken = max(taken, int(path.stem.rsplit("-", 1)[1]))
     return folder / f"night-{taken + 1:02d}.json"
@@ -338,16 +359,17 @@ def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER)
 
 def run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
 ) -> MorningResult:
     """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends."""
     with phase(morning.sleep):
-        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset)
+        return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset,
+                            pinned=pinned)
 
 
 def _run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
-    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None,
+    label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
 ) -> MorningResult:
     """Score every arm on ``user_id``'s sealed probes, on the checkpoint serving after ``night``.
 
@@ -359,12 +381,12 @@ def _run_morning(
     if subset is not None and label == "final":
         raise MorningError("a final run asks the full set of probes and arms, never a subset")
     folder = results.results_root(morning.root) / user_id / SCORES
-    target = _next_file(folder, night)
+    target = _next_file(folder, night, None if subset is None else subset.name, any_set=not pinned)
     serving = morning.arms.adapters.last_promoted(user_id)
     if promoted:
         if checkpoint is None:
             raise MorningError("a promoted night gives the checkpoint it promoted")
-        if serving != checkpoint:
+        if serving != checkpoint and not pinned:  # a backfill names a past one: scored, never served
             raise MorningError("the night's checkpoint is not the one serving now; nothing was scored")
     else:
         checkpoint = serving
@@ -385,7 +407,8 @@ def _run_morning(
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
     judge = _Counting(morning.judge, retries)
     spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
-    key = f"morning:{night.isoformat()}:{user_id}"
+    # A backfill holds under a key of its own, so a failed morning's settled spend still counts (``latest_attempts``)
+    key = f"morning:{night.isoformat()}:{user_id}" + (f":backfill-{probe_set(subset)}" if pinned else "")
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
@@ -430,6 +453,8 @@ def _run_morning(
     record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
     if subset is not None:
         record["subset"] = subset.name
+    if pinned:
+        record["pinned"] = True
     if no_verdict:
         record[NO_VERDICT] = no_verdict
     if woke is not None:
@@ -440,7 +465,7 @@ def _run_morning(
     os.replace(pending, target)
     judge_usd, estimated = spend()
     return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()),
-                         judge_usd, estimated)
+                         judge_usd, estimated, None if subset is None else subset.name)
 
 
 __all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",

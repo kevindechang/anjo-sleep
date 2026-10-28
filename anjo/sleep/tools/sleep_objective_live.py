@@ -52,8 +52,9 @@ No room for a hold stops the rest; so does an arm that fails.
 
 **The report** reads each account's night logs and morning scores (numbers only): per night the
 training receipt (minutes and rows by term, the dream filter's keep rate by seed kind), the general
-gate's lost points, promoted or not and the night's cost; per arm the mean weights-only score (arm 3
-against base) and arm 4's; per control and night its budget and the minutes it used, flagged past 5%.
+gate's lost points, promoted or not and the night's cost; per arm and probe set (``full``, ``daily-v1``:
+``ANJO_SLEEP_MORNING_SUBSET``) the weights-only score (arm 3 against base) and arm 4's by night date, and
+their means, never pooled across sets; per control and night its budget and the minutes it used, flagged past 5%.
 """
 from __future__ import annotations
 
@@ -72,7 +73,8 @@ from typing import Any, Final
 from anjo.sleep.budget import Ledger, Reservation, default_ledger
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV
 from anjo.sleep.night.holds import usd
-from anjo.sleep.reports.results import results_root
+from anjo.sleep.probes.morning import MORNING_SUBSET_ENV, morning_subset
+from anjo.sleep.reports.results import FULL_SET, results_root, score_records
 from anjo.sleep.train import objective
 from anjo.sleep.train.terms import DREAMS_NOT_WIRED
 
@@ -213,9 +215,18 @@ def dreams_wired(root: Path, account: str) -> bool:
 
 
 def scores(root: Path, account: str) -> list[dict[str, Any]]:
-    folder = root / account / "scores"
-    files = sorted(folder.glob("night-*.json")) if folder.is_dir() else []
-    return [json.loads(path.read_text(encoding="utf-8")) for path in files]
+    """Each scored morning, one per (night, probe set) in that order (``results.score_records``): a backfill
+    (``tools.morning_backfill``) may score an earlier night last, or a night again on another set."""
+    return list(score_records(root / account / "scores").values())
+
+
+def by_set(scored: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Per probe set: arm 3's and arm 4's score by night date, and their means. A mean never spans two sets."""
+    sets = {name: [s for s in scored if str(s.get("subset") or FULL_SET) == name]
+            for name in sorted({str(s.get("subset") or FULL_SET) for s in scored})}
+    return {name: {"by_night": {str(s["night"]): {"3": _arm_score(s, "3"), "4": _arm_score(s, "4")} for s in mine},
+                   "arm3_mean": _mean([_arm_score(s, "3") for s in mine]), "arm4_mean": _mean([_arm_score(s, "4") for s in mine])}
+            for name, mine in sets.items()}
 
 
 def _arm_score(record: Mapping[str, Any], arm: str) -> float | None:
@@ -253,8 +264,7 @@ def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) 
         dreams: list[dict[str, Any]] = [t["dreams"] for t in terms if t.get("dreams")]
         table[arm] = {
             "nights": len(done), "promoted": sum(n["promoted"] for n in done),
-            "arm3_by_night": [_arm_score(s, "3") for s in scored], "arm4_by_night": [_arm_score(s, "4") for s in scored],
-            "arm3_mean": _mean([_arm_score(s, "3") for s in scored]), "arm4_mean": _mean([_arm_score(s, "4") for s in scored]),
+            "scores": by_set(scored),  # per probe set, never pooled: a night may be scored on two
             "general_lost_by_night": [n["general_lost"] for n in done],
             "train_minutes_mean": _mean([n["train"].get("train_minutes") for n in done]),
             "minutes_by_term": [t.get("minutes") for t in terms], "rows_by_term": [t.get("rows") for t in terms],
@@ -329,6 +339,8 @@ def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, files: M
         out(f"    worst case ${priced[arm]:.2f} (estimate)")
         out(_token_line(arm, files.get(arm)))
     out(f"  thought channel: {os.environ.get(CHANNEL_ENV) or 'off'} ({CHANNEL_ENV}, this shell's), the same in every arm")
+    out(f"  morning: {os.environ.get(MORNING_SUBSET_ENV, '').strip() or 'the full set'} ({MORNING_SUBSET_ENV}, this "
+        "shell's, passed through), the same in every arm")
     if "dreams" in chosen:
         out("  dreams: the app must wire the core's dream seeds into NightDeps.dreams first; unwired, its dataset "
             f"step says dreams: {DREAMS_NOT_WIRED}, and its control doesn't run")
@@ -411,6 +423,7 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     try:
         accounts = _accounts(args.account)
         chosen = arms(accounts)
+        morning_subset(os.environ)  # an unknown ANJO_SLEEP_MORNING_SUBSET stops the plan, as it stops each run
         files = _token_files(args.token_file, chosen)
     except ValueError as error:
         parser.error(str(error))

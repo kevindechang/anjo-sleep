@@ -26,7 +26,8 @@ one clock. A start after that is refused before any day is simulated or any nigh
 
 Each night naps or sleeps deep by the same decision as every night (``night/sleep_pressure.py``,
 under the wiring's policy), and the report says which. After each night that slept deep the morning
-probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Each morning is logged in
+probe run scores every arm (`probes.morning`), or the subset ``ANJO_SLEEP_MORNING_SUBSET`` names
+(``daily-v1``; any other value stops the run before it starts); a nap runs no GPU morning. Each morning is logged in
 its night's log as the daily run logs it (``night/daily.py``), ``ok`` or ``failed`` with its reason,
 and the night's story is told again with its wake. A judge that fails one morning never stops the
 run: the next night goes on, the report says which morning failed, and the command exits 3
@@ -59,7 +60,15 @@ from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
-from anjo.sleep.probes.morning import MorningError, run_morning
+from anjo.sleep.probes.morning import (
+    MORNING_PROBES,
+    Morning,
+    MorningError,
+    ProbeSubset,
+    morning_subset,
+    probe_set,
+    run_morning,
+)
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -98,6 +107,7 @@ class Rig:
     # ``on_scoring`` is told how long each scoring run took (seconds), as ``on_day`` is for the day.
     score: Callable[[str, date, str, NightResult], object] | None = None
     on_scoring: Callable[[str, float], None] | None = None
+    subset: ProbeSubset | None = None  # the set ``score`` asks, recorded in each night's summary and a failed morning
     timer: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # the wall clock, read as the run starts
 
@@ -141,11 +151,14 @@ def _check_window(user_id: str, day: DayRun, last_end: datetime | None) -> None:
         raise AcceleratedError(f"{user_id}: the day's window starts before the last day's window ended")
 
 
-def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None) -> None:
-    """Add the run's labels to the night's summary, atomically."""
+def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None,
+           probes: str | None = None) -> None:
+    """Add the run's labels to the night's summary, atomically, and the probe set its morning asks."""
     path = result.log_path.parent / SUMMARY
     summary = json.loads(path.read_text(encoding="utf-8"))
     summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index})
+    if probes is not None:
+        summary[MORNING_PROBES] = probes
     if vm is not None:
         summary["vm"] = dict(vm)
     pending = path.with_name(f".{SUMMARY}.stamp")
@@ -169,7 +182,7 @@ def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult)
         if rig.on_scoring is not None:
             rig.on_scoring(uid, seconds)
     if failure is not None:
-        log_failed_morning(log, night, failure, seconds)
+        log_failed_morning(log, night, failure, seconds, subset=rig.subset)
     else:
         log.step("morning", "ok", uses="new", system=None, **morning_receipt(done, seconds))
     log.tell(night, result.status)
@@ -205,7 +218,8 @@ def run_accelerated_batch(
                                        as_of={uid: day_window(night)[1] for uid in runs})
         for uid, result in results.items():
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
-            _stamp(result, sha=sha, label=kind, day_index=i, vm=vm)
+            _stamp(result, sha=sha, label=kind, day_index=i, vm=vm,
+                   probes=None if rig.score is None else probe_set(rig.subset))
             out[uid].append(result)
         if rig.score is not None:
             for uid, result in results.items():
@@ -327,6 +341,16 @@ def match_by_night(path: Path, start: date, days: int) -> tuple[tuple[date, floa
     return tuple((night, float(budgets[night])) for night in nights)
 
 
+def morning_scorer(build: Callable[[str, str, date], Morning], personas: Mapping[str, str],
+                   subset: ProbeSubset | None) -> Callable[[str, date, str, NightResult], object]:
+    def score(uid: str, night: date, label: str, result: NightResult) -> object:
+        """The morning probe run on the night's own checkpoint (the serving one if it promoted nothing), on
+        ``subset`` (``ANJO_SLEEP_MORNING_SUBSET``; None: the full set)."""
+        return run_morning(uid, night, result.checkpoint, morning=build(uid, personas[uid], night), label=label,
+                           promoted=result.status == "promoted", subset=subset)
+    return score
+
+
 def _with_terms(deps: NightDeps, terms: Terms) -> NightDeps:
     """The wiring's ports with sft_dpo_seed's terms; with every switch off, untouched (today's night)."""
     return replace(deps, terms=terms) if terms != Terms() else deps
@@ -347,6 +371,12 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("a real run needs --wiring, --simulate, --morning and a --user with its --persona (or --fake)")
     if len(args.personas) != len(args.users):
         parser.error("each --user has one --persona: accelerated runs are synthetic people only")
+    try:
+        subset = morning_subset(os.environ)  # an unknown ANJO_SLEEP_MORNING_SUBSET stops here, before any call
+    except ValueError as error:
+        parser.error(str(error))
+    if subset is not None and args.label == "final":
+        parser.error("a final run scores the full morning: unset ANJO_SLEEP_MORNING_SUBSET")
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
     if args.match_file is not None:
@@ -363,12 +393,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     life_s = LIFE_NIGHT_TIMEOUT_S * (LIFE_NIGHTS_HELD + args.days)
     wiring, simulate, morning = _named(args.wiring), _named(args.simulate), _named(args.morning)
 
-    def score(uid: str, night: date, label: str, result: NightResult) -> object:
-        """The morning probe run on the night's own checkpoint (the serving one if it promoted nothing)."""
-        ports = morning(uid, personas[uid], night)
-        return run_morning(uid, night, result.checkpoint, morning=ports, label=label,
-                           promoted=result.status == "promoted")
-
+    score = morning_scorer(morning, personas, subset)
     try:
         with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, life_s) as (runner, hooks):
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
@@ -377,7 +402,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
                 night=night, personas=personas, mind_inquiry=args.mind)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      score=score, **hooks)
+                      score=score, subset=subset, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept)

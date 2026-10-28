@@ -259,6 +259,7 @@ def test_a_failed_morning_is_logged_with_its_reason_and_the_line_still_comes(tmp
         assert [(s["step"], s["status"]) for s in steps] == [("morning", "failed"), ("dailies", "ok")]
         assert steps[0]["why"] == f"morning failed: {type(error).__name__}: {error}"
         assert steps[0].get("no_verdict") == (3 if label == "unread" else None)
+        assert steps[0]["subset"] == "daily-v1"  # the set a development morning asks, there for a backfill
 
 
 @pytest.mark.parametrize("status", ["rejected", "nothing_new"])
