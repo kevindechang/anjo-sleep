@@ -126,11 +126,17 @@ class Channel:
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
-        seed: int | None = None,
+        seed: int | None = None, max_tokens: int | None = None,
     ) -> ChatResult:
-        return self.client.complete(adapter, messages, temperature=temperature, seed=seed, soft=self.tokens)
+        return self.client.complete(adapter, messages, temperature=temperature, seed=seed, max_tokens=max_tokens,
+                                    soft=self.tokens)
+
+    @property
+    def row_field(self) -> str:
+        """The snapshot as a row's ``core`` (JSON)."""
+        return json.dumps(self.snapshot.to_json(), sort_keys=True)
 
     def stamp(self, transcripts: Sequence[PracticeTranscript]) -> list[PracticeTranscript]:
         """The transcripts with the state their replies were made under."""
-        core = json.dumps(self.snapshot.to_json(), sort_keys=True)
+        core = self.row_field
         return [replace(t, core=core) for t in transcripts]

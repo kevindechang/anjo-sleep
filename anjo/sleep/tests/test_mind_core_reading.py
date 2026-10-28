@@ -22,13 +22,16 @@ from anjo.sleep.mind.core.latents import FakeEncoder  # noqa: E402
 from anjo.sleep.mind.core.night import CoreNight  # noqa: E402
 from anjo.sleep.mind.core.projector import Projector  # noqa: E402
 from anjo.sleep.mind.core.types import CoreConfig  # noqa: E402
-from anjo.sleep.night.core_snapshot import CoreSnapshot  # noqa: E402
+from anjo.sleep.night.core_dreams import core_dreams  # noqa: E402
+from anjo.sleep.night.core_snapshot import CoreSnapshot, state_sha  # noqa: E402
+from anjo.sleep.night.dreams import Terms  # noqa: E402
 from anjo.sleep.night.run import GPU_STEPS, run_night_batch_with  # noqa: E402
 from anjo.sleep.night.state import checkpoint_id  # noqa: E402
 from anjo.sleep.night.sleep_pressure import SleepPolicy  # noqa: E402
 from anjo.sleep.serving.client import WakeResult  # noqa: E402
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps, summary, thread  # noqa: E402
 from anjo.sleep.tests.test_channel_night import ChannelTrainer, SoftGlimmer, _setup  # noqa: E402
+from anjo.sleep.tests.test_mind_core_dreams import Glimmer  # noqa: E402
 from anjo.sleep.tests.test_sleep_pressure import _holds_on  # noqa: E402
 from anjo.sleep.tests.test_thought_channel import K, _anchors  # noqa: E402
 from anjo.sleep.types import CheckpointRef  # noqa: E402
@@ -207,6 +210,37 @@ def test_a_promotion_keeps_her_unit_first_or_promotes_nothing(tmp_path: Path, mo
     assert head.projector == step(third.log_path, "train")["receipt"]["projector"]
 
 
+def test_a_unit_kept_for_a_promotion_that_then_fails_is_followed_by_one_naming_the_serving_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange: a first night promotes; the next one keeps its unit, then its promotion raises
+    world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
+    trainer = SavingTrainer(world)
+    world.targets(UID).upsert(thread(UID))
+    held = store.MindStore(tmp_path / store.STORE_DIR, UID)
+    assert _channel_night(world, core, trainer, shared, NIGHT).status == "promoted"
+    (first,) = held.units()
+
+    def refused(*args: Any, **kwargs: Any) -> None:
+        raise OSError("the registry can't be written")
+
+    # Act
+    with monkeypatch.context() as patched:
+        patched.setattr(world.registry, "promote", refused)
+        second = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=1))
+
+    # Assert: the promotion's unit names an adapter that never served, so the night's end keeps one
+    # naming the adapter that does, with the projector that served beside it
+    assert second.status == "failed" and step(second.log_path, "promote")["status"] == "failed"
+    _, unserved, last = held.units()
+    assert unserved.lora != first.lora and unserved.lora != checkpoint_id(world.registry.last_promoted(UID))
+    assert last.lora == first.lora == checkpoint_id(world.registry.last_promoted(UID))
+    assert last.projector == first.projector and summary(second.log_path)["mind_unit"]["lora"] == first.lora
+    third = _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=2))
+    assert "projector_fallback" not in step(third.log_path, "dream")
+    assert first.projector is not None and trainer.channel[-1]["projector"] == Path(first.projector)
+
+
 def test_a_unit_naming_another_adapter_than_the_one_serving_falls_back_logged(tmp_path: Path) -> None:
     # Arrange: two promoted nights, then the first adapter serves again
     world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
@@ -231,3 +265,44 @@ def test_a_unit_naming_another_adapter_than_the_one_serving_falls_back_logged(tm
     assert trainer.channel[-1]["projector"] == shared
     assert "projector_fallback" not in step(third.log_path, "promote") and "projector_fallback" not in step(
         _channel_night(world, core, trainer, shared, NIGHT + timedelta(days=4)).log_path, "dream")
+
+
+class DreamRows(SavingTrainer):
+    """The channel's trainer, keeping the dream rows each night trained on."""
+
+    def __init__(self, world: World) -> None:
+        super().__init__(world)
+        self.dream_rows: list[Any] = []
+
+    def train_with_channel(self, user_id: str, night: Any, prev: CheckpointRef | None, data: Any, name: str, *,
+                           arm: str, projector: Path) -> tuple[CheckpointRef, dict[str, Any]]:
+        self.dream_rows.extend(data.dreams)
+        return super().train_with_channel(user_id, night, prev, data, name, arm=arm, projector=projector)
+
+
+def test_her_dreams_through_the_channel_reply_from_the_states_her_dream_kept(tmp_path: Path) -> None:
+    # Arrange: the real core, the channel on, and the dreams through it
+    world, core, shared = World(tmp_path), _core_night(tmp_path), _shared(tmp_path)
+    world.targets(UID).upsert(thread(UID))
+    world.plan(UID, NIGHT)
+    trainer, soft, glimmer = DreamRows(world), SoftGlimmer(), Glimmer()
+    channel = _setup(world, soft, shared)
+    deps = world.deps(core=core, mind_state=core.reading, trainer=trainer, channel=channel,
+                      terms=Terms(seed=True, dreams=True), dreams=core_dreams(core, world.evidence, glimmer, seed=7, channel=channel))
+
+    # Act
+    night = run_night_batch_with(deps, {UID: NIGHT})[UID]
+
+    # Assert: every dream row carries one of the states her dream kept, never the consolidated one,
+    # and each was read back from her store as it was kept
+    dreamt = step(night.log_path, "dream")
+    kept = {d["state"] for key in ("dreams", "boundaries") for d in dreamt[key]}
+    assert night.status == "promoted" and trainer.dream_rows and len(glimmer.calls) == len(trainer.dream_rows)
+    snaps = {CoreSnapshot.from_json(json.loads(row.core)).state_sha for row in trainer.dream_rows}
+    assert snaps <= kept and dreamt["state"] not in snaps
+    for ref in snaps:
+        reading = core.imagined(UID, NIGHT, ref)
+        assert reading is not None and state_sha(reading.state) == ref and reading.projector is None
+    with pytest.raises(ValueError, match="kept"):
+        core.imagined(UID, NIGHT, dreamt["state"])  # tonight's consolidated state is no dream
+    assert core.imagined("someone-else", NIGHT, next(iter(snaps))) is None

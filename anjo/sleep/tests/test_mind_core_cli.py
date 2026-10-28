@@ -146,9 +146,9 @@ def test_toy_training_writes_every_contradiction_in_the_family_it_is_told(
     told: list[object] = []
 
     def recording(real: Any) -> Any:
-        def call(*args: Any, **kwargs: Any) -> Any:
+        def call(n: int, *args: Any, **kwargs: Any) -> Any:
             told.append(kwargs.get("stance"))
-            return real(*args, **kwargs)
+            return real(min(n, 16), *args, **kwargs)  # a few lives: the family told is what's checked
         return call
 
     for name in ("lives", "contradiction_pairs"):

@@ -63,6 +63,9 @@ class FakeCore:
     def reading(self, user_id: str, night: date) -> MindReading | None:
         return None
 
+    def imagined(self, user_id: str, night: date, state_ref: str) -> MindReading | None:
+        return None
+
     def keep(self, call: MindCall, dreamt: Dreamt, *, lora: str | None, projector: str | None) -> dict[str, object]:
         if self.keep_fails:
             raise OSError("the disk is full")

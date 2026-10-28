@@ -98,21 +98,31 @@ def projector_path(deps: NightDeps, reading: MindReading) -> Path:
     """The projector the person's night reads and trains from: their own, as their last unit kept it,
     or the shared pretraining's before their first channel night. A kept one that's gone fails."""
     assert deps.channel is not None
+    return _projector_file(deps.channel, reading)
+
+
+def _projector_file(setup: ChannelSetup, reading: MindReading) -> Path:
     if reading.projector is None:
-        return deps.channel.shared_projector
+        return setup.shared_projector
     own = Path(reading.projector)
     if not own.is_file():
         raise ValueError("the person's kept projector isn't there; the channel won't fall back to the shared one")
     return own
 
 
+def channel_for(setup: ChannelSetup, reading: MindReading) -> Channel:
+    """The channel over ``reading``'s state, through the projector the night reads (``projector_path``);
+    the snapshot's state must be the one MIND kept under the reading's id."""
+    projector = Projector.load(_projector_file(setup, reading).read_bytes())
+    snap = snapshot(reading.state, reading.predictions, arm=setup.arm, k=projector.k)
+    if snap.state_sha != reading.state_id:
+        raise ValueError("the state the channel would read isn't the state MIND kept under that id")
+    return Channel(snap, projector, setup.soft_client)
+
+
 def _channel(deps: NightDeps, reading: MindReading) -> Channel:
     assert deps.channel is not None
-    projector = Projector.load(projector_path(deps, reading).read_bytes())
-    snap = snapshot(reading.state, reading.predictions, arm=deps.channel.arm, k=projector.k)
-    if snap.state_sha != reading.state_id:
-        raise ValueError("the state practice would read isn't the state MIND kept for the night")
-    return Channel(snap, projector, deps.channel.soft_client)
+    return channel_for(deps.channel, reading)
 
 
 @dataclass(frozen=True)
