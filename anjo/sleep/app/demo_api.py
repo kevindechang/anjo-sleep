@@ -5,12 +5,22 @@
 ``register.register_sleep`` mounts ``page_router`` at the root and ``router`` under ``/api``, and
 every route answers 404 unless ``ANJO_SLEEP_HOST=1``:
 
-- ``GET /sleep/demo``, ``/sleep/demo/app.js``, ``/sleep/demo/demo.css``: the page and its two files;
+- ``GET /sleep/demo`` and ``/sleep/demo/<asset>``: the page and its files (``page.ASSETS``);
 - ``GET /api/sleep/demo/page``: her brief (``judge_brief``, the panel beside the chat), the starter
   scenes and whether their pre-generated pairs are ready. No GPU, no model;
 - ``POST /api/sleep/demo/visits`` with ``{"adult": true}``: the visit token; anything else is 403;
 - with that token in ``X-Demo-Visit``: ``POST /api/sleep/demo/starters/<scene>`` (a pre-generated
   pair), ``POST /api/sleep/demo/ask`` (her own question, live) and ``POST /api/sleep/demo/vote``.
+
+The full step, under the same prefixes (the carve-out is unchanged):
+
+- ``GET /api/sleep/demo/nights``: the night slider's stops, which starter answers each holds and
+  which toggles each scene offers. No GPU, no model;
+- with the visit token: ``POST /api/sleep/demo/nights/<stop>/starters/<scene>`` (a stop's
+  pre-generated answer), ``POST /api/sleep/demo/nights/<stop>/ask`` (the visitor's question at one
+  stop, live), ``POST /api/sleep/demo/toggles/<scene>`` (the labeled "notes off" and swap pairs) and
+  ``GET /api/sleep/demo/mind`` (her mind panel, its held-out text filtered on the server);
+- ``GET /sleep/demo/nights.js``, ``/sleep/demo/mind.js``, ``/sleep/demo/mind.css``: their files.
 
 The page is public: there is no account, no cookie and no stored message. ``PUBLIC_PREFIXES`` are
 the only paths ``register_sleep`` opens to anonymous visitors (the app's auth middleware reads them
@@ -30,7 +40,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Final
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
@@ -38,7 +48,11 @@ from anjo.sleep.app.flags import sleep_host
 from anjo.sleep.demo.limits import Refused
 from anjo.sleep.demo.page import asset, page_html
 from anjo.sleep.demo.pairs import Reveal, SideFacts
-from anjo.sleep.demo.service import MAX_CHARS, Asleep, DemoService, Fixed, PairView, SideView
+from anjo.sleep.demo.service import (
+    MAX_CHARS, Asleep, DemoService, Fixed, NightsView, PairView, SideView, StopReply, TogglePair, ToggleView,
+)
+from anjo.sleep.demo.slider import DEVELOPMENT, Stop
+from anjo.sleep.demo.starters import LABEL
 from anjo.sleep.demo.visits import client_key
 from anjo.sleep.demo.words import COPY
 
@@ -125,6 +139,44 @@ def _facts_out(facts: SideFacts) -> dict[str, Any]:
 
 def _reveal_out(reveal: Reveal) -> dict[str, Any]:
     return {"choice": reveal.vote.choice, "left": _facts_out(reveal.left), "right": _facts_out(reveal.right)}
+
+
+def _stop_out(stop: Stop) -> dict[str, Any]:
+    ckpt = stop.checkpoint
+    return {"key": stop.key, "night": stop.night, "from_night": stop.from_night, "fallback": stop.fallback,
+            "status": stop.status, "latest": stop.latest, "available": stop.available,
+            "arm": "1" if ckpt is None else "3", "checkpoint": None if ckpt is None else ckpt.id,
+            "checkpoint_night": None if ckpt is None else ckpt.night.isoformat()}
+
+
+def _nights_out(view: NightsView) -> dict[str, Any]:
+    return {
+        "state": "unavailable" if view.stops is None else "ok", "label": DEVELOPMENT, "answers_label": LABEL,
+        "stops": [{**_stop_out(v.stop), "ready": list(v.ready)} for v in view.stops or ()],
+        "generated_at": view.generated_at, "live": view.live,
+        "toggles": [{"scene": t.scene, "notes_off": t.notes_off, "swap": t.swap} for t in view.toggles],
+    }
+
+
+def _reply_out(reply: StopReply) -> dict[str, Any]:
+    return {"kind": "answer", "stop": _stop_out(reply.stop), "text": reply.side.text, "withheld": reply.side.withheld,
+            "source": reply.kind, "generated_at": reply.generated_at, "label": DEVELOPMENT}
+
+
+def _toggle_side(view: SideView, arm: str) -> dict[str, Any]:
+    return {"arm": arm, "label": COPY[f"toggle_arm_{arm}"], **_side_out(view)}
+
+
+def _toggle_out(pair: TogglePair | None, arms: tuple[str, str]) -> dict[str, Any] | None:
+    if pair is None:
+        return None
+    return {"label": LABEL, "with": _toggle_side(pair.with_side, arms[0]), "without": _toggle_side(pair.without, arms[1]),
+            "stop": None if pair.stop is None else _stop_out(pair.stop), "model": pair.model,
+            "generated_at": pair.generated_at}
+
+
+def _toggles_out(view: ToggleView) -> dict[str, Any]:
+    return {"notes_off": _toggle_out(view.notes_off, ("3", "1")), "swap": _toggle_out(view.swap, ("swap", "bare"))}
 
 
 # ── the page ──────────────────────────────────────────────────────────────────
@@ -215,3 +267,65 @@ def vote(
     except Refused as refused:
         raise _refusal(refused) from None
     return _reveal_out(reveal)
+
+
+# ── the full step: the night slider, the toggles and the mind panel ──────────
+
+StopKey = Path(max_length=8)
+
+
+@router.get("/nights")
+def nights(request: Request, service: DemoService = Depends(demo_service)) -> dict[str, Any]:
+    try:
+        return _nights_out(service.nights(_client(request, service), _now()))
+    except Refused as refused:
+        raise _refusal(refused) from None
+
+
+@router.post("/nights/{key}/starters/{scene_id}")
+def stop_starter(
+    scene_id: str, request: Request, key: str = StopKey, x_demo_visit: str = Header(default="", max_length=256),
+    service: DemoService = Depends(demo_service),
+) -> dict[str, Any]:
+    try:
+        return _reply_out(service.stop_starter(_client(request, service), x_demo_visit, key, scene_id, _now()))
+    except Refused as refused:
+        raise _refusal(refused) from None
+
+
+@router.post("/nights/{key}/ask")
+def stop_ask(
+    body: AskIn, request: Request, key: str = StopKey, x_demo_visit: str = Header(default="", max_length=256),
+    service: DemoService = Depends(demo_service),
+) -> dict[str, Any]:
+    try:
+        answer = service.ask_stop(_client(request, service), x_demo_visit, key, body.text, _now())
+    except Refused as refused:
+        raise _refusal(refused) from None
+    if isinstance(answer, Fixed):
+        return {"kind": "crisis", "text": answer.text}
+    if isinstance(answer, Asleep):
+        return {"kind": "asleep", "waking": answer.waking}
+    return _reply_out(answer)
+
+
+@router.post("/toggles/{scene_id}")
+def toggles(
+    scene_id: str, request: Request, x_demo_visit: str = Header(default="", max_length=256),
+    service: DemoService = Depends(demo_service),
+) -> dict[str, Any]:
+    try:
+        return _toggles_out(service.toggles(_client(request, service), x_demo_visit, scene_id, _now()))
+    except Refused as refused:
+        raise _refusal(refused) from None
+
+
+@router.get("/mind")
+def mind(
+    request: Request, x_demo_visit: str = Header(default="", max_length=256),
+    service: DemoService = Depends(demo_service),
+) -> dict[str, Any]:
+    try:
+        return dict(service.mind(_client(request, service), x_demo_visit, _now()))
+    except Refused as refused:
+        raise _refusal(refused) from None
