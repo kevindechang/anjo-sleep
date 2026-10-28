@@ -190,7 +190,7 @@ def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
             failed_at(log, *failures.of_verdicts(attempt, tried.life, tried.verdicts))
             return None
         round_ += 1
-        tried = _checked(spec, backend, log, attempt, round_, repair.round_calls(spec.prevalence, len(found)), memo,
+        tried = _checked(spec, backend, log, attempt, round_, repair.round_calls(spec.prevalence, found), memo,
                          partial(repair.rewritten, tried, found, round_))
     return None if tried is None else Generated(tried.life, tried.problems, attempt + 1, tried.verdicts, round_)
 
@@ -214,11 +214,15 @@ def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
             failed_at(log, failures.of_rule(attempt, failed))
             return None
         read, audit = repair.Memo(reader, memo), repair.Memo(auditor, memo)
-        verdicts = gates.check(built, problems, reader=read, auditor=audit,
-                               model=backend.read_by.reads_with(backend.provider))
+        model = backend.read_by.reads_with(backend.provider)
+        verdicts = gates.check(built, problems, reader=read, auditor=audit, model=model)
         audited = all(verdict.passed for verdict in verdicts if verdict.gate == "script_audit")
         issues = () if audited else gates.audit_issues(built, problems, audit)  # the audit's reply, from the memo
-        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues)
+        items = {item.id: item for item in problems.items}
+        windows = {} if not backend.repair else {  # each flagged window's days, its single day's reply from the memo
+            verdict.item_id: found for verdict in verdicts if verdict.item_id in items
+            and (found := gates.flagged_window(built, items[verdict.item_id], verdict, read, model)) is not None}
+        return repair.Tried(draft, tuple(plans), built, problems, verdicts, issues, windows)
 
 
 class CallFailed(RuntimeError):

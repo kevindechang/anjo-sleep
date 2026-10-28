@@ -14,8 +14,9 @@ one; 0 leaves them unpaced), so lives side by side don't send Vertex more than i
 The fakes stand in for Vertex and aren't paced.
 
 ``generate``'s ``--repair`` gives a core split's attempt that fails only a leak or the script audit
-up to ``repair.ROUNDS`` repair rounds (``repair``), and ``--keep-failed`` keeps each failed check's
-life under the data dir's ``quarantine``; APD's own splits take neither, as registered.
+up to ``repair.ROUNDS`` repair rounds (``repair``); APD's own splits are regenerated whole, as
+registered. ``--keep-failed`` keeps each failed check's life under the data dir's ``quarantine``,
+on ``core-train`` only: every other split's items are sealed.
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from anjo.sleep.mind.apd.types import CORE_SPLITS
 from anjo.sleep.mind.spark_provider import SparkProvider
 
 FAKE_GENERATOR_RATE = Rate(0.15, 0.6)  # the fakes' generator without list prices: list-like
+KEEP_FAILED_SPLIT = "core-train"  # the one split whose failed lives may be kept: its items train the core, unsealed
 
 
 def add(command: argparse.ArgumentParser) -> None:
@@ -59,7 +61,8 @@ def add_repair(command: argparse.ArgumentParser) -> None:
                          help=f"a core split's attempt failing only a leak or the script audit has the days named "
                               f"written again, up to {repair.ROUNDS} rounds, each held as an attempt")
     command.add_argument("--keep-failed", action="store_true",
-                         help="keep a core split's failed attempts' lives under the data dir's quarantine")
+                         help=f"keep {KEEP_FAILED_SPLIT}'s failed attempts' lives under the data dir's quarantine "
+                              f"({KEEP_FAILED_SPLIT} only)")
 
 
 def split_of(args: argparse.Namespace) -> str:
@@ -121,9 +124,11 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace, provider: S
         readers.check(split, reads)
     except ValueError as error:
         parser.error(str(error))
-    if (getattr(args, "repair", False) or getattr(args, "keep_failed", False)) and split in generators.APD_SPLITS:
-        parser.error(f"--repair and --keep-failed are for the core splits; APD's {split} lives are regenerated "
-                     "whole, as registered")
+    if getattr(args, "repair", False) and split in generators.APD_SPLITS:
+        parser.error(f"--repair is for the core splits; APD's {split} lives are regenerated whole, as registered")
+    if getattr(args, "keep_failed", False) and split != KEEP_FAILED_SPLIT:
+        parser.error(f"--keep-failed is for {KEEP_FAILED_SPLIT} only: {split}'s items are sealed, and a kept life and "
+                     "the auditor's words about it would sit outside its sealed files")
     if not args.fake and writes.model is not None and generator_rate(args) is None:
         parser.error(f"--generator {writes.name} needs --generator-prices in,out to price its holds")
     if getattr(args, "vertex_concurrency", DEFAULT_CONCURRENCY) < 1:
@@ -158,9 +163,10 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
     if not getattr(args, "repair", False):
         return ()
     return (f"--repair: an attempt failing only a leak or the script audit takes up to {repair.ROUNDS} repair rounds, "
-            f"each writing at most {repair.REPAIR_DAYS} days again and held before it starts at most as an attempt "
-            f"is (a full read again; only changed or unread windows are paid for), so the worst case can reach "
-            f"{1 + repair.ROUNDS} times the one shown",)
+            f"each writing at most {repair.REPAIR_DAYS} days again, extracting every later day again, and held "
+            f"before it starts at most as an attempt is (a full read again; only changed or unread windows are paid "
+            f"for), so the worst case can reach {1 + repair.ROUNDS} times the one shown. A round costs a share of the "
+            f"first check that grows the earlier its first day falls: on the fakes, about 63% for day 6 of a six-item life",)
 
 
 def pace_note(args: argparse.Namespace) -> str:

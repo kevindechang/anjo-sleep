@@ -338,7 +338,7 @@ def _extractor(chat: ChatFn, model: str, replies: list[tuple[ChatResult, str]] |
 @dataclass(frozen=True)
 class WrittenDay:
     """One day as written and extracted: its messages, where each beat sits (beat id to the
-    message's source), its evidence and its target mentions."""
+    message's source), its evidence and its target mentions, and each message's source."""
 
     index: int
     day: date
@@ -346,6 +346,7 @@ class WrittenDay:
     spots: Mapping[str, str]
     items: tuple[Evidence, ...]
     mentions: tuple[Any, ...]
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -382,7 +383,16 @@ class Draft:
         found = _extract_day(chat, self.model, self.life_id, day, turns, tuple(self.held.values()),
                              {e.id for e in self.evidence}, index)
         return WrittenDay(index, day, tuple(texts), MappingProxyType({b: turns[i].source for b, i in placed.items()}),
-                          tuple(found.items), tuple(found.mentions))
+                          tuple(found.items), tuple(found.mentions), tuple(turn.source for turn in turns))
+
+    def extracted_again(self, chat: ChatFn, done: WrittenDay) -> WrittenDay:
+        """``done``, its messages as they were, extracted again on what the draft holds (``repair``:
+        the targets open before it changed); its sources, and so its beats' places, are kept."""
+        turns = [Turn(source, "user", text, frozenset({self.model}))
+                 for source, text in zip(done.sources, done.texts, strict=True)]
+        found = _extract_day(chat, self.model, self.life_id, done.day, turns, tuple(self.held.values()),
+                             {e.id for e in self.evidence}, done.index)
+        return dataclasses.replace(done, items=tuple(found.items), mentions=tuple(found.mentions))
 
     def with_message(self, chat: ChatFn, text: str, beat: str, *, branch: str) -> Draft:
         """The draft with ``text`` said word for word as one more message of its last day, placing
@@ -393,7 +403,7 @@ class Draft:
         found = _extract_day(chat, self.model, self.life_id, last.day, [turn], tuple(self.held.values()),
                              {e.id for e in self.evidence}, last.index)
         said = WrittenDay(last.index, last.day, (*last.texts, text), MappingProxyType({**last.spots, beat: turn.source}),
-                          (*last.items, *found.items), (*last.mentions, *found.mentions))
+                          (*last.items, *found.items), (*last.mentions, *found.mentions), (*last.sources, turn.source))
         held = _fold_targets(self.held, found.mentions, self.life_id, last.day)
         targets = {**self.targets, last.day: tuple(sorted(held.values(), key=lambda t: t.id))}
         return dataclasses.replace(self, written=(*self.written[:-1], said), held=MappingProxyType(held),

@@ -66,6 +66,50 @@ class LeakyDay:
 
 
 @dataclasses.dataclass
+class LabelCarries(LeakyDay):
+    """``LeakyDay`` whose extractor files ``MARK`` as a thread on the day that says it, and
+    mentions that thread again on every later day it is open, as a model linking targets does."""
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        result: ChatResult = super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+        if calls.kind_of(messages) != "extract":
+            return result
+        body, reply = json.loads(messages[-1]["content"]), json.loads(result.text)
+        thread = {"kind": "thread", "label": MARK, "check_after": None, "existing_id": None, "confidence": 0.5}
+        for item, message in zip(reply["items"], body["messages"], strict=True):
+            if MARK in message["text"]:
+                item["target"] = thread
+        for found in (t for t in body["open_targets"] if t["label"] == MARK):
+            reply["items"].append({"turn": 0, "kind": "lesson", "text": "They are still on it.",
+                                   "target": {**thread, "existing_id": found["id"]}})
+        return dataclasses.replace(result, text=json.dumps(reply))
+
+
+HALVES = ("Half one: the grade is booked for the 20th.", "Half two: the grader is away until the 24th.")
+
+
+@dataclasses.dataclass
+class TwoHalves(LeakyDay):
+    """``LeakyDay`` that says ``HALVES`` on days 5 and 6 as first written, and neither on a rewrite."""
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        result: ChatResult = self.inner(model, messages, tools, timeout_s, temperature=temperature)
+        if calls.kind_of(messages) != "write":
+            return result
+        body = json.loads(messages[-1]["content"])
+        self.days.append(body["day"])
+        if "reason" in body:
+            self.repairs.append(body)
+            return result
+        if body["day"] not in (5, 6):
+            return result
+        day = json.loads(result.text)
+        return dataclasses.replace(result, text=json.dumps({**day, "messages": [*day["messages"], HALVES[body["day"] - 5]]}))
+
+
+@dataclasses.dataclass
 class FlagsTheMark(GateReader):
     """The fake reader, flagging any leak window of the evidence view that holds ``MARK``; each
     leak request kept."""
@@ -77,7 +121,8 @@ class FlagsTheMark(GateReader):
         if calls.kind_of(messages) == "leak":
             body = json.loads(messages[-1]["content"])
             self.leaks.append(body)
-            if body["view"] == "evidence" and any(MARK in day["text"] for day in body["days"]):
+            text = " ".join(day["text"] for day in body["days"])
+            if body["view"] == "evidence" and (MARK in text or all(half in text for half in HALVES)):
                 return ChatResult(json.dumps({"flag": True}), (), model, 10, 2, "stop")
         return super().__call__(model, messages, tools, timeout_s, temperature=temperature)
 
@@ -139,6 +184,11 @@ def test_a_leak_flagged_on_day_6_is_repaired_and_the_life_passes(tmp_path: Path)
     assert all("2026-09-12" in [day["date"] for day in body["days"]] or body not in first for body in again)
     assert len({json.dumps(body, sort_keys=True) for body in again}) == len(again)  # nothing read twice
     assert sum(c.kind == "audit" for c in log.calls) == 2  # the changed script is audited again
+    # day 6 written and extracted again, and every later day extracted again on the targets now held
+    assert [c.kind for c in log.calls if c.repair == 1 and c.kind in ("write", "extract")] == [
+        "write", "extract", *["extract"] * (10 - LEAKY_DAY)]
+    first_usd, round_usd = (sum(c.usd for c in log.calls if c.repair == n) for n in (0, 1))
+    assert 0.5 < round_usd / first_usd < 0.7  # on the fakes, a day-6 round costs about 63% of the first check
     # held and priced like an attempt, every hold settled
     reserved, settled = _jobs(tmp_path / "budget.jsonl", "reserve"), _jobs(tmp_path / "budget.jsonl", "settle")
     rounds = [job for job in reserved if f":{SPEC.seed}:0:r1:" in job]
@@ -175,6 +225,31 @@ def test_without_repair_a_leak_fails_the_attempt_as_today(tmp_path: Path, monkey
     assert {f.step for f in log.failures} == {"leak"} and {c.repair for c in log.calls} == {0}
 
 
+def test_a_label_that_carries_to_later_days_is_extracted_away_with_its_day(tmp_path: Path) -> None:
+    # Arrange: day 6 files the conclusion as a thread, and every later day mentions it again
+    writer, log = LabelCarries(), CallLog()
+
+    # Act
+    made = gen_batch.generate_life(SPEC, _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True), log)
+
+    # Assert: one round mends it, since days 7 to 10 are extracted again without the thread open
+    assert made.attempts == 1 and made.repaired == 1 and writer.days == [*range(1, 11), LEAKY_DAY]
+    assert all(MARK not in target.label for targets in made.life.targets.values() for target in targets)
+
+
+def test_a_flagged_pair_of_days_has_both_written_again(tmp_path: Path) -> None:
+    # Arrange: each half alone passes; days 5 and 6 together give the item away
+    writer, log = TwoHalves(), CallLog()
+
+    # Act
+    made = gen_batch.generate_life(SPEC, _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True), log)
+
+    # Assert: the flagged window's two days were written again, in one round
+    assert made.repaired == 1 and [body["day"] for body in writer.repairs] == [5, 6]
+    assert all("2026-09-11 and 2026-09-12" in body["reason"] for body in writer.repairs)
+    assert {f.step for f in log.failures} <= {"leak"} and not log.failures
+
+
 # ── The script audit ──────────────────────────────────────────────────────────
 
 
@@ -204,18 +279,23 @@ def test_fixes_name_each_day_with_its_reasons_or_none_when_a_rewrite_cannot_help
     found = repair.fixes(life, problems, (leak, audit), ("On 2026-09-12 and 2026-09-08 it says so.",))
     assert found is not None and sorted(found) == [1, 5]  # day indexes, from 0
     assert first.topic in found[5][0] and "messages of" in found[5][0] and "2026-09-08" in found[1][0]
+    # a flagged pair of days names both
+    pair = {first.id: (life.days[5], life.days[6])}
+    assert sorted(repair.fixes(life, problems, (leak,), (), pair) or {}) == [5, 6]
     # a gate a rewrite can't mend, an issue with no day, and too many days are left to a fresh attempt
     lost = GateVerdict("discoverability", second.id, False, "the reader found nothing")
     assert repair.fixes(life, problems, (leak, lost), ()) is None
     assert repair.fixes(life, problems, (audit,), ("The resolution does not follow.",)) is None
     many = " ".join(day.isoformat() for day in life.days[:repair.REPAIR_DAYS + 1])
     assert repair.fixes(life, problems, (audit,), (many,)) is None
+    assert repair.fixes(life, problems, (leak, audit), ("On 2026-09-08 and 2026-09-09.",), pair) is None  # 4 days
     assert repair.fixes(life, problems, (), ()) is None  # nothing failed
 
 
 def test_a_round_holds_its_writes_and_a_full_read_again() -> None:
+    # days 2 and 4 (indexes 1, 3) written and extracted, and days 3 and 5 to 10 extracted again
     full = backends.life_calls(4)
-    assert repair.round_calls(4, 2) == backends.GenCalls(4, full.reads, full.muse)
+    assert repair.round_calls(4, {1, 3}) == backends.GenCalls(2 * 2 + 7, full.reads, full.muse)
 
 
 def test_the_memo_answers_a_request_it_sent_before_without_a_call() -> None:
@@ -262,13 +342,21 @@ def test_keep_failed_quarantines_a_failed_attempt_as_lives_are_stored(tmp_path: 
     assert sorted(path.name for path in (data / "lives").iterdir()) == [f"{life.id}.json"]
 
 
-def test_repair_and_keep_failed_are_for_the_core_splits_only(tmp_path: Path,
-                                                             capsys: pytest.CaptureFixture[str]) -> None:
-    for argv in (["generate", "--repair"], ["generate", "--held-out", "--draw-seed", "x", "--keep-failed"]):
+def test_repair_is_for_the_core_splits_and_keep_failed_for_core_train_only(tmp_path: Path,
+                                                                           capsys: pytest.CaptureFixture[str]) -> None:
+    data = tmp_path / "pilot"
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--fake", "--data", str(data), "generate", "--repair"], out=lambda line: None)
+    assert stopped.value.code == 2 and "core splits" in capsys.readouterr().err
+    # core-val's and core-test's items are sealed: their failed lives and the auditor's words stay unkept
+    for split in (["--split", "core-val"], ["--split", "core-test"], ["--split", "development"],
+                  ["--held-out", "--draw-seed", "x"]):
         with pytest.raises(SystemExit) as stopped:
-            cli.main(["--fake", "--data", str(tmp_path / "pilot"), *argv], out=lambda line: None)
-        assert stopped.value.code == 2 and "core splits" in capsys.readouterr().err
-    assert not (tmp_path / "pilot").exists()
+            cli.main(["--fake", "--data", str(data), "generate", *split, "--keep-failed"], out=lambda line: None)
+        assert stopped.value.code == 2 and "core-train only" in capsys.readouterr().err
+    assert not data.exists()
+    assert cli.main(["--fake", "--data", str(data), "--only", "1", "generate", "--split", "core-val", "--repair"],
+                    out=lambda line: None) == 0
 
 
 def test_the_plan_says_what_a_repair_round_may_hold(tmp_path: Path) -> None:
