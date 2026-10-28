@@ -26,7 +26,7 @@ must not move).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Final
 
@@ -212,6 +212,25 @@ def life(seed: int, index: int, *, dim: int = DIM) -> LabelledStream:
 
 def lives(n: int, *, seed: int, dim: int = DIM) -> tuple[LabelledStream, ...]:
     return tuple(life(seed, i, dim=dim) for i in range(n))
+
+
+def _shifted(stream: LabelledStream, person: str, days: int) -> LabelledStream:
+    by = timedelta(days=days)
+    events = tuple(replace(e, life_or_person=person, t=e.t + by) for e in stream.events)
+    labels = tuple(replace(lab, knowable_at=lab.knowable_at + by, outcome_at=lab.outcome_at + by) for lab in stream.labels)
+    return LabelledStream(person, tuple(d + by for d in stream.days), events, labels)
+
+
+def chained(n: int, *, seed: int, links: int, dim: int = DIM) -> tuple[LabelledStream, ...]:
+    """``n`` long lives, each ``links`` toy lives lived one after another by one person: many
+    nights, for what builds up across them (a fast memory that is never reset saturates)."""
+    out = []
+    for i in range(n):
+        person = f"toy{seed}-chain{i}"
+        parts = [_shifted(life(seed, i * links + j, dim=dim), person, j * DAYS) for j in range(links)]
+        out.append(LabelledStream(person, tuple(d for p in parts for d in p.days),
+                                  tuple(e for p in parts for e in p.events), tuple(lab for p in parts for lab in p.labels)))
+    return tuple(out)
 
 
 # ── Counterfactual autobiographies ────────────────────────────────────────────

@@ -48,6 +48,7 @@ class CoreState:
     observed: int
     cites: tuple[tuple[Cite, ...], ...]  # per slot, the strongest write first
     delta: Mapping[str, NDArray[np.float32]] = field(default_factory=dict)
+    pending: float = 0.0  # surprise observed since the last consolidation: what sleep hasn't taken in
 
     def __post_init__(self) -> None:
         for name in _ARRAYS:
@@ -77,7 +78,8 @@ class CoreState:
 
 def equal(a: CoreState, b: CoreState) -> bool:
     """Same person, core, arrays, clock, cites and adaptation."""
-    same_meta = (a.person, a.model_id, a.now, a.observed, a.cites) == (b.person, b.model_id, b.now, b.observed, b.cites)
+    same_meta = (a.person, a.model_id, a.now, a.observed, a.cites, a.pending) == (
+        b.person, b.model_id, b.now, b.observed, b.cites, b.pending)
     same_arrays = all(np.array_equal(getattr(a, name), getattr(b, name)) for name in _ARRAYS)
     same_delta = set(a.delta) == set(b.delta) and all(np.array_equal(a.delta[n], b.delta[n]) for n in a.delta)
     return same_meta and same_arrays and same_delta
@@ -94,6 +96,7 @@ def save(state: CoreState) -> bytes:
     meta = {
         "version": STATE_VERSION, "person": state.person, "model_id": state.model_id, "now": state.now,
         "observed": state.observed, "cites": [[[eid, share] for eid, share in row] for row in state.cites],
+        "pending": state.pending,
     }
     entries = {name: getattr(state, name) for name in _ARRAYS}
     entries.update({_DELTA + name: value for name, value in sorted(state.delta.items())})
@@ -124,6 +127,7 @@ def load(blob: bytes, *, model_id: str) -> CoreState:
             now=None if meta["now"] is None else float(meta["now"]), observed=int(meta["observed"]),
             cites=tuple(tuple((str(eid), float(share)) for eid, share in row) for row in meta["cites"]),
             delta={name[len(_DELTA):]: value for name, value in arrays.items() if name.startswith(_DELTA)},
+            pending=float(meta.get("pending", 0.0)),
         )
     except (KeyError, TypeError) as error:
         raise StateError(f"a saved state is missing a part: {error}") from None

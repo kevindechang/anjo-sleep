@@ -21,6 +21,9 @@ with its kind and the gap since the event before (``encode``). Then:
    function of the event (``fast_update``): ``S = eta S - theta grad``, ``M = (1 - alpha) M + S``.
    Keys are unit vectors and ``theta <= theta_max <= 0.5``, so a step never overshoots.
 3. **Global state:** a GRU cell over the event, the memory read and what was written.
+
+A person's **slow memory** (``slow``, from her nights: ``api.Core.consolidate``) is read with the
+fast one and enters the surprise, but only the fast one learns and forgets.
 4. **The stance probe** (``stance``, for contradictions). A plain key is a projection of the whole
    event, so a constraint that flips a plan's attribute cancels the very part of the key it
    shares with the plan, and recalls nothing of it. With ``stance`` the key is the centered square
@@ -89,10 +92,12 @@ class Heads(NamedTuple):
 
 def fast_update(
     memory: Tensor, momentum: Tensor, k: Tensor, v: Tensor, theta: Tensor, eta: Tensor, alpha: Tensor,
+    slow: Tensor | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """One Titans step of a linear memory on (k, v): ``(memory, momentum, surprise)``. The gradient
-    of ``|M k - v|^2`` in ``M`` is ``2 (M k - v) k^T``."""
-    err = torch.bmm(memory, k[:, :, None])[:, :, 0] - v
+    of ``|M k - v|^2`` in ``M`` is ``2 (M k - v) k^T``. With a ``slow`` memory (the person's
+    consolidated one) the error is the two together's, and only the fast one learns and forgets."""
+    err = torch.bmm(memory if slow is None else memory + slow, k[:, :, None])[:, :, 0] - v
     surprise = err.pow(2).mean(dim=-1)
     grad = 2.0 * err[:, :, None] * k[:, None, :]
     momentum = eta[:, None, None] * momentum - theta[:, None, None] * grad
@@ -155,7 +160,9 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         timing = torch.stack([torch.log1p(gap.clamp(min=0.0)), torch.ones_like(gap)], dim=-1)
         return self.inp_norm(self.inp(vec / rms)) + self.kind(kind) + self.time(timing)
 
-    def step(self, st: Tensors, e: Tensor, gap: Tensor, now: Tensor) -> tuple[Tensors, Written]:
+    def step(
+        self, st: Tensors, e: Tensor, gap: Tensor, now: Tensor, slow: Tensor | None = None,
+    ) -> tuple[Tensors, Written]:
         cfg = self.cfg
         faded = st.usage * torch.exp(-F.softplus(self.fade) * gap.clamp(min=0.0))[:, None]
         st = st._replace(usage=faded)
@@ -165,7 +172,7 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         slots = st.slots * (1.0 - fresh[:, :, None]) + self.slot_init * fresh[:, :, None]
         opened = st.opened * (1.0 - fresh) + now[:, None] * fresh
         write = address[:, : cfg.slots] + address[:, cfg.slots:] * free
-        memory, momentum, surprise, read = self._remember(st, e, gap)
+        memory, momentum, surprise, read = self._remember(st, e, gap, slow)
         parts = [e, self.read_norm(read)]
         if self.stance_norm is not None:
             parts.append(self.stance_norm(read * self.wv(e)))
@@ -180,16 +187,19 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         out = Tensors(slots, usage, opened, memory, momentum, glob, now)
         return out, Written(write, fresh, surprise, address)
 
-    def _remember(self, st: Tensors, e: Tensor, gap: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """What the memory recalls for the event (read before the write), then one surprise step."""
+    def _remember(
+        self, st: Tensors, e: Tensor, gap: Tensor, slow: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """What the memory recalls for the event (read before the write, the slow memory's too),
+        then one surprise step of the fast one."""
         cfg = self.cfg
         k = self._key(e)
-        read = torch.bmm(st.memory, k[:, :, None])[:, :, 0]
+        read = torch.bmm(st.memory if slow is None else st.memory + slow, k[:, :, None])[:, :, 0]
         if not cfg.fast:
             return st.memory, st.momentum, torch.zeros(e.shape[0]), torch.zeros_like(read)
         g = torch.sigmoid(self.gates(torch.cat([e, torch.log1p(gap.clamp(min=0.0))[:, None]], dim=-1)))
         memory, momentum, surprise = fast_update(
-            st.memory, st.momentum, k, self.wv(e), g[:, 0] * cfg.theta_max, g[:, 1], g[:, 2])
+            st.memory, st.momentum, k, self.wv(e), g[:, 0] * cfg.theta_max, g[:, 1], g[:, 2], slow)
         return memory, momentum, surprise, read
 
     def _key(self, e: Tensor) -> Tensor:
