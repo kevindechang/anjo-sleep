@@ -406,12 +406,14 @@ def test_the_limiter_fails_closed_on_the_host(account: str) -> None:
 
 
 def _snapshot(root: Path) -> dict[str, str]:
-    """Every file under the data root but the demo's own counters and votes and the budget ledger
-    its warm time is debited to, by content hash."""
-    demo, ledger = _demo_dir(), str(_ledger().path)  # the ledger and its lock file
+    """Every file under the data root but the demo's own counters and votes, the budget ledger its warm
+    time is debited to and the host's Glimmer turn marks (times only, ``serving.activity``), by content hash."""
+    from anjo.sleep.app.storage import glimmer_turns
+
+    demo, ledger, turns = _demo_dir(), str(_ledger().path), glimmer_turns()  # the ledger and its lock file
     return {
         str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(root.rglob("*")) if path.is_file() and demo not in path.parents
+        for path in sorted(root.rglob("*")) if path.is_file() and demo not in path.parents and turns not in path.parents
         and not str(path).startswith(ledger) and not path.name.endswith(("-wal", "-shm", "-journal"))
     }
 
@@ -507,7 +509,9 @@ def test_page_writes_no_history_or_memory(account: str, offline_embedder: None) 
     assert _memory_rows() == memory  # and not one of its rows moved: no recall count, nothing added
     assert _db_rows() == rows  # no message, session, memory, surface or evidence row, added or changed
     assert _snapshot(root) == files  # no file outside the demo's counters, votes and warm time changed
-    for path in _demo_dir().iterdir():
+    from anjo.sleep.app.storage import glimmer_turns
+
+    for path in [*_demo_dir().iterdir(), *(p for p in glimmer_turns().rglob("*") if p.is_file())]:
         assert "MARKER" not in path.read_text()
 
 

@@ -50,7 +50,7 @@ from typing import Final, cast
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.flags import require_sleep_host
-from anjo.sleep.app.storage import SLEEP_DIR, data_root
+from anjo.sleep.app.storage import SLEEP_DIR, data_root, glimmer_turns
 from anjo.sleep.budget import LEDGER_NAME, Bound, BudgetError, Ledger, Pool
 from anjo.sleep.demo.limits import JsonCounterStore, Limiter, Limits, Refused
 from anjo.sleep.demo.pairs import PairRegistry, Vote
@@ -60,6 +60,7 @@ from anjo.sleep.demo.starters import BASELINES, PRODUCT, StarterSet
 from anjo.sleep.demo.starters import load as load_starters
 from anjo.sleep.evidence.jsonl import PLAIN, LogError, append_records
 from anjo.sleep.probes.arms import Arm, ArmDeps, DonorError, reply
+from anjo.sleep.serving import activity
 from anjo.sleep.serving import client as vllm
 from anjo.sleep.serving.backend import Serving
 from anjo.sleep.serving.client import ServingError, VllmClient, WakeResult
@@ -225,7 +226,8 @@ class GlimmerArms:
     def _one(self, arm: str, probe: Probe, deps: ArmDeps) -> Answer:
         started = self._clock()
         try:
-            got = reply(cast(Arm, arm), self._user, probe, deps=deps)  # arm 4, or a checked baseline
+            with activity.turn(glimmer_turns()):  # in flight: the night's GPU stop never cuts it
+                got = reply(cast(Arm, arm), self._user, probe, deps=deps)  # arm 4, or a checked baseline
         except (ServingError, DonorError) as error:
             raise ArmsError(f"arm {arm}: {type(error).__name__}") from None
         tokens = got.prompt_tokens + vllm.MAX_TOKENS  # the reply's ceiling: its real length isn't reported
@@ -282,7 +284,8 @@ class BackgroundWake:
 
     def _run(self) -> None:
         try:
-            result = self._wake()
+            with activity.turn(glimmer_turns()):  # a wake in flight: the night's GPU stop never cuts it
+                result = self._wake()
         except (ServingError, ServeConfigError) as error:
             logger.warning("the live demo's wake failed: %s", error)
             return
