@@ -76,6 +76,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol
 
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.context.brief import CUT, REASONING_ROOM
 from anjo.sleep.context.brief_store import union
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.context.template import render
@@ -114,9 +115,6 @@ TEACHER_ALARM_SHARE: Final = 0.5  # a night whose targets are more often the tea
 Adapter = Callable[[str], CheckpointRef | None]
 SparkRole = Literal["person", "teacher", "critic"]
 ROLES: Final[tuple[SparkRole, ...]] = ("person", "teacher", "critic")
-CUT: Final = "length"  # the finish reason of a reply that reached its max_tokens
-OBSERVED_REASONING: Final = 8_500 - 2_000  # the longest live call's output less its visible brief
-REASONING_ROOM: Final = 2 * OBSERVED_REASONING
 VISIBLE_TOKENS: Final[Mapping[str, int]] = MappingProxyType(
     {"person": 2_048, "teacher": GLIMMER_REPLY_CAP, "critic": 256})
 SPARK_CAPS: Final[Mapping[str, int]] = MappingProxyType(

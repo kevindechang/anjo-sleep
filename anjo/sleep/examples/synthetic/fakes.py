@@ -164,7 +164,7 @@ def _scenes(prompt: str) -> str:
 
 def fake_spark(
     model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-    timeout_s: float, *, temperature: float | None = None,
+    timeout_s: float, *, temperature: float | None = None, max_tokens: int | None = None, seed: int | None = None,
 ) -> ChatResult:
     """Muse Spark Open: extraction, probes, briefs and practice scenes, by the prompt it is sent."""
     head = str(messages[0]["content"])

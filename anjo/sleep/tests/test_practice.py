@@ -126,7 +126,8 @@ def test_transcripts_carry_cleared_ancestry_and_seeded_replies() -> None:
 
 
 class _Chat:
-    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
+                 max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
         return _result(brief_text("PRE-PRACTICE BRIEF"))
 
 

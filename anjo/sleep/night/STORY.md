@@ -10,7 +10,8 @@ the accelerated runner's morning). The demo page's night view reads it (`demo/ni
 Telling it never fails a night: a story that can't be told or written is a failed `story` step in
 the log (`STORY_STEP`, its error's type and, when Sleep raised it, its message), and the night's
 status and summary stand. That step, like the morning's and the Dailies line's (`AFTER_THE_NIGHT`),
-never reads as where the night stopped.
+never reads as where the night stopped. Nor does a kept brief: a `failed` brief step carrying `kept`
+(`KEPT`) left the briefs as they were and the night went on; the page says which one was kept.
 
 A record a step can't fill yet is `NotRun(reason)`, never missing, `None` or a zero. Each one still
 waiting for its branch names that branch in a `*_NOT_YET` reason in `story.py`.
@@ -18,6 +19,7 @@ waiting for its branch names that branch in a `*_NOT_YET` reason in `story.py`.
 | Record | Fields | Owner |
 |---|---|---|
 | `sleep` | `Sleep(kind, pressure, threshold, reason)` | sleep-pressure (filled) |
+| `brief` | `Brief(folded)`, or `Kept(kept_from, error)`: the brief broke a rule twice (once at temperature 0, once sampled), so the briefs of night `kept_from` were kept (`empty` on a first night) and the night went on with them | night-story (filled) |
 | `dream.questions` | questions the notice pass opened tonight | MIND's inquiry (filled) |
 | `dream.ignitions`, `dream.threads`, `dream.boundaries` | `Ignition(kind, score, cites)`, `Thread(slot, score, cites)`, `Boundary(state, slot, steps)` | **mind-frontier** (read, waiting for its `dream` step) |
 | `rehearse.scenes`, `flagged`, `corrected` | practice's scenes, the critic's pairs, the teacher's corrections | night-story (filled) |
@@ -54,5 +56,5 @@ To fill a record:
    story needs raises `StoryError`. The night then logs a failed `story` step and keeps the story it
    had, and the page shows the story unavailable.
 3. Extend `tests/test_night_story.py`: the round trip, and a told night with your field filled.
-4. Adding, removing or retyping a field is a new `STORY_VERSION` (2 added `Reused`). Filling a
-   field the schema already holds is not.
+4. Adding, removing or retyping a field is a new `STORY_VERSION` (2 added `Reused`, 3 the `brief`).
+   Filling a field the schema already holds is not.

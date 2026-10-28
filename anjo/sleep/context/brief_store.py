@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from anjo.sleep.baseten_api import SPARK_OPEN
-from anjo.sleep.context.brief import BriefState, ChatFn, fold_day
+from anjo.sleep.context.brief import BriefChat, BriefState, fold_day
 from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.provenance import may_train
@@ -123,7 +123,7 @@ class JsonlBriefStore:
 
     def fold(
         self, night: date, new: Sequence[Evidence], *, at: datetime, hosted_in_training: bool,
-        chat: ChatFn | None = None,
+        chat: BriefChat | None = None,
     ) -> BriefRecord:
         """Fold ``new`` into both briefs, store the result and return it."""
         if any(item.person_id != self.person_id for item in new):

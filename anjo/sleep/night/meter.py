@@ -101,13 +101,14 @@ class SpendMeter:
         return lambda messages: self.charge(inner(messages))
 
     def wrap_chat(self, inner: Any) -> Any:
-        """The brief's and practice's ``ChatFn`` (model, messages, tools, timeout, temperature), and
-        full practice's cap (``max_tokens``), passed on only when a caller sets one."""
+        """The brief's and practice's ``ChatFn`` (model, messages, tools, timeout, temperature), with a
+        cap (``max_tokens``: full practice's and the brief's) and a seed (the brief's retry), each
+        passed on only when a caller sets one."""
 
         def chat(model: Any, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
-                 max_tokens: int | None = None) -> ChatResult:
-            capped = {} if max_tokens is None else {"max_tokens": max_tokens}
-            return self.charge(inner(model, messages, tools, timeout_s, temperature=temperature, **capped))
+                 max_tokens: int | None = None, seed: int | None = None) -> ChatResult:
+            given = {name: value for name, value in (("max_tokens", max_tokens), ("seed", seed)) if value is not None}
+            return self.charge(inner(model, messages, tools, timeout_s, temperature=temperature, **given))
 
         return chat
 

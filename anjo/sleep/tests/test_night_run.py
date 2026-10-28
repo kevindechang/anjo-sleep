@@ -15,11 +15,15 @@ from typing import Any
 import pytest
 
 from anjo.sleep.budget import CAPS, Ledger
+from anjo.sleep.context.brief import MAX_TOKENS, RETRY_SEED, RETRY_TEMPERATURE, SECTIONS
+from anjo.sleep.context.brief_store import TrainingBriefs
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.choose import StateChooser
 from anjo.sleep.night.deps import InquiryOutcome, MindCall, NightSettings, NoInquiry, StudyOutcome
+from anjo.sleep.night.holds import SPARK_MAX_IN_TOKENS, spark_usd
 from anjo.sleep.night.meter import WonderMeter
-from anjo.sleep.night.run import PROBES_WORST_USD, run_night_batch_with
+from anjo.sleep.night.run import BRIEF_MAX_CALLS, PROBES_WORST_USD, run_night_batch_with
+from anjo.sleep.night.story import Kept, Learn, Wake, story_from
 from anjo.sleep.note.hold import HELD_BACK_LINE
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tests.night_fakes import (
@@ -715,6 +719,68 @@ def test_a_pool_without_room_stops_the_brief_practice_and_probes_before_any_call
             "practice": len([p for p in world.spark.prompts if p.startswith("# scenes_v1")]) + world.glimmer.calls,
             "probes": len([e for e in world.events if e[0] == "probes"])}[refused]
     assert made == 0  # no call was made
+
+
+def _story(result: NightResult) -> Any:
+    return story_from(json.loads((result.log_path.parent / "story.json").read_text(encoding="utf-8")))
+
+
+def test_a_brief_that_fails_twice_keeps_yesterdays_and_the_night_goes_on(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    yesterday, tonight = NIGHT - timedelta(days=1), NIGHT
+    world.plan("p1", yesterday)
+    world.plan("p1", tonight)
+    assert _one(world, night=yesterday).status == "promoted"
+    kept = world.briefs("p1").latest()
+    assert kept is not None and kept.night == yesterday
+    world.spark.briefs_cut, world.spark.brief_calls = 2, []  # tonight the served brief runs away twice
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    result = _one(world, night=tonight, ledger=ledger)
+
+    assert (result.status, result.failed_at) == ("promoted", None)  # the night went on
+    brief = step(result.log_path, "brief")
+    assert brief["status"] == "failed" and brief["kept"] == yesterday.isoformat()
+    assert brief["why"] == f"brief kept from {yesterday.isoformat()}" and "BriefError" in brief["error"]
+    waiting = 3 + len(world.transcripts("p1").for_night(yesterday))  # tonight's items, and yesterday's practice
+    assert (brief["folded"], brief["pending"]) == (0, waiting)
+    assert [r["status"] for r in steps(result.log_path) if r["step"] in ("practice", "dataset", "train", "gates")] == ["ok"] * 4
+    assert world.briefs("p1").records() == [kept]  # nothing written: both briefs stay yesterday's
+    assert len(world.briefs("p1").unfolded(world.evidence("p1").stored(tonight))) >= waiting  # folded next night
+    practiced = world.transcripts("p1").for_night(tonight)
+    assert practiced and all(kept.training in (t.context or "") for t in practiced)  # practice ran on the kept brief
+    trained_on = TrainingBriefs(world.briefs).served("p1")
+    assert trained_on is not None and trained_on.compiled_at == kept.compiled_at
+
+    assert [(c["max_tokens"], c["temperature"], c["seed"]) for c in world.spark.brief_calls] == [
+        (MAX_TOKENS, 0.0, None), (MAX_TOKENS, RETRY_TEMPERATURE, RETRY_SEED)]  # capped, then retried once, sampled
+    events = [e for e in read_records(ledger.path, PLAIN) if e["job"].startswith("night:brief:")]
+    assert [e["op"] for e in events] == ["reserve", "settle"]
+    assert events[0]["amount"] == pytest.approx(spark_usd(world.deps().prices, BRIEF_MAX_CALLS * SPARK_MAX_IN_TOKENS,
+                                                          BRIEF_MAX_CALLS * MAX_TOKENS))  # every attempt held at its cap
+    both = 2 * spark_usd(world.deps().prices, 1853, MAX_TOKENS)  # the runaway and its retry, each cut at its cap
+    assert events[1]["amount"] == pytest.approx(both) == pytest.approx(summary(result.log_path)["cost_parts"]["brief"])
+    assert summary(result.log_path)["brief"] == {"kept": yesterday.isoformat(), "why": brief["why"],
+                                                 "error": brief["error"]}
+    told = _story(result)
+    assert told.brief == Kept(yesterday.isoformat(), brief["error"])
+    assert isinstance(told.wake, Wake) and isinstance(told.learn, Learn)  # never "the night stopped at brief"
+
+
+def test_a_first_night_without_a_brief_uses_the_empty_brief(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    world.spark.briefs_cut = 2
+    result = _one(world)
+
+    assert (result.status, result.failed_at) == ("promoted", None)
+    brief = step(result.log_path, "brief")
+    assert (brief["status"], brief["kept"], brief["why"]) == ("failed", "empty", "brief kept empty: none written yet")
+    assert world.briefs("p1").records() == []  # no brief yet, as before her first fold: readers serve none
+    assert TrainingBriefs(world.briefs).served("p1") is None
+    practiced = world.transcripts("p1").for_night(NIGHT)
+    assert practiced and not any(heading in (t.context or "") for t in practiced for heading in SECTIONS)
+    assert _story(result).brief == Kept("empty", brief["error"])
+    assert summary(result.log_path)["brief"]["kept"] == "empty"
 
 
 def test_a_real_persons_probes_hold_is_settled_in_full(tmp_path: Path) -> None:
