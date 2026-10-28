@@ -17,6 +17,11 @@ accelerated life per arm on fresh synthetic accounts, then ``--report`` over wha
 - ``dreams``: the seed arm with ``ANJO_SLEEP_DREAMS=1``, only with its control ``seed_matched``: the
   seed arm's objective, its main block stretched to the dreams arm's minutes, serving GPU minutes for
   the dreams' text included. Unwired dreams (the dataset step's ``dreams: not wired``) skip the control.
+- ``protect``: the fold arm with ``ANJO_SLEEP_PROTECT=anchors``: tonight's slot trains off the forgetting
+  anchors' activation basis (``train/sleep_protect.py``). Only with ``fold`` (the same arm unprojected) and
+  its twin ``protect_random``: the same job with a random orthonormal basis of the same rank and width in
+  place of the anchors' (the decisive ablation). A twin needs no match file: the same rows, step plan and
+  sampling make its minutes the same by construction, and the report checks they stayed within 5%.
 
 A control runs after the arm it is matched to, with a match file of that arm's minutes per night
 (``--match-file``, per run: no host setting can pad a real night). Every arm runs with
@@ -67,21 +72,27 @@ from anjo.sleep.train.terms import DREAMS_NOT_WIRED
 
 POOL: Final = "modal_usd"
 A100_USD_PER_HOUR: Final = 2.50  # Modal's A100-80GB list price, checked 2026-10-27
-ORDER: Final = ("seed", "today", "fold", "dreams", "seed_matched")
+ORDER: Final = ("seed", "today", "fold", "dreams", "seed_matched", "protect", "protect_random")
 CONTROL_OF: Final = {"today": "seed", "seed_matched": "dreams"}  # a control, and the arm its minutes match
-NEEDS: Final = {"seed": "today", "dreams": "seed_matched"}  # an arm making a claim, and its control
+TWIN_OF: Final = {"protect_random": "protect"}  # the same job with one thing swapped: equal minutes by construction
+NEEDS: Final = {"seed": ("today",), "dreams": ("seed_matched",), "protect": ("protect_random", "fold")}  # a claim's comparisons
 PRESSURE_ENV: Final = "ANJO_SLEEP_PRESSURE"
 SEED: Final = {objective.OBJECTIVE_ENV: objective.SEED_OBJECTIVE}
 ENVS: Final[Mapping[str, Mapping[str, str]]] = {
     "seed": SEED, "fold": {**SEED, objective.FOLD_ENV: "1"}, "dreams": {**SEED, objective.DREAMS_ENV: "1"},
     "today": {objective.OBJECTIVE_ENV: "sft_dpo"}, "seed_matched": SEED,
+    "protect": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "anchors"},
+    "protect_random": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "random"},
 }
 # Estimates per night (2026-10-29), not measurements: seeding's teacher passes 0.9, fresh samples 1.3,
 # imitation 0.8, the fold 0.1, dreams' ranking and block 1.3 plus 1.5 minutes of serving for their text.
-ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8}
+# The protected slot adds 1.5 to the fold's: the anchors' passes 0.3, the bases 0.5, the projection in the
+# loop and the protected cut 0.7; each night's receipt measures the first two (terms.protect.minutes).
+ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8, "protect": 4.6, "protect_random": 4.6}
 TODAY_TRAIN_MIN: Final = 2.83  # today's training minutes, measured 2026-10-28: a control's budget holds them too
 MISMATCH: Final = 0.05
-SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, PRESSURE_ENV)
+SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, objective.PROTECT_ENV,
+                   PRESSURE_ENV)
 SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # app.sim_transport's: the account a day's lines post as
 HOLD_KEY: Final = "sleep-objective-live"
 WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.sleep.app.sim_transport:simulate",
@@ -89,14 +100,16 @@ WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.s
 
 
 def arms(accounts: Mapping[str, str]) -> list[str]:
-    """The arms asked for, in run order: each control after the arm it is matched to."""
+    """The arms asked for, in run order: each control and twin after the arm it is matched to."""
     unknown = sorted(set(accounts) - set(ORDER))
     if unknown or "seed" not in accounts:
         raise ValueError(f"arms are {', '.join(ORDER)}, and the seed arm is always run")
     if len(set(accounts.values())) != len(accounts):
         raise ValueError("each arm lives on its own account")
-    missing = [f"{arm} needs {control}" for arm, control in NEEDS.items() if arm in accounts and control not in accounts]
-    missing += [f"{control} needs {arm}" for control, arm in CONTROL_OF.items() if control in accounts and arm not in accounts]
+    missing = [f"{arm} needs {other}" for arm, others in NEEDS.items() if arm in accounts
+               for other in others if other not in accounts]
+    missing += [f"{control} needs {arm}" for control, arm in {**CONTROL_OF, **TWIN_OF}.items()
+                if control in accounts and arm not in accounts]
     if missing:
         raise ValueError(f"every claim runs with its matched control: {'; '.join(missing)}")
     return [arm for arm in ORDER if arm in accounts]
@@ -209,6 +222,7 @@ def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) 
             "minutes_by_term": [t.get("minutes") for t in terms], "rows_by_term": [t.get("rows") for t in terms],
             "dreams_by_seed": [d.get("by_seed") for d in dreams], "dream_blocks_kept": sum(bool(d.get("block_kept")) for d in dreams),
             "cost_usd": round(sum(float(n["cost_usd"] or 0.0) for n in done), 2),
+            **({"protect_by_night": [t.get("protect") for t in terms]} if "protect" in arm else {}),
             **({"match": matches(done)} if arm in CONTROL_OF else {}),
         }
         out(f"{arm}: {json.dumps(table[arm], sort_keys=True)}")
@@ -218,6 +232,9 @@ def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) 
         fold, seed = budgets(root, accounts["fold"]), budgets(root, accounts["seed"])
         if _off(sum(fold.values()), sum(seed.values())):
             out(f"  fold: its training minutes part from the seed arm's by more than {MISMATCH:.0%}: it needs a control")
+    for twin, arm in TWIN_OF.items():
+        if twin in table and _off(sum(budgets(root, accounts[twin]).values()), sum(budgets(root, accounts[arm]).values())):
+            out(f"  {twin}: its training minutes part from {arm}'s by more than {MISMATCH:.0%}: the twin isn't matched")
     return table
 
 

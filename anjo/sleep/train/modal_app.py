@@ -51,6 +51,7 @@ _FILES: Final = (
     (_TRAIN / "sleep_job.py", "/root/anjo/sleep/train/sleep_job.py"),  # sft_dpo_seed's run, beside the script
     (_TRAIN / "sleep_loss.py", "/root/anjo/sleep/train/sleep_loss.py"),  # its one loss
     (_TRAIN / "sleep_fold.py", "/root/anjo/sleep/train/sleep_fold.py"),  # its fold
+    (_TRAIN / "sleep_protect.py", "/root/anjo/sleep/train/sleep_protect.py"),  # its protected slot
     (_TRAIN / "channel_train.py", "/root/anjo/sleep/train/channel_train.py"),  # beside the script, which loads it by path
     (_TRAIN / "modal_job.py", "/root/anjo/sleep/train/modal_job.py"),
     (_TRAIN / "modal_app.py", "/root/anjo/sleep/train/modal_app.py"),

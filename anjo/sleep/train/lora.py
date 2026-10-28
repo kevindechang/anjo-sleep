@@ -19,6 +19,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   or ``sft_dpo_seed`` (2026-10-29): one weighted loss in one job over SFT, DPO, knowledge seeding, the
   imitation term and, with ``dreams``, dreams (``sleep_loss.py``). ``fold_rank`` folds the night into the
   person's long-term adapter at that rank, a fresh slot training beside it at ``r`` and the fresh rate.
+  ``protect`` (``anchors`` or ``random``, with the fold only) trains that slot off the forgetting anchors'
+  activation basis, or a random one of its shape (``sleep_protect.py``); ``off`` sends the recipe unchanged.
 
 ``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Modal for the
 night by default, or Colab) under the training hard timeout, copies the finished adapter into the local
@@ -61,6 +63,8 @@ VOLUME_URI: Final = f"modal-volume://{config.ADAPTERS_VOLUME}"
 PROJECTOR_SUFFIX: Final = ".projector.npz"  # the thought channel's projector, beside its night's adapter
 Objective = Literal["sft", "sft_dpo", "sft_dpo_seed"]
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft", "sft_dpo", "sft_dpo_seed")
+Protection = Literal["off", "anchors", "random"]
+PROTECTIONS: Final[tuple[Protection, ...]] = ("off", "anchors", "random")
 WITH_PAIRS: Final = ("sft_dpo", "sft_dpo_seed")
 MAX_MATCH_MINUTES: Final = 100.0  # inside the job's two-hour cap, with its start and landing
 DPO_BETA: Final = 0.1
@@ -96,6 +100,7 @@ class LoraCfg:
     dpo_lr: float = DPO_LR
     fold_rank: int | None = None  # sft_dpo_seed: fold the night into a long-term adapter of this rank
     dreams: bool = False  # sft_dpo_seed: train on the night's dream rows
+    protect: Protection = "off"  # sft_dpo_seed with the fold: tonight's slot off the anchors' basis (or a random one)
     # The live comparison's matched control only: each night's training budget in minutes (its reference
     # arm's, serving included), which the job fills by the clock; every real night leaves it empty.
     match_by_night: tuple[tuple[date, float], ...] = ()
@@ -124,6 +129,10 @@ class LoraCfg:
         seeded = self.objective == "sft_dpo_seed"
         if (self.fold_rank is not None or self.dreams) and not seeded:
             raise LoraCfgError("the fold and dreams train only under sft_dpo_seed")
+        if self.protect not in PROTECTIONS:
+            raise LoraCfgError(f"protect is one of {', '.join(PROTECTIONS)}")
+        if self.protect != "off" and (not seeded or self.fold_rank is None):
+            raise LoraCfgError("the protected slot trains only under sft_dpo_seed with the fold, which keeps it apart")
         if self.fold_rank is not None and (isinstance(self.fold_rank, bool) or not self.r <= self.fold_rank <= MAX_RANK):
             raise LoraCfgError(f"the long-term rank is from the night's rank {self.r} to {MAX_RANK}")
         nights = [night for night, _ in self.match_by_night]
@@ -192,7 +201,8 @@ def training_config(
     fixed |= {"keep_every_row": True} if keep_every_row else {}
     fixed |= {} if channel is None else {"channel": dict(channel)}
     if cfg.objective == "sft_dpo_seed":
-        fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams}}
+        fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams,
+                            **({} if cfg.protect == "off" else {"protect": cfg.protect})}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.
     rate = cfg.warm_lr if warm and cfg.fold_rank is None else cfg.lr
     if cfg.match_by_night:
