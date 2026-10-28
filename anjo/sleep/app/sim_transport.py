@@ -11,6 +11,10 @@ calls hold their worst case on ``baseten_sleep_usd`` first and settle the tokens
 under the night lock (``night_lock``), so a night start never sweeps a live day's hold.
 Glimmer is woken first (``serving.backend``); if it can't be, the day does not start. The day
 ends with Glimmer put back to sleep.
+
+Before any of that, the token is checked against the day's account: ``GET /api/billing/config``, an
+authenticated read with no side effects, echoes the caller's user id. A token that isn't ``user_id``'s,
+or can't be checked, refuses the day (``TokenRefused``): no hold, no wake, no line posted as anyone.
 """
 from __future__ import annotations
 
@@ -40,6 +44,12 @@ DEFAULT_RETRY_AFTER_S: Final = 1.0  # a busy refusal without a usable ``Retry-Af
 MIN_RETRY_AFTER_S: Final = 0.1  # so the total wait always grows and the loop ends
 MAX_RETRY_AFTER_S: Final = 5.0  # one wait never exceeds this, whatever the server asks
 MAX_BUSY_WAIT_S: Final = 30.0  # all the waiting one turn does before it fails as busy
+WHOAMI: Final = "/api/billing/config"  # an authenticated read that echoes the caller's user id
+
+
+class TokenRefused(RuntimeError):
+    """The sim token isn't the day's account's, or couldn't be checked: the day doesn't start.
+    Its message names neither the token nor any account."""
 
 
 def reply_text(stream: str) -> str:
@@ -122,6 +132,17 @@ class DevApiTransport:
         except httpx.HTTPError as error:
             raise TurnFailed(f"{path} failed in transport ({type(error).__name__})", reason=type(error).__name__) from None
 
+    def check_account(self, user_id: str) -> None:
+        """Refuse a token that isn't ``user_id``'s before any line is posted; fail closed."""
+        try:
+            response = self._http.get(WHOAMI)
+        except httpx.HTTPError as error:
+            raise TokenRefused(f"the sim token couldn't be checked ({type(error).__name__})") from None
+        if response.is_error:
+            raise TokenRefused(f"the sim token couldn't be checked: {WHOAMI} returned HTTP {response.status_code}")
+        if _body(response).get("user_id") != user_id:
+            raise TokenRefused("the sim token belongs to another account than the day's: no line is posted")
+
     def send(self, session_id: str, text: str, *, cleared: bool) -> str:
         if not cleared:
             raise ValueError("the simulator's sessions are cleared")
@@ -132,10 +153,11 @@ class DevApiTransport:
 
 def simulate(user_id: str, persona: str, day_index: int, seed: int) -> DayRun:
     require_sleep_host()
+    transport = DevApiTransport(os.environ[DEV_URL_ENV], os.environ[SIM_TOKEN_ENV])
+    transport.check_account(user_id)  # before the hold and the wake: a wrong pairing posts nothing
     from anjo.sleep.app.night import PERSONAS, prices
 
     person = load_person_file(PERSONAS / f"{persona}.json").visible
-    transport = DevApiTransport(os.environ[DEV_URL_ENV], os.environ[SIM_TOKEN_ENV])
     model, price = SparkSim(), prices()
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     with night_lock(ledger), held(ledger, f"sim:{user_id}:d{day_index}:s{seed}", ("baseten_sleep_usd",),

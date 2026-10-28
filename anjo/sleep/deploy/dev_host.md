@@ -530,7 +530,10 @@ The night runs as its own process, so a long night can't take down the server.
   serve unscored). This timer keeps `Persistent=true`: the night lock makes a catch-up safe.
 - The account id is never in the code: `ANJO_SLEEP_DAILY_USERS=film_founder=<account id>` in the env file.
   The env file also holds `ANJO_SLEEP_HOST=1`, the backend's names (§1.4, or Modal's URL and token),
-  `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir.
+  `ANJO_SLEEP_DEV_URL`, `ANJO_SLEEP_SIM_TOKEN` and the data dir. The token must be that account's:
+  each day first reads `GET /api/billing/config` and refuses a token for any other account before it
+  holds, wakes or posts a line. The live comparison (`tools/sleep_objective_live.py`) gives each arm
+  its own account's token from `--token-file <arm>=<path>` in place of this one.
 - Each phase ends with Glimmer asleep (`backend.phase`): the day sets the copy count to 0 when it
   ends, and the night phase once, after the morning run.
 
