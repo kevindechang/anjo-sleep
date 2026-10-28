@@ -1,7 +1,9 @@
 """The intervention test on the live models (Task 17): does her state cause what she does next?
 
 ``INTERVENTION_SNAPSHOTS`` mid-inquiry snapshots are drawn from the development lives' M runs on
-disk, in the order ``SNAPSHOT_SEED`` fixes (``interventions.draw_snapshots``). Each is resumed after
+disk, in the order ``SNAPSHOT_SEED`` fixes (``interventions.draw_snapshots``), only once all
+``DEVELOPMENT_LIVES`` of them are there (``DrawRefused`` before), so the draw is the same on every
+rerun. Each is resumed after
 each of the three edits against its unedited twin (``interventions.intervention_test``), on the
 APD session's base Glimmer at temperature 0, dated on the snapshot's night, with the evidence held
 fixed: both twins read the life's evidence as of the snapshot.
@@ -13,8 +15,9 @@ fixed: both twins read the life's evidence as of the snapshot.
 - **Spend:** each snapshot-edit is one work item, its Spark Open calls (both twins' screen and
   resolver, and the writer's) held first on ``baseten_mind_usd`` at ``EDIT_SPARK_CALLS`` calls'
   worst case and journaled (``SparkCalls``), as the runs are held.
-- **Never twice:** each finished item is stored (``interventions/<n>.<edit>.json``) and skipped on a
-  rerun; items run in parallel against the one server (``batch.in_parallel``). An item starts only
+- **Never twice, never mixed:** each finished item is stored under its snapshot's identity
+  (``item_name``: the life, its M run, the step the snapshot ends at and its question, then the
+  edit) and skipped on a rerun; only the draw's own items are read back (``on_disk``). Items run in parallel against the one server (``batch.in_parallel``). An item starts only
   when the session can carry ``run_s`` more. One with a failed call (after ``retry``'s tries) fails
   alone: recorded (``DataDir.record_failed``), never stored, run again on a rerun; the others go on.
 
@@ -23,6 +26,7 @@ The section of the report is ``reports.apd.intervention_section``.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -38,7 +42,7 @@ from anjo.sleep.mind.apd.interventions import EDIT_KINDS, InterventionResult, Sk
 from anjo.sleep.mind.apd.live import Meter, RunFailed, SparkCalls, arm_models, held_run
 from anjo.sleep.mind.apd.resume import resume_point
 from anjo.sleep.mind.apd.store import DataDir
-from anjo.sleep.mind.apd.types import INTERVENTION_SNAPSHOTS, ProblemFile
+from anjo.sleep.mind.apd.types import DEVELOPMENT_LIVES, INTERVENTION_SNAPSHOTS, ProblemFile
 from anjo.sleep.mind.inquiry.types import EditKind, Hypothesis, Question
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.spark_inquiry import ChatFn
@@ -48,6 +52,11 @@ WRONG_MAX_TOKENS: Final = 256
 SNAPSHOT_SEED: Final = 17  # registered with the protocol
 EDIT_SPARK_CALLS: Final = 2 * MIND_SPARK_CALLS + 1  # both twins' screen and resolver calls, and the writer's
 Done = tuple[tuple[InterventionResult, ...], tuple[Skipped, ...]]
+_UNSAFE: Final = re.compile(r"[^\w.+-]")
+
+
+class DrawRefused(ValueError):
+    """The snapshots asked for before every development life's M run is on disk."""
 
 
 @dataclass(frozen=True)
@@ -75,23 +84,31 @@ class SparkWrong:
         return statement.strip()
 
 
-def draw(data: DataDir, *, seed: int = SNAPSHOT_SEED, count: int = INTERVENTION_SNAPSHOTS) -> tuple[Snapshot, ...]:
-    """The snapshots, from every development life's M run on disk."""
+def draw(data: DataDir, *, seed: int = SNAPSHOT_SEED, count: int = INTERVENTION_SNAPSHOTS,
+         whole: bool = True) -> tuple[Snapshot, ...]:
+    """The snapshots, from the development lives' M runs on disk: all ``DEVELOPMENT_LIVES`` of them,
+    or ``DrawRefused``, so a draw never changes under a rerun. ``whole=False`` is timing's probe,
+    which keeps nothing."""
     pairs = [(life, run) for life in data.lives("development") if (run := data.run(life.id, "M")) is not None]
+    if whole and len(pairs) < DEVELOPMENT_LIVES:
+        raise DrawRefused(f"the intervention test draws from all {DEVELOPMENT_LIVES} development lives' M runs, "
+                          f"and {len(pairs)} are on disk: run them first")
     return interventions.draw_snapshots(pairs, mind_core(), seed=seed, count=count)
 
 
-def item_name(n: int, kind: EditKind) -> str:
-    return f"{n:02d}.{kind}"
+def item_name(snap: Snapshot, kind: EditKind) -> str:
+    """A snapshot-edit's name, by its snapshot's identity: the life, its M run, the step the
+    snapshot ends at and the question it is on; then the edit."""
+    return f"{snap.life_id}.M.s{len(snap.events)}.{_UNSAFE.sub('_', snap.question_id)}.{kind}"
 
 
 def _item(
-    data: DataDir, n: int, snap: Snapshot, kind: EditKind, session: ColabSession, backend: Backend, out: Out,
+    data: DataDir, snap: Snapshot, kind: EditKind, session: ColabSession, backend: Backend, out: Out,
     meter: Meter | None, keep: bool, run_s: float,
 ) -> Done | None:
     session.check_room(run_s)
     life = data.life(snap.life_id)
-    name = item_name(n, kind)
+    name = item_name(snap, kind)
     spend = fresh_journal(data, f"{'' if keep else 'timing-'}intervene-{name}", backend, out, life_id=life.id,
                           arm=f"intervention {name}")
     spark = SparkCalls(backend.spark, backend.prices, backend.ledger, f"intervene:{name}",
@@ -122,28 +139,31 @@ def intervene(
     ``keep=False`` (timing) runs the given snapshots and stores nothing."""
     snaps = draw(data) if snapshots is None else tuple(snapshots)
     say = serial(out)
-    todo = [(n, snap, kind) for n, snap in enumerate(snaps) for kind in EDIT_KINDS
-            if not keep or data.intervention(item_name(n, kind)) is None]
-    ran = in_parallel([partial(_item, data, n, snap, kind, session, backend, say, meter, keep, run_s)
-                       for n, snap, kind in todo], parallel)
-    check_failed([f"intervention {item_name(n, kind)}" for (n, _snap, kind), done in zip(todo, ran, strict=True)
+    todo = [(snap, kind) for snap in snaps for kind in EDIT_KINDS
+            if not keep or data.intervention(item_name(snap, kind)) is None]
+    ran = in_parallel([partial(_item, data, snap, kind, session, backend, say, meter, keep, run_s)
+                       for snap, kind in todo], parallel)
+    check_failed([f"intervention {item_name(snap, kind)}" for (snap, kind), done in zip(todo, ran, strict=True)
                   if done is None])
-    found = [done for done in ran if done is not None] if not keep else [stored(data, n, kind) for n in range(len(snaps)) for kind in EDIT_KINDS]
+    found = [done for done in ran if done is not None] if not keep else [stored(data, snap, kind) for snap in snaps
+                                                                         for kind in EDIT_KINDS]
     return (tuple(r for results, _ in found for r in results), tuple(s for _, skipped in found for s in skipped))
 
 
-def stored(data: DataDir, n: int, kind: EditKind) -> Done:
-    found = data.intervention(item_name(n, kind))
+def stored(data: DataDir, snap: Snapshot, kind: EditKind) -> Done:
+    found = data.intervention(item_name(snap, kind))
     if not (isinstance(found, tuple) and len(found) == 2):
-        raise ValueError(f"intervention {item_name(n, kind)} isn't on disk")
+        raise ValueError(f"intervention {item_name(snap, kind)} isn't on disk")
     return found[0], found[1]
 
 
 def on_disk(data: DataDir) -> Done | None:
-    """Every stored snapshot-edit's results and skips, or ``None`` when the test hasn't run."""
+    """The draw's stored snapshot-edits' results and skips (no file of another snapshot is read),
+    or ``None`` when the test hasn't run."""
     if not data.interventions.exists():
         return None
-    found = [data.intervention(path.stem) for path in sorted(data.interventions.glob("*.json"))]
+    names = (item_name(snap, kind) for snap in draw(data) for kind in EDIT_KINDS)
+    found = [done for done in (data.intervention(name) for name in names) if done is not None]
     if not found:
         return None
     return (tuple(r for results, _ in found for r in results), tuple(s for _, skipped in found for s in skipped))

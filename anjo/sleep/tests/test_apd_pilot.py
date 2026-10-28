@@ -176,17 +176,36 @@ def test_the_store_rebuilds_only_anjo_sleeps_own_types(tmp_path: Path) -> None:
         data.life("../etc/passwd")
 
 
+def _sessions(root: Path) -> int:
+    return sum(1 for event in read_records(root / "fake-budget.jsonl", PLAIN)
+               if event["op"] == "reserve" and str(event["job"]).startswith("colab_serve:"))
+
+
 def test_intervention_test_runs_each_snapshot_edit_once_and_reports(tmp_path: Path) -> None:
     for command in (["generate"], ["run"]):
         assert _main(["--fake", "--data", str(tmp_path), "--only", "2", *command])[0] == 0
-    code, text = _main(["--fake", "--data", str(tmp_path), "--parallel", "4", "intervene"])
+    sessions = _sessions(tmp_path)
+    code, text = _main(["--fake", "--data", str(tmp_path), "intervene"])
+    assert code == cli.REFUSED_CODE and "Refused:" in text and "all 8 development lives" in text  # 2 of 8 runs
+    assert not (tmp_path / "interventions").exists() and _sessions(tmp_path) == sessions  # refused before the VM
+    for command in (["generate"], ["run"]):
+        assert _main(["--fake", "--data", str(tmp_path), *command])[0] == 0
+    code, text = _main(["--fake", "--data", str(tmp_path), "intervene"])
     assert code == 0 and "the intervention test:" in text
+    data = DataDir(tmp_path)
     stored = sorted(path.stem for path in (tmp_path / "interventions").glob("*.json"))
-    assert len(stored) == INTERVENTION_SNAPSHOTS * len(EDIT_KINDS)
+    drawn = intervene.draw(data)
+    assert stored == sorted(intervene.item_name(snap, kind) for snap in drawn for kind in EDIT_KINDS)
+    assert len(stored) == INTERVENTION_SNAPSHOTS * len(EDIT_KINDS)  # each by its snapshot: life, M run, step
+    assert all(f".M.s{len(snap.events)}." in intervene.item_name(snap, "swap_lead") for snap in drawn)
     again = _main(["--fake", "--data", str(tmp_path), "intervene"])[1]
-    assert "intervention 0" not in again  # every snapshot-edit was kept: none runs twice
-    found = intervene.on_disk(DataDir(tmp_path))
+    assert not any(line.startswith("intervention ") for line in again.splitlines())  # none runs twice
+    stray = tmp_path / "interventions" / "00.swap_lead.json"  # an item of no snapshot this draw holds
+    stray.write_bytes((tmp_path / "interventions" / f"{stored[0]}.json").read_bytes())
+    found = intervene.on_disk(data)
     assert found is not None
+    assert sum(len(part) for part in found) == sum(len(part) for name in stored
+                                                   for part in data.intervention(name))  # the stray isn't mixed in
     section = apd_report.intervention_section(*found)
     assert section.startswith("## Intervention test") and all(f"| {kind} |" in section for kind in EDIT_KINDS)
     with pytest.raises(StoreError):  # the writer reads a development life's problem file, never a held-out one

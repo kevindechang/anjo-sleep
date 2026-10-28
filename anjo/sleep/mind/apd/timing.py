@@ -243,7 +243,7 @@ def time_pilot(data: DataDir, session: ColabSession, backend: Backend, out: Out,
     assert isinstance(runs, tuple)
     m_run = next(run for run in runs if run.arm == "M")
     branches_s, branches_usd, training_cu = _replay(data.life(m_run.life_id), m_run, session, backend, out, clock)
-    snaps = intervene.draw(data, count=1)
+    snaps = intervene.draw(data, count=1, whole=False)  # a probe from the timed M runs, nothing kept
     probe = Meter()
     _, intervene_s = _timed(clock, lambda: intervene.intervene(data, session, backend, out, parallel=parallel,
                                                                snapshots=snaps, keep=False, meter=probe))

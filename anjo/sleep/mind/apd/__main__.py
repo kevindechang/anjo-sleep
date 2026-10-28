@@ -213,7 +213,8 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
     except MindBusy as error:
         out(f"{error}.")
         return BUSY
-    except (pilot.FreezeError, LedgerError, StoreError, ServeConfigError, colab_vllm.PreflightError) as error:
+    except (pilot.FreezeError, LedgerError, StoreError, ServeConfigError, colab_vllm.PreflightError,
+            intervene.DrawRefused) as error:
         out(f"Refused: {error}.")
         return REFUSED_CODE
     except (RunFailed, colab_vllm.SessionEnding) as error:
@@ -290,8 +291,10 @@ def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, ou
         left = None if backend.ledger is None else backend.ledger.remaining("baseten_mind_usd")
         out(timing.describe(measured, spark_left=left))
     elif args.command == "intervene":
+        snaps = intervene.draw(data)  # before the VM: refused until every development M run is on disk
         with pilot.serving(backend, settings_, session_s, out) as session:
-            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel, run_s=run_s)
+            results, skipped = intervene.intervene(data, session, backend, out, parallel=args.parallel,
+                                                   snapshots=snaps, run_s=run_s)
         out(f"the intervention test: {len(results)} resumed, {len(skipped)} skipped")
     elif args.command == "judge":
         pilot.judge_lives(data, _lives(data, split, args.only), backend, out)
@@ -368,12 +371,16 @@ def _fake_adapters(root: Path) -> Path:
     return folder
 
 
-def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out) -> int:
-    """The whole pilot on the fakes, step by step through the same commands."""
+def _chain(parser: argparse.ArgumentParser, base: list[str], data: DataDir, out: Out, *, whole: bool = True) -> int:
+    """The whole pilot on the fakes, step by step through the same commands. On some lives only
+    (``whole`` off, ``--only``), the intervention test, which draws from all the development
+    lives, is left out."""
     prereg = _fake_freeze(data, HELD_OUT_LIVES)
     adapters = _fake_adapters(data.root)
+    if not whole:
+        out("the intervention test draws from all the development lives' M runs: left out with --only")
     for argv in (
-        ["generate"], ["timing"], ["run"], ["intervene"],
+        ["generate"], ["timing"], ["run"], *([["intervene"]] if whole else []),
         ["generate", "--held-out", "--draw-seed", FAKE_DRAW_SEED, "--lives", str(HELD_OUT_LIVES), "--prereg", str(prereg)],
         ["run", "--held-out", "--adapters", str(adapters), "--replay", FAKE_ADAPTERS[0], "--shuffled", FAKE_ADAPTERS[1]],
         ["kill-resume", "--kill-at", str(FAKE_KILL_AT)],
@@ -400,7 +407,7 @@ def _main(argv: Sequence[str] | None, out: Out) -> int:
         if args.command in (None, "pilot"):
             base = ["--fake", "--data", str(data.root), "--parallel", str(args.parallel),
                     *([] if args.only is None else ["--only", str(args.only)])]
-            return _chain(parser, base, data, out)
+            return _chain(parser, base, data, out, whole=args.only is None)
         return _guarded(args, data, _fake_backend(data), out)
     if args.command in (None, "pilot"):
         parser.error("the whole chain runs only with --fake; live, run each command")
