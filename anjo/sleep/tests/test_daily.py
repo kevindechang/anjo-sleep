@@ -188,7 +188,7 @@ def test_a_development_night_takes_the_daily_subset_and_a_final_night_the_full_s
 
     def score(*args: Any, **kw: Any) -> MorningResult:
         asked.append(kw.get("subset"))
-        return MorningResult(tmp_path / "scores.json", replies=28, judge_calls=22)
+        return MorningResult(tmp_path / "scores.json", replies=28, judge_calls=22, judge_usd=0.21, judge_estimated=1)
 
     for label in ("development", "final"):
         result = daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / label), label=label,
@@ -196,6 +196,7 @@ def test_a_development_night_takes_the_daily_subset_and_a_final_night_the_full_s
                                        dailies=lambda *a: None)
         morning = json.loads(result.log_path.read_text().splitlines()[0])
         assert (morning["step"], morning["replies"], morning["judge_calls"]) == ("morning", 28, 22)
+        assert (morning["judge_usd"], morning["judge_estimated"]) == (0.21, 1)  # what the judge settled at, for the cost model
         assert morning.get("subset") == (DAILY.name if label == "development" else None)
     assert asked == [DAILY, None]  # the final runs keep every probe and every arm
 

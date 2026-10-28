@@ -10,7 +10,9 @@ and seconds; no conversation text) and prints a line a step, the biggest first:
   the serving price) and Spark Open (the rest). The ceiling counts every part but MIND
   (``demo.dailies.CEILING_PARTS``);
 - what the summary never holds, outside the ceiling: Wonder's homework (``wonder_usd``) and the
-  morning run (its GPU seconds and its judge calls at ``JUDGE_USD_PER_CALL``).
+  morning run (its GPU seconds, and its judge as the ledger settled it: the replies' tokens, and each call
+  that reported none at ``JUDGE_USD_PER_CALL``, the hold's bound, shown ``estimated``; a log from before
+  the judge was metered gives only its calls, all at the bound and ``estimated``).
 
 **The month** is one projection, from pressure traces: a month of days, each the day's new turns, new
 trainable items and open high-risk targets (``DayLoad``), run through the nights' own nap-or-deep
@@ -80,8 +82,10 @@ TRAINED_LINES: Final = ("extract", "brief", "mind", "practice_spark", "practice_
                         "latent_encode", "gates", "serve_overhead")
 QUIET_LINES: Final = ("extract", "brief", "mind", "latent_encode")
 WONDER_MONTH_USD: Final = 3.0  # NightSettings.wonder_usd_month, Wonder's rolling cap (a test keeps them equal)
-JUDGE_NOTE: Final = (f"the morning judge is counted at ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL), a placeholder"
-                     " the ledger settles at too: 2026-10-29's $0.44 is the daily subset's 22 calls at it, not tokens")
+JUDGE_NOTE: Final = (f"the morning judge is estimated at ${JUDGE_USD_PER_CALL:g} a call (JUDGE_USD_PER_CALL, the hold's"
+                     " per-call bound) until a night's log carries its tokens: 2026-10-29's $0.44 is 22 calls at it")
+ESTIMATED_NOTE: Final = (f"estimated: judge calls that reported no tokens, counted at ${JUDGE_USD_PER_CALL:g} a call (the"
+                         " hold's per-call bound); the rest at their tokens")
 
 
 class CostError(ValueError):
@@ -94,6 +98,7 @@ class Line:
     usd: float
     gpu_minutes: float | None
     in_ceiling: bool
+    estimated: bool = False  # some of it at a per-call bound, not tokens
 
 
 @dataclass(frozen=True)
@@ -253,8 +258,11 @@ def night_lines(summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]], 
     found.append(Line("homework", _number(summary.get("wonder_usd")) or 0.0, None, False))
     if (seconds := _seconds(steps, "morning", "dailies")) is not None:
         found.append(Line("morning_gpu", seconds * serve, seconds / 60.0, False))
-    if (calls := _number(_step(steps, "morning").get("judge_calls"))) is not None:
-        found.append(Line("morning_judge", calls * JUDGE_USD_PER_CALL, None, False))
+    morning = _step(steps, "morning")
+    if (spent := _number(morning.get("judge_usd"))) is not None:  # settled: tokens, and the bound for calls without
+        found.append(Line("morning_judge", spent, None, False, bool(_number(morning.get("judge_estimated")))))
+    elif (calls := _number(morning.get("judge_calls"))) is not None:  # logged before the judge was metered
+        found.append(Line("morning_judge", calls * JUDGE_USD_PER_CALL, None, False, True))
     return sorted(found, key=lambda line: line.usd, reverse=True)
 
 
@@ -491,12 +499,13 @@ def _night_report(folder: Path, summary: Mapping[str, Any], lines: Sequence[Line
            f"from {folder.name}", f"  {'line':<16}{'usd':>10}{'gpu min':>9}  ceiling"]
     for line in lines:
         minutes = "-" if line.gpu_minutes is None else f"{line.gpu_minutes:.1f}"
-        out.append(f"  {line.step:<16}{_usd(line.usd):>10}{minutes:>9}  {'yes' if line.in_ceiling else 'no'}")
+        out.append(f"  {line.step:<16}{_usd(line.usd):>10}{minutes:>9}  {'yes' if line.in_ceiling else 'no'}"
+                   + ("  estimated" if line.estimated else ""))
     ceiling = ceiling_usd(lines)
     out.append(f"  ceiling parts {_usd(ceiling)}; a month of nights like this: {_usd(MONTH_NIGHTS * ceiling)}"
                f" (ceiling ${CEILING_USD:g})")
-    if any(line.step == "morning_judge" for line in lines):
-        out.append(f"  {JUDGE_NOTE}")
+    if any(line.estimated for line in lines):
+        out.append(f"  {ESTIMATED_NOTE}")
     safety = (summary.get("gates") or {}).get("safety")
     if isinstance(safety, Mapping) and safety.get("skipped"):
         out.append(f"  safety gate: skipped ({SKIPPED_REASON}); the gates line is general and collapse only")

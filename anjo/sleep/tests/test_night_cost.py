@@ -54,7 +54,8 @@ def test_cost_model_sums_a_night_log(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert by_step["training"].gpu_minutes == 2.88 and by_step["gates"].gpu_minutes == pytest.approx(20.0)
     # What the summary never holds: Wonder's homework and the morning run, outside the ceiling.
     assert by_step["homework"].usd == 0.25 and not by_step["homework"].in_ceiling
-    assert by_step["morning_judge"].usd == pytest.approx(22 * JUDGE_USD_PER_CALL)
+    # A log from before the judge was metered: its calls at the hold's per-call bound, marked estimated.
+    assert by_step["morning_judge"].usd == pytest.approx(22 * JUDGE_USD_PER_CALL) and by_step["morning_judge"].estimated
     assert by_step["morning_gpu"].usd == pytest.approx(90.0 / 3600 * PRICES.serve_gpu_per_hour)
     assert not by_step["mind"].in_ceiling  # §5.5: every part but MIND
     assert cost.ceiling_usd(lines) == pytest.approx(0.02 + 0.05 + 0.40 + 0.12 + 0.60)
@@ -70,16 +71,31 @@ def test_cost_model_sums_a_night_log(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert current.morning < before.morning / 10  # the light daily morning
     assert set(current.quiet) == {"extract", "brief", "mind", "latent_encode"} and current.quiet["latent_encode"] == 0.0
     # The morning: today's measured arms (165 s for the daily subset) scaled to the subset, its judge calls
-    # at the placeholder the ledger settles at too, and the dailies.
+    # estimated at the hold's per-call bound (no night's tokens yet), and the dailies.
     assert current.morning == pytest.approx(22 * JUDGE_USD_PER_CALL + 165.0 / 3600 * PRICES.serve_gpu_per_hour + 0.005)
 
     assert cost.main(["--from", str(folder), "--prices", "1.25,4.25,2.5,1.8"]) == 0
     out = capsys.readouterr().out
     assert "practice_spark" in out and "projected month" in out and "worst case" in out
     assert "month, active" in out and "month, quiet" in out  # one projection, from the pressure traces
-    assert "placeholder" in out and "not tokens" in out  # the judge's price per call is not measured, and says so
+    night_part = out.split("projected")[0]
+    assert "morning_judge" in night_part and night_part.count("estimated") >= 2  # the line and its note say so
+    assert "estimated at $0.02 a call" in out.split("projected")[1]  # the projection's judge, too
     assert cost.WONDER_MONTH_USD == NightSettings.__dataclass_fields__["wonder_usd_month"].default
     assert "$0.6000" in out.split("projected")[0]  # the logged gates line, as measured
+
+
+def test_a_metered_morning_judge_is_its_settled_tokens(tmp_path: Path) -> None:
+    """A night logged after the judge was metered: the line is what the ledger settled, estimated only
+    when some call reported no tokens."""
+    summary, steps = cost.read_night(_night(tmp_path / "night"))
+    morning = {"step": "morning", "status": "ok", "seconds": 90.0, "judge_calls": 22, "judge_usd": 0.15}
+    tokens = {line.step: line for line in cost.night_lines(summary, [*steps[:-1], {**morning, "judge_estimated": 0}],
+                                                              PRICES)}["morning_judge"]
+    assert tokens.usd == pytest.approx(0.15) and not tokens.estimated
+    some = {line.step: line for line in cost.night_lines(summary, [*steps[:-1], {**morning, "judge_estimated": 2}],
+                                                            PRICES)}["morning_judge"]
+    assert some.usd == pytest.approx(0.15) and some.estimated
 
 
 def test_cost_model_projects_a_batched_night(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
