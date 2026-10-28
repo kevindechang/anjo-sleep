@@ -5,6 +5,7 @@ serves at, and ``build`` over the sleep host's stores. Offline: the serving clie
 called."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -344,3 +345,25 @@ def test_the_morning_counts_requests_the_judge_and_glimmer_sent_again(
     assert ports.retries() == 0
     judge.chat.keywords["retries"].counted()  # the Meta API answered 429, and the judge's call went again
     assert ports.retries() == 1 and ports.concurrency == 8
+
+
+def test_the_night_naps_or_sleeps_deep_under_the_environments_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.app.history_source import own_turn_count
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepPolicyError
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    deps = night.build(NoTrainer(), options)
+    assert deps.sleep_policy == SleepPolicy(month_usd=15.0, max_days=7) and deps.turns is own_turn_count
+    assert deps.settings.force_deep is False
+    monkeypatch.setenv("ANJO_SLEEP_MONTH_USD", "10")
+    monkeypatch.setenv("ANJO_SLEEP_MAX_DAYS", "3")
+    forced = night.build(NoTrainer(), replace(options, force_deep=True))
+    assert forced.sleep_policy == SleepPolicy(month_usd=10.0, max_days=3) and forced.settings.force_deep is True
+    monkeypatch.setenv("ANJO_SLEEP_MAX_DAYS", "never")
+    with pytest.raises(SleepPolicyError):  # a setting it can't use stops the night before it starts
+        night.build(NoTrainer(), options)

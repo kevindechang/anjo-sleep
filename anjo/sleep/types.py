@@ -23,7 +23,7 @@ from typing import Literal
 EvidenceKind = Literal["lesson", "correction", "preference", "tone_request", "homework", "practice"]
 ProbeKind = Literal["tone_hold", "taste_ab", "vocab", "pushback", "new_work"]
 GateName = Literal["general", "collapse", "safety"]
-NightStatus = Literal["promoted", "rejected", "nothing_new", "failed"]
+NightStatus = Literal["promoted", "rejected", "nothing_new", "napped", "failed"]
 CostPart = Literal["extract", "training", "practice", "gates", "brief", "mind"]
 TargetKind = Literal["commitment", "thread"]
 TargetStatus = Literal["open", "paused", "closed"]

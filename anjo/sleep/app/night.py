@@ -25,6 +25,10 @@ it off the serving path). Everything else is here:
   what the server reports at the first gate (``gate_cache``: the root it serves Glimmer from and the
   revision that root names), never on this host's settings alone.
 
+A night naps or sleeps deep (``night/sleep_pressure.py``) under ``ANJO_SLEEP_MONTH_USD`` and
+``ANJO_SLEEP_MAX_DAYS``, reading the person's own turn count (``own_turn_count``); ``--force-deep``
+(``NightOptions.force_deep``) makes it a deep sleep, the month's cap still winning.
+
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
@@ -47,7 +51,7 @@ from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
 from anjo.sleep.app.flags import require_sleep_host
-from anjo.sleep.app.history_source import HistorySource
+from anjo.sleep.app.history_source import HistorySource, own_turn_count
 from anjo.sleep.app.mind_night import build_mind
 from anjo.sleep.app.ownership import SEALED_ENV as SEALED_ENV  # re-exported: the morning run and tests read it here
 from anjo.sleep.app.ownership import cancel_flag, night_logs, purge, retry_pending
@@ -82,6 +86,7 @@ from anjo.sleep.night.deps import (
     GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
 )
 from anjo.sleep.night.gpu import ReservedGpu
+from anjo.sleep.night.sleep_pressure import policy_from
 from anjo.sleep.note.hold import GlimmerNoteWriter
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
@@ -233,8 +238,9 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     registry = checkpoint_registry()
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
     client = serving.client().on(options.night)  # prompts dated on the night's clock
-    night_settings = replace(settings(), practice_scenes=options.practice_scenes,
-                             practice_teacher=options.practice_teacher, mind_inquiry=options.mind_inquiry)
+    night_settings = replace(settings(), practice_scenes=options.practice_scenes, practice_teacher=options.practice_teacher,
+                             mind_inquiry=options.mind_inquiry, force_deep=options.force_deep)
+    sleep_policy = policy_from(os.environ)  # a setting it can't use stops the night before it starts
     night_prices = prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
@@ -268,6 +274,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
-        inquiry=mind or NoInquiry(), notice=mind or NoNotice(),
+        inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
     )
 

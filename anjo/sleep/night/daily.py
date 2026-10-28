@@ -31,6 +31,10 @@ after midnight, and the morning probe run right after the night, in the same pro
 ``--mind`` (or ``ANJO_SLEEP_DAILY_MIND=1``) turns MIND's inquiry on in the night phase; it is off by
 default and has no effect on the day phase.
 
+A night that napped (``night/sleep_pressure.py``) trained nothing, so it runs no morning: its log
+records the morning ``skipped``, and no Dailies line is made. ``--force-deep`` makes the night a deep
+sleep whatever its pressure (the demo); the month's cap (``ANJO_SLEEP_MONTH_USD``) still wins.
+
 The person's account id is never in the code: ``ANJO_SLEEP_DAILY_USERS`` maps persona to account,
 for example ``film_founder=<account id>``.
 """
@@ -51,6 +55,7 @@ from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night.nightlog import NightLog
 from anjo.sleep.night.run import Window
+from anjo.sleep.night.sleep_night import NAP_WHY
 from anjo.sleep.probes.morning import DAILY, MorningResult, run_morning
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
@@ -163,15 +168,17 @@ def run_night_phase(
     nights: Callable[..., dict[str, NightResult]] = night_command.execute,
     score: Callable[..., object] = run_morning, morning: Callable[..., object] | None = None,
     dailies: Callable[..., object] | None = None, timer: Callable[[], float] = monotonic,
-    for_date: date | None = None, mind: bool = False,
+    for_date: date | None = None, mind: bool = False, force_deep: bool = False,
 ) -> NightResult:
     plan = night_plan(now, for_date)
     missed = missed_day(markers, persona, plan)
     with phase():  # one phase: Glimmer stays up from the night into the morning, then sleeps once
         result = nights(wiring=WIRING, night=plan.night, users=[user], personas={user: persona},
                         windows={user: plan.window}, days={} if missed is None else {user: missed},
-                        as_of={user: plan.window[1]}, mind=mind)[user]  # real time: the night's clock is the wall's
-        if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
+                        as_of={user: plan.window[1]}, mind=mind, force_deep=force_deep)[user]  # real time: the night's clock is the wall's
+        if result.status == "napped":  # a nap trained nothing and runs no GPU morning: logged, never silent
+            NightLog(result.log_path.parent).step("morning", "skipped", uses="new", system=None, why=NAP_WHY)
+        elif result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
             log, started = NightLog(result.log_path.parent), timer()
             ports = (morning or _morning())(user, persona, plan.night)
             sent_again = _retries(ports)
@@ -230,6 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                              "in the future, not before her life starts")
     parser.add_argument("--mind", action="store_true",
                         help=f"night phase: run MIND's inquiry in the night (also on when {MIND_ENV}=1; default off)")
+    parser.add_argument("--force-deep", action="store_true",
+                        help="night phase: a deep sleep whatever its pressure (the demo); the month's cap still wins")
     parser.add_argument("--label", choices=("development", "final"), default="development")
     args = parser.parse_args(argv)
     user = daily_users().get(args.persona)
@@ -251,9 +260,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if day.failure is not None or day.failed > 0 or day.short else 0
     mind = args.mind or os.environ.get(MIND_ENV, "").strip() == "1"
     result = run_night_phase(user, args.persona, now, markers=marker_dir(), label=args.label,
-                             for_date=args.for_date, mind=mind)
+                             for_date=args.for_date, mind=mind, force_deep=args.force_deep)
     print(json.dumps({"phase": "night", "night": night.night.isoformat(), "status": result.status,
-                      "mind": mind, "failed_at": result.failed_at, "log": str(result.log_path)}))
+                      "mind": mind, "force_deep": args.force_deep, "failed_at": result.failed_at,
+                      "log": str(result.log_path)}))
     return 0 if result.status != "failed" else 1
 
 

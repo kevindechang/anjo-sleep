@@ -336,7 +336,8 @@ def test_every_word_the_new_scripts_read_is_in_the_one_copy_module() -> None:
         script = (WEB_DIR / name).read_text()
         read = set(re.findall(r"copy\.([a-zA-Z0-9_]+)", script))
         assert read and read <= set(words.COPY), (name, sorted(read - set(words.COPY)))
-    for prefix, codes in (("night_status", ("promoted", "rejected", "nothing_new", "failed")),
+    for prefix, codes in (("night_status", ("promoted", "rejected", "nothing_new", "napped", "failed")),
+                          ("sleep_kind", ("nap", "deep")),
                           ("reason", ("unknown_priority_class", "action_not_offered", "candidate_limit",
                                       "below_threshold", "budget", "lost_to_target", "note_declined")),
                           ("chart_arm", ("1", "2C", "2F", "3", "3x", "4")), ("toggle_arm", ("1", "3", "swap", "bare")),

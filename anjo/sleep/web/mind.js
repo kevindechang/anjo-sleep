@@ -114,6 +114,14 @@
     return box;
   }
 
+  // How a night slept, after its status: "napped" or "deep sleep", its pressure against its threshold, and why.
+  function sleepLine(sleep) {
+    if (!sleep) return "";
+    const note = fill(copy.sleep_note, { pressure: sleep.pressure.toFixed(2), threshold: sleep.threshold.toFixed(2),
+      reason: word("sleep_reason", sleep.reason) });
+    return ` · ${word("sleep_kind", sleep.kind)} (${note})`;
+  }
+
   function choiceLine(c) {
     if (!c.action) return fill(copy.mind_chose_nothing, { night: c.night });
     return fill(copy.mind_chose, { night: c.night, action: word("action", c.action), target: plainText(c.target) });
@@ -124,7 +132,7 @@
     const { box, body } = section("choices", copy.mind_choices, latest ? choiceLine(latest) : "", data.state);
     for (const c of data.items) {
       const night = element("article", "night");
-      night.append(element("p", "night-head", `${fill(copy.slider_tick, { n: c.night })} · ${day(c.date)} · ${word("night_status", c.status)}`),
+      night.append(element("p", "night-head", `${fill(copy.slider_tick, { n: c.night })} · ${day(c.date)} · ${word("night_status", c.status)}${sleepLine(c.sleep)}`),
         element("p", "night-choice", choiceLine(c)));
       const facts = [c.outcome && fill(copy.mind_outcome, { outcome: word("outcome", c.outcome) }),
         c.note && fill(copy.mind_night_note, { note: word("note", c.note) })].filter(Boolean);

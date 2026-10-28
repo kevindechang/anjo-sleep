@@ -5,6 +5,8 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
 1. ``close_day``: the night's window (the calendar day, or an accelerated run's simulated day).
 2. ``extract``: the day's evidence and targets (Task 3). ``notice`` (2b, Task 17): with ``mind_inquiry``
    on, one thinker pass over the person's new items may open questions (``night/mind.py``); else a no-op.
+   ``sleep`` (2c, with a sleep policy): a nap or a deep sleep (``night/sleep_pressure.py``). A nap
+   skips the probes and steps 5 to 9 (``napped``), and runs everything else, MIND and the note included.
 3. ``probes``: Kevin's night probes are generated and sealed, a synthetic person's were sealed once,
    before any training input exists.
 4. ``choose``: her chooser (Task 7a's ``StateChooser``; ``RuleChooser`` is the fallback) picks one action
@@ -61,6 +63,8 @@ from anjo.sleep.night.holds import held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
+from anjo.sleep.night.past import paid_within, spent_within
+from anjo.sleep.night.sleep_night import NAP_WHY, tonight
 from anjo.sleep.mind import expect, points, receipt
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
@@ -90,7 +94,7 @@ Window = tuple[datetime, datetime]
 PERSON_KINDS: Final = frozenset({"lesson", "correction", "preference", "tone_request"})
 USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "sweep": ("new", None), "simulate": ("existing", "chat route"), "close_day": ("new", None), "extract": ("existing", "history store"), "notice": ("new", None),
-    "probes": ("new", None), "choose": ("new", None), "brief": ("new", None),
+    "sleep": ("new", None), "probes": ("new", None), "choose": ("new", None), "brief": ("new", None),
     "practice": ("new", None), "dataset": ("new", None), "train": ("new", None),
     "gates": ("existing", "crisis check"), "promote": ("new", None), "note": ("existing", "outreach"),
     "finish": ("new", None),
@@ -206,7 +210,11 @@ class NightRunner:
                 p.log.step("simulate", "ok", uses="existing", system="chat route", answered=day.answered,
                            failed_turns=day.failed, short_day=day.short, **extra)
             for step, fn in (("close_day", self._close_day), ("extract", self._extract), ("notice", self._notice),
+                             *((("sleep", self._sleep),) if self.deps.sleep_policy else ()),
                              ("probes", self._probes), ("choose", self._choose), ("brief", self._brief)):
+                if step == "probes" and p.status == "napped":
+                    self._skip(p, step, NAP_WHY)
+                    continue
                 self._do(p, step, fn)
         due = [p for p in people if p.due and p.failed_at is None]
         if due:
@@ -216,9 +224,10 @@ class NightRunner:
         results = {}
         for p in people:
             if p.failed_at is None and not p.due:
-                p.status = "nothing_new"
+                why = NAP_WHY if p.status == "napped" else "below min_new_examples: no practice, training, gates or promotion"
+                p.status = p.status or "nothing_new"
                 for step in GPU_STEPS:
-                    self._skip(p, step, "below min_new_examples: no practice, training, gates or promotion")
+                    self._skip(p, step, why)
             self._do(p, "note", self._note)
             results[p.uid] = self._finish(p)
         return results
@@ -278,8 +287,8 @@ class NightRunner:
         deps.cancel(uid)  # before any state loads: the first look at the flag is the baseline a change is read against
         log = NightLog(night_folder(deps.logs(uid), night))
         history = summaries(deps.logs(uid))
-        actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - _paid_within(history, window[1], timedelta(hours=24))))
-        wonder_spent = _spent_within(history, window[1], timedelta(days=30))
+        actions_left = min(MAX_NIGHT_ACTIONS, max(0, deps.settings.rolling_actions - paid_within(history, window[1], timedelta(hours=24))))
+        wonder_spent = spent_within(history, window[1], timedelta(days=30))
         return _Night(
             uid=uid, night=night, window=window, log=log,
             spend=SpendMeter(spark_in_per_m=deps.prices.spark_in_per_m, spark_out_per_m=deps.prices.spark_out_per_m),
@@ -379,6 +388,12 @@ class NightRunner:
             return {"noop": True, "port": "notice (Task 17): no-op"}
         new = [item for item in p.store.for_day(p.night) if not item.held_out]
         return notice.notice(self._call(p, "notice"), new)
+
+    def _sleep(self, p: _Night) -> Mapping[str, Any]:
+        """Nap or deep sleep (``sleep_night.py``): a nap runs no probes, GPU step or morning."""
+        made, record = tonight(self.deps, p.uid, p.night, p.window, p.as_of, p.store, p.targets)
+        p.due, p.status = (p.due, None) if made.kind == "deep" else (False, "napped")
+        return record
 
     def _probes(self, p: _Night) -> Mapping[str, Any]:
         if self.deps.is_synthetic(p.uid):  # sealed once: nothing is called tonight
@@ -719,6 +734,7 @@ class NightRunner:
             **({} if p.gates_wake_seconds is None else {"gates_wake_seconds": p.gates_wake_seconds}),
             "paid_actions": p.paid_actions, "wonder_calls": p.wonder.calls, "wonder_usd": p.wonder.usd,
             "steps": [record["step"] for record in p.log.steps()],
+            **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
         })
         return result
 
@@ -733,22 +749,6 @@ def _outcome(stopped: str | None) -> receipt.Outcome:
 
 def _note_error(stage: str, error: BaseException) -> str:
     return f"{stage}: {type(error).__name__}"
-
-
-def _paid_within(history: Sequence[Mapping[str, Any]], end: datetime, span: timedelta) -> int:
-    return sum(int(s.get("paid_actions", 0)) for s in history if _inside(s, end, span))
-
-
-def _spent_within(history: Sequence[Mapping[str, Any]], end: datetime, span: timedelta) -> float:
-    return math.fsum(float(s.get("wonder_usd", 0.0)) for s in history if _inside(s, end, span))
-
-
-def _inside(summary: Mapping[str, Any], end: datetime, span: timedelta) -> bool:
-    at = summary.get("night_end")
-    if not isinstance(at, str):
-        return False
-    moment = datetime.fromisoformat(at)
-    return end - span < moment <= end
 
 
 def run_night_batch_with(

@@ -13,6 +13,14 @@ deterministic floor, and is logged and shown as skipped, never as passed. Anjo's
 still guards every reply a person sees. After a night that fails or is rejected, the last good
 model keeps serving.
 
+**Naps and deep sleeps.** Not every night trains. Sleep pressure builds from the turns and new
+evidence since her last deep sleep and the threads she is most at risk on. Below the threshold she
+naps: extraction, MIND, the brief and the note run, at about $0 and with no GPU. Once pressure
+reaches the threshold, or a week has passed, she sleeps deep and the full night runs. The threshold
+rises as the month's spend nears its cap (`ANJO_SLEEP_MONTH_USD`, $15 by default), and a deep sleep
+that would pass the cap becomes a nap that says so. Every page shows which kind of night it was,
+with its pressure and the reason.
+
 **State decides, weights learn.** What Anjo knows about you stays in her state: the evidence
 store, the brief, her targets and the receipts for every choice she made. Facts stay word for
 word, so they stay exact and delete cleanly. The weights learn the language of your field and

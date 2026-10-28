@@ -23,6 +23,14 @@ runs extraction and the brief only), at two settings:
   gate skipped (``ANJO_SLEEP_SAFETY_GATE`` off for the hackathon: no case is sent; ``--safety-gate on``
   costs it). A night whose log shows the gate skipped says so; it is never costed as passed.
 
+**The month from a pressure trace** (``--pressure-trace FILE``) runs a month of nights through the
+nights' own nap-or-deep decision (``night/sleep_pressure.py``): the file is a JSON list, one entry a
+day, each the day's new turns, new trainable items and open high-risk targets (``{"turns": 40,
+"evidence": 9, "high_risk": 1}``). Turns and items build up from one deep sleep to the next, the
+pressure each night reads is the stand-in's, and the month's spend raises the threshold and holds the
+cap (``--month-usd``, ``--max-days``). A deep night costs the current setting's trained night and
+morning, a nap its quiet night. It prints each night's pressure, threshold, kind and reason.
+
 Extraction, the brief and training are the night's own numbers. What a setting changes is
 estimated from ``UNITS``, each with its source: the 2026-10-28 measurements anchor practice (its
 serial seconds and Spark dollars) and the gates (their seconds, which scale the gates' estimate).
@@ -42,6 +50,7 @@ from typing import Any, Final
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
 from anjo.sleep.gates.safety import SKIPPED_REASON
 from anjo.sleep.night.deps import Prices
+from anjo.sleep.night.sleep_pressure import Kind, Reason, SleepPolicy, SleepPolicyError, SleepState, decide, sleep_pressure
 from anjo.sleep.practice.full import SPARK_CAPS
 from anjo.sleep.probes.generate import COUNTS
 from anjo.sleep.probes.morning import ARM_ORDER, DAILY, JUDGE_USD_PER_CALL, PAIRS, ProbeSubset
@@ -251,6 +260,89 @@ def project(settings: Settings, units: Units, prices: Prices, night: Measured) -
                       _spark_bound(units, prices) if settings.spark_capped else None)
 
 
+# ── the month from a pressure trace ──────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class DayLoad:
+    """One day of a trace: the person's new turns, new trainable items and open high-risk targets."""
+
+    turns: int
+    evidence: int
+    high_risk: int = 0
+
+
+@dataclass(frozen=True)
+class TracedNight:
+    kind: Kind
+    reason: Reason
+    pressure: float
+    threshold: float
+    usd: float
+
+
+@dataclass(frozen=True)
+class MonthTrace:
+    nights: tuple[TracedNight, ...]
+
+    @property
+    def deep(self) -> int:
+        return sum(night.kind == "deep" for night in self.nights)
+
+    @property
+    def naps(self) -> int:
+        return len(self.nights) - self.deep
+
+    @property
+    def usd(self) -> float:
+        return math.fsum(night.usd for night in self.nights)
+
+
+def read_trace(text: str) -> list[DayLoad]:
+    """A trace file's days; anything but a list of whole, non-negative counts is refused."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raise CostError("the pressure trace is not JSON") from None
+    days: list[DayLoad] = []
+    for entry in raw if isinstance(raw, list) else [None]:
+        counts = [entry.get(key, 0) for key in ("turns", "evidence", "high_risk")] if isinstance(entry, dict) else [None]
+        whole = [n for n in counts if isinstance(n, int) and not isinstance(n, bool) and n >= 0]
+        if len(whole) != 3:
+            raise CostError("a pressure trace is a list of days, each with whole, non-negative turns, evidence and high_risk")
+        days.append(DayLoad(*whole))
+    return days
+
+
+def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: Projection) -> MonthTrace:
+    """Each day's night, decided as the nights decide it, at the projection's deep and quiet costs."""
+    deep_usd = math.fsum(projection.trained.values()) + projection.morning
+    nap_usd = math.fsum(projection.quiet.values())
+    spent, turns, evidence, last_deep = 0.0, 0, 0, None
+    nights: list[TracedNight] = []
+    for i, day in enumerate(trace):
+        turns, evidence = turns + day.turns, evidence + day.evidence
+        since = None if i == 0 else i - (0 if last_deep is None else last_deep)
+        state = SleepState(new_turns=turns, new_evidence=evidence, open_high_risk=day.high_risk,
+                           days_since_deep=since, month_spent_usd=spent)
+        made = decide(state, policy, pressure=sleep_pressure(state))
+        usd = deep_usd if made.kind == "deep" else nap_usd
+        nights.append(TracedNight(made.kind, made.reason, made.pressure, made.threshold, usd))
+        spent += usd
+        if made.kind == "deep":
+            turns, evidence, last_deep = 0, 0, i
+    return MonthTrace(tuple(nights))
+
+
+def _trace_report(found: MonthTrace, policy: SleepPolicy, name: str) -> list[str]:
+    out = [f"a month from the pressure trace, at {name}", f"  {'night':<7}{'pressure':>9}{'threshold':>10}  {'kind':<6}reason"]
+    for n, night in enumerate(found.nights, start=1):
+        out.append(f"  {n:<7}{night.pressure:>9.2f}{night.threshold:>10.2f}  {night.kind:<6}{night.reason}")
+    out.append(f"  {found.deep} deep, {found.naps} naps: {_usd(found.usd)} of the month's ${policy.month_usd:g} cap"
+               f" (deep sleep after at most {policy.max_days} days)")
+    return out
+
+
 # ── the report ───────────────────────────────────────────────────────────────
 
 
@@ -317,12 +409,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="ANJO_SLEEP_CONCURRENCY for the current projection (8 by default)")
     parser.add_argument("--safety-gate", choices=("on", "off"), default="off",
                         help="ANJO_SLEEP_SAFETY_GATE for the current projection (off for the hackathon)")
+    parser.add_argument("--pressure-trace", type=Path, help="a JSON list of days: a month by the nights' nap-or-deep decision")
+    parser.add_argument("--month-usd", type=float, default=SleepPolicy().month_usd, help="ANJO_SLEEP_MONTH_USD")
+    parser.add_argument("--max-days", type=int, default=SleepPolicy().max_days, help="ANJO_SLEEP_MAX_DAYS")
     args = parser.parse_args(argv)
     if not 0.0 <= args.trained_share <= 1.0 or args.concurrency < 1:
         parser.error("--trained-share is from 0 to 1 and --concurrency at least 1")
     try:
         summary, steps = read_night(args.folder)
-    except CostError as error:
+        trace = None if args.pressure_trace is None else read_trace(args.pressure_trace.read_text(encoding="utf-8"))
+        policy = SleepPolicy(month_usd=args.month_usd, max_days=args.max_days)
+    except (CostError, OSError, SleepPolicyError) as error:
         raise SystemExit(f"cost: {error}") from None
     night = measured(summary, steps, args.prices)
     current = replace(CURRENT, name=f"current@{args.concurrency}", practice_concurrency=args.concurrency,
@@ -332,8 +429,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings.append(replace(current, name=f"current@{CONCURRENT_REQUESTS}",
                                 practice_concurrency=CONCURRENT_REQUESTS, gate_concurrency=CONCURRENT_REQUESTS))
     found = [project(s, UNITS, args.prices, night) for s in settings]
+    traced = [] if trace is None else ["", *_trace_report(month_from_trace(trace, policy, found[1]), policy, current.name)]
     print("\n".join([*_night_report(args.folder, summary, night_lines(summary, steps, args.prices)), "",
-                     *_projection_report(found, args.trained_share)]))
+                     *_projection_report(found, args.trained_share), *traced]))
     return 0
 
 

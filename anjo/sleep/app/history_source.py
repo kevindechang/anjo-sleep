@@ -72,6 +72,17 @@ def own_imports(user_id: str) -> list[Imported]:
     return imported
 
 
+def own_turn_count(user_id: str, window: tuple[datetime, datetime]) -> int:
+    """How many of the person's own turns lie inside ``window``: sleep pressure's turn count
+    (``NightDeps.turns``), read as extraction reads them (a synthetic person's cleared sessions only).
+    A count: nothing of what was said leaves this function."""
+    require_sleep_host()
+    start, end = window
+    synthetic = is_synthetic(user_id)
+    rows = get_history_between(user_id, start, end, session_ids=cleared_sessions(user_id) if synthetic else None)
+    return sum(1 for row in rows if row["role"] == "user")
+
+
 class HistorySource:
     """Extracts and records one day of a person's evidence. ``chat`` is Spark Open by default."""
 
