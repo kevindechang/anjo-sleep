@@ -3,7 +3,7 @@
 All three are Task 17's MIND arm (``MindArm()``) on the same world query, screen, resolver, brief
 and budget; only the thinker differs: base Glimmer for M, thinker-1's adapter for M+replay and
 thinker-shuffled's for M+shuffled (``served.arm_thinker``), each prompt dated on its night
-(``served.dated_core`` sets the thinkers' shared clock). They run on held-out lives only, and
+(the arms set the thinkers' shared clock as each night starts). They run on held-out lives only, and
 each run is scored by Task 17's ``score_sheet`` under the audited judge and rescored under Gemini,
 as M and B are; ``reports/replay.py`` applies Task 17's primary rule to the pairs.
 
@@ -26,7 +26,7 @@ from anjo.sleep.mind.apd.score import ApdJudge, ScoreSheet, score_life, score_sh
 from anjo.sleep.mind.apd.types import ArmModels, ArmName, ArmRun, Life, LifeScore, ProblemFile
 from anjo.sleep.mind.inquiry.types import Budget
 from anjo.sleep.mind.replay.sample import RecordingThinker
-from anjo.sleep.mind.replay.served import NightClock, dated_core, failed_calls
+from anjo.sleep.mind.replay.served import NightClock, failed_calls
 from anjo.sleep.mind.replay.spend import Holds, held_gpu
 
 REPLAY_ARMS: Final[tuple[ArmName, ...]] = ("M", "M+replay", "M+shuffled")
@@ -77,13 +77,13 @@ def run_replay_arms(
     With ``holds``, each run holds its Glimmer time first (``spend``)."""
     if any(life.split != "held_out" for life in lives):
         raise ValueError("the 17b test runs on held-out lives only")
-    dated = dated_core(core or mind_core(), thinkers.clock)
+    mind = core or mind_core()
     runs: list[ArmRun] = []
     for life in lives:
         for arm in REPLAY_ARMS:
             with held_gpu(holds, f"arm:{life.id}:{arm}", len(life.days)):
-                runs.append(run_arm(arm, life, dataclasses.replace(models, thinker=thinkers.of(arm)), budget=budget,
-                                    core=dated, brief=brief))
+                arm_models = dataclasses.replace(models, thinker=thinkers.of(arm), clock=thinkers.clock)
+                runs.append(run_arm(arm, life, arm_models, budget=budget, core=mind, brief=brief))
     return ArmRuns(tuple(runs), {arm: failed_calls(thinkers.of(arm).calls) for arm in REPLAY_ARMS})
 
 

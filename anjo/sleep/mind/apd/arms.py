@@ -31,7 +31,10 @@ How the arms differ:
   true, so a retraction reports ``1 - p``: MIND's is the withdrawn hypothesis's credence.
 
 A night is masked to the end of its day, UTC (``night_as_of``), so every item must be stamped
-within its own day (``check_clock``). 17-core's functions arrive as a
+within its own day (``check_clock``). Every arm sets ``ArmModels.clock`` to each night as it
+starts (``date_night``), the one place a served Glimmer's prompts get their date, for Task 17's
+arms and 17b's alike. A MIND arm's log pairs each world answer and resolver verdict it logs with
+the model its API reported (``WrittenLog``), so replay can tell what wrote it. 17-core's functions arrive as a
 ``MindCore``; ``mind_core()`` imports them lazily, so these modules load, and tests run on fakes,
 without them.
 """
@@ -58,6 +61,10 @@ from anjo.sleep.mind.apd.types import (
     FindingRegistry,
     FindingReport,
     Life,
+    NightClock,
+    Reported,
+    Written,
+    model_written,
 )
 from anjo.sleep.mind.inquiry.ports import InquiryPorts, Thinker, WorkspaceLog, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
@@ -65,6 +72,7 @@ from anjo.sleep.mind.inquiry.types import (
     FULL_RULES,
     NO_KERNEL,
     RECENT_OPS,
+    Answered,
     Applied,
     Budget,
     ConcludeOp,
@@ -185,6 +193,12 @@ class LifeSearch:
         return tuple(held[item_id] for item_id in ids if item_id in held)
 
 
+def date_night(clock: NightClock | None, night: date) -> None:
+    """Date every Glimmer prompt from here on on ``night``: the one dating path for every arm."""
+    if clock is not None:
+        clock.day = night
+
+
 class MemoryLog:
     """An APD run's in-memory ``WorkspaceLog``, seeded with a snapshot's events when given."""
 
@@ -201,6 +215,28 @@ class MemoryLog:
 
     def events(self) -> tuple[WorkspaceEvent, ...]:
         return tuple(self._events)
+
+
+class WrittenLog:
+    """A MIND arm's log that pairs each world answer and resolver verdict it appends with the
+    model its API reported for that call (``Reported``), as ``Written`` records. Each port's call
+    is logged as the step right after it, so the latest model it reported is that step's; every
+    world answer takes its port's report, so a failed call's empty answer leaves none behind."""
+
+    def __init__(self, inner: WorkspaceLog, reported: Reported) -> None:
+        self.inner, self.reported = inner, reported
+        self.written: list[Written] = []
+
+    def append(self, event: WorkspaceEvent) -> None:
+        self.inner.append(event)
+        entry, port = event.step.entry, model_written(event.step.entry)
+        if isinstance(entry, Answered) or port == "resolver":
+            model = self.reported.take("world" if isinstance(entry, Answered) else "resolver")
+            if port is not None and model is not None:
+                self.written.append(Written(event.step.seq, port, model))
+
+    def events(self) -> tuple[WorkspaceEvent, ...]:
+        return self.inner.events()
 
 
 def load_brief() -> str:
@@ -459,6 +495,7 @@ def _run_a(life: Life, models: ArmModels, budget: Budget, brief: str) -> ArmRun:
     tokens: tuple[int, ...] = ()
     contexts: dict[date, str] = {}
     for night in life.days:
+        date_night(models.clock, night)
         registry, spent, reflection = _a_night(night_inputs(life, night), registry, models, thinker, search, budget)
         tokens, contexts = (*tokens, spent.tokens_used), {**contexts, night: reflection}
     return ArmRun(arm="A", life_id=life.id, reports=registry.reports, tokens=tokens, contexts=contexts)
@@ -562,6 +599,7 @@ def _run_b(life: Life, models: ArmModels, budget: Budget, brief: str) -> ArmRun:
     tokens: tuple[int, ...] = ()
     contexts: dict[date, str] = {}
     for night in life.days:
+        date_night(models.clock, night)
         desk, spent = _b_night(night_inputs(life, night), desk, budget)
         tokens, contexts = (*tokens, spent.tokens_used), {**contexts, night: desk.notebook}
     return ArmRun(arm="B", life_id=life.id, reports=desk.registry.reports, tokens=tokens, contexts=contexts)
@@ -643,13 +681,16 @@ def sync_findings(registry: FindingRegistry, ws: Workspace, *, day: date, citabl
 
 
 def _run_mind(name: ArmName, life: Life, models: ArmModels, budget: Budget, core: MindCore, brief: str) -> ArmRun:
-    arm, log = MIND_ARMS[name], MemoryLog()
+    reported = Reported() if models.reported is None else models.reported
+    reported.last.clear()
+    arm, log = MIND_ARMS[name], WrittenLog(MemoryLog(), reported)
     ports = mind_ports(models, life, log, brief)
     ws, registry = Workspace(), FindingRegistry()
     tokens: tuple[int, ...] = ()
     turns: tuple[Turn, ...] = ()
     contexts: dict[date, str] = {}
     for night in life.days:
+        date_night(models.clock, night)
         inputs = night_inputs(life, night)
         runs = mind_night(arm, inputs, ws, ports, budget, core)
         for run in runs:
@@ -659,7 +700,7 @@ def _run_mind(name: ArmName, life: Life, models: ArmModels, budget: Budget, core
         tokens, contexts = (*tokens, runs[-1].budget.tokens_used), {**contexts, night: findings_text(registry.reports)}
     return ArmRun(
         arm=name, life_id=life.id, reports=registry.reports, tokens=tokens, contexts=contexts, events=log.events(),
-        turns=turns,
+        turns=turns, written=tuple(log.written),
     )
 
 

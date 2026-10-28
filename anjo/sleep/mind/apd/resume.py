@@ -44,12 +44,13 @@ from anjo.sleep.mind.apd.arms import (
     MemoryLog,
     MindCore,
     check_clock,
+    date_night,
     load_brief,
     mind_night,
     mind_ports,
     night_inputs,
 )
-from anjo.sleep.mind.apd.types import ArmModels, Life
+from anjo.sleep.mind.apd.types import ArmModels, Life, NightClock
 from anjo.sleep.mind.inquiry.ports import InquiryPorts, WorkspaceLog
 from anjo.sleep.mind.inquiry.types import Budget, RunStart, Workspace, WorkspaceEvent
 
@@ -139,15 +140,19 @@ def conclusions(ws: Workspace) -> tuple[Conclusion, ...]:
     return tuple(sorted((held[f.question_id], f.kind, f.statement) for f in ws.findings))
 
 
-def _nights(life: Life, nights: Sequence[date], ws: Workspace, ports: InquiryPorts, budget: Budget, core: MindCore) -> Workspace:
+def _nights(life: Life, nights: Sequence[date], ws: Workspace, ports: InquiryPorts, budget: Budget, core: MindCore,
+            clock: NightClock | None = None) -> Workspace:
     for night in nights:
+        date_night(clock, night)
         ws = mind_night(MIND_ARMS["M"], night_inputs(life, night), ws, ports, budget, core)[-1].ws
     return ws
 
 
-def _resume(ws: Workspace, point: ResumePoint, life: Life, ports: InquiryPorts, budget: Budget, core: MindCore) -> Workspace:
+def _resume(ws: Workspace, point: ResumePoint, life: Life, ports: InquiryPorts, budget: Budget, core: MindCore,
+            clock: NightClock | None = None) -> Workspace:
     """Call the killed loop function again, finish its night, then run the nights after it."""
     start = point.start
+    date_night(clock, start.night)
     inputs = night_inputs(life, start.night)
     if start.call == "notice":
         noticed = core.notice(ws, inputs.new, ports, point.budget, night=start.night, targets=inputs.targets,
@@ -158,7 +163,7 @@ def _resume(ws: Workspace, point: ResumePoint, life: Life, ports: InquiryPorts, 
         left, focus, rules, control = point.budget, point.focus, start.rules, start.control
     ws = core.run_inquiry(ws, ports, left, night=start.night, targets=inputs.targets, as_of=start.as_of, focus=focus,
                           rules=rules, control=control).ws
-    return _nights(life, [night for night in life.days if night > start.night], ws, ports, budget, core)
+    return _nights(life, [night for night in life.days if night > start.night], ws, ports, budget, core, clock)
 
 
 def rebuild(setup: KillSetup, path: Path) -> dict[str, object]:
@@ -172,7 +177,8 @@ def rebuild(setup: KillSetup, path: Path) -> dict[str, object]:
         return {"digest_equal": False, "conclusions": None}
     if not events or setup.core.digest(ws) != events[-1].after:
         return {"digest_equal": False, "conclusions": None}
-    final = _resume(ws, resume_point(events), setup.life, setup.ports(log), setup.budget, setup.core)
+    final = _resume(ws, resume_point(events), setup.life, setup.ports(log), setup.budget, setup.core,
+                    setup.models.clock)
     return {"digest_equal": True, "conclusions": [list(c) for c in conclusions(final)]}
 
 
@@ -197,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.kill_at is None:
         parser.error("kill needs --kill-at")
     log = KillingLog(setup.open_log(args.log), args.kill_at)
-    _nights(setup.life, setup.life.days, Workspace(), setup.ports(log), setup.budget, setup.core)
+    _nights(setup.life, setup.life.days, Workspace(), setup.ports(log), setup.budget, setup.core, setup.models.clock)
     return RAN_OUT
 
 
@@ -231,7 +237,8 @@ def kill_resume(setup: str, life_id: str, kill_at: int, *, workdir: Path, timeou
         raise ValueError("a life id names a file: letters, digits, '.', '_' and '-' only")
     made = load_setup(setup)(life_id)
     check_clock(made.life)
-    whole = _nights(made.life, made.life.days, Workspace(), made.ports(MemoryLog()), made.budget, made.core)
+    whole = _nights(made.life, made.life.days, Workspace(), made.ports(MemoryLog()), made.budget, made.core,
+                    made.models.clock)
     path = workdir / f"{life_id}.kill-{kill_at}.log"
     if path.exists():
         raise ValueError(f"{path.name} already exists: a kill starts on a fresh log")

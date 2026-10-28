@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep.budget import CAPS, Ledger, Pool
+from anjo.sleep.mind.apd import fakes as apd_fakes
 from anjo.sleep.mind.apd.types import Life
 from anjo.sleep.mind.apd.arms import load_brief, mind_core, run_arm
 from anjo.sleep.mind.replay import compare, dataset, estimate, fakes, resolve, sample, served, settings, spend
@@ -104,14 +105,20 @@ class _Server:
 
 
 @dataclass(frozen=True)
-class _Colab:
-    """Glimmer on Colab vLLM, as replay's ``GlimmerServer``: the fake server's client."""
+class _Named:
+    """A server that only calls itself ``name``: not a live Colab session, whatever its name."""
 
     vllm: VllmClient
     name: str = "colab"
 
     def client(self) -> VllmClient:
         return self.vllm
+
+
+def _colab(server: Any) -> Any:
+    """Glimmer on Colab vLLM as ``colab_vllm.serve`` yields it, on a fake VM whose tunnel reaches
+    ``server``."""
+    return apd_fakes.serving(apd_fakes.poster_transport(server))
 
 
 def _replay(models: sample.ReplayModels | None = None, seeds: Sequence[int] = (0,)) -> ReplayData:
@@ -134,9 +141,9 @@ def _replay(models: sample.ReplayModels | None = None, seeds: Sequence[int] = (0
 def test_thinker_rows_match_the_served_rendering_token_for_token() -> None:
     tokenizer = _Glimmer()
     server = _Server(tokenizer)
-    client = VllmClient.over(server)
-    models = replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(_Colab(client)))
-    data = _replay(models)
+    with _colab(server) as colab:
+        client = colab.client()
+        data = _replay(replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(colab)))
     night = thinker.render_night(data)
     cfg = training_config(LoraCfg(), len(data.thinker1.examples), warm=False, revision="a" * 40, night=night)
     template = colab_train.template_kwargs(cfg)
@@ -166,19 +173,20 @@ class _Failing(_Server):
 
 def test_branch_and_arm_thinkers_are_served_as_the_night_serves_mind() -> None:
     server = _Server(_Glimmer())
-    client = VllmClient.over(server)
     day = date(2026, 9, 9)
-    branch = served.branch_thinkers(_Colab(client))(7, day)
-    assert (branch.temperature, branch.seed, branch.adapter, branch.clock.day) == (0.8, 7, None, day)
-    base = served.arm_thinker(_Colab(client), None, served.NightClock())
-    assert (base.temperature, base.adapter) == (0.0, None)
-    with pytest.raises(ValueError, match="night"):  # an arm's call before its night is set
-        base.propose("anything", 50)
-    reply = branch.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
-    assert reply.model == "meta-models/Muse-Glimmer-30B" and branch.calls == [CallEnd("stop")]
-    assert branch.propose("anything", 0).tokens == 0 and not server.served.get("anything")
-    broken = served.branch_thinkers(_Colab(VllmClient.over(_Failing(_Glimmer()))))(7, day)
-    failed = broken.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
+    with _colab(server) as colab:
+        branch = served.branch_thinkers(colab)(7, day)
+        assert (branch.temperature, branch.seed, branch.adapter, branch.clock.day) == (0.8, 7, None, day)
+        base = served.arm_thinker(colab, None, served.NightClock())
+        assert (base.temperature, base.adapter) == (0.0, None)
+        with pytest.raises(ValueError, match="night"):  # an arm's call before its night is set
+            base.propose("anything", 50)
+        reply = branch.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
+        assert reply.model == "meta-models/Muse-Glimmer-30B" and branch.calls == [CallEnd("stop")]
+        assert branch.propose("anything", 0).tokens == 0 and not server.served.get("anything")
+    with _colab(_Failing(_Glimmer())) as failing:
+        broken = served.branch_thinkers(failing)(7, day)
+        failed = broken.propose("## Your question\nq1 (contradiction, active, opened 2026-09-08): x", 50)
     assert (failed.text, failed.tokens, broken.calls) == ("", 50, [CallEnd(None, failed=True)])
 
 
@@ -339,12 +347,24 @@ PRICES = Prices(spark_in_per_m=0.6, spark_out_per_m=2.4, train_gpu_per_hour=1.5,
 
 def test_replay_serves_glimmer_on_colab_only() -> None:
     client = VllmClient.over(_Server(_Glimmer()))
-    for server in (ModalServing("https://anjo--glimmer.modal.run", "t"), replace(_Colab(client), name="sagemaker")):
-        with pytest.raises(ReplayRefused, match="Colab"):
-            served.branch_thinkers(server)
-        with pytest.raises(ReplayRefused, match="Colab"):
-            served.arm_thinker(server, None, served.NightClock())
-    assert served.branch_thinkers(_Colab(client))(1, date(2026, 9, 9)).client is client
+    with _colab(_Server(_Glimmer())) as colab:
+        assert served.branch_thinkers(colab)(1, date(2026, 9, 9)).client.base_url == colab.base_url
+        remote = replace(colab, local_port=443)
+        object.__setattr__(remote, "_state", colab._state)  # live, but its client isn't its own tunnel's
+        remote_client = VllmClient("https://glimmer.example.com", "k")
+        object.__setattr__(remote, "client", lambda: remote_client)
+        elsewhere = (
+            ModalServing("https://anjo--glimmer.modal.run", "t"), _Named(client, "sagemaker"),
+            _Named(client, "colab"),  # a client merely named "colab", reached some other way
+            _Named(VllmClient("https://colab.example.com", "k"), "colab"), remote,
+        )
+        for server in elsewhere:
+            with pytest.raises(ReplayRefused, match="Colab"):
+                served.branch_thinkers(server)
+            with pytest.raises(ReplayRefused, match="Colab"):
+                served.arm_thinker(server, None, served.NightClock())
+    with pytest.raises(ReplayRefused, match="isn't serving"):  # the session has ended
+        served.branch_thinkers(colab)
 
 
 def test_labels_branches_and_arms_hold_their_worst_case_before_they_run(tmp_path: Path) -> None:
@@ -403,31 +423,31 @@ def test_the_dry_run_prices_the_labels_and_bounds_the_gpu_time() -> None:
 
 def test_a_branch_row_and_an_arm_prompt_masked_to_the_same_night_carry_its_date() -> None:
     server = _Server(_Glimmer())
-    colab = _Colab(VllmClient.over(server))
-    data = _replay(replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(colab)))
-    rows = [json.loads(line) for d in (data.thinker1, data.shuffled) for line in d.to_jsonl().splitlines()]
-    for row in rows:  # a start state's id is "<life>:<night>:<question>", its tools masked to that night
-        assert row["current_date"] == row["id"].split(":")[1]
-    real, masks = mind_core(), list[tuple[str, int]]()
+    with _colab(server) as colab:
+        data = _replay(replace(fakes.fake_replay_models(), thinker_for=served.branch_thinkers(colab)))
+        rows = [json.loads(line) for d in (data.thinker1, data.shuffled) for line in d.to_jsonl().splitlines()]
+        for row in rows:  # a start state's id is "<life>:<night>:<question>", its tools masked to that night
+            assert row["current_date"] == row["id"].split(":")[1]
+        real, masks = mind_core(), list[tuple[str, int]]()
 
-    def notice(ws: Any, new: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
-        masks.append((as_of.date().isoformat(), len(server.dates)))
-        return real.notice(ws, new, ports, budget, night=night, as_of=as_of, **rest)
+        def notice(ws: Any, new: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
+            masks.append((as_of.date().isoformat(), len(server.dates)))
+            return real.notice(ws, new, ports, budget, night=night, as_of=as_of, **rest)
 
-    def run_inquiry(ws: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
-        masks.append((as_of.date().isoformat(), len(server.dates)))
-        return real.run_inquiry(ws, ports, budget, night=night, as_of=as_of, **rest)
+        def run_inquiry(ws: Any, ports: Any, budget: Any, *, night: date, as_of: datetime, **rest: Any) -> Any:
+            masks.append((as_of.date().isoformat(), len(server.dates)))
+            return real.run_inquiry(ws, ports, budget, night=night, as_of=as_of, **rest)
 
-    clock = served.NightClock()
-    arm = served.arm_thinker(colab, None, clock)
-    thinkers = compare.ArmThinkers(arm, served.arm_thinker(colab, None, clock), served.arm_thinker(colab, None, clock), clock)
-    held_out = fakes.fake_life(100, split="held_out")
-    compare.run_replay_arms([held_out], fakes.fake_models(), thinkers, brief=BRIEF,
-                            core=replace(real, notice=notice, run_inquiry=run_inquiry))
-    ends = [start for _, start in masks[1:]] + [len(server.dates)]
-    called = [(night, server.dates[start:end]) for (night, start), end in zip(masks, ends, strict=True)]
-    assert any(dates for _, dates in called)
-    for night, dates in called:  # each arm prompt carries the night its evidence is masked to
-        assert set(dates) <= {night}
-    shared = {row["current_date"] for row in rows} & {night for night, dates in called if dates}
-    assert shared  # the same nights, dated the same: a branch's row and an arm's prompt agree
+        clock = served.NightClock()
+        arm = served.arm_thinker(colab, None, clock)
+        thinkers = compare.ArmThinkers(arm, served.arm_thinker(colab, None, clock), served.arm_thinker(colab, None, clock), clock)
+        held_out = fakes.fake_life(100, split="held_out")
+        compare.run_replay_arms([held_out], fakes.fake_models(), thinkers, brief=BRIEF,
+                                core=replace(real, notice=notice, run_inquiry=run_inquiry))
+        ends = [start for _, start in masks[1:]] + [len(server.dates)]
+        called = [(night, server.dates[start:end]) for (night, start), end in zip(masks, ends, strict=True)]
+        assert any(dates for _, dates in called)
+        for night, dates in called:  # each arm prompt carries the night its evidence is masked to
+            assert set(dates) <= {night}
+        shared = {row["current_date"] for row in rows} & {night for night, dates in called if dates}
+        assert shared  # the same nights, dated the same: a branch's row and an arm's prompt agree

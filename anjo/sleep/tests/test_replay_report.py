@@ -11,6 +11,7 @@ from datetime import date
 
 import pytest
 
+from anjo.sleep.mind.apd import fakes as apd_fakes
 from anjo.sleep.mind.apd import types as apd
 from anjo.sleep.mind.inquiry.types import ModelReply, RunStart
 from anjo.sleep.mind.replay import cli, compare, fakes, served
@@ -18,7 +19,7 @@ from anjo.sleep.mind.replay.served import NightClock
 from anjo.sleep.mind.replay.types import CallEnd
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.reports import replay as report
-from anjo.sleep.serving.client import ServingError, VllmClient
+from anjo.sleep.serving.client import ServingError
 from anjo.sleep.types import CheckpointRef
 
 
@@ -85,22 +86,12 @@ def test_a_failed_call_voids_the_comparison() -> None:
 
 def test_an_adapter_is_refused_before_any_call_unless_it_matches_the_servers_rendering() -> None:
     poster = _NoCalls()
-    client = VllmClient.over(poster)
     ref = CheckpointRef("p-0-n0", "apd-replay", date(2026, 9, 17), "volume://p-0-n0", None, rendering="other/low")
-    colab = _Colab(client)
-    for adapter in (ref, dataclasses.replace(ref, rendering=None)):
-        with pytest.raises(ServingError, match="rendering"):
-            served.arm_thinker(colab, adapter, NightClock())
+    with apd_fakes.serving(apd_fakes.poster_transport(poster)) as colab:
+        for adapter in (ref, dataclasses.replace(ref, rendering=None)):
+            with pytest.raises(ServingError, match="rendering"):
+                served.arm_thinker(colab, adapter, NightClock())
     assert not poster.paths
-
-
-@dataclasses.dataclass(frozen=True)
-class _Colab:
-    vllm: VllmClient
-    name: str = "colab"
-
-    def client(self) -> VllmClient:
-        return self.vllm
 
 
 class _NoCalls:

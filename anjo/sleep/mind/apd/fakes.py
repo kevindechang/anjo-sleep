@@ -25,7 +25,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -35,10 +36,14 @@ import httpx
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.budget import Ledger
-from anjo.sleep.mind.apd import colab_vllm
-from anjo.sleep.mind.replay.fakes import section
+from anjo.sleep.mind.apd import colab_vllm, generate
+from anjo.sleep.mind.apd.generate import Generated, LifeSpec
+from anjo.sleep.mind.replay import fakes as replay_fakes
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.serving import config, framing
+from anjo.sleep.serving.client import Poster, ServingError
+from anjo.sleep.serving.config import ServeConfig
+from anjo.sleep.train.runners.colab import ColabCli
 from anjo.sleep.spark_inquiry import RESOLVE_PROMPT, WORLD_PROMPT
 
 FIRST: Final = config.FIRST_SPECIAL_ID
@@ -65,6 +70,11 @@ class Ticks:
         return self.now
 
 
+def _section(text: str, heading: str) -> list[str]:
+    """The non-blank lines under ``heading``."""
+    return [line for line in replay_fakes.section(text, heading) if line.strip()]
+
+
 def _items(lines: Sequence[str]) -> list[tuple[str, str, str]]:
     found = (_ITEM.match(line) for line in lines)
     return [(m["id"], m["day"], m["text"]) for m in found if m]
@@ -76,11 +86,11 @@ def _items(lines: Sequence[str]) -> list[tuple[str, str, str]]:
 def _notice(text: str) -> list[dict[str, Any]]:
     """One contradiction between the oldest item and today's first, on the first open target,
     once no question is held."""
-    if section(text, "## Questions you hold") != ["(none)"]:
+    if _section(text, "## Questions you hold") != ["(none)"]:
         return []
-    targets = [m["id"] for m in (_TARGET.match(line) for line in section(text, "## Open targets")) if m]
-    earlier = _items(section(text, "## Earlier evidence you hold"))
-    new = _items(section(text, "## Today's new evidence"))
+    targets = [m["id"] for m in (_TARGET.match(line) for line in _section(text, "## Open targets")) if m]
+    earlier = _items(_section(text, "## Earlier evidence you hold"))
+    new = _items(_section(text, "## Today's new evidence"))
     if not (targets and earlier and new) or earlier[0][1] == new[0][1]:
         return []
     return [{"op": "NOTICE", "kind": "contradiction", "subject": "Two steps of the plan can't both hold",
@@ -88,22 +98,22 @@ def _notice(text: str) -> list[dict[str, Any]]:
 
 
 def _cycle(text: str) -> dict[str, Any]:
-    head = section(text, "## Your question")
+    head = _section(text, "## Your question")
     question = head[0].split(" ", 1)[0]
     raised = head[1].rsplit("Raised by: ", 1)[1].rstrip(".").split(", ") if len(head) > 1 else []
     held = [(m["id"], float(m["credence"]), m["statement"]) for m in (
-        _HYPOTHESIS.match(line) for line in section(text, "## Hypotheses (credences are heuristic)")) if m]
+        _HYPOTHESIS.match(line) for line in _section(text, "## Hypotheses (credences are heuristic)")) if m]
     if not held:
         return {"op": "HYPOTHESIZE", "question_id": question, "catch_all": 0.2,
                 "hypotheses": [{"statement": HOLDS, "credence": 0.4}, {"statement": CHANGES, "credence": 0.4}]}
     ids = [h for h, _, _ in held]
     change = next((h for h, _, s in held if s == CHANGES), ids[-1])
-    if section(text, "## Answers to your world queries (never evidence)") == ["(none)"]:
+    if _section(text, "## Answers to your world queries (never evidence)") == ["(none)"]:
         return {"op": "INVESTIGATE", "question_id": question, "tool": "world_query", "query": "What breaks a plan?"}
-    if section(text, "## Open predictions") == section(text, "## Settled predictions") == ["(none)"]:
+    if _section(text, "## Open predictions") == _section(text, "## Settled predictions") == ["(none)"]:
         return {"op": "PREDICT", "question_id": question, "claim": CLAIM, "horizon_days": 2,
                 "p_true_given": {h: (0.8 if h == change else 0.2 if s == HOLDS else 0.5) for h, _, s in held}}
-    waiting = [i for i, _, _ in _items([line for line in section(text, "## Evidence") if "not yet assessed" in line])]
+    waiting = [i for i, _, _ in _items([line for line in _section(text, "## Evidence") if "not yet assessed" in line])]
     if waiting:
         return {"op": "ASSESS", "question_id": question, "evidence_id": waiting[0],
                 "likelihoods": {h: (2.0 if h == change else 0.5 if s == HOLDS else 1.0) for h, _, s in held}}
@@ -116,8 +126,8 @@ def _cycle(text: str) -> dict[str, Any]:
 
 def _b(text: str) -> dict[str, Any]:
     """The notebook agent: search, report one suspicion on what it found, then stop."""
-    steps = section(text, "## Your steps so far tonight")
-    if section(text, "## Your findings so far") != ["none"]:
+    steps = _section(text, "## Your steps so far tonight")
+    if _section(text, "## Your findings so far") != ["none"]:
         return {"action": {"tool": "stop"}}
     found = [i for i, _, _ in _items(steps)]
     if len(found) < 2:
@@ -128,13 +138,13 @@ def _b(text: str) -> dict[str, Any]:
 
 
 def _a(text: str) -> list[dict[str, Any]]:
-    said = _items(section(text, "## Everything the person has said, up to tonight"))
+    said = _items(_section(text, "## Everything the person has said, up to tonight"))
     days = sorted({day for _, day, _ in said})
     if len(days) < 2:
         return []
     cites = [next(i for i, d, _ in said if d == days[0]), next(i for i, d, _ in said if d == days[-1])]
     return [{"problem": "Two steps of the plan conflict", "conclusion": CHANGES, "p": 0.55, "cites": cites,
-             "kind": "suspicion", "finding_id": "f1" if section(text, "## Your findings so far") != ["none"] else None}]
+             "kind": "suspicion", "finding_id": "f1" if _section(text, "## Your findings so far") != ["none"] else None}]
 
 
 def think(text: str) -> str:
@@ -154,13 +164,14 @@ def think(text: str) -> str:
 @dataclass
 class FakeVllm:
     """``/v1/models``, ``/tokenize`` and ``/v1/completions`` for one session, behind its key.
-    ``dates`` is each completion's rendered date; ``models`` the model each completion named."""
+    ``served`` is each completion's kind (``world`` or ``think``), rendered date and prompt, in
+    order; ``models`` the model each completion named."""
 
     key: str
     adapters: set[str] = field(default_factory=set)
     healthy: bool = True
     chats: list[tuple[list[dict[str, Any]], str]] = field(default_factory=list)
-    dates: list[str] = field(default_factory=list)
+    served: list[tuple[str, str, str]] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -188,10 +199,11 @@ class FakeVllm:
         if model != config.MODEL and model not in self.adapters:
             return httpx.Response(404, json={"error": "no such adapter"})
         messages, day = self.chats[body["prompt"][1]]
-        self.dates.append(day)
-        self.models.append(model)
         system = messages[0]["content"] if messages[0]["role"] == "system" else None
-        text = WORLD_ANSWER if system == WORLD_PROMPT else think(str(messages[-1]["content"]))
+        prompt = str(messages[-1]["content"])
+        self.served.append(("world" if system == WORLD_PROMPT else "think", day, prompt))
+        self.models.append(model)
+        text = WORLD_ANSWER if system == WORLD_PROMPT else think(prompt)
         cap = int(body["max_tokens"])
         tokens = max(1, len(text) // 4)
         return httpx.Response(200, json={
@@ -296,6 +308,41 @@ def fake_tunnels(vm: FakeColab) -> colab_vllm.TunnelOpener:
     return open_tunnel
 
 
+SETTINGS: Final = ServeConfig(precision=config.SERVING, revision="a" * 40, tool_parser=None, gpu_snapshot=False,
+                              vllm_version=config.DEFAULT_VLLM_VERSION)
+SERVE_S: Final = 3 * 3600.0
+
+
+def poster_transport(poster: Poster) -> httpx.MockTransport:
+    """A transport that answers each request with what ``poster`` returns for it (a test's own
+    fake vLLM, written as a ``Poster``); a ``ServingError`` answers 503."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        try:
+            return httpx.Response(200, json=poster.post(request.url.path, json.loads(request.content or b"{}")))
+        except ServingError as error:
+            return httpx.Response(503, json={"error": str(error)})
+
+    return httpx.MockTransport(handle)
+
+
+@contextmanager
+def serving(transport: httpx.BaseTransport | None = None, vm: FakeColab | None = None,
+            ledger: Ledger | None = None) -> Iterator[colab_vllm.ColabSession]:
+    """A live session of the real ``colab_vllm.serve`` on a fake VM. Its tunnel carries
+    ``transport`` (a test's own server) in place of the VM's fake vLLM when one is given."""
+    machine = vm or FakeColab(ledger=ledger)
+    opener = fake_tunnels(machine)
+
+    def tunnels(session: str, local: int, remote: int, timeout_s: float) -> colab_vllm.Tunnel:
+        tunnel = opener(session, local, remote, timeout_s)
+        return tunnel if transport is None else FakeTunnel(machine, session, transport)
+
+    with colab_vllm.serve(ColabCli(Path("/fake/colab"), run=machine), ledger, SETTINGS, timeout_s=SERVE_S,
+                          tunnels=tunnels, clock=Ticks(), wait=lambda _session: True) as session:
+        yield session
+
+
 def adapter_folder(folder: Path, rendering: str) -> Path:
     """A LoRA adapter folder as training leaves one in the cache, recording ``rendering``."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -378,6 +425,12 @@ class FakeGateAuditor:
         if str(messages[0]["content"]).startswith("# identify_v1"):
             return _reply(json.dumps({"match": True}), "muse-spark-1.3")
         return _reply(json.dumps({"ok": True, "issues": []}), "muse-spark-1.3")
+
+
+def fake_life(spec: LifeSpec) -> Generated:
+    """``spec``'s life, written, extracted and gated on the fakes."""
+    return generate.generate(spec.field, spec.families, spec.prevalence, spec.seed, split=spec.split,
+                             chat=FakeLifeChat(), reader=FakeGateReader(), auditor=FakeGateAuditor())
 
 
 def fake_judge(strict: bool) -> Callable[[str], str]:
