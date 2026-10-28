@@ -42,6 +42,7 @@ from anjo.sleep.demo.slider import Stop
 from anjo.sleep.demo.starters import Side, StarterSet, generate, to_json
 from anjo.sleep.demo.words import SCENES, Scene
 from anjo.sleep.serving import backend
+from anjo.sleep.serving.client import LOAD_WAIT_S
 from anjo.sleep.types import CheckpointRef
 
 
@@ -110,7 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif not glimmer_status(serving, warmth):
             print("Glimmer is asleep; pass --wake to wake her for this run", file=sys.stderr)
             return 1
-        arms = GlimmerArms(user, deps=glimmer_deps(user, serving), status=lambda: True)
+        # Pre-generated: nobody waits on these answers, so a new adapter's folder is waited for.
+        arms = GlimmerArms(user, deps=glimmer_deps(user, serving, load_wait_s=LOAD_WAIT_S), status=lambda: True)
         if args.nights:
             return _nights(args.out, arms, user)
         starters = write_starters(
