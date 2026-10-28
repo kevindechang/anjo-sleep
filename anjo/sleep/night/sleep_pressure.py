@@ -70,6 +70,10 @@ PRACTICE_REUSED_SAVES_USD: Final = 0.85  # a rerun's practice, already paid for
 MEASURED_REUSED_USD: Final = 1.19  # measured: Teo's night 1 (2026-10-29), practice reused; shown beside the estimate
 MEASURED_NIGHTS: Final = 3  # her last deep nights at tonight's settings that price tonight's
 MEASURED_MARGIN: Final = 0.15  # on the highest of them: a base side recomputed after a revision change is under it
+# A deep night is never priced under this or a nap: the cost model's cheapest deep night at any setting it
+# projects (practice reused, every saving on: $0.92 on 2026-10-29's numbers), rounded down. A gated night
+# measured under it settled only part of its spend (a test keeps it at or under the model).
+DEEP_FLOOR_USD: Final = 0.90
 # A nap's own paid steps at list prices: extract and the brief ($0.023 for one day's items on 2026-10-29;
 # a busy day's brief folds more), rounded up. Wonder's study is held back apart (``SleepState.wonder_left_usd``);
 # the nap's latent encode is planned, not live.
@@ -175,11 +179,14 @@ def deep_night_usd(*, gpu: str = DEFAULT_GPU, core: bool = False, cache_hit: boo
 
 def deep_estimate(state: SleepState, policy: SleepPolicy) -> float:
     """Tonight's deep night: the highest of her last ``MEASURED_NIGHTS`` measured ones at tonight's
-    settings plus ``MEASURED_MARGIN``, or the model's (``deep_night_usd``) before she has one."""
+    settings plus ``MEASURED_MARGIN``, or the model's (``deep_night_usd``) before she has one; never
+    under ``DEEP_FLOOR_USD`` or a nap."""
     if measured := state.measured_deep_usd[:MEASURED_NIGHTS]:
-        return round(max(measured) * (1.0 + MEASURED_MARGIN), 6)
-    return deep_night_usd(gpu=policy.gpu, core=policy.core, cache_hit=state.base_cached,
-                          practice_fresh=state.practice_fresh)
+        found = max(measured) * (1.0 + MEASURED_MARGIN)
+    else:
+        found = deep_night_usd(gpu=policy.gpu, core=policy.core, cache_hit=state.base_cached,
+                               practice_fresh=state.practice_fresh)
+    return round(max(found, DEEP_FLOOR_USD, policy.nap_usd), 6)
 
 
 def fits(state: SleepState, policy: SleepPolicy, tonight_usd: float) -> bool:
@@ -228,16 +235,18 @@ def _wanted(state: SleepState, policy: SleepPolicy, pressure: float, threshold: 
     return "deep", "pressure"
 
 
-def decide(state: SleepState, policy: SleepPolicy, *, pressure: float, force_deep: bool = False) -> SleepDecision:
-    """Tonight's kind and why. ``pressure`` is ``sleep_pressure(state)`` (or the core's)."""
+def decide(state: SleepState, policy: SleepPolicy, *, pressure: float, force_deep: bool = False,
+           at_cap: bool = False) -> SleepDecision:
+    """Tonight's kind and why. ``pressure`` is ``sleep_pressure(state)`` (or the core's). ``at_cap``: the
+    night was found with no room even for a nap before extract, so it is a capped nap whatever it wants."""
     if not (math.isfinite(pressure) and 0.0 <= pressure <= 1.0):
         raise SleepPolicyError("sleep pressure is a number from 0 to 1")
     threshold = policy.threshold(state.month_spent_usd)
     kind, reason = _wanted(state, policy, pressure, threshold, force_deep)
     deep_usd = deep_estimate(state, policy)
-    if kind == "deep" and not fits(state, policy, deep_usd):
+    if kind == "deep" and (at_cap or not fits(state, policy, deep_usd)):
         kind, reason = "nap", "month_cap"  # the budget wins, even over --force-deep
-    capped = kind == "nap" and not fits(state, policy, policy.nap_usd)
+    capped = kind == "nap" and (at_cap or not fits(state, policy, policy.nap_usd))
     return SleepDecision(kind, reason, pressure, threshold, force_deep, state, policy.month_usd, deep_usd, capped)
 
 

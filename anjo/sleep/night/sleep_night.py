@@ -64,10 +64,12 @@ Owed = tuple[date, tuple[datetime, datetime], datetime]  # a day, its window and
 def tonight(
     deps: NightDeps, uid: str, night: date, window: tuple[datetime, datetime], as_of: datetime,
     store: EvidenceStore, targets: TargetStore, wonder_spent: float = 0.0, caught_up: tuple[date, ...] = (),
+    capped: bool = False,
 ) -> tuple[SleepDecision, dict[str, Any], date]:
     """The decision, the step's record and the first day tonight's notice pass reads. Needs
     ``deps.sleep_policy``. ``wonder_spent`` is Wonder's spend in its rolling window; ``caught_up`` the
-    owed days tonight's extract settled."""
+    owed days tonight's extract settled; ``capped`` a night found at the cap before extract (``at_cap``),
+    which is a capped nap whatever its day held."""
     if deps.sleep_policy is None:
         raise ValueError("a night decides its sleep only under a policy")
     history = summaries(deps.logs(uid))
@@ -86,7 +88,8 @@ def tonight(
         **_month(deps, uid, night, history, wonder_spent), practice_fresh=practice_fresh,
         measured_deep_usd=measured, owed_days=sum(day not in caught_up for day, _, _ in owed_days(history, night)),
     )
-    made = decide(state, deps.sleep_policy, pressure=deps.sleep_pressure(state), force_deep=deps.settings.force_deep)
+    made = decide(state, deps.sleep_policy, pressure=deps.sleep_pressure(state), force_deep=deps.settings.force_deep,
+                  at_cap=capped)
     return made, {**made.record(), **settings, "turns": turns}, notice_from(history, night)
 
 
@@ -142,7 +145,7 @@ def catch_up(source: Any, p: PersonNight, owed: Sequence[Owed]) -> None:
 def sleep_step(deps: NightDeps, p: PersonNight) -> Mapping[str, Any]:
     """The ``sleep`` step: a nap stops the night's training and anything that wakes Glimmer."""
     made, record, p.notice_from = tonight(deps, p.uid, p.night, p.window, p.as_of, p.store, p.targets,
-                                          p.wonder_month_spent, p.caught_up)
+                                          p.wonder_month_spent, p.caught_up, p.capped)
     if made.kind == "nap":
         p.due, p.status = False, "napped"
     if p.caught_up:  # owed days tonight's extract settled
