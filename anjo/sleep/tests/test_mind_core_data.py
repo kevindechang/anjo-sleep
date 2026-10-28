@@ -167,3 +167,17 @@ def test_prescore_counts_cited_overlap_inside_each_items_window() -> None:
                               findings.Raised(_day(5), 0.9, ("e-x",), "risk")], threshold=0.5, ignite=0.5)
     scored = findings.prescore(alarm, (item, decoy))
     assert (scored.flagged, scored.unmatched, scored.findings) == (1, 1, 2)
+
+
+def test_the_core_reads_the_latents_workers_event_record() -> None:
+    from anjo.sleep.mind.core import latents, types
+
+    assert types.EventLatent is latents.EventLatent  # one record, no duplicate
+    at = datetime(2026, 10, 1, 9, tzinfo=timezone.utc)
+    good = latents.EventLatent("e1", "life-1", at, "turn", np.ones(4, dtype=np.float32))
+    types.LabelledStream("life-1", (at.date(),), (good,), ())
+    for bad in (latents.EventLatent("e1", "life-1", at, "turn", np.array([1.0, np.nan], dtype=np.float32)),
+                latents.EventLatent("e1", "life-1", at, "turn", np.ones((2, 2), dtype=np.float32)),
+                latents.EventLatent("e1", "life-1", at.replace(tzinfo=None), "turn", np.ones(4, dtype=np.float32))):
+        with pytest.raises(ValueError):
+            types.LabelledStream("life-1", (at.date(),), (bad,), ())

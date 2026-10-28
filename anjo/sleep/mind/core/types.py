@@ -1,7 +1,8 @@
 """MIND's neural core: the values it reads and returns. Pure and torch-free.
 
 An event is one evidence item of a life, or one turn or finding of a real person, read as a
-vector from Glimmer's own hidden states (``EventLatent``, the latents worker's format). The core
+vector from Glimmer's own hidden states (``EventLatent``: the latents module's record, the one the
+core reads; a ``LabelledStream`` checks each event's vector is one finite row and its time aware). The core
 binds events into slots, one per open thread, and answers per slot: will this thread fail within
 ``HORIZON_DAYS`` days, is a prerequisite missing, and how wrong is its own forecast likely to be.
 Training reads ``ThreadLabel`` rows: which events make up a thread, from when its problem is
@@ -15,12 +16,13 @@ CLI (``python -m anjo.sleep.mind.core``) need torch, on the CPU.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal, TypeAlias, get_args
+from typing import Final, Literal, get_args
 
 import numpy as np
-from numpy.typing import NDArray
+
+from anjo.sleep.mind.core.latents import EventLatent as EventLatent  # the one event record
 
 HORIZON_DAYS: Final = 7  # the hazard heads look this many days ahead
 KINDS: Final = (
@@ -28,7 +30,6 @@ KINDS: Final = (
 )
 IgnitionKind = Literal["risk", "missing", "collision"]
 IGNITION_KINDS: Final = frozenset(get_args(IgnitionKind))
-Vector: TypeAlias = NDArray[np.float32]
 
 
 def kind_index(kind: str) -> int:
@@ -69,27 +70,6 @@ class CoreConfig:
 
 
 @dataclass(frozen=True)
-class EventLatent:
-    """One event as the latents worker writes it: ``vec`` is Glimmer's hidden states, pooled."""
-
-    event_id: str
-    life_or_person: str
-    t: datetime
-    kind: str
-    vec: Vector = field(compare=False, repr=False)
-
-    def __post_init__(self) -> None:
-        if not self.event_id or not self.life_or_person:
-            raise ValueError("an event names its id and its life or person")
-        days_of(self.t)
-        vec = np.array(self.vec, dtype=np.float32)
-        if vec.ndim != 1 or vec.size == 0 or not np.all(np.isfinite(vec)):
-            raise ValueError(f"event {self.event_id}'s vector is one finite row")
-        vec.setflags(write=False)
-        object.__setattr__(self, "vec", vec)
-
-
-@dataclass(frozen=True)
 class ThreadLabel:
     """A labelled thread of one life: what training and the offline eval read.
 
@@ -118,6 +98,15 @@ class ThreadLabel:
             raise ValueError(f"label {self.id} surfaces before it is knowable")
 
 
+def _check_event(event: EventLatent) -> None:
+    if not event.event_id or not event.life_or_person:
+        raise ValueError("an event names its id and its life or person")
+    days_of(event.t)
+    vec = np.asarray(event.vec)
+    if vec.ndim != 1 or vec.size == 0 or not np.all(np.isfinite(vec)):
+        raise ValueError(f"event {event.event_id}'s vector is one finite row")
+
+
 @dataclass(frozen=True)
 class LabelledStream:
     """One life's events in time order, its days (the person-days it counts for) and its labels."""
@@ -128,6 +117,8 @@ class LabelledStream:
     labels: tuple[ThreadLabel, ...]
 
     def __post_init__(self) -> None:
+        for event in self.events:
+            _check_event(event)
         if any(b.t < a.t for a, b in zip(self.events, self.events[1:])):
             raise ValueError(f"life {self.life_id}'s events run in time order")
         ids = [e.event_id for e in self.events]
