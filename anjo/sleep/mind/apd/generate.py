@@ -38,6 +38,7 @@ from anjo.sleep.evidence.targets import mentioned_target
 from anjo.sleep.mind.apd import gates, retry
 from anjo.sleep.mind.apd.core_families import fields, templates_for
 from anjo.sleep.mind.apd.families import Template
+from anjo.sleep.mind.apd.generators import BY_MODEL, CUT, Refused, answer
 from anjo.sleep.mind.apd.types import (
     DEVELOPMENT_LIVES,
     EMPTY_HELD_OUT_LIVES,
@@ -76,15 +77,17 @@ class GenerationFailed(ValueError):
     """An attempt broke a rule (a malformed day, a misplaced beat, a fact that left no evidence),
     and where, none of any reply's text: the ``step`` (``writer``, ``extractor``, ``planted fact``
     or ``pair``), the ``day`` (1 to ``LIFE_DAYS``), the planted ``item`` (its number), and for a
-    reply that couldn't be read the ``field`` it lacked, its length and its finish reason."""
+    reply that couldn't be read the ``field`` it lacked, the ``rule`` that refused it
+    (``generators.Refused``), its length and its answer's, and its finish reason."""
 
-    WHERE: Final = ("step", "day", "item", "field", "reply_chars", "finish_reason")
+    WHERE: Final = ("step", "day", "item", "field", "rule", "reply_chars", "answer_chars", "finish_reason")
 
     def __init__(self, message: str, *, step: str | None = None, day: int | None = None, item: int | None = None,
-                 field: str | None = None, reply_chars: int | None = None, finish_reason: str | None = None) -> None:
+                 field: str | None = None, rule: str | None = None, reply_chars: int | None = None,
+                 answer_chars: int | None = None, finish_reason: str | None = None) -> None:
         super().__init__(message)
-        self.step, self.day, self.item, self.field = step, day, item, field
-        self.reply_chars, self.finish_reason = reply_chars, finish_reason
+        self.step, self.day, self.item, self.field, self.rule = step, day, item, field, rule
+        self.reply_chars, self.answer_chars, self.finish_reason = reply_chars, answer_chars, finish_reason
 
     def at(self, **where: Any) -> GenerationFailed:
         """The same failure located further; what it already says is kept."""
@@ -229,27 +232,50 @@ def _check_model(reply: ChatResult, model: str) -> None:
         raise ModelMismatch("a reply doesn't name Spark Open as the experiment's provider serves it")
 
 
-def _write_day(
-    chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
-    beats: Sequence[Beat],
-) -> tuple[list[str], dict[str, int]]:
+def writer_messages(
+    field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat],
+) -> list[dict[str, Any]]:
+    """The writer's call for day ``index`` (from 0): ``life_v1.md`` and the day's payload."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
         "plant": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "plant"],
         "ask": [{"beat": b.id, "say": b.say} for b in beats if b.kind == "ask"],
     }
-    messages = [
+    return [
         {"role": "system", "content": LIFE_PROMPT.read_text(encoding="utf-8")},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
-    reply = chat(model, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+
+
+def _write_day(
+    chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
+    beats: Sequence[Beat],
+) -> tuple[list[str], dict[str, int]]:
+    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats), None, TIMEOUT_S,
+                 temperature=WRITE_TEMPERATURE)
     _check_model(reply, model)
+    text: str | None = None
     try:
-        return _read_day(reply.text, beats)
+        text = answered(reply, model)
+        return _read_day(text, beats)
     except GenerationFailed as failed:
         raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
-                        finish_reason=reply.finish_reason) from None
+                        answer_chars=None if text is None else len(text), finish_reason=reply.finish_reason) from None
+
+
+def answered(reply: ChatResult, model: str) -> str:
+    """What a reply answered: a Fireworks generator's answer (``generators.answer``), Spark Open's
+    reply as it came. A reply cut at its cap, or a generator's draft, is refused by its rule."""
+    try:
+        if model in BY_MODEL:
+            return answer(reply.text, reply.finish_reason)
+        if reply.finish_reason == "length":
+            raise Refused(CUT, "a reply cut at its cap")
+    except Refused as refused:
+        raise GenerationFailed(str(refused), field="reply", rule=refused.rule, reply_chars=len(reply.text),
+                               finish_reason=reply.finish_reason) from None
+    return reply.text
 
 
 def _read_day(text: str, beats: Sequence[Beat]) -> tuple[list[str], dict[str, int]]:
@@ -276,17 +302,19 @@ def _check_placed(placed: dict[Any, Any], beats: Sequence[Beat], count: int) -> 
     return {str(k): int(v) for k, v in placed.items()}
 
 
-def _extractor(chat: ChatFn, model: str, replies: list[ChatResult] | None = None
+def _extractor(chat: ChatFn, model: str, replies: list[tuple[ChatResult, str]] | None = None
                ) -> Callable[[list[dict[str, Any]]], ChatResult]:
-    """Task 3's ``extract`` with ``extract_open_v1.md`` as its prompt; each reply kept in ``replies``."""
+    """Task 3's ``extract`` with ``extract_open_v1.md`` as its prompt, reading each reply's answer
+    (``answered``); each reply and its answer kept in ``replies``."""
     system = EXTRACT_PROMPT.read_text(encoding="utf-8")
 
     def call(messages: list[dict[str, Any]]) -> ChatResult:
         swapped = [{"role": "system", "content": system}, *messages[1:]]
         reply = chat(model, swapped, None, TIMEOUT_S, temperature=EXTRACT_TEMPERATURE)
+        text = answered(reply, model)
         if replies is not None:
-            replies.append(reply)
-        return reply
+            replies.append((reply, text))
+        return dataclasses.replace(reply, text=text)
 
     return call
 
@@ -399,16 +427,19 @@ def _extract_day(
     known: set[str], index: int | None = None,
 ) -> Any:
     now = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) + END_OF_DAY
-    replies: list[ChatResult] = []
+    replies: list[tuple[ChatResult, str]] = []
+    on_day = None if index is None else index + 1
     try:
         return extract(life_id, day, turns, imported=(), targets=open_targets, known_ids=frozenset(known),
                        now=now, chat=_extractor(chat, model, replies), model=model)
+    except GenerationFailed as failed:  # its reply refused (``answered``)
+        raise failed.at(step="extractor", day=on_day) from None
     except ExtractionError as exc:
         field = next((name for marker, name in _EXTRACT_FIELDS if marker in str(exc)), None)
-        last = replies[-1] if replies else None
-        raise GenerationFailed(f"extraction failed: {exc}", step="extractor",
-                               day=None if index is None else index + 1, field=field,
+        last, text = replies[-1] if replies else (None, None)
+        raise GenerationFailed(f"extraction failed: {exc}", step="extractor", day=on_day, field=field,
                                reply_chars=None if last is None else len(last.text),
+                               answer_chars=None if text is None else len(text),
                                finish_reason=None if last is None else last.finish_reason) from None
 
 

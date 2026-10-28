@@ -5,7 +5,8 @@ reply, a planted fact, a pair), at a gate (a verdict that didn't pass), or on a 
 fails after its tries or a reader's reply that can't be read (an error out of the attempt). Each
 becomes one ``AttemptFailure``: the step, the day (1 to ``LIFE_DAYS``) and the item (its number in
 the life) where known, the error's class or the gate's verdict, the code's own reason, and for a
-reply that couldn't be read the field it lacked, its length and its finish reason. The reasons are
+reply that couldn't be read the field it lacked, the rule that refused it (``generators.Refused``),
+its length, its answer's length and its finish reason. The reasons are
 the code's own strings and the dates in them; nothing a model wrote is kept, and never an item's
 topic. ``gen_batch`` saves each to ``failed.jsonl``, keeps it in the life's call log and prints its
 ``line``.
@@ -39,7 +40,9 @@ class AttemptFailure:
     day: int | None = None
     item: int | None = None
     field: str | None = None
+    rule: str | None = None  # the rule that refused the reply (``generators.Refused``)
     reply_chars: int | None = None
+    answer_chars: int | None = None  # what of the reply was read as its answer
     finish_reason: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -48,8 +51,8 @@ class AttemptFailure:
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> AttemptFailure:
         return cls(int(raw["attempt"]), str(raw["step"]), str(raw["error"]), str(raw["reason"]), _int(raw.get("day")),
-                   _int(raw.get("item")), _str(raw.get("field")), _int(raw.get("reply_chars")),
-                   _str(raw.get("finish_reason")))
+                   _int(raw.get("item")), _str(raw.get("field")), _str(raw.get("rule")), _int(raw.get("reply_chars")),
+                   _int(raw.get("answer_chars")), _str(raw.get("finish_reason")))
 
 
 def _int(found: object) -> int | None:
@@ -62,7 +65,7 @@ def _str(found: object) -> str | None:
 
 def of_rule(attempt: int, failed: GenerationFailed) -> AttemptFailure:
     return AttemptFailure(attempt, failed.step or "rule", type(failed).__name__, str(failed), failed.day, failed.item,
-                          failed.field, failed.reply_chars, failed.finish_reason)
+                          failed.field, failed.rule, failed.reply_chars, failed.answer_chars, failed.finish_reason)
 
 
 def of_verdicts(attempt: int, life: Life, verdicts: Sequence[GateVerdict]) -> tuple[AttemptFailure, ...]:
@@ -74,8 +77,8 @@ def of_verdicts(attempt: int, life: Life, verdicts: Sequence[GateVerdict]) -> tu
         number = None if verdict.item_id is None else _ITEM.search(verdict.item_id)
         dated = _DATE.search(verdict.reason or "")
         day = None if dated is None else (date.fromisoformat(dated.group()) - life.days[0]).days + 1
-        found.append(AttemptFailure(attempt, verdict.gate, "verdict", verdict.reason or "did not pass", day,
-                                    None if number is None else int(number.group(1))))
+        found.append(AttemptFailure(attempt, verdict.gate, "verdict", verdict.reason or "did not pass", day=day,
+                                    item=None if number is None else int(number.group(1))))
     return tuple(found)
 
 
@@ -84,10 +87,10 @@ def of_error(attempt: int, error: Exception, last: Call | None) -> AttemptFailur
     the attempt's last call, with that reply's length and finish reason when it came back."""
     step = "writer" if last is None else STEPS.get(last.kind, last.kind)
     return AttemptFailure(attempt, step, type(error).__name__, str(error) or type(error).__name__,
-                          None if last is None or last.kind != "write" else last.days,
-                          None if last is None else last.item, None,
-                          None if last is None or last.failed else last.reply_chars,
-                          None if last is None or last.failed else last.finish)
+                          day=None if last is None or last.kind != "write" else last.days,
+                          item=None if last is None else last.item,
+                          reply_chars=None if last is None or last.failed else last.reply_chars,
+                          finish_reason=None if last is None or last.failed else last.finish)
 
 
 def recorded(records: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -101,8 +104,10 @@ def line(name: str, failure: AttemptFailure) -> str:
     where = [f"day {failure.day}" if failure.day is not None else "",
              f"item {failure.item}" if failure.item is not None else "",
              f"field {failure.field}" if failure.field is not None else ""]
+    answered = "" if failure.answer_chars is None else f" (answer {failure.answer_chars})"
     reply = "" if failure.reply_chars is None else (
-        f"; reply {failure.reply_chars} chars, finish {failure.finish_reason or 'unknown'}")
+        f"; reply {failure.reply_chars} chars{answered}, finish {failure.finish_reason or 'unknown'}")
+    rule = "" if failure.rule is None else f" [rule {failure.rule}]"
     at = ", ".join(part for part in where if part)
     return (f"FAILED attempt {failure.attempt + 1} of {name} at the {failure.step}"
-            f"{' (' + at + ')' if at else ''}: {failure.error}: {failure.reason}{reply}")
+            f"{' (' + at + ')' if at else ''}: {failure.error}: {failure.reason}{rule}{reply}")

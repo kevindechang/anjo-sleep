@@ -19,19 +19,23 @@ from anjo.sleep import fireworks_api
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generators, probe
+from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generators, pairs, probe
+from anjo.sleep.mind.apd.backend import Halted
 from anjo.sleep.mind.apd.live import RunsFailed
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.spark_provider import FIREWORKS
 from anjo.sleep.model_api import ChatResult
+from anjo.sleep.stops import BudgetStop
 
 DEEPSEEK = generators.DEEPSEEK
 RATE = Rate(0.30, 1.20)
 SPEC = next(spec for spec in core_splits.core_specs("core-train") if spec.prevalence > 0)
-RECORD_KEYS = {"what", "name", "attempt", "step", "error", "reason", "day", "item", "field", "reply_chars",
-               "finish_reason"}
+RECORD_KEYS = {"what", "name", "attempt", "step", "error", "reason", "day", "item", "field", "rule", "reply_chars",
+               "answer_chars", "finish_reason"}
+BODY = '{"messages": ["a"], "placed": {}}'
+DRAFT = '{"messages": ["a draft"], "placed": {}}'
 
 
 class Recorded:
@@ -42,6 +46,7 @@ class Recorded:
         self.inner = fakes.generator_transport(shape)
         self.bodies: list[dict[str, Any]] = []
         self.answers: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []
         self.transport = httpx.MockTransport(self.handle)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -50,6 +55,7 @@ class Recorded:
         if response.status_code == 200:
             self.bodies.append(response.json())
             sent = json.loads(request.content)
+            self.requests.append(sent)
             self.answers.append(json.loads(fakes.FakeLifeChat()(sent["model"], sent["messages"], None, 30.0).text))
         return response
 
@@ -85,15 +91,31 @@ def _no_text(texts: list[str], *places: str) -> None:
 # ── The writer reads the answer ───────────────────────────────────────────────
 
 
-def test_answer_takes_the_reasoning_and_the_fence_out() -> None:
-    body = '{"messages": ["a"], "placed": {}}'
-    assert generators.answer(body) == body
-    assert generators.answer(f"<think>\nfirst {{this}}\n</think>\n\n{body}") == body
-    assert generators.answer(f"Here it is:\n```json\n{body}\n```\nDone.") == body
-    assert generators.answer(f"<think>plan</think>\n```\n{body}\n```") == body
-    assert generators.answer("<think>never closed {") == "<think>never closed {"  # unreadable stays unreadable
+def test_answer_takes_the_reasoning_and_the_one_fence_out() -> None:
+    assert generators.answer(BODY) == BODY
+    assert generators.answer(f"<think>\nfirst {{this}}\n</think>\n\n{BODY}", "stop") == BODY
+    assert generators.answer(f"Here it is:\n```json\n{BODY}\n```\nDone.") == BODY
+    assert generators.answer(f"<think>plan</think>\n```\n{BODY}\n```") == BODY
+    # a draft fenced inside closed reasoning is not a fence of the answer's
+    assert generators.answer(f"<think>a draft:\n```json\n{DRAFT}\n```\n</think>\n```json\n{BODY}\n```") == BODY
+    # reasoning whose opening tag was the chat template's: the answer is what follows its close
+    assert generators.answer(f"a draft:\n```json\n{DRAFT}\n```\n</think>\n\n{BODY}") == BODY
     fenced_inside = '{"messages": ["```json\\n{}\\n```"], "placed": {}}'
     assert generators.answer(fenced_inside) == fenced_inside  # an answer already is unchanged
+
+
+@pytest.mark.parametrize(("text", "finish", "rule"), [
+    (BODY, "length", "cut"),  # a reply cut at its cap is never a whole answer, even when it parses
+    (f"<think>a draft:\n```json\n{DRAFT}\n```\nnow chec", "length", "cut"),
+    (f"<think>a draft:\n```json\n{DRAFT}\n```\n", "stop", "open_think"),
+    ("<think>never closed {", None, "open_think"),
+    (f"<think>x</think><think>y {BODY}", "stop", "open_think"),
+    (f"A draft:\n```json\n{DRAFT}\n```\nThe answer:\n```json\n{BODY}\n```", "stop", "fences"),
+])
+def test_answer_refuses_a_cut_reply_open_reasoning_and_two_fences(text: str, finish: str | None, rule: str) -> None:
+    with pytest.raises(generators.Refused) as refused:
+        generators.answer(text, finish)
+    assert refused.value.rule == rule and DRAFT not in str(refused.value) and BODY not in str(refused.value)
 
 
 @pytest.mark.parametrize(("shape", "reasoning"), [("plain", 0), ("think", 40), ("fenced", 0), ("reasoning_field", 40)])
@@ -113,6 +135,31 @@ def test_a_readable_reply_shape_writes_the_same_life_and_counts_its_reasoning(
     written = [(c.kind, c.tokens_out) for c in log.calls if c.kind in ("write", "extract")]
     expected = [(c.kind, c.tokens_out + reasoning) for c in plain_log.calls if c.kind in ("write", "extract")]
     assert written == expected and not log.failures
+
+
+@pytest.mark.parametrize(("shape", "rule", "finish"), [
+    ("length", "cut", "length"), ("draft_in_cut_think", "cut", "length"), ("open_think", "open_think", "stop"),
+    ("two_fences", "fences", "stop"),
+])
+def test_a_drafted_or_cut_answer_is_never_read_as_the_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                         shape: str, rule: str, finish: str) -> None:
+    # Arrange: every reply holds a whole day's JSON, but as a draft or cut at its cap
+    backend, recorded = _backend(tmp_path, monkeypatch, shape)
+    data, lines = DataDir(tmp_path / "pilot"), list[str]()
+
+    # Act
+    with pytest.raises(RunsFailed):
+        gen_batch.generate_lives(data, [SPEC], backend, lines.append)
+
+    # Assert: each attempt refused at the writer's first day, by its rule, and nothing was saved
+    attempts = [raw for raw in data.failed() if raw["what"] == "generate-attempt"]
+    assert len(attempts) == 3 and not data.lives("core-train")
+    for raw in attempts:
+        assert (raw["step"], raw["day"], raw["field"], raw["rule"], raw["finish_reason"]) == (
+            "writer", 1, "reply", rule, finish)
+        assert raw["reply_chars"] > 0 and raw["answer_chars"] is None
+    assert all(f"[rule {rule}]" in line for line in lines if line.startswith("FAILED "))
+    _no_text(recorded.texts(), (data.root / "failed.jsonl").read_text(encoding="utf-8"), "\n".join(lines))
 
 
 # ── Each failed attempt, recorded ─────────────────────────────────────────────
@@ -135,8 +182,8 @@ def test_a_reply_cut_at_its_cap_fails_each_attempt_at_the_writer_and_says_so(
         assert set(raw) == RECORD_KEYS
         assert (raw["step"], raw["day"], raw["item"], raw["field"], raw["finish_reason"]) == (
             "writer", 1, None, "reply", "length")
-        assert raw["error"] == "GenerationFailed" and raw["reply_chars"] > 0
-        assert raw["reason"] == "a day's reply is not a JSON object"
+        assert raw["error"] == "GenerationFailed" and raw["reply_chars"] > 0 and raw["rule"] == "cut"
+        assert raw["reason"] == "a reply cut at its cap"
     assert [raw["what"] for raw in data.failed()] == ["generate-attempt"] * 3 + ["generate"]
     failed = [line for line in lines if line.startswith("FAILED ")]
     assert len(failed) == 3 and all("at the writer (day 1, field reply)" in line for line in failed)
@@ -210,11 +257,13 @@ def test_a_failed_gate_is_recorded_by_gate_item_and_day(tmp_path: Path, monkeypa
 
 
 @pytest.mark.parametrize(("shape", "seen"), [
-    ("plain", ["think_tags=False", "starts_with_brace=True", "writer_reads=ok", "finish_reason=stop"]),
+    ("plain", ["think_tags=False", "starts_with_brace=True", "answer=ok", "writer_reads=ok", "finish_reason=stop"]),
     ("think", ["think_tags=True", "reasoning_tokens=40", "writer_reads=ok"]),
     ("fenced", ["fenced=True", "starts_with_brace=False", "answer_json=True", "writer_reads=ok"]),
     ("reasoning_field", ["reasoning_chars=26", "'reasoning_content'", "writer_reads=ok"]),
-    ("length", ["finish_reason=length", "answer_json=False", "writer_reads=not a JSON object"]),
+    ("length", ["finish_reason=length", "answer=refused (cut)", "writer_reads=refused"]),
+    ("open_think", ["answer=refused (open_think)", "writer_reads=refused"]),
+    ("two_fences", ["answer=refused (fences)", "writer_reads=refused"]),
 ])
 def test_probe_prints_each_replys_shape_never_its_text(monkeypatch: pytest.MonkeyPatch, shape: str,
                                                        seen: list[str]) -> None:
@@ -230,6 +279,39 @@ def test_probe_prints_each_replys_shape_never_its_text(monkeypatch: pytest.Monke
     assert 0 < spent < 2 * RATE.worst
     _no_text(recorded.texts(), "\n".join(lines))
     assert "Let me plan" not in "\n".join(lines) and "The person" not in "\n".join(lines)
+
+
+def _one_based(model: str, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+               on_reply: Any = None, **kw: Any) -> ChatResult:
+    """A writer that numbers its messages from 1 in ``placed``."""
+    reply = fakes.FakeLifeChat()(model, messages, tools, timeout_s)
+    body = json.loads(reply.text)
+    text = json.dumps({**body, "placed": {beat: spot + 1 for beat, spot in body["placed"].items()}})
+    on_reply({"model": model, "choices": [{"message": {"role": "assistant", "content": text},
+                                           "finish_reason": "stop"}],
+              "usage": {"prompt_tokens": 800, "completion_tokens": 40, "total_tokens": 840}})
+    return dataclasses.replace(reply, text=text)
+
+
+def test_probe_places_two_beats_on_its_even_calls_and_says_where_they_landed(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded, lines = Recorded("plain"), list[str]()
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-test")
+
+    probe.run(DEEPSEEK, 2, RATE, lines.append, call=partial(fireworks_api.generate, transport=recorded.transport))
+    probe.run(DEEPSEEK, 2, RATE, lines.append, call=_one_based)
+
+    # The first call has no beats; the second two, each placed by its index from 0
+    assert "beats=0" in lines[0] and "placed_valid=None" in lines[0]
+    assert all(part in lines[1] for part in ("beats=2", "placed_valid=True", "beats_at_placed=2",
+                                             "beats_one_before_placed=0", "writer_reads=ok"))
+    # A writer that counts from 1 is seen: its beats sit one message before where it says
+    assert all(part in lines[3] for part in ("beats=2", "placed_valid=False", "beats_at_placed=0",
+                                             "beats_one_before_placed=2"))
+    assert "writer_reads=a beat points outside the day's messages (field placed)" in lines[3]
+    sent = [json.loads(body["messages"][-1]["content"]) for body in recorded.requests]
+    assert [len(day["plant"]) + len(day["ask"]) for day in sent] == [0, 2]
+    printed = "\n".join(lines)
+    assert all(beat.say not in printed for beat in probe.BEATS)
 
 
 def test_probe_counts_a_rejected_call_at_its_worst_case(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,6 +336,7 @@ def test_probe_writer_is_planned_first_and_refused_without_live(monkeypatch: pyt
     assert cli.main(["--live", *command], out=lines.append) == 0
     worst = 3 * Rate(*DEEPSEEK.list_prices or (0, 0)).worst
     assert lines[0].startswith("Plan: probe-writer: 3 writer call(s) on deepseek-v4p1-flash")
+    assert "the even ones with two beats" in lines[0]
     assert f"Hold on {FIREWORKS.pool}: ${worst:.4f}" in lines[1] and lines[-1].startswith("Nothing has run")
     with pytest.raises(SystemExit):
         cli.main(["--live", "probe-writer", "--generator", "spark"], out=lines.append)  # not on Fireworks
@@ -284,3 +367,36 @@ def test_probe_writer_runs_held_and_settles_what_it_cost(tmp_path: Path, monkeyp
     assert [line.split(":")[0] for line in lines if line.startswith("probe ")] == ["probe 1", "probe 2"]
     assert lines[-1] == f"Settled ${float(settle['amount']):.4f} on {FIREWORKS.pool}."
     _no_text(recorded.texts(), "\n".join(lines))
+
+
+# ── A life stopped mid-attempt ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("pair", [False, True])
+@pytest.mark.parametrize("stop", [BudgetStop("a pool can't hold it"), Halted("the command is ending")])
+def test_a_life_stopped_mid_attempt_keeps_the_calls_it_made(tmp_path: Path, stop: Exception, pair: bool) -> None:
+    # Arrange: the third call of the life (or the pair) stops the run (a hold without room, a kill)
+    made: list[int] = []
+
+    def stops_third(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                    temperature: float | None = None) -> ChatResult:
+        made.append(1)
+        if len(made) == 3:
+            raise stop
+        return fakes.FakeLifeChat()(model, messages, tools, timeout_s, temperature=temperature)
+
+    backend = dataclasses.replace(backends.fake_backend(FIREWORKS), life_chat=stops_third,
+                                  ledger=RunLedger(tmp_path / "budget.jsonl"), prices=cli.FAKE_PRICES,
+                                  rates=cli.FAKE_RATES)
+    data = DataDir(tmp_path / "pilot")
+
+    # Act
+    with pytest.raises(type(stop)):
+        if pair:
+            pairs.generate_pairs(data, pairs.pair_specs()[:1], backend, lambda line: None)
+        else:
+            gen_batch.generate_lives(data, [SPEC], backend, lambda line: None)
+
+    # Assert: the two calls it paid for are in its log, so ``calls`` still counts them
+    (made_id,) = data.call_logs()
+    assert made_id.endswith(".failed") and [c.kind for c in _logged(data, made_id)] == ["write", "extract"]

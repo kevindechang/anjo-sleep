@@ -35,7 +35,6 @@ Every try is logged (``calls.CallLog``) when the caller asks.
 """
 from __future__ import annotations
 
-import dataclasses
 import functools
 import importlib
 import random
@@ -56,7 +55,7 @@ from anjo.sleep.mind.apd import colab_vllm, fakes, retry
 from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.colab_vllm import ColabSession, TunnelOpener
-from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator, answer
+from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
 from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
@@ -165,9 +164,8 @@ def gen_chat(provider: SparkProvider) -> BriefChat:
         if model == "muse-spark":
             return meta_api.chat("muse-spark", messages, tools, timeout_s, temperature=temperature, max_tokens=cap)
         if model in BY_MODEL:
-            result = fireworks_api.generate(model, messages, tools, timeout_s, temperature=temperature,
-                                            max_tokens=cap, reasoning_effort=BY_MODEL[model].reasoning_effort)
-            return dataclasses.replace(result, text=answer(result.text))  # its answer, never its reasoning
+            return fireworks_api.generate(model, messages, tools, timeout_s, temperature=temperature, max_tokens=cap,
+                                          reasoning_effort=BY_MODEL[model].reasoning_effort)
         return provider.write(model, messages, tools, timeout_s, temperature=temperature, max_tokens=cap)
 
     return chat

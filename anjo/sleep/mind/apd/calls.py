@@ -5,9 +5,9 @@ was sent: ``write``, ``extract``, ``leak``, ``discover``, ``identify``, ``audit`
 the item it read for (numbered in the order the attempt first read it: never its topic, which is
 the sealed file's), how many days it read, its tokens in and out as the provider counted them,
 what it was priced at, and its reply's length and finish reason (never its text).
-``DataDir.save_calls`` keeps a life's log, every attempt included, and a skipped life's too (under
-``failed_log_id``); ``breakdown`` prints it per gate, per days read and per item, which is what the
-plan's read shapes are checked against. The log also keeps why each failed attempt failed
+``DataDir.save_calls`` keeps a life's log, every attempt included, and a skipped, killed or
+stopped life's too (under ``failed_log_id``); ``breakdown`` prints it per gate, per days read and
+per item, which is what the plan's read shapes are checked against. The log also keeps why each failed attempt failed
 (``failures.AttemptFailure``).
 
 Pure.
@@ -147,5 +147,5 @@ def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:
 
 
 def failed_log_id(life_id: str) -> str:
-    """The id a skipped life's log is kept under (its first attempt's life id)."""
+    """The id a life's log is kept under when it wasn't saved (its first attempt's life id)."""
     return f"{life_id}.failed"

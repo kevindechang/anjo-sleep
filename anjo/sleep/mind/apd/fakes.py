@@ -453,15 +453,19 @@ class FakeLifeChat:
         return _reply(json.dumps({"items": items}), model)
 
 
-REPLY_SHAPES: Final = ("plain", "think", "fenced", "reasoning_field", "length", "rejected")
+REPLY_SHAPES: Final = ("plain", "think", "fenced", "reasoning_field", "length", "rejected", "draft_in_cut_think",
+                       "open_think", "two_fences")
 
 
 def generator_transport(shape: str) -> httpx.MockTransport:
     """Fireworks answering a reasoning generator's writer and extractor (``FakeLifeChat``'s replies)
     in one ``shape`` of ``REPLY_SHAPES``: plain JSON; reasoning in the content between think tags;
     the JSON fenced inside prose; reasoning kept apart in ``reasoning_content``; every reply cut at
-    its cap (``finish_reason`` length, the JSON unfinished); or ``reasoning_effort`` refused with
-    HTTP 400. The reasoning is counted in the usage as a provider counts it."""
+    its cap (``finish_reason`` length, the JSON unfinished); ``reasoning_effort`` refused with HTTP
+    400; or a drafted answer that must never be read as the day's: fenced inside reasoning cut at
+    its cap (``draft_in_cut_think``), fenced inside reasoning that never closed (``open_think``), or
+    fenced before the final fenced answer (``two_fences``). The reasoning is counted in the usage
+    as a provider counts it."""
     if shape not in REPLY_SHAPES:
         raise ValueError(f"no reply shape {shape!r}")
     chat = FakeLifeChat()
@@ -481,6 +485,12 @@ def generator_transport(shape: str) -> httpx.MockTransport:
             message["reasoning_content"], reasoning = "Let me plan the day first.", 40
         elif shape == "length":
             message["content"], finish = answer[: len(answer) // 2], "length"
+        elif shape == "draft_in_cut_think":
+            message["content"], finish, reasoning = f"<think>\nA draft:\n```json\n{answer}\n```\nNow check", "length", 40
+        elif shape == "open_think":
+            message["content"], reasoning = f"<think>\nA draft:\n```json\n{answer}\n```\n", 40
+        elif shape == "two_fences":
+            message["content"] = f"A draft:\n```json\n{answer}\n```\nThe answer:\n```json\n{answer}\n```"
         usage = {"prompt_tokens": len(json.dumps(body["messages"])) // 4, "completion_tokens": len(answer) // 4 + reasoning,
                  "completion_tokens_details": {"reasoning_tokens": reasoning}}
         return httpx.Response(200, json={"model": body["model"], "usage": usage,

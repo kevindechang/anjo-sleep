@@ -1,18 +1,19 @@
 """``probe-writer``: a few tiny writer calls on a core split's generator, to see the shape of its
 replies before a life is written (MIND's data).
 
-Each call is the writer's own (``life_v1.md``, at the writer's temperature, cap and reasoning
-effort) on a first day with no beats. What is printed is the reply's shape, never its text: the
-fields the message holds, the content's length and whether it carries think tags or a fence, the
-reasoning field's length, whether the answer (``generators.answer``) is a JSON object and passes
-the writer's own reading (``generate._read_day``), the finish reason, and the token counts as the
-provider gave them. Live (``live``), the calls are held first on Fireworks' pool at their worst
+Each call is the writer's own (``generate.writer_messages``, at the writer's temperature, cap and
+reasoning effort) on a first day: an odd call with no beats, an even one with two (``BEATS``), so
+a placement the writer gets wrong (counted from 1, say) shows. What is printed is the reply's
+shape, never its text: the fields the message holds, the content's length and whether it carries
+think tags or a fence, the reasoning field's length, whether an answer was taken from it or
+refused by a rule (``generators.answer``), whether that answer is a JSON object and passes the
+writer's own reading (``generate._read_day``), where its beats landed (``placement``: counts
+only), the finish reason, and the token counts as the provider gave them. Live (``live``), the calls are held first on Fireworks' pool at their worst
 case, under MIND's lock, and settled at what they cost; a call that fails costs its worst case.
 """
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -20,9 +21,9 @@ from typing import Any, Final
 from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Ledger
 from anjo.sleep.mind.apd import gates, generate, retry
-from anjo.sleep.mind.apd.generators import GENERATORS, Generator, answer
+from anjo.sleep.mind.apd.generate import Beat, GenerationFailed
+from anjo.sleep.mind.apd.generators import GENERATORS, Generator, Refused, answer
 from anjo.sleep.mind.apd.judging import Rate
-from anjo.sleep.mind.apd.types import LIFE_DAYS
 from anjo.sleep.mind.spark_provider import FIREWORKS
 from anjo.sleep.mind.sweep import lock_path, mind_lock
 from anjo.sleep.model_api import ChatResult, ModelApiError
@@ -35,20 +36,27 @@ FIELD: Final = "independent film"
 Call = Callable[..., ChatResult]  # ``fireworks_api.generate``'s signature
 
 
+BEATS: Final = (Beat("i1.o1", "the screening moved to Friday because the venue was double-booked", "plant"),
+                Beat("i2.s", "whether to send the rough cut to the festival before the sound mix is done", "ask"))
+MARKS: Final = {"i1.o1": "friday", "i2.s": "festival"}  # a word of each beat that its message holds
+
+
+def beats_for(number: int) -> tuple[Beat, ...]:
+    """Probe ``number``'s beats: two on an even call, none on an odd one."""
+    return BEATS if number % 2 == 0 else ()
+
+
 def messages(number: int) -> list[dict[str, Any]]:
-    """Probe ``number``'s writer call: day 1 of a life, no earlier days, no beats."""
-    payload = {"field": FIELD, "day": 1, "of": LIFE_DAYS, "date": generate.LIFE_START.isoformat(),
-               "variation": number, "earlier": [], "plant": [], "ask": []}
-    return [{"role": "system", "content": generate.LIFE_PROMPT.read_text(encoding="utf-8")},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    """Probe ``number``'s writer call: day 1 of a life, no earlier days."""
+    return generate.writer_messages(FIELD, 0, generate.LIFE_START, number, [], beats_for(number))
 
 
 def _count(found: object) -> object:
     return found if isinstance(found, int) and not isinstance(found, bool) else None
 
 
-def reply_shape(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """What a reply holds, none of its text."""
+def reply_shape(raw: Mapping[str, Any], beats: Sequence[Beat] = ()) -> dict[str, Any]:
+    """What a reply to a day with ``beats`` holds, none of its text."""
     choice = (raw.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content")
@@ -65,22 +73,53 @@ def reply_shape(raw: Mapping[str, Any]) -> dict[str, Any]:
         "total_tokens": _count(usage.get("total_tokens")),
         "reasoning_tokens": _count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens")),
     }
-    return {**shape, **_answer_shape(answer(text))}
+    return {**shape, "beats": len(beats), **_answer_shape(text, choice.get("finish_reason"), beats)}
 
 
-def _answer_shape(text: str) -> dict[str, Any]:
+def _answer_shape(text: str, finish: object, beats: Sequence[Beat]) -> dict[str, Any]:
+    unread: dict[str, Any] = {"answer_json": None, "answer_keys": None, "messages": None, **placement(None, beats)}
     try:
-        body = gates.json_object(text)
+        found = answer(text, finish if isinstance(finish, str) else None)
+    except Refused as refused:
+        return {"answer": f"refused ({refused.rule})", **unread, "writer_reads": "refused"}
+    try:
+        body = gates.json_object(found)
     except gates.GateError:
-        return {"answer_json": False, "answer_keys": None, "messages": None, "writer_reads": "not a JSON object"}
-    messages_ = body.get("messages")
+        return {"answer": "ok", **unread, "answer_json": False, "writer_reads": "not a JSON object"}
     try:
-        generate._read_day(text, [])
+        generate._read_day(found, beats)
         reads = "ok"
-    except generate.GenerationFailed as failed:
+    except GenerationFailed as failed:
         reads = f"{failed} (field {failed.field})"
-    return {"answer_json": True, "answer_keys": sorted(body), "writer_reads": reads,
-            "messages": len(messages_) if isinstance(messages_, list) else None}
+    texts = body.get("messages")
+    return {"answer": "ok", "answer_json": True, "answer_keys": sorted(body),
+            "messages": len(texts) if isinstance(texts, list) else None, **placement(body, beats), "writer_reads": reads}
+
+
+def placement(body: Mapping[str, Any] | None, beats: Sequence[Beat]) -> dict[str, Any]:
+    """Where a day's beats landed, as counts: whether ``placed`` is valid (each beat once, at a
+    message counted from 0), how many beats the message ``placed`` names holds, and how many the
+    message before it does (a writer counting from 1). ``None`` with no beats or no answer."""
+    if not beats or body is None:
+        return {"placed_valid": None, "beats_at_placed": None, "beats_one_before_placed": None}
+    texts, placed = body.get("messages"), body.get("placed")
+    if not isinstance(texts, list) or not isinstance(placed, dict):
+        return {"placed_valid": False, "beats_at_placed": 0, "beats_one_before_placed": 0}
+    try:
+        generate._check_placed(placed, beats, len(texts))
+        valid = True
+    except GenerationFailed:
+        valid = False
+    spots = [(placed.get(beat.id), MARKS[beat.id]) for beat in beats]
+    return {"placed_valid": valid, "beats_at_placed": sum(_holds(texts, spot, mark) for spot, mark in spots),
+            "beats_one_before_placed": sum(_holds(texts, spot, mark, back=1) for spot, mark in spots)}
+
+
+def _holds(texts: Sequence[object], spot: object, mark: str, *, back: int = 0) -> bool:
+    if not isinstance(spot, int) or isinstance(spot, bool) or not 0 <= spot - back < len(texts):
+        return False
+    text = texts[spot - back]
+    return isinstance(text, str) and mark in text.lower()
 
 
 def describe(number: int, shape: Mapping[str, Any]) -> str:
@@ -109,7 +148,8 @@ def run(generator: Generator, count: int, rate: Rate, out: Callable[[str], None]
             out(f"probe {number}: failed: {error}")
             continue
         found[-1] = rate.usd(result.input_tokens, result.output_tokens)
-        out(describe(number, {**reply_shape(seen[0] if seen else {}), "counted_out_tokens": result.output_tokens}))
+        shape = reply_shape(seen[0] if seen else {}, beats_for(number))
+        out(describe(number, {**shape, "counted_out_tokens": result.output_tokens}))
     return sum(found)
 
 
@@ -130,6 +170,6 @@ def live(generator: Generator, count: int, rate: Rate, ledger: Ledger, out: Call
 def plan_lines(generator: Generator, count: int, rate: Rate, pool: str) -> list[str]:
     worst = count * rate.worst
     return [f"Plan: probe-writer: {count} writer call(s) on {generator.name} ({generator.model}, reasoning effort "
-            f"{generator.reasoning_effort}), day 1 with no beats.",
+            f"{generator.reasoning_effort}), each a first day: the odd ones with no beats, the even ones with two beats.",
             f"Hold on {pool}: ${worst:.4f} ({count} x ${rate.worst:.4f}, each call at its cap), settled at what they "
             "cost.", "Prints each reply's shape, never its text.", "Nothing has run. Add --yes to start it."]

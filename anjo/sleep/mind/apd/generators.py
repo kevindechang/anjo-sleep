@@ -23,7 +23,9 @@ halted and ceilinged by the same code (``backend``, ``gen_batch``).
 - **Its answer only** (``answer``). A reasoning model may put its reasoning in the reply between
   think tags, or wrap its JSON in a fence with prose around it; the writer and the extractor read
   the answer, never the reasoning (which a reply's own reasoning field already keeps apart). A
-  reply cut at its cap stays cut, and fails as unreadable.
+  draft is never taken for the answer: a reply cut at its cap, one whose reasoning never closed,
+  and one with more than one fenced block outside its reasoning are refused (``Refused``), each by
+  its rule.
 
 Pure.
 """
@@ -107,16 +109,37 @@ def generator_of(life: Life) -> GeneratorName:
 
 _THINK: Final = re.compile(r"<think>.*?</think>", re.DOTALL)
 _FENCED: Final = re.compile(r"```[A-Za-z]*[ \t]*\n(.*?)```", re.DOTALL)
+CUT: Final = "cut"
+OPEN_THINK: Final = "open_think"
+FENCES: Final = "fences"
 
 
-def answer(text: str) -> str:
-    """A generator's reply as its answer: reasoning between think tags taken out, and a fenced
-    JSON answer taken out of the prose around it. A reply that is its answer already is unchanged."""
-    body = _THINK.sub("", text).strip()
+class Refused(ValueError):
+    """A reply that can't be taken for its answer, and the ``rule`` it broke. Its message is the
+    code's own, never the reply's text."""
+
+    def __init__(self, rule: str, message: str) -> None:
+        super().__init__(message)
+        self.rule = rule
+
+
+def answer(text: str, finish_reason: str | None = None) -> str:
+    """A generator's reply as its answer: closed reasoning taken out (and reasoning the chat
+    template opened, up to its close), and the one fenced answer taken out of the prose around it.
+    A reply that is its answer already is unchanged. Refused: a reply cut at its cap (``CUT``),
+    reasoning left open (``OPEN_THINK``), more than one fenced block outside it (``FENCES``)."""
+    if finish_reason == "length":
+        raise Refused(CUT, "a reply cut at its cap")
+    body = _THINK.sub("", text)
+    if "<think>" in body:
+        raise Refused(OPEN_THINK, "a reply whose reasoning never closed")
+    body = body.rsplit("</think>", 1)[-1].strip()
     if body.startswith("{"):
         return body
-    fenced = _FENCED.search(body)
-    return fenced.group(1).strip() if fenced else body
+    fenced = _FENCED.findall(body)
+    if len(fenced) > 1:
+        raise Refused(FENCES, "a reply with more than one fenced block")
+    return fenced[0].strip() if fenced else body
 
 
 def mixed(lives: Iterable[Life], model: str) -> tuple[str, ...]:

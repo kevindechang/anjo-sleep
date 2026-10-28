@@ -245,13 +245,15 @@ def _name(spec: PairSpec) -> str:
 
 
 def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
-    log = CallLog()
+    log, made = CallLog(), None
     try:
         made = generate_pair(spec, backend, log)
     except SKIPPED as error:
-        first = pair_id(pair_template(spec.template).field, spec.seed)
-        data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
         return _Outcome(spec, _Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
+    finally:
+        if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
+            first = pair_id(pair_template(spec.template).field, spec.seed)
+            data.save_calls(failed_log_id(first), [call.to_json() for call in log.calls])
     data.save_made(made.pair.id, made_record(backend))
     data.save_calls(made.pair.id, [call.to_json() for call in log.calls])
     data.save_pair(made.pair)
