@@ -47,7 +47,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -62,6 +62,9 @@ from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
 from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
+
+if TYPE_CHECKING:  # the limiter waits on this module's halt, so it imports this one
+    from anjo.sleep.mind.apd.limiter import Limiter
 from anjo.sleep.model_api import ChatResult, ModelApiError, RateLimited
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
@@ -130,6 +133,7 @@ class Backend:
     generator_rate: Rate | None = None  # its list prices, when it isn't Spark Open
     read_by: Reader = SPARK_READER  # who reads a core split's and the pairs' gates (``readers``), through ``reader``
     reader_rate: Rate | None = None  # its list prices, when it isn't Spark Open
+    read_limit: Limiter | None = field(default=None, compare=False)  # the run's one limit on the reader's calls
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -488,11 +492,13 @@ def held_attempt(backend: Backend, key: str, calls: GenCalls = WORST_LIFE,
     """One attempt's writer, reader and auditor, at most ``calls``, its worst case held first on
     every pool it uses (``attempt_holds``: the provider's, with the extra tries its calls share, the
     reader's own when it has one, and Muse Spark's), each try logged to ``log`` when given.
-    Nothing starts once ``backend.halt`` is set; a hold without room waits (``_room``)."""
+    Nothing starts once ``backend.halt`` is set, a read queued at the run's limiter
+    (``read_limit``) included; a hold without room waits (``_room``)."""
     halted(backend.halt)
     retries = Retries(calls.retries, sleep=backend.sleep, halt=backend.halt)
     spark = CountedChat(backend.life_chat, calls.writes, write_rate(backend), retries, halt=backend.halt, log=log)
-    reader = CountedChat(backend.reader, calls.reads, read_rate(backend), retries, halt=backend.halt, log=log)
+    reads = backend.reader if backend.read_limit is None else backend.read_limit.limit(backend.reader, backend.halt)
+    reader = CountedChat(reads, calls.reads, read_rate(backend), retries, halt=backend.halt, log=log)
     auditor = CountedChat(backend.auditor, calls.muse, None if backend.rates is None else backend.rates[MUSE],
                           Retries(calls.retries, sleep=backend.sleep, halt=backend.halt, rate_limits_only=True),
                           halt=backend.halt, log=log)

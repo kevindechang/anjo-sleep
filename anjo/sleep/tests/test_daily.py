@@ -13,6 +13,8 @@ import pytest
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
 from anjo.sleep.night import daily
+from anjo.sleep.night.nightlog import STORY
+from anjo.sleep.night.story import SELF_MODEL_NOT_YET, UNCOUNTED, Morning, NotRun, Wake, story_from
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.sim.day import DayRun, TurnFailed, run_day
 from anjo.sleep.types import NightResult
@@ -224,6 +226,9 @@ def test_night_phase_runs_dailies_after_morning_and_survives_its_failure(tmp_pat
     assert [(s["step"], s["status"]) for s in steps] == [("morning", "ok"), ("dailies", "failed")]
     assert steps[0]["seconds"] == 90.0 and steps[1]["seconds"] == 12.5  # the card's GPU-minutes, measured
     assert steps[1]["error"] == "RuntimeError" and "thread" not in json.dumps(steps)  # a type, never a message
+    told = story_from(json.loads((result.log_path.parent / STORY).read_text()))  # told again after the line
+    assert told.wake == Wake(Morning(NotRun(UNCOUNTED), 0), NotRun(SELF_MODEL_NOT_YET))  # the morning, not "stopped at dailies"
+    assert "dailies" not in json.dumps(told.record())
 
     ran: list[str] = []
     daily.run_night_phase("acct", "founder", AT_2AM, markers=_good_day(tmp_path / "again"),

@@ -494,7 +494,7 @@ class NightRunner:
         kept = self.deps.transcripts(p.uid).for_night(p.night)
         if kept:  # a rerun of the night reuses the practice it already paid for
             p.store.add([transcript.evidence() for transcript in kept])
-            return {"scenes": len(kept), "reused": True, "homework": None}
+            return {"scenes": len(kept), "reused": True, "reused_from": p.night.isoformat(), "homework": None}
         started = self._timer(), self.deps.retries()
         p.spend.part = "practice"
         runner, channel = channel_night.practice(self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night)

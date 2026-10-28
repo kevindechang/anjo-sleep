@@ -2,7 +2,8 @@
 accelerated life per arm on fresh synthetic accounts, then ``--report`` over what they wrote.
 
     python -m anjo.sleep.tools.sleep_objective_live --account seed=<id> --account today=<id> \\
-        [--account fold=<id>] --persona founder --days 5 --night-usd <a measured night's cost_usd> [--yes]
+        [--account fold=<id>] --token-file seed=<path> --token-file today=<path> [--token-file fold=<path>] \\
+        --persona founder --days 5 --night-usd <a measured night's cost_usd> [--yes]
     python -m anjo.sleep.tools.sleep_objective_live --account seed=<id> ... --report
 
 **Arms**, each a whole accelerated run (``sim.accelerated``, the same persona, seed and virtual dates):
@@ -23,9 +24,14 @@ A control runs after the arm it is matched to, with a match file of that arm's m
 
 **Never a real night.** Every account must be new: one that already has a results folder is refused,
 so no arm ever trains on a running life. Each run names a persona; the wiring refuses a persona on an
-account that isn't registered synthetic. The runs inherit this shell's environment, with the switches
-replaced by the arm's; the thought channel (``ANJO_SLEEP_CHANNEL``) is the shell's, so on or off it is
-the same in every arm, and a claim and its control differ in their objective alone.
+account that isn't registered synthetic. Each arm chats as its own account: ``--token-file <arm>=<path>``
+names a file holding a signed-in token for that arm's account, read when ``--yes`` starts and never
+printed or logged (the plan says only whether each is there and non-empty). ``--yes`` needs one for
+every arm. The day itself refuses a token that isn't its account's (``app.sim_transport``). The runs
+inherit this shell's environment, with the switches replaced by the arm's and the shell's own
+``ANJO_SLEEP_SIM_TOKEN`` by the arm's token; the thought channel (``ANJO_SLEEP_CHANNEL``) is the
+shell's, so on or off it is the same in every arm, and a claim and its control differ in their
+objective alone.
 
 **Holds.** The plan's worst case is priced at ``--night-usd`` (a measured night's ``cost_usd``, today's
 objective) plus each arm's added A100 minutes (``ADDED_A100_MIN``, estimates; a control at its match
@@ -76,6 +82,7 @@ ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8}
 TODAY_TRAIN_MIN: Final = 2.83  # today's training minutes, measured 2026-10-28: a control's budget holds them too
 MISMATCH: Final = 0.05
 SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, PRESSURE_ENV)
+SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # app.sim_transport's: the account a day's lines post as
 HOLD_KEY: Final = "sleep-objective-live"
 WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.sleep.app.sim_transport:simulate",
                  "--morning", "anjo.sleep.app.morning:build")
@@ -111,9 +118,11 @@ def command(account: str, persona: str, days: int, start: date, match_file: Path
             *(["--match-file", str(match_file)] if match_file is not None else [])]
 
 
-def arm_env(arm: str, base: Mapping[str, str]) -> dict[str, str]:
-    """The run's environment: the switches cleared, then the arm's own, sleep pressure off."""
-    return {key: value for key, value in base.items() if key not in SWITCHES} | dict(ENVS[arm]) | {PRESSURE_ENV: "0"}
+def arm_env(arm: str, base: Mapping[str, str], token: str) -> dict[str, str]:
+    """The run's environment: the switches cleared, then the arm's own, sleep pressure off, and its
+    account's token in place of the shell's."""
+    kept = {key: value for key, value in base.items() if key not in SWITCHES}
+    return kept | dict(ENVS[arm]) | {PRESSURE_ENV: "0", SIM_TOKEN_ENV: token}
 
 
 def nights(root: Path, account: str) -> list[dict[str, Any]]:
@@ -222,7 +231,35 @@ def _accounts(pairs: Sequence[str]) -> dict[str, str]:
     return found
 
 
-def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, out: Callable[[str], None]) -> dict[str, float]:
+def _token_files(pairs: Sequence[str], chosen: Sequence[str]) -> dict[str, Path]:
+    found: dict[str, Path] = {}
+    for pair in pairs:
+        arm, _, path = pair.partition("=")
+        if not path or arm in found or arm not in chosen:
+            raise ValueError("--token-file is <arm>=<path>, once per arm that runs")
+        found[arm] = Path(path)
+    return found
+
+
+def _token(path: Path | None) -> str | None:
+    """The token in ``path``, or None when it isn't given, can't be read or is empty. Never printed."""
+    if path is None:
+        return None
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return token or None
+
+
+def _token_line(arm: str, path: Path | None) -> str:
+    if path is None:
+        return f"    {arm}: no token file"
+    return f"    {arm}: token file {'ok' if _token(path) else 'missing or empty'}"
+
+
+def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, files: Mapping[str, Path],
+          out: Callable[[str], None]) -> dict[str, float]:
     priced = {arm: arm_usd(arm, args.days, args.night_usd or 0.0) for arm in chosen}
     out(f"sleep objective live comparison: plan only, nothing run, nothing held ({args.persona}, {args.days} days "
         f"from {start.isoformat()}, {len(chosen)} arms: {', '.join(chosen)})")
@@ -231,6 +268,7 @@ def _plan(args: argparse.Namespace, chosen: Sequence[str], start: date, out: Cal
         match = f" --match-file <{CONTROL_OF[arm]} arm's minutes per night>" if arm in CONTROL_OF else ""
         out(f"  {arm}: {env} {' '.join(command('<' + arm + ' account>', args.persona, args.days, start)[1:])}{match}")
         out(f"    worst case ${priced[arm]:.2f} (estimate)")
+        out(_token_line(arm, files.get(arm)))
     out(f"  thought channel: {os.environ.get(CHANNEL_ENV) or 'off'} ({CHANNEL_ENV}, this shell's), the same in every arm")
     if "dreams" in chosen:
         out("  dreams: the app must wire the core's dream seeds into NightDeps.dreams first; unwired, its dataset "
@@ -250,8 +288,9 @@ def _hold(ledger: Ledger, key: str, amount: float) -> Reservation | None:
     return found
 
 
-def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], chosen: Sequence[str], start: date,
-              priced: dict[str, float], run: Callable[..., Any], out: Callable[[str], None], folder: Path) -> int:
+def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], tokens: Mapping[str, str], chosen: Sequence[str],
+              start: date, priced: dict[str, float], run: Callable[..., Any], out: Callable[[str], None],
+              folder: Path) -> int:
     root, ledger = results_root(), default_ledger()
     held: Reservation | None = None
     try:
@@ -273,8 +312,8 @@ def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], chosen: Seq
             if ledger.remaining(POOL) < priced[arm]:
                 out(f"{arm}: {POOL} has under its ${priced[arm]:.2f}; it and the arms after it don't run")
                 return 1
-            done = run(command(accounts[arm], args.persona, args.days, start, match_file), env=arm_env(arm, os.environ),
-                       check=False)
+            done = run(command(accounts[arm], args.persona, args.days, start, match_file),
+                       env=arm_env(arm, os.environ, tokens[arm]), check=False)
             if done.returncode != 0:
                 out(f"{arm}: the run exited with {done.returncode}; the arms after it don't run")
                 return 1
@@ -292,6 +331,8 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
          out: Callable[[str], None] = print, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
     parser = argparse.ArgumentParser(prog="sleep_objective_live", description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--account", action="append", default=[], help="<arm>=<synthetic account id>")
+    parser.add_argument("--token-file", action="append", default=[],
+                        help="<arm>=<file holding a signed-in token for that arm's account>")
     parser.add_argument("--persona", default="founder")
     parser.add_argument("--days", type=int, default=5, choices=range(1, 15), metavar="N")
     parser.add_argument("--night-usd", type=float, default=None, help="a measured night's cost_usd")
@@ -301,17 +342,23 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     try:
         accounts = _accounts(args.account)
         chosen = arms(accounts)
+        files = _token_files(args.token_file, chosen)
     except ValueError as error:
         parser.error(str(error))
     if args.report:
         report(results_root(), accounts, out)
         return 0
     start = (now() - timedelta(days=args.days + 1)).date()  # one past start for every arm: the same virtual nights
-    priced = _plan(args, chosen, start, out)
+    priced = _plan(args, chosen, start, files, out)
     if not args.yes:
         return 0
     if args.night_usd is None or args.night_usd <= 0:
         parser.error("--yes needs --night-usd, a measured night's cost_usd")
+    tokens = {arm: token for arm in chosen if (token := _token(files.get(arm)))}
+    lacking = [arm for arm in chosen if arm not in tokens]
+    if lacking:
+        parser.error(f"--yes needs a non-empty --token-file for every arm, so each chats as its own account: "
+                     f"{', '.join(lacking)}")
     root = results_root()
     used = [accounts[arm] for arm in chosen if (root / accounts[arm]).exists()]
     if used:
@@ -320,7 +367,7 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     if left < sum(priced.values()):
         parser.error(f"{POOL} has ${left:.2f} left, under the plan's ${sum(priced.values()):.2f}")
     with tempfile.TemporaryDirectory(prefix="sleep-objective-match-") as folder:
-        return _run_arms(args, accounts, chosen, start, priced, run, out, Path(folder))
+        return _run_arms(args, accounts, tokens, chosen, start, priced, run, out, Path(folder))
 
 
 if __name__ == "__main__":

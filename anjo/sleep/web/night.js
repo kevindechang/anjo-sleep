@@ -1,8 +1,10 @@
 // Her latest night as one loop (one system): how she slept, then dream → rehearse → learn → check →
 // wake, left to right, from the /mind payload's story (demo/night_view.py). mind.js fetches /mind
 // once and hands the payload over (demo:mind), so this draws without a request of its own. A stage
-// that didn't run is greyed with the reason the night wrote; a nap stops after the dream. Plain words
-// first, exact numbers second, and every word goes in through textContent.
+// that didn't run is greyed with the reason the night wrote; a nap stops after the dream; practice a
+// rerun reused says whose it was. The lede claims the whole loop only when the story says it ran
+// (``rehearsed_the_dream``), else only what happened. Plain words first, exact numbers second, and
+// every word goes in through textContent.
 (() => {
   "use strict";
 
@@ -42,6 +44,7 @@
   function lineOf(stage) {
     if (stage.state === "failed") return element("p", "stage-line", fill(copy.story_failed_line, { step: stage.step }));
     if (stage.state === "not_run") return element("p", "stage-line", stage.reason);
+    if (stage.state === "reused") return plain(copy.story_line_reused, { n: stage.key, night: stage.reused_from });
     if (stage.stage === "check") return plain(stage.promoted ? copy.story_line_check : copy.story_line_check_held, { n: stage.key, of: stage.of });
     if (stage.key === null) return element("p", "stage-line", copy.story_line_wake_uncounted);
     return plain(copy[`story_line_${stage.stage}`], { n: stage.key });
@@ -94,7 +97,8 @@
     box.setAttribute("data-state", stage.state);
     const head = element("p", "stage-head");
     head.append(element("span", "stage-name", copy[`story_stage_${stage.stage}`] || stage.stage));
-    if (stage.state !== "ran") head.append(element("span", "tag", stage.state === "failed" ? copy.story_failed : copy.story_not_run));
+    const said = { failed: copy.story_failed, not_run: copy.story_not_run, reused: copy.story_reused }[stage.state];
+    if (said) head.append(element("span", "tag", said));
     box.append(head, lineOf(stage));
     if (stage.numbers.length) box.append(numbers(stage));
     if (stage.gates && stage.gates.length) box.append(gates(stage));
@@ -103,9 +107,18 @@
     return box;
   }
 
+  // The lede says only what the night did: the whole loop when it ran, else the plain line.
+  function claim(view) {
+    const lede = byId("night-loop-lede");
+    const ok = Boolean(view && view.state === "ok");
+    lede.textContent = ok ? (view.rehearsed_the_dream ? copy.story_lede : copy.story_lede_plain) : "";
+    lede.hidden = !ok;
+  }
+
   function draw(view) {
     const asof = byId("night-loop-asof");
     const body = byId("night-loop-body");
+    claim(view);
     if (!view || view.state !== "ok") {
       asof.textContent = view && view.state === "none" ? copy.story_none : copy.story_unavailable;
       body.replaceChildren();

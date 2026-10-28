@@ -11,6 +11,7 @@ from anjo.sleep.mind import receipt
 from anjo.sleep.night.deps import InquiryOutcome, StudyOutcome
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.nightlog import NightLog
+from anjo.sleep.night.nightlog import safe_error as safe_error  # the log's own (the story's failures use it); read here too
 from anjo.sleep.ports import EvidenceStore, TargetStore
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.types import CheckpointRef, Choice, GateResult, NightStatus, Probe
@@ -74,13 +75,6 @@ class PersonNight:
     @property
     def napped(self) -> bool:
         return self.status == "napped"
-
-
-def safe_error(error: BaseException) -> str:
-    """The error's type, and its message only when Sleep raised it (never another library's text,
-    which could quote a request)."""
-    name = type(error).__name__
-    return f"{name}: {error}" if type(error).__module__.startswith("anjo.sleep") else name
 
 
 def checkpoint_id(ckpt: CheckpointRef | None) -> str | None:

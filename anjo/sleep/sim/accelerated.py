@@ -26,7 +26,12 @@ one clock. A start after that is refused before any day is simulated or any nigh
 
 Each night naps or sleeps deep by the same decision as every night (``night/sleep_pressure.py``,
 under the wiring's policy), and the report says which. After each night that slept deep the morning
-probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Real runs train synthetic
+probe run scores every arm (`probes.morning`); a nap runs no GPU morning. Each morning is logged in
+its night's log as the daily run logs it (``night/daily.py``), ``ok`` or ``failed`` with its reason,
+and the night's story is told again with its wake. A judge that fails one morning never stops the
+run: the next night goes on, the report says which morning failed, and the command exits 3
+(``UNSCORED_EXIT``) when every night ran but a morning failed. The morning's own refusal
+(``MorningError``: a rerun, or a checkpoint that moved since the night) still stops it. Real runs train synthetic
 people only, on the runner ``ANJO_SLEEP_TRAIN_RUNNER`` names (``train/runners/choice.py``): Modal by
 default, one call a night, or Colab, one VM per life (``ColabLives``).
 """
@@ -47,13 +52,14 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+from anjo.sleep.night.daily import UNSCORED_EXIT, log_failed_morning, morning_outcome, morning_receipt
 from anjo.sleep.night.deps import NightDeps, NightOptions
 from anjo.sleep.night.dreams import Terms
 from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
-from anjo.sleep.probes.morning import run_morning
+from anjo.sleep.probes.morning import MorningError, run_morning
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
 
@@ -147,6 +153,28 @@ def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: M
     os.replace(pending, path)
 
 
+def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult) -> None:
+    """The morning probe run after a night, logged in its night's log, and the night's story told
+    again with its wake. A failure is that morning's alone; the morning's refusal stops the run."""
+    assert rig.score is not None
+    log, began, failure = NightLog(result.log_path.parent), rig.timer(), None
+    try:
+        done = rig.score(uid, night, label, result)
+    except MorningError:
+        raise  # a rerun, or a checkpoint that moved since the night: the run's own rule broke
+    except Exception as error:  # a judge that can't be read, timed out or is down: this morning only
+        failure = error
+    finally:
+        seconds = max(0.0, rig.timer() - began)
+        if rig.on_scoring is not None:
+            rig.on_scoring(uid, seconds)
+    if failure is not None:
+        log_failed_morning(log, night, failure, seconds)
+    else:
+        log.step("morning", "ok", uses="new", system=None, **morning_receipt(done, seconds))
+    log.tell(night, result.status)
+
+
 def run_accelerated_batch(
     lives: Sequence[tuple[str, Persona]], days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
     label: str = "development", sweep: Sweep | None = None,
@@ -182,10 +210,7 @@ def run_accelerated_batch(
         if rig.score is not None:
             for uid, result in results.items():
                 if result.status not in ("failed", "napped"):  # nothing new to score, and a nap runs no GPU morning
-                    began = rig.timer()
-                    rig.score(uid, night, kind, result)
-                    if rig.on_scoring is not None:
-                        rig.on_scoring(uid, max(0.0, rig.timer() - began))
+                    _morning(rig, uid, night, kind, result)
     return out
 
 
@@ -240,11 +265,19 @@ def _report(
     digest = hashlib.sha256(json.dumps([summaries, timeless], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
-               "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), **_trained(r)}
+               "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), "morning": morning_outcome(r),
+               **_trained(r)}
               for s, r in zip(summaries, results, strict=True)]
     return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
             "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
+
+
+def _exit(results: Sequence[NightResult]) -> int:
+    """1 when a night failed; ``UNSCORED_EXIT`` (3) when every night ran but a morning failed; else 0."""
+    if any(r.status == "failed" for r in results):
+        return 1
+    return UNSCORED_EXIT if any(morning_outcome(r).startswith("failed") for r in results) else 0
 
 
 def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: datetime) -> date:
@@ -269,7 +302,7 @@ def _fake(days: int, start: date | None, seed: int, mind: bool, parser: argparse
         results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
-    return 0 if all(r.status != "failed" for r in results) else 1
+        return _exit(results)  # while the run's folder still holds its logs
 
 
 def _named(path: str) -> Any:
@@ -353,7 +386,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     sha = git_sha()
     print(json.dumps({uid: _report(done, fake=False, days=args.days, sha=sha) for uid, done in results.items()},
                      indent=1, sort_keys=True))
-    return 0 if all(r.status != "failed" for done in results.values() for r in done) else 1
+    return _exit([r for done in results.values() for r in done])
 
 
 def main(argv: Sequence[str] | None = None) -> int:

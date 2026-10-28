@@ -19,7 +19,7 @@ from anjo.sleep import fireworks_api
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, retry
+from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_args, gen_batch, limiter, retry
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.mind.apd.limiter import Limiter
 from anjo.sleep.mind.apd.live import RunsFailed
@@ -64,6 +64,12 @@ def _jittered(wait: float, base: float) -> bool:
     return base * low <= wait <= min(base * high, retry.MAX_WAIT_S)
 
 
+def _hinted(wait: float, hint: float) -> bool:
+    """A hinted wait: the hint, capped, plus up to ``retry.HINT_JITTER`` of it."""
+    base = min(hint, retry.MAX_WAIT_S)
+    return base <= wait <= base * (1.0 + retry.HINT_JITTER)
+
+
 # ── A 429 waits and tries again ───────────────────────────────────────────────
 
 
@@ -86,12 +92,20 @@ def test_a_429_then_a_reply_succeeds_within_one_attempt_unbilled(tmp_path: Path)
     assert not log.failures
 
 
-@pytest.mark.parametrize(("hint", "waited"), [(17.0, 17.0), (240.0, retry.MAX_WAIT_S)])
-def test_a_429s_retry_hint_is_honoured_up_to_the_cap(tmp_path: Path, hint: float, waited: float) -> None:
+@pytest.mark.parametrize("hint", [17.0, 240.0])
+def test_a_429s_retry_hint_is_honoured_up_to_the_cap(tmp_path: Path, hint: float) -> None:
     slept: list[float] = []
     reader = LimitedFirst(fakes.FakeGateReader(), 1, hint=hint)
     assert gen_batch.generate_life(SPEC, _backend(tmp_path, slept, reader=reader)).attempts == 1
-    assert slept == [waited]
+    assert len(slept) == 1 and _hinted(slept[0], hint)
+
+
+def test_a_hinted_wait_is_jittered_so_calls_given_one_hint_part() -> None:
+    # Calls answered with the same hint wait the hint plus up to HINT_JITTER of it, not together
+    assert retry.rate_limit_wait(1, 17.0, lambda: 0.0) == 17.0
+    assert retry.rate_limit_wait(1, 17.0, lambda: 1.0) == pytest.approx(17.0 * (1.0 + retry.HINT_JITTER))
+    assert retry.rate_limit_wait(1, 240.0, lambda: 0.5) == pytest.approx(retry.MAX_WAIT_S * (1.0 + retry.HINT_JITTER / 2))
+    assert 0.0 < retry.HINT_JITTER <= 0.2
 
 
 def test_repeated_429s_exhaust_the_tries_then_the_next_attempt_cools_down(tmp_path: Path) -> None:
@@ -152,7 +166,7 @@ def test_the_writer_on_fireworks_waits_out_a_429(tmp_path: Path) -> None:
     slept: list[float] = []
     writer = LimitedFirst(fakes.FakeLifeChat(), 2, kind="write", hint=3.0)
     made = gen_batch.generate_life(SPEC, _backend(tmp_path, slept, life_chat=writer))
-    assert made.attempts == 1 and slept == [3.0, 3.0]
+    assert made.attempts == 1 and len(slept) == 2 and all(_hinted(wait, 3.0) for wait in slept)
 
 
 # ── Where a 429 and its hint come from ────────────────────────────────────────
@@ -211,7 +225,7 @@ def test_the_limiter_never_exceeds_its_count_under_parallel_attempts(tmp_path: P
     # Arrange: four lives side by side, their reads through one limiter of two
     specs = [spec for spec in core_splits.core_specs("core-train") if spec.prevalence > 0][:4]
     counting = Counting()
-    backend = _backend(tmp_path, [], reader=Limiter(2).limit(counting))
+    backend = _backend(tmp_path, [], reader=counting, read_limit=Limiter(2))
 
     # Act
     gen_batch.generate_lives(DataDir(tmp_path / "pilot"), specs, backend, lambda line: None, parallel=4)
@@ -236,12 +250,123 @@ def test_the_limiter_paces_its_starts_per_minute() -> None:
         Limiter(0)
 
 
+# ── A kill reaches the limiter ────────────────────────────────────────────────
+
+
+REPLY = ChatResult("{}", (), "gemini", 1, 1, "stop")
+
+
+class Held:
+    """A chat that records each call and holds it until ``release`` is set."""
+
+    def __init__(self) -> None:
+        self.sent, self.entered, self.release = list[str](), threading.Event(), threading.Event()
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        self.sent.append(str(model))
+        self.entered.set()
+        self.release.wait(5.0)
+        return REPLY
+
+
+def _in_thread(call: Any, *args: Any) -> tuple[threading.Thread, list[BaseException]]:
+    raised: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            call(*args)
+        except BaseException as error:  # noqa: BLE001 - the test reads what the call raised
+            raised.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, raised
+
+
+def test_a_kill_reaches_a_read_queued_at_the_limiter() -> None:
+    # Arrange: the limiter's one place taken by a read in flight, a second read queued behind it
+    halt, chat = threading.Event(), Held()
+    limited = Limiter(1).limit(chat, halt)
+    first, _ = _in_thread(limited, "first", [], None, 1.0)
+    assert chat.entered.wait(5.0)
+    second, raised = _in_thread(limited, "second", [], None, 1.0)
+
+    # Act: the command ends, then the read in flight lets its place go
+    halt.set()
+    chat.release.set()
+    first.join(5.0)
+    second.join(5.0)
+
+    # Assert: the queued read never reached the model
+    assert chat.sent == ["first"]
+    assert len(raised) == 1 and isinstance(raised[0], backends.Halted)
+
+
+def test_a_kill_ends_a_paced_wait_at_once() -> None:
+    # Arrange: one read a minute, on the real clock: the second start is 60 s away
+    halt, chat = threading.Event(), Held()
+    chat.release.set()
+    limited = Limiter(4, per_minute=1.0).limit(chat, halt)
+    limited("first", [], None, 1.0)
+    killer = threading.Timer(0.05, halt.set)
+    started = time.monotonic()
+
+    # Act
+    killer.start()
+    with pytest.raises(backends.Halted):
+        limited("second", [], None, 1.0)
+
+    # Assert: the wait ended with the kill, and nothing more was sent
+    assert time.monotonic() - started < 5.0
+    assert chat.sent == ["first"]
+
+
+def test_an_attempts_reader_waits_at_the_limiter_on_the_commands_halt(tmp_path: Path) -> None:
+    # Arrange: the run's limiter of one held elsewhere; the attempt's reader queued behind it
+    halt, chat, limit = threading.Event(), Held(), Limiter(1)
+    chat.release.set()
+    backend = dataclasses.replace(_backend(tmp_path, [], reader=chat, read_limit=limit), halt=halt, ledger=None)
+    with backends.held_attempt(backend, "k", backends.life_calls(SPEC.prevalence)) as (_, reader, _auditor):
+        with limit.slot():
+            queued, raised = _in_thread(reader, "gemini", [{"role": "user", "content": "x"}], None, 1.0)
+            time.sleep(0.05)  # let it pass the reader's own halt check and queue at the limiter
+
+            # Act
+            halt.set()
+        queued.join(5.0)
+
+    # Assert
+    assert chat.sent == []
+    assert len(raised) == 1 and isinstance(raised[0], backends.Halted)
+
+
+# ── The plan ──────────────────────────────────────────────────────────────────
+
+
 def test_the_plan_prints_the_vertex_limits(tmp_path: Path) -> None:
     lines: list[str] = []
     assert cli.main([*LIVE, "--data", str(tmp_path), "generate", "--split", "core-train"], out=lines.append) == 0
-    assert any("Gemini reads: at most 4 at once across the run" in line for line in lines)
+    paced = f"their starts paced to {limiter.DEFAULT_PER_MINUTE:g} a minute (a conservative default"
+    assert any(f"Gemini reads: at most 4 at once across the run, {paced}" in line for line in lines)
     lines.clear()
     assert cli.main([*LIVE, "--data", str(tmp_path), "generate", "--split", "core-train", "--vertex-concurrency", "2",
-                     "--vertex-rpm", "30"], out=lines.append) == 0
-    assert any("at most 2 at once across the run, their starts paced to 30 a minute" in line for line in lines)
+                     "--vertex-rpm", "12"], out=lines.append) == 0
+    assert any("at most 2 at once across the run, their starts paced to 12 a minute;" in line for line in lines)
     assert any(f"cools down {retry.ATTEMPT_COOL_DOWN_S:g} s" in line for line in lines)
+    lines.clear()
+    assert cli.main([*LIVE, "--data", str(tmp_path), "generate", "--split", "core-train", "--vertex-rpm", "0"],
+                    out=lines.append) == 0
+    assert any("Gemini reads: at most 4 at once across the run, unpaced;" in line for line in lines)
+
+
+def test_the_default_paces_live_reads_only() -> None:
+    # Live, the run's limiter paces at the default rate; the fakes stand in for Vertex and aren't paced
+    assert limiter.DEFAULT_PER_MINUTE == 30.0
+    parser = cli._parser()
+    live = parser.parse_args([*LIVE, "--data", "d", "generate", "--split", "core-train"])
+    fake = parser.parse_args(["--fake", "generate", "--split", "core-train"])
+    applied = gen_args.apply(live, dataclasses.replace(backends.fake_backend(FIREWORKS), fake=False))
+    assert applied.read_limit is not None and applied.read_limit.per_minute == limiter.DEFAULT_PER_MINUTE
+    faked = gen_args.apply(fake, backends.fake_backend(FIREWORKS))
+    assert faked.read_limit is not None and faked.read_limit.per_minute is None

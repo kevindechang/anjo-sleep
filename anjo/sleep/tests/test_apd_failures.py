@@ -412,7 +412,7 @@ def test_probe_writer_is_planned_first_and_refused_without_live(monkeypatch: pyt
 
 
 def test_probe_writer_runs_held_and_settles_what_it_cost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Arrange: the shared ledger in a temporary data dir, Fireworks answering with think tags
+    # Arrange: the shared ledger in a tmp_path data dir, Fireworks answering with think tags
     recorded, lines = Recorded("think"), list[str]()
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
     monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-test")
