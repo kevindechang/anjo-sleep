@@ -18,6 +18,7 @@ from anjo.sleep.budget import Ledger
 from anjo.sleep.demo import daily_lines, dailies, words
 from anjo.sleep.demo.daily_lines import DailyLines, DailyLinesError
 from anjo.sleep.demo.dailies import DailiesError, DailySources, NightFiles, dailies_view, one_line
+from anjo.sleep.demo.panel import PanelError
 from anjo.sleep.demo.heldout import HeldOutText
 from anjo.sleep.demo.starters import Side
 from anjo.sleep.night.holds import usd
@@ -128,6 +129,11 @@ def _sources(nights: list[NightFiles], /, **changes: Any) -> DailySources:
     return DailySources(**{**base, **changes})
 
 
+def _view(sources: DailySources, held: HeldOutText, **kw: Any) -> dict[str, Any]:
+    """The card with the reply check passing everything unless a test says otherwise."""
+    return dailies_view(sources, held, **{"passes": lambda _text: True, **kw})
+
+
 TWO = [NightFiles(_summary(1, "promoted"), _steps()), NightFiles(_summary(2, "promoted"), _steps())]
 NOBODY = HeldOutText(())
 
@@ -136,7 +142,7 @@ NOBODY = HeldOutText(())
 
 
 def test_dailies_card_sections_from_a_night() -> None:
-    card = dailies_view(_sources(TWO), NOBODY)
+    card = _view(_sources(TWO), NOBODY)
     assert (card["state"], card["night"], card["date"], card["status"]) == ("ok", 2, day(2).isoformat(), "promoted")
     assert card["morning"] == day(3).isoformat()  # the night's clock: the morning after it, never the server's
     assert [(n["night"], n["date"]) for n in card["nights"]] == [(2, day(2).isoformat()), (1, day(1).isoformat())]
@@ -163,23 +169,31 @@ def test_dailies_card_sections_from_a_night() -> None:
     assert (cost["state"], cost["source"]) == ("ok", "summary")
     assert [part["part"] for part in cost["parts"]] == list(dailies.CARD_PARTS)
 
-    first = dailies_view(_sources(TWO), NOBODY, night=1)  # a card by night
+    first = _view(_sources(TWO), NOBODY, night=1)  # a card by night
     assert (first["night"], first["line"]["before_night"], first["line"]["before"]["text"]) == (
         1, 0, "From base.")  # night one's before is the base model
     assert [q["subject"]["text"] for q in first["learned"]["questions"]] == ["An older question from night one"]
     with pytest.raises(DailiesError):
-        dailies_view(_sources(TWO), NOBODY, night=3)
+        _view(_sources(TWO), NOBODY, night=3)
+
+
+def test_a_malformed_night_fails_where_it_is_read() -> None:
+    with pytest.raises(PanelError):  # the app reads it inside its guarded read: the card is unavailable
+        NightFiles({"status": "promoted"})
+    with pytest.raises(PanelError):
+        NightFiles({**_summary(1, "promoted"), "choices": "not a list"})
+    assert NightFiles(_summary(1, "promoted"), _steps()).record.status == "promoted"
 
 
 def test_dailies_before_his_first_night_and_unreadable_sources() -> None:
-    assert dailies_view(_sources([]), NOBODY)["state"] == "none"
-    closed = dailies_view(_sources(TWO, nights=None), NOBODY)
+    assert _view(_sources([]), NOBODY)["state"] == "none"
+    closed = _view(_sources(TWO, nights=None), NOBODY)
     assert closed["state"] == "unavailable" and closed["night"] is None
     assert all(closed[name]["state"] == "unavailable" for name in ("learned", "line", "cost"))
-    partial = dailies_view(_sources(TWO, workspace=None, lines=None, settlements=None), NOBODY)
+    partial = _view(_sources(TWO, workspace=None, lines=None, settlements=None), NOBODY)
     assert (partial["learned"]["state"], partial["line"]["state"]) == ("unavailable", "unavailable")
     assert partial["cost"]["state"] == "ok"  # the summary still carries the night's own parts
-    quiet = dailies_view(_sources([_quiet(1)], evidence=(), workspace=_workspace(), lines=_lines()), NOBODY)
+    quiet = _view(_sources([_quiet(1)], evidence=(), workspace=_workspace(), lines=_lines()), NOBODY)
     assert quiet["learned"]["state"] == "none"  # nothing reached him, nothing chosen, nothing beaten
 
 
@@ -187,7 +201,7 @@ def test_dailies_text_passes_the_held_out_filter() -> None:
     held = HeldOutText([HELD])
     targets = (*TARGETS[:1], _target("t-pricing", f"About this: {HELD}", "commitment"), TARGETS[2])
     lines = _lines((None, _ckpt(1)), (_ckpt(1), _ckpt(2)), text=lambda key: f"{HELD} From {key}.")
-    card = dailies_view(_sources(TWO, targets=targets, workspace=_workspace(f"Maybe: {HELD}"), lines=lines), held)
+    card = _view(_sources(TWO, targets=targets, workspace=_workspace(f"Maybe: {HELD}"), lines=lines), held)
     shown = json.dumps(card)
     assert HELD not in shown and " ".join(HELD.split()[2:10]) not in shown
     learned = card["learned"]
@@ -196,8 +210,11 @@ def test_dailies_text_passes_the_held_out_filter() -> None:
     assert learned["questions"][0]["subject"] == {"text": None, "withheld": True}
     assert card["line"]["after"] == {"text": None, "withheld": True}
 
+    with pytest.raises(TypeError):  # no default: a card is never built without the reply check
+        dailies_view(_sources(TWO), NOBODY)  # type: ignore[call-arg]
+
     # A reply the reply check trips is held back too, both sides of the line.
-    checked = dailies_view(_sources(TWO), NOBODY, passes=lambda text: "p-film-n2" not in text)
+    checked = _view(_sources(TWO), NOBODY, passes=lambda text: "p-film-n2" not in text)
     assert (checked["line"]["before"], checked["line"]["after"]) == (
         {"text": None, "withheld": True}, {"text": None, "withheld": True})
 
@@ -206,12 +223,12 @@ def test_dailies_no_new_checkpoint_says_so() -> None:
     lines = _lines((None, _ckpt(1)), (_ckpt(1), _ckpt(2)))  # even with pairs on file
     for status in ("rejected", "nothing_new", "failed"):
         nights = [NightFiles(_summary(1, "promoted"), _steps()), NightFiles(_summary(2, status), _steps())]
-        card = dailies_view(_sources(nights, history=(_ckpt(1),), lines=lines), NOBODY)
+        card = _view(_sources(nights, history=(_ckpt(1),), lines=lines), NOBODY)
         line = card["line"]
         assert (line["state"], line["reason"]) == ("none", "no_new_checkpoint"), status
         assert line["before"] is None and line["after"] is None and "From" not in json.dumps(line)
     # A promoted night whose pair was never generated says that, and shows nothing either.
-    missing = dailies_view(_sources(TWO, lines=_lines((None, _ckpt(1)))), NOBODY)["line"]
+    missing = _view(_sources(TWO, lines=_lines((None, _ckpt(1)))), NOBODY)["line"]
     assert (missing["state"], missing["reason"], missing["after"]) == ("none", "not_generated", None)
 
 
@@ -239,7 +256,7 @@ def test_dailies_line_pregenerated_per_checkpoint_pair(tmp_path: Path) -> None:
     # The card reads the pair its night names: night 3's before is night 2's checkpoint, never a stale pair.
     three = [*TWO, NightFiles(_summary(3, "promoted"), _steps())]
     history = (_ckpt(1), _ckpt(2), _ckpt(3))
-    assert dailies_view(_sources(three, history=history, lines=again), NOBODY)["line"]["reason"] == "not_generated"
+    assert _view(_sources(three, history=history, lines=again), NOBODY)["line"]["reason"] == "not_generated"
     # A scene whose words changed since retires its pairs, by the prompt's hash.
     reworded = words.Scene(SCENE.id, SCENE.title, SCENE.prompt + " Keep it short.")
     assert again.find("p-film-n1", "p-film-n2", reworded) is None
@@ -251,6 +268,7 @@ def test_one_line_is_the_first_sentence_they_say_differently() -> None:
     assert one_line(before, after) == ("I'm so sorry about tonight.", "You lost three hours tonight, and that's on us.")
     assert one_line("Same words. Then this.", "Same words. Then that!") == ("Then this.", "Then that!")
     assert one_line("**Same.** Again.", "- Same.\nAgain.") is None  # markup aside, he'd say it the same way
+    assert one_line("Same.", "Same. And one more thing.") == (None, "And one more thing.")  # said only after
     long = " ".join(["word"] * 80) + "."
     cut = one_line("Short.", long)
     assert cut is not None and cut[1] is not None and len(cut[1].split()) == dailies.LINE_WORDS and cut[1].endswith("…")
@@ -276,6 +294,9 @@ def _ledger(tmp_path: Path) -> Ledger:
     _settle(ledger, f"modal_train:{night}:{PERSON}:a1", 0.13, "modal_usd")
     _settle(ledger, f"night:extract:{PERSON}:{night}:a1", 0.011)
     _settle(ledger, f"night:notice:{PERSON}:{night}:spark:a1", 0.002, "baseten_mind_usd")
+    _settle(ledger, f"night:note:{PERSON}:{night}:a1", 0.004, "modal_usd")  # the note's GPU: not in the summary
+    _settle(ledger, f"night:homework:{PERSON}:{night}:t-bench:c1:a1", 0.003, "meta_usd")  # Wonder: nor this
+    _settle(ledger, f"colab_train:{night}:{PERSON}:a1", 0.7, "colab_cu")  # compute units, never dollars
     _settle(ledger, f"night:practice:{PERSON}:{other}:a1", 0.9)  # another night's
     _settle(ledger, "sim:someone-else:d2:s7:a1", 0.9)  # another person's
     assert ledger.reserve(f"morning:{night}:{PERSON}:extra:a1", ("modal_usd",), usd(5.0)) is not None  # a hold
@@ -288,44 +309,49 @@ def _parts(card: dict[str, Any]) -> dict[str, tuple[Any, Any, Any]]:
 
 
 def test_dailies_cost_from_summary_else_ledger(tmp_path: Path) -> None:
-    settled = _ledger(tmp_path).settled()
+    settled = _ledger(tmp_path).settlements()
     assert f"morning:{day(2).isoformat()}:{PERSON}:extra:a1" not in settled  # a hold is never a settlement
+    assert f"colab_train:{day(2).isoformat()}:{PERSON}:a1" not in settled  # dollars only
     nights = [_quiet(1), NightFiles(_summary(2, "promoted"), _steps())]
-    card = dailies_view(_sources(nights, settlements=settled, day_index={day(2): 2}), NOBODY)
+    card = _view(_sources(nights, settlements=settled, day_index={day(2): 2}), NOBODY)
     parts = _parts(card)
     assert card["cost"]["source"] == "summary"
     assert parts["day"] == (pytest.approx(0.006), None, "ledger")  # the simulator's calls; nothing timed the day
     assert parts["practice"] == (pytest.approx(0.05), pytest.approx(5.0), "summary")
     assert parts["training"] == (pytest.approx(0.12), pytest.approx(4.5), "summary")
     assert parts["morning"] == (pytest.approx(0.21), pytest.approx(3.5), "ledger")  # the run and its dailies line
-    assert parts["rest"] == (pytest.approx(0.037), pytest.approx(2.0), "summary")  # extraction, gates, the brief, MIND
-    assert card["cost"]["usd"] == pytest.approx(0.006 + 0.05 + 0.12 + 0.21 + 0.037)
+    # Extraction, gates, the brief and MIND from the summary; the note's GPU and Wonder from the ledger.
+    assert parts["rest"] == (pytest.approx(0.037 + 0.007), pytest.approx(2.0), "summary")
+    assert card["cost"]["usd"] == pytest.approx(0.006 + 0.05 + 0.12 + 0.21 + 0.044)
     assert card["cost"]["gpu_minutes"] == pytest.approx(15.0)  # measured durations only, never a hold's bound
 
     # A summary without its cost parts: the night's own ledger keys, and the card says so.
     bare = [_quiet(1), NightFiles(_summary(2, "promoted", parts=None), _steps())]
-    fallback = dailies_view(_sources(bare, settlements=settled, day_index={day(2): 2}), NOBODY)
+    fallback = _view(_sources(bare, settlements=settled, day_index={day(2): 2}), NOBODY)
     parts = _parts(fallback)
     assert fallback["cost"]["source"] == "ledger"
     assert parts["practice"] == (pytest.approx(0.06), pytest.approx(5.0), "ledger")
     assert parts["training"] == (pytest.approx(0.13), pytest.approx(4.5), "ledger")
-    assert parts["rest"] == (pytest.approx(0.013), pytest.approx(2.0), "ledger")
+    assert parts["rest"] == (pytest.approx(0.013 + 0.007), pytest.approx(2.0), "ledger")  # the same things
+    colab = {**settled, f"colab_train:{day(2).isoformat()}:{PERSON}:a1": 0.7}  # given one anyway: not dollars
+    assert _parts(_view(_sources(bare, settlements=colab, day_index={day(2): 2}), NOBODY))["training"][0] == (
+        pytest.approx(0.13))
     # No ledger and no day marker: those parts are unrecorded, never guessed.
-    blind = _parts(dailies_view(_sources(bare, settlements=None), NOBODY))
+    blind = _parts(_view(_sources(bare, settlements=None), NOBODY))
     assert blind["day"] == (None, None, None) and blind["practice"] == (None, pytest.approx(5.0), None)
 
 
 def test_dailies_projects_a_month_against_the_ceiling() -> None:
     nights = [_quiet(1), NightFiles(_summary(2, "promoted"), _steps())]
-    projection = dailies_view(_sources(nights), NOBODY)["cost"]["projection"]
+    projection = _view(_sources(nights), NOBODY)["cost"]["projection"]
     trained, quiet = 0.01 + 0.05 + 0.12 + 0.02 + 0.004, 0.012  # the ceiling counts all but MIND
     assert projection["label"] == "development" and projection["ceiling_usd"] == dailies.CEILING_USD
     assert (projection["nights"], projection["trained_share"]) == (2, 0.5)
     assert projection["month_usd"] == pytest.approx(30 * (0.5 * trained + 0.5 * quiet))
     assert projection["worst_month_usd"] == pytest.approx(30 * trained) and projection["under_ceiling"] is True
-    first = dailies_view(_sources(nights), NOBODY, night=1)["cost"]["projection"]  # only the nights up to it
+    first = _view(_sources(nights), NOBODY, night=1)["cost"]["projection"]  # only the nights up to it
     assert (first["nights"], first["trained_share"], first["worst_month_usd"]) == (1, 0.0, None)
     assert first["month_usd"] == pytest.approx(30 * quiet)
     failed = NightFiles(_summary(3, "failed", failed_at="train"), ())  # a night that started training counts
-    later = dailies_view(_sources([*nights, failed]), NOBODY)["cost"]["projection"]
+    later = _view(_sources([*nights, failed]), NOBODY)["cost"]["projection"]
     assert later["trained_share"] == pytest.approx(2 / 3)

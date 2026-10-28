@@ -9,8 +9,12 @@ its section ``unavailable``; it never fails the page.
 
 - **Only a synthetic account**, and only behind a held-out filter that could be built
   (``demo_mind.held_out``): otherwise every section is unavailable, as in the mind panel.
-- **The reply check** is Anjo's own crisis check on each full reply. A pre-generated line it trips
-  is withheld, never replaced: nobody asked it, so no referral is shown or counted.
+- **The reply check** is Anjo's own crisis check on each full reply (``delivery.passes_reply_check``,
+  as for the night's notes). A pre-generated line it trips is withheld, never replaced: nobody
+  asked it, so no referral is shown or counted.
+- **A malformed night** fails where it is read (``NightFiles`` parses it), so the card is
+  unavailable, as the mind panel is, never an error.
+- **The ledger's dollars only** (``Ledger.settlements``): Colab's compute units are not dollars.
 - **The day's index** comes from the day phase's marker (``night.daily``), read by its path:
   ``<data dir>/sleep/daily/<persona>-<date>.json``. The simulator's ledger keys carry it.
 """
@@ -24,6 +28,7 @@ from pathlib import Path
 from typing import Any, Final, TypeVar
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
+from anjo.sleep.app.delivery import passes_reply_check
 from anjo.sleep.app.demo_live import DEMO_PERSONA, demo_dir
 from anjo.sleep.app.demo_mind import READ_ERRORS, held_out, night_files
 from anjo.sleep.app.storage import SLEEP_DIR, checkpoint_registry, data_root, evidence_store, target_store, workspace_log
@@ -85,16 +90,9 @@ def sources(user: str) -> DailySources:
         workspace=_read("MIND's workspace", lambda: workspace_log(user).workspace()),
         history=_read("her checkpoints", lambda: checkpoint_registry().history(user)),
         lines=_read("the line pairs", _lines),
-        settlements=_read("the budget ledger", lambda: Ledger(data_root() / SLEEP_DIR / LEDGER_NAME).settled()),
+        settlements=_read("the budget ledger", lambda: Ledger(data_root() / SLEEP_DIR / LEDGER_NAME).settlements()),
         day_index=_day_indexes(nights),
     )
-
-
-def passes(text: str) -> bool:
-    """Anjo's reply check, without its referral: a line it trips is withheld, not shown."""
-    from anjo.core.crisis_reply import reply_crisis_reason
-
-    return reply_crisis_reason(text) is None
 
 
 def dailies_payload(user: str | None, night: int | None) -> dict[str, Any] | None:
@@ -104,6 +102,6 @@ def dailies_payload(user: str | None, night: int | None) -> dict[str, Any] | Non
     if user is None or held is None:
         return closed()
     try:
-        return dailies_view(sources(user), held, night=night, passes=passes)
+        return dailies_view(sources(user), held, night=night, passes=passes_reply_check)
     except DailiesError:
         return None

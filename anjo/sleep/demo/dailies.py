@@ -3,21 +3,28 @@
 ``dailies_view`` builds one night's card from what the app read. It has three sections, each ``ok``,
 ``none`` (nothing to show) or ``unavailable`` (its source couldn't be read), as in ``panel``:
 
-- ``learned``: what he took from the night, in his own words. These are the targets the night
+- ``learned``: what she (Anjo, his model) took from his day. These are the targets the night
   opened (first mentioned that day) or moved (mentioned again), from the person's own evidence of
   that day; what the night chose and what it beat; and any question MIND raised from that day's
   evidence (its newest origin item is the night's).
-- ``line``: one line he'd now say differently. ``words.DAILY_SCENE`` is answered notes off by the
+- ``line``: one line she'd now say differently. ``words.DAILY_SCENE`` is answered notes off by the
   checkpoint that served before the night and by the one the night promoted, pre-generated as one
   pair (``daily_lines``). ``one_line`` cuts the line: the first sentence, in order, where the two
-  replies differ. A night that promoted nothing has no pair, and the card says so (``reason``).
+  replies differ; a side with no sentence there is ``null``. A night that promoted nothing has no
+  pair, and the card says so (``reason``).
 - ``cost``: what the night cost, in dollars at list price and GPU-minutes, split into the simulated
-  day, practice, training, the morning run and the rest (extraction, gates, the brief, MIND).
+  day, practice, training, the morning run and the rest (extraction, gates, the brief, MIND, the
+  note's GPU and Wonder's calls).
   - Dollars come from the night's summary when it carries its cost parts (``NightResult.cost_parts``).
-    Otherwise they come from the budget ledger's settlements under the night's own keys
-    (``ledger_part``), and ``source`` says which. The summary never holds the day or the morning
-    run, so those two always come from the ledger. A hold is never counted, and neither is the
-    batch's shared GPU session (``night_gpu:``): the summary splits that session per person.
+    Otherwise they come from the budget ledger's dollar settlements under the night's own keys
+    (``ledger_part``), and ``source`` says which. The summary never holds the day, the morning run,
+    the note's GPU (``night:note:``), Wonder's calls (``night:homework:``, the summary's
+    ``wonder_usd``) or the probes (``night:probes:``), so those always come from the ledger, and
+    both sources count the same things.
+  - The ledger can't split the batch's shared GPU session (``night_gpu:``) per person, so the
+    fallback leaves out practice's and the gates' serving time, which the summary carries. Colab's
+    training is in compute units, not dollars, so the fallback never counts it (``colab_train:``);
+    a hold is never counted.
   - GPU-minutes come only from durations a step measured: the night log's ``practice``, ``train``,
     ``gates``, ``morning`` and ``dailies`` records. Nothing times the day's serving.
   - ``projection`` is a person-month at the pace of the nights so far against the $10 ceiling, as
@@ -25,7 +32,7 @@
 
 Every free text passes the held-out filter and is sent as ``{"text": ..., "withheld": ...}``. The
 free texts are a target's label, a question's subject and the line. The line is also withheld when
-the reply check (``passes``) trips on either full reply. Time is the night's clock: a night's card
+the reply check (``passes``, required) trips on either full reply. Time is the night's clock: a night's card
 reads nothing dated after it, and its ``morning`` is the day after its date. Nothing here reads a
 clock, a file or the environment.
 """
@@ -56,7 +63,9 @@ SUMMARY_PARTS: Final[Mapping[str, tuple[str, ...]]] = {
     "practice": ("practice",), "training": ("training",), "rest": ("extract", "gates", "brief", "mind")}
 TIMED_STEPS: Final[Mapping[str, tuple[str, ...]]] = {
     "practice": ("practice",), "training": ("train",), "morning": ("morning", "dailies"), "rest": ("gates",)}
-TRAIN_HOLDS: Final = ("modal_train", "colab_train")
+TRAIN_HOLDS: Final = ("modal_train",)  # Colab's (``colab_train``) are compute units, never dollars
+UNSUMMARIZED: Final = ("note", "homework", "probes")  # night steps whose spend the summary never carries
+OUTSIDE_SUMMARY: Final = "outside_summary"  # their ledger bucket: part of ``rest`` from either source
 TARGETS_SHOWN: Final = 5
 LINE_WORDS: Final = 40
 _MARKUP = re.compile(r"^\s*(?:[-*•>]+|#+|\d+[.)])\s+")
@@ -69,10 +78,16 @@ class DailiesError(LookupError):
 
 @dataclass(frozen=True)
 class NightFiles:
-    """One night's ``summary.json`` and its ``log.jsonl`` records (``night.nightlog``)."""
+    """One night's ``summary.json`` and its ``log.jsonl`` records (``night.nightlog``), parsed as it
+    is made: a malformed night raises ``PanelError`` where the app reads it, so its read fails and
+    the card is ``unavailable``, never an error."""
 
     summary: Mapping[str, Any]
     steps: Sequence[Mapping[str, Any]] = ()
+    record: NightRecord = field(init=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "record", night_record(self.summary, self.steps))
 
 
 @dataclass(frozen=True)
@@ -138,8 +153,7 @@ def _numbered(nights: Sequence[NightFiles]) -> list[tuple[int, NightRecord, Nigh
     """Each night with its number, oldest first; a night run again counts once, its last run."""
     last: dict[date, tuple[NightRecord, NightFiles]] = {}
     for files in nights:
-        record = night_record(files.summary, files.steps)
-        last[record.night] = (record, files)
+        last[files.record.night] = (files.record, files)
     return [(n, *last[day]) for n, day in enumerate(sorted(last), start=1)]
 
 
@@ -228,8 +242,9 @@ def _line(
 
 
 def ledger_part(job: str, person: str, night: date, day_index: int | None) -> str | None:
-    """The card part a settled ledger key belongs to, for ``person``'s ``night``; None for another
-    person's, another night's or the batch's shared GPU session."""
+    """The card part a settled ledger key belongs to, for ``person``'s ``night`` (``OUTSIDE_SUMMARY``
+    for a night step the summary never carries); None for another person's, another night's, the
+    batch's shared GPU session or Colab's compute units."""
     head, _, rest = job.partition(":")
     on = night.isoformat()
     if head == "sim":
@@ -240,7 +255,7 @@ def ledger_part(job: str, person: str, night: date, day_index: int | None) -> st
         return "training" if rest.startswith(f"{on}:{person}:") else None
     step, _, key = rest.partition(":")
     if head == "night" and key.startswith(f"{person}:{on}:"):
-        return "practice" if step == "practice" else "rest"
+        return "practice" if step == "practice" else OUTSIDE_SUMMARY if step in UNSUMMARIZED else "rest"
     return None
 
 
@@ -272,13 +287,20 @@ def _rounded(value: float | None, digits: int) -> float | None:
     return None if value is None else round(value, digits)
 
 
-def _part(name: str, files: NightFiles, settled: Mapping[str, float] | None) -> dict[str, Any]:
+def _dollars(name: str, files: NightFiles, settled: Mapping[str, float]) -> tuple[float | None, str | None]:
+    """One part's dollars and where they came from. ``rest`` adds, from the ledger, the night steps
+    the summary never carries, so both sources count the same things."""
     parts = files.summary.get("cost_parts")
-    usd, source = None, None
+    extra = settled.get(OUTSIDE_SUMMARY) if name == "rest" else None
     if name in SUMMARY_PARTS and isinstance(parts, Mapping):
-        usd, source = math.fsum(_number(parts.get(p)) or 0.0 for p in SUMMARY_PARTS[name]), "summary"
-    elif settled is not None and name in settled:
-        usd, source = settled[name], "ledger"
+        return math.fsum([_number(parts.get(p)) or 0.0 for p in SUMMARY_PARTS[name]] + [extra or 0.0]), "summary"
+    if name in settled or extra is not None:
+        return math.fsum([settled.get(name, 0.0), extra or 0.0]), "ledger"
+    return None, None
+
+
+def _part(name: str, files: NightFiles, settled: Mapping[str, float] | None) -> dict[str, Any]:
+    usd, source = _dollars(name, files, {} if settled is None else settled)
     return {"part": name, "usd": _rounded(usd, 6), "gpu_minutes": _rounded(_timed(name, files.steps), 3),
             "source": source}
 
@@ -344,15 +366,12 @@ def closed() -> dict[str, Any]:
     return _empty("unavailable")
 
 
-def _passes(_text: str) -> bool:
-    return True
-
-
 def dailies_view(
-    sources: DailySources, held: HeldOutText, *, night: int | None = None, passes: Callable[[str], bool] = _passes,
+    sources: DailySources, held: HeldOutText, *, passes: Callable[[str], bool], night: int | None = None,
 ) -> dict[str, Any]:
     """Night ``night``'s card (by its number), or her latest night's; ready to send, nothing in it
-    carries held-out text. Raises ``DailiesError`` for a night she hasn't run."""
+    carries held-out text. ``passes`` is Anjo's reply check, which every line must pass (there is
+    no default: it never fails open). Raises ``DailiesError`` for a night she hasn't run."""
     if sources.nights is None:
         return closed()
     numbered = _numbered(sources.nights)

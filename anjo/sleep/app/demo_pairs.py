@@ -30,11 +30,12 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from time import monotonic
+from typing import Final
 
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.demo_live import (
@@ -55,6 +56,7 @@ from anjo.sleep.demo.slider import Stop
 from anjo.sleep.demo.starters import Side, StarterSet, generate, to_json
 from anjo.sleep.demo.words import DAILY_SCENE, SCENES, Scene
 from anjo.sleep.night.holds import held
+from anjo.sleep.night.sweep import night_lock
 from anjo.sleep.probes.morning import ARM_POOLS
 from anjo.sleep.serving import backend
 from anjo.sleep.serving import client as vllm
@@ -62,6 +64,11 @@ from anjo.sleep.serving.client import LOAD_WAIT_S
 from anjo.sleep.types import CheckpointRef, NightResult
 
 logger = logging.getLogger(__name__)
+
+LINE_MARGIN_S: Final = 120.0  # building the two contexts and writing the file, beyond the answers
+# The line's whole timed block at its worst: two answers, each waiting for a new adapter's folder and
+# then for its reply. The hold is never below what the block can take, so it never records an overage.
+LINE_MAX_S: Final = 2 * (vllm.REQUEST_TIMEOUT_S + LOAD_WAIT_S) + LINE_MARGIN_S
 
 
 def _side(answer: Answer, serve_usd_per_hour: float | None) -> Side:
@@ -124,13 +131,19 @@ def write_daily_line(
     return lines
 
 
-def _gpu_hold(user: str, night: date, rate: float | None, timer: Callable[[], float]) -> AbstractContextManager[None]:
-    """The two answers' GPU time, held at the worst case and settled as measured; none unpriced."""
+@contextmanager
+def _gpu_hold(user: str, night: date, rate: float | None, timer: Callable[[], float]) -> Iterator[None]:
+    """The two answers' GPU time, held at the worst case and settled as measured; none unpriced.
+    Under the night lock (``night_lock``): the line runs after the night has let go of it, and a
+    night that started meanwhile would settle this live hold at its bound (``night.sweep``)."""
     if rate is None:
-        return nullcontext()
+        yield
+        return
+    ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
     started = timer()
-    return held(Ledger(data_root() / SLEEP_DIR / LEDGER_NAME), f"dailies:{night.isoformat()}:{user}", ARM_POOLS,
-                Bound(rate, 2 * vllm.REQUEST_TIMEOUT_S), lambda: rate * max(0.0, timer() - started) / 3600.0)
+    with night_lock(ledger), held(ledger, f"dailies:{night.isoformat()}:{user}", ARM_POOLS, Bound(rate, LINE_MAX_S),
+                                  lambda: rate * max(0.0, timer() - started) / 3600.0):
+        yield
 
 
 def line_for(user: str, night: date, arms: StopArms, *, timer: Callable[[], float] = monotonic) -> DailyLines | None:

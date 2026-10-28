@@ -50,7 +50,7 @@ from anjo.sleep.demo.dailies import NightFiles
 from anjo.sleep.demo.heldout import HeldOutText, persona_texts
 from anjo.sleep.demo.night_answers import NightAnswers
 from anjo.sleep.demo.night_answers import load as load_answers
-from anjo.sleep.demo.panel import MindSources, NightRecord, mind_view, night_record
+from anjo.sleep.demo.panel import MindSources, NightRecord, mind_view
 from anjo.sleep.demo.record import chart_view, ledger_view, task16_view
 from anjo.sleep.demo.slider import NightMark, Stop, plan_stops
 from anjo.sleep.demo.toggles import SwapSet, load_swaps
@@ -102,7 +102,7 @@ def night_files(user: str) -> tuple[NightFiles, ...]:
 
 
 def night_records(user: str) -> tuple[NightRecord, ...]:
-    return tuple(night_record(files.summary, files.steps) for files in night_files(user))
+    return tuple(files.record for files in night_files(user))
 
 
 def serving_rendering() -> str:

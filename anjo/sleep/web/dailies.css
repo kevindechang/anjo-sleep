@@ -1,6 +1,6 @@
 /* The live demo page's Dailies: the morning sheet a film crew reads before the day's shoot. Built on
    demo.css's tokens: a slate with a clapper stripe, then three numbered takes in a margin, like
-   scene numbers on a call sheet. His new weights keep the product green; the evening before stays
+   scene numbers on a call sheet. Her new weights keep the product green; the evening before stays
    ink; the cost reads like a production report, figures in mono, the total under a double rule. */
 
 :root {
@@ -107,7 +107,7 @@
 .take-body > * { margin-top: var(--space-4); }
 .take-empty { font: 400 var(--text-reply)/1.55 var(--serif); color: var(--ink-soft); }
 
-/* 01 what he took from the night */
+/* 01 what she took from his day */
 .moves {
   display: grid;
   grid-template-columns: max-content max-content minmax(0, 1fr);
@@ -144,7 +144,7 @@
 .asked { margin: var(--space-4) 0 0; padding-left: var(--space-4); border-left: 2px solid var(--accent); }
 .asked-text { display: block; margin-top: var(--space-1); font: italic 400 1.0625rem/1.45 var(--serif); }
 
-/* 02 one line he'd now say differently */
+/* 02 one line she'd now say differently */
 .cue { padding: var(--space-3) var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
 .cue-title { margin-top: var(--space-2); font: 600 0.6875rem/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
 .cue-prompt { margin-top: var(--space-1); font: 400 1rem/1.5 var(--serif); color: var(--ink-soft); max-width: var(--measure); }
@@ -167,6 +167,7 @@
 .side-after { border-left-color: var(--product); background: var(--paper-raised); box-shadow: var(--lift); }
 .side-after .label { color: var(--product); }
 .line-text { margin: var(--space-3) 0 0; font: 400 var(--text-reply)/1.55 var(--serif); text-wrap: pretty; }
+.line-missing { color: var(--ink-faint); font-style: italic; }
 .line-source { font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.02em; }
 
 /* 03 what the night cost */

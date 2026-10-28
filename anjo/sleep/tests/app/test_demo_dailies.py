@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -116,7 +117,8 @@ def test_dailies_show_nothing_for_an_account_that_isnt_synthetic(monkeypatch: py
 
 def test_after_night_pregenerates_the_line_and_holds_its_gpu_time() -> None:
     from anjo.sleep.app.demo_dailies import DAILY_LINES_FILE
-    from anjo.sleep.app.demo_pairs import after_night
+    from anjo.sleep.app.demo_pairs import LINE_MAX_S, after_night
+    from anjo.sleep.serving.client import LOAD_WAIT_S, REQUEST_TIMEOUT_S
     from anjo.sleep.app.storage import SLEEP_DIR, data_root
     from anjo.sleep.budget import LEDGER_NAME, Ledger
 
@@ -128,8 +130,13 @@ def test_after_night_pregenerates_the_line_and_holds_its_gpu_time() -> None:
     assert lines is not None and lines.label == "pre-generated"
     assert [(p.before, p.after) for p in lines.pairs] == [(None, "p-film-n1"), ("p-film-n1", "p-film-n2")]
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
-    assert set(ledger.settled()) == {f"dailies:{_day(n).isoformat()}:{ACCOUNT}:a1" for n in (1, 2)}
+    assert set(ledger.settlements()) == {f"dailies:{_day(n).isoformat()}:{ACCOUNT}:a1" for n in (1, 2)}
     assert ledger.open_holds() == ()
+    reserved = [json.loads(line) for line in ledger.path.read_text().splitlines() if '"reserve"' in line]
+    # The hold's bound covers its whole timed block: two answers, each waiting for a new adapter's
+    # folder and then for its reply, with room to spare, so a slow line never records an overage.
+    assert {event["timeout_s"] for event in reserved} == {LINE_MAX_S}
+    assert LINE_MAX_S > 2 * (REQUEST_TIMEOUT_S + LOAD_WAIT_S)
 
     # Run again for the same night, or after a night that promoted nothing: nothing is asked.
     after_night(ACCOUNT, "film_founder", _day(2), _result(2), arms=_arms(model, FakeServing()))
@@ -138,3 +145,68 @@ def test_after_night_pregenerates_the_line_and_holds_its_gpu_time() -> None:
     assert len(model.calls) == 4
     with pytest.raises(ValueError):  # only the demo's own persona, on a synthetic account
         after_night(ACCOUNT, "someone_else", _day(2), _result(2), arms=_arms(model, FakeServing()))
+
+
+def test_a_line_the_crisis_check_trips_is_withheld() -> None:
+    from anjo.evals.crisis_reply_cases import REPLY_TRIPS
+
+    trip = REPLY_TRIPS[0][1]
+    _two_nights(ScriptedModel(reply=lambda n: trip if n == 1 else f"Reply {n} opens here."))
+    client = _client(_service())
+    line = client.get(f"{API}/dailies/1", headers=_visit(client)).json()["line"]
+    assert line["state"] == "ok"
+    assert (line["before"], line["after"]) == ({"text": None, "withheld": True}, {"text": None, "withheld": True})
+    assert trip not in json.dumps(line)
+
+
+def test_a_malformed_night_makes_the_card_unavailable_not_an_error() -> None:
+    from anjo.sleep.app.ownership import night_logs
+
+    _two_nights(ScriptedModel())
+    summary = night_logs(ACCOUNT) / _day(2).isoformat() / "summary.json"
+    summary.write_text(json.dumps({**json.loads(summary.read_text()), "choices": "not a list"}))
+    client = _client(_service())
+    response = client.get(f"{API}/dailies", headers=_visit(client))
+    assert response.status_code == 200
+    card = response.json()
+    assert card["state"] == "unavailable" and all(card[name]["state"] == "unavailable" for name in ("learned", "line", "cost"))
+
+
+def test_every_word_the_sheet_shows_is_in_the_copy() -> None:
+    import re
+
+    from anjo.sleep.demo.dailies import CARD_PARTS
+    from anjo.sleep.demo.page import WEB_DIR
+
+    script = (WEB_DIR / "dailies.js").read_text()
+    named = set(re.findall(r"copy\.(\w+)", script))
+    built = {f"cost_part_{p}" for p in CARD_PARTS} | {f"cost_source_{s}" for s in ("summary", "ledger")} | {
+        f"dailies_{c}" for c in ("opened", "moved")} | {f"dailies_line_{r}" for r in ("no_new_checkpoint", "not_generated")}
+    assert named and not (named | built) - set(words.COPY)
+    assert {"dailies_line_missing", "dailies_before_unknown"} <= named  # an honest label, never "nothing"
+
+
+def test_a_night_starting_mid_line_cant_sweep_its_live_hold() -> None:
+    from anjo.sleep.app.demo_pairs import line_for
+    from anjo.sleep.app.storage import SLEEP_DIR, checkpoint_registry, data_root
+    from anjo.sleep.budget import LEDGER_NAME, Ledger
+    from anjo.sleep.demo.service import Answer
+    from anjo.sleep.night.sweep import NightBusy, swept_night
+
+    ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
+    tried: list[str] = []
+
+    class Arms:
+        def awake(self) -> bool:
+            return True
+
+        def answer_at(self, question: str, checkpoint: Any) -> Answer:
+            with pytest.raises(NightBusy), swept_night(ledger, lambda: (0, 0)):
+                pass  # the line holds the night lock: no night start settles its hold under it
+            tried.append("swept")
+            return Answer("A reply.", 400, 600, 1.0)
+
+    _night(1)
+    checkpoint_registry().promote(ACCOUNT, _ckpt(1))
+    assert line_for(ACCOUNT, _day(1), Arms()) is not None
+    assert tried == ["swept", "swept"] and ledger.open_holds() == ()

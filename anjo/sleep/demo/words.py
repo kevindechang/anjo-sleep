@@ -82,7 +82,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "age_heading": "Before you start",
     "age_text": (
         "This page sends questions to an AI model. You must be 18 or older to use it. Nothing you "
-        "type is saved, and nothing you type teaches him."
+        "type is saved, and nothing you type teaches her."
     ),
     "age_confirm": "I'm 18 or older",
     "age_submit": "Start",
@@ -102,10 +102,10 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "ask_submit": "Ask both",
     "asking": "Both sides are writing. This can take a minute.",
     "asleep": (
-        "He's asleep right now, so your own questions can't be answered. The starter questions "
+        "She's asleep right now, so your own questions can't be answered. The starter questions "
         "still work."
     ),
-    "waking": "He's asleep. We're waking him now; try again in a few minutes.",
+    "waking": "She's asleep. We're waking her now; try again in a few minutes.",
     "you_asked": "You asked",
     "she_asks": "Teo asks",
     # the pair and the vote
@@ -120,9 +120,9 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "not_votable": "One reply was withheld, so this pair can't be voted on.",
     "reveal_heading": "Who wrote which",
     "your_vote": "Your vote",
-    "arm_4": "His own model: weights trained on him, plus his notes",
-    "arm_2C": "Baseline: the untrained model, plus his notes",
-    "arm_2F": "Baseline: the untrained model, plus his notes and every raw piece of evidence",
+    "arm_4": "His own model: her weights trained on him, plus her notes on him",
+    "arm_2C": "Baseline: the untrained model, plus her notes on him",
+    "arm_2F": "Baseline: the untrained model, plus her notes on him and every raw piece of evidence",
     "prompt_tokens": "Prompt length",
     "tokens": "tokens",
     "cost": "Cost per turn",
@@ -134,14 +134,14 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "visit_spent": "That's all the questions for this visit. Reload the page to start a new one.",
     "asks_spent": "That's all the questions for today from your connection. The starter questions still work.",
     "live_spent": (
-        "He's done answering new questions for today, so the page is running on the starter questions."
+        "She's done answering new questions for today, so the page is running on the starter questions."
     ),
     "live_closed": (
-        "He answers new questions only at set hours, and this isn't one of them. The starter "
+        "She answers new questions only at set hours, and this isn't one of them. The starter "
         "questions still work."
     ),
     "slow_down": "That's faster than this demo allows. Wait a minute and try again.",
-    "busy": "He's answering a lot of people right now. Try again in a moment.",
+    "busy": "She's answering a lot of people right now. Try again in a moment.",
     "resting": "The demo is resting right now. Try again later.",
     "resting_today": "The demo is resting for today. Try again tomorrow.",
     "empty": "Write a question first.",
@@ -154,33 +154,33 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "votes_spent": "That's all the votes for this visit. Reload the page to start a new one.",
     "too_many_open": "Vote on the pairs you have open before asking for more.",
     "bad_choice": "Pick left, right, about the same or neither.",
-    "lost_thread": "Something went wrong while he was answering. Try again.",
+    "lost_thread": "Something went wrong while she was answering. Try again.",
     "offline": "The page can't reach the server. Check your connection and try again.",
     "unknown_stop": "That night isn't one of the slider's stops.",
-    "vote_first": "Vote on this question's two replies first. His other answers to it open after your vote.",
+    "vote_first": "Vote on this question's two replies first. Her other answers to it open after your vote.",
     "stop_unavailable": (
         "That night's weights were trained for another setup than the one serving now, so it can't "
         "answer. Nothing else answers in its place."
     ),
-    # ── the full step (Nov 2): the night slider, the toggles and his mind panel ──
+    # ── the full step (Nov 2): the night slider, the toggles and her mind panel ──
     "development": "development",
     "night_status_promoted": "promoted",
     "night_status_rejected": "rejected by a gate",
     "night_status_nothing_new": "nothing new to learn",
     "night_status_failed": "failed",
     "arm_label_1": "base model, notes off",
-    "arm_label_3": "his weights, notes off",
+    "arm_label_3": "her weights, notes off",
     # the night slider
     "slider_heading": "Night by night, notes off",
     "slider_note": (
-        "His weights alone, with every note switched off, at night 0 and the nights after. These are "
+        "Her weights alone, with every note switched off, at night 0 and the nights after. These are "
         "development nights, not the final test."
     ),
     "slider_scene_label": "His question",
     "slider_label": "Night",
     "slider_tick": "Night {n}",
     "slider_tick_base": "Night 0",
-    "slider_stop_base": "Night 0 is the base model, before he slept even once.",
+    "slider_stop_base": "Night 0 is the base model, before she slept even once.",
     "slider_stop_own": "Night {n}'s own weights: that night was {status}.",
     "slider_stop_fallback": (
         "Night {n} was {status}, so it has no weights of its own. These are night {from}'s, the last "
@@ -195,35 +195,35 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     ),
     "slider_unavailable_note": "No answer at this night.",
     "slider_not_ready": "This night's answer to that question hasn't been generated yet.",
-    "slider_vote_first": "Vote on this question's two replies above first. His answer night by night opens after your vote.",
-    "slider_unavailable": "His nights can't be read right now.",
-    "slider_no_nights": "He hasn't slept yet, so there is only night 0.",
-    "slider_ask_label": "Ask him at this night",
+    "slider_vote_first": "Vote on this question's two replies above first. Her answer night by night opens after your vote.",
+    "slider_unavailable": "Her nights can't be read right now.",
+    "slider_no_nights": "She hasn't slept yet, so there is only night 0.",
+    "slider_ask_label": "Ask her at this night",
     "slider_ask_submit": "Ask at {night}",
     "slider_ask_hint": "Answered live by this night's weights, notes off. Each night you ask counts as one of your questions.",
-    "slider_asking": "He's answering from that night. This can take a minute.",
+    "slider_asking": "She's answering from that night. This can take a minute.",
     # the toggles on a starter scene
     "toggles_heading": "Look closer",
     "toggles_note": "Labeled, not blind, and generated in advance.",
     "toggle_notes_off": "Notes off",
-    "toggle_swap": "His state on another model",
-    "toggle_arm_3": "His weights, every note off",
+    "toggle_swap": "Her state on another model",
+    "toggle_arm_3": "Her weights, every note off",
     "toggle_arm_1": "The base model, every note off",
-    "toggle_arm_swap": "Another model, given his notes",
+    "toggle_arm_swap": "Another model, given her notes",
     "toggle_arm_bare": "The same model, with no notes",
-    "toggle_notes_off_source": "his weights from night {night}, checkpoint {checkpoint}",
+    "toggle_notes_off_source": "her weights from night {night}, checkpoint {checkpoint}",
     "toggle_swap_source": "{model}, development",
     "toggle_missing": "This comparison wasn't generated for this question.",
-    # his mind panel
-    "mind_kicker": "His mind",
-    "mind_heading": "What he is working on, and what he chose",
-    "mind_loading": "Loading his state…",
+    # her mind panel
+    "mind_kicker": "Her mind",
+    "mind_heading": "What she is working on, and what she chose",
+    "mind_loading": "Loading her state…",
     "mind_note": (
-        "Read from his logs as they stand, on his own clock. Anything only our scorer may read is held "
+        "Read from her logs as they stand, on her own clock. Anything only our scorer may read is held "
         "back, on the server, before it reaches this page."
     ),
     "mind_asof": "As of night {night} ({date}).",
-    "mind_asof_none": "He hasn't slept yet.",
+    "mind_asof_none": "She hasn't slept yet.",
     "mind_glance_questions": "Open questions: {n}.",
     "mind_glance_targets": "Open threads and plans: {n}.",
     "mind_glance_empty": "Nothing to show yet.",
@@ -232,10 +232,10 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "mind_none_yet": "not yet",
     "mind_no_target": "nothing",
     "mind_withheld": "Held back: only the scorer may read this.",
-    "mind_questions": "His questions",
-    "mind_questions_line": "Questions he is working on: {n}.",
+    "mind_questions": "Her questions",
+    "mind_questions_line": "Questions she is working on: {n}.",
     "mind_credence_note": (
-        "Each bar is how much weight he gives one answer. It's a heuristic of his, not a measured "
+        "Each bar is how much weight she gives one answer. It's a heuristic of hers, not a measured "
         "probability."
     ),
     "question_kind_contradiction": "contradiction",
@@ -245,7 +245,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "question_status_open": "noticed",
     "question_status_active": "working on it",
     "question_status_parked": "parked",
-    "mind_prediction": "He predicted",
+    "mind_prediction": "She predicted",
     "mind_prediction_given": "chance it holds, by answer: {given} · by {horizon}",
     "prediction_outcome_pending": "not resolved yet",
     "prediction_outcome_true": "came true",
@@ -254,12 +254,12 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "prediction_outcome_censored": "ran out of time",
     "mind_targets": "His open threads and plans",
     "mind_targets_line": "{n} open.",
-    "mind_confidence_note": "His own heuristic confidence that he understood each one.",
+    "mind_confidence_note": "Her own heuristic confidence that she understood each one.",
     "mind_target_due": "plan, due {date}",
     "target_kind_thread": "thread",
     "target_kind_commitment": "plan",
-    "mind_wants": "His wants",
-    "mind_wants_line": "His wants on night {night}: {n}.",
+    "mind_wants": "Her wants",
+    "mind_wants_line": "Her wants on night {night}: {n}.",
     "want_status_won": "chosen",
     "want_status_held_back": "held back",
     "want_status_rejected": "turned down",
@@ -270,16 +270,16 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "action_revisit_thread": "revisit a thread",
     "action_inquire": "think a question through",
     "action_hold_note": "write a note",
-    "reason_unknown_priority_class": "of a kind he doesn't rank",
+    "reason_unknown_priority_class": "of a kind she doesn't rank",
     "reason_action_not_offered": "not on offer that night",
     "reason_candidate_limit": "past the night's limit",
     "reason_below_threshold": "not strong enough",
     "reason_budget": "no budget left",
     "reason_lost_to_target": "lost to the chosen one",
     "reason_note_declined": "the note was declined",
-    "mind_choices": "What he chose, and what it beat",
-    "mind_chose": "On night {night} he chose to {action}: {target}.",
-    "mind_chose_nothing": "On night {night} he chose nothing.",
+    "mind_choices": "What she chose, and what it beat",
+    "mind_chose": "On night {night} she chose to {action}: {target}.",
+    "mind_chose_nothing": "On night {night} she chose nothing.",
     "mind_outcome": "It {outcome}",
     "outcome_ran": "ran",
     "outcome_declined": "was declined",
@@ -295,11 +295,11 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "note_note_failed": "couldn't be written",
     "mind_beat": "It beat",
     "mind_held_back": "Held back",
-    "mind_expectations": "His expectations",
+    "mind_expectations": "Her expectations",
     "mind_expectations_line": "{n} made, {resolved} resolved.",
     "mind_expectations_note": (
-        "How likely he thought you'd come back to a topic before a horizon. Resolved only from your "
-        "side, never from his own."
+        "How likely she thought he'd come back to a topic before a horizon. Resolved only from his "
+        "side, never from her own."
     ),
     "mind_expect_numbers": "{p} · by {horizon}",
     "expect_outcome_needed": "needed",
@@ -335,19 +335,19 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "dimension_knowledge": "knowledge",
     "dimension_interaction": "interaction",
     "chart_arm_1": "Base model, no notes",
-    "chart_arm_2C": "Base model with his notes",
-    "chart_arm_2F": "Base model with his notes and all his evidence",
-    "chart_arm_3": "His weights, notes off",
+    "chart_arm_2C": "Base model with her notes",
+    "chart_arm_2F": "Base model with her notes and all his evidence",
+    "chart_arm_3": "Her weights, notes off",
     "chart_arm_3x": "Another life's weights, notes off",
-    "chart_arm_4": "His weights with his notes",
+    "chart_arm_4": "Her weights with her notes",
     "chart_arm_short_1": "base",
     "chart_arm_short_2C": "notes",
     "chart_arm_short_2F": "all",
-    "chart_arm_short_3": "his",
+    "chart_arm_short_3": "hers",
     "chart_arm_short_3x": "other",
-    "chart_arm_short_4": "his+",
+    "chart_arm_short_4": "hers+",
     # the Task 16 result and the ledger
-    "task16_heading": "Does his state study what matters?",
+    "task16_heading": "Does her state study what matters?",
     "task16_not_yet": "Not yet. This is measured on the held-out lives after the freeze.",
     "ledger_heading": "The pre-registration ledger",
     "ledger_line_ok": "Entries: {n}. The chain verifies here, and {sync}",
@@ -358,15 +358,15 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "ledger_head": "Head: {hash}",
     "ledger_note": "Every file, prompt and threshold registered before the results existed, newest first, by hash.",
     # ── dailies: the morning sheet ──
-    "unknown_night": "That night isn't one he has slept yet.",
+    "unknown_night": "That night isn't one she has slept yet.",
     "dailies_kicker": "Dailies",
     "dailies_heading": "The morning after each night",
     "dailies_note": (
-        "In film, dailies are what the crew reviews each morning. Here: what his model took from the night, "
-        "one line it would now say differently, and what the night cost. Read from his logs, on his own clock."
+        "In film, dailies are what the crew reviews each morning. Here: what she, his model, took from his day, "
+        "one line she'd now say differently, and what the night cost. Read from her logs, on her own clock."
     ),
     "dailies_loading": "Loading this morning's sheet…",
-    "dailies_none": "He hasn't slept yet, so there are no dailies.",
+    "dailies_none": "She hasn't slept yet, so there are no dailies.",
     "dailies_unavailable": "This morning's sheet can't be read right now.",
     "dailies_pick": "Morning after",
     "dailies_option": "Night {night} · {date}",
@@ -374,19 +374,21 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "dailies_slate_morning": "Morning of",
     "dailies_slate_status": "The night",
     "dailies_withheld": "Held back by a check before it reached this page.",
-    "dailies_learned": "What he took from last night",
-    "dailies_learned_none": "Nothing new reached him that night, and he chose nothing.",
+    "dailies_learned": "What she took from his day",
+    "dailies_learned_none": "Nothing new reached her that night, and she chose nothing.",
     "dailies_opened": "new",
     "dailies_moved": "came back",
     "dailies_more": "and {n} more",
-    "dailies_question": "A new question he asked himself",
-    "dailies_line": "One line he'd now say differently",
+    "dailies_question": "A new question she's asking",
+    "dailies_line": "One line she'd now say differently",
     "dailies_asked": "The same question, asked the evening before and the morning after:",
     "dailies_before": "Before · night {night}",
     "dailies_before_base": "Before · the base model",
+    "dailies_before_unknown": "Before · an earlier checkpoint",
+    "dailies_line_missing": "Nothing here: this reply ended sooner.",
     "dailies_after": "After · night {night}",
-    "dailies_line_source": "Pre-generated · his weights alone, every note off · generated {date}",
-    "dailies_line_same": "He'd still say it the same way.",
+    "dailies_line_source": "Pre-generated · her weights alone, every note off · generated {date}",
+    "dailies_line_same": "She'd still say it the same way.",
     "dailies_line_no_new_checkpoint": (
         "No new weights were promoted that night, so there is no before and after. Nothing was generated."
     ),
@@ -405,7 +407,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "cost_col_gpu": "GPU-min",
     "cost_total": "Total",
     "cost_unrecorded": "not recorded",
-    "cost_month": "A month at his pace so far: {month} of the {ceiling} ceiling.",
+    "cost_month": "A month at this pace so far: {month} of the {ceiling} ceiling.",
     "cost_month_worst": "If every night trained: {worst}.",
     "cost_month_label": "Projection, development",
     "cost_month_none": "Not enough nights to project a month yet.",

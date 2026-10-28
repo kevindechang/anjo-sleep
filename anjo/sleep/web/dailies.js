@@ -1,6 +1,6 @@
 // The live demo page's Dailies: the morning sheet for one night, as a film crew reviews the night's
 // footage the morning after. A slate (which night, which morning, what the night did), then three
-// takes: what he took from the night, one line he'd now say differently, and what the night cost.
+// takes: what she (his model) took from his day, one line she'd now say differently, and what the night cost.
 // The server has already withheld every held-out text; a withheld item arrives as
 // {text: null, withheld: true} and is shown as held back. Nothing here calls a model.
 (() => {
@@ -80,7 +80,7 @@
     body.append(element("p", "take-empty", state === "unavailable" ? copy.mind_state_unavailable : none));
   }
 
-  // ── 01: what he took from the night ─────────────────────────────────────
+  // ── 01: what she took from his day ──────────────────────────────────────
 
   function candidate(c) {
     const row = element("li", `status-${c.status}`);
@@ -128,13 +128,14 @@
     return box;
   }
 
-  // ── 02: one line he'd now say differently ───────────────────────────────
+  // ── 02: one line she'd now say differently ──────────────────────────────
 
+  // A side with no sentence at that point arrives as null: it says so, never "nothing".
   function side(kind, label, item) {
     const box = element("figure", `side-take side-${kind}`);
     box.append(element("figcaption", "label", label));
     const quote = element("blockquote", "line-text");
-    quote.append(said(item));
+    quote.append(item ? said(item) : element("span", "faint line-missing", copy.dailies_line_missing));
     box.append(quote);
     return box;
   }
@@ -154,7 +155,8 @@
     if (data.same) {
       body.append(element("p", "take-empty", copy.dailies_line_same));
     } else {
-      const before = data.before_night === 0 ? copy.dailies_before_base : fill(copy.dailies_before, { night: data.before_night });
+      const before = data.before_night === 0 ? copy.dailies_before_base
+        : known(data.before_night) ? fill(copy.dailies_before, { night: data.before_night }) : copy.dailies_before_unknown;
       const versus = element("div", "versus");
       const arrow = element("span", "versus-arrow", "→");
       arrow.setAttribute("aria-hidden", "true");
