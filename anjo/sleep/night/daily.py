@@ -23,7 +23,8 @@ after midnight, and the morning probe run right after the night, in the same pro
   new weights, the demo's Dailies line is pre-generated (``app.demo_pairs.after_night``) while
   Glimmer is still awake: the scene answered by the checkpoint before the night and by the new one.
   Its failure is logged in the night's log and never fails the night. Both steps log how long they
-  took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time.
+  took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time, and the
+  morning how many requests it sent again (``retries``), when any.
 
 ``--mind`` (or ``ANJO_SLEEP_DAILY_MIND=1``) turns MIND's inquiry on in the night phase; it is off by
 default and has no effect on the day phase.
@@ -42,7 +43,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
-from typing import Final
+from typing import Any, Final
 
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night import __main__ as night_command
@@ -171,8 +172,12 @@ def run_night_phase(
         if result.status != "failed":  # a failed night keeps yesterday's checkpoint: nothing new to score
             log, started = NightLog(result.log_path.parent), timer()
             ports = (morning or _morning())(user, persona, plan.night)
+            sent_again = _retries(ports)
             score(user, plan.night, result.checkpoint, morning=ports, label=label, promoted=result.status == "promoted")
-            log.step("morning", "ok", uses="new", system=None, seconds=round(timer() - started, 3))
+            receipt: dict[str, Any] = {"seconds": round(timer() - started, 3)}
+            if retries := _retries(ports) - sent_again:  # requests the morning sent again: a count, when any
+                receipt["retries"] = retries
+            log.step("morning", "ok", uses="new", system=None, **receipt)
             if result.status == "promoted":  # new weights: the line he'd now say differently
                 _pregenerate(log, dailies, timer, user, persona, plan.night, result)
     return result
@@ -194,6 +199,12 @@ def _pregenerate(
         log.step("dailies", "ok", uses="new", system=None, seconds=seconds)
     else:
         log.step("dailies", "failed", uses="new", system=None, seconds=seconds, error=error)
+
+
+def _retries(ports: object) -> int:
+    """The morning's running count of requests sent again (``Morning.retries``), 0 for ports without one."""
+    count = getattr(ports, "retries", None)
+    return int(count()) if callable(count) else 0
 
 
 def _morning() -> Callable[..., object]:

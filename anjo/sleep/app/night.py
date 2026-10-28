@@ -16,7 +16,9 @@ it off the serving path). Everything else is here:
   a real person's are written from the day's evidence by Muse Spark and sealed before training;
 - the safety gate on Anjo's crisis corpus and reply check (``safety_gate``);
 - the held note through outreach (``delivery``), its final text through the reply check;
-- every paid step's hold on the sleep host's budget ledger.
+- every paid step's hold on the sleep host's budget ledger;
+- practice's calls and the generation gates' (collapse, safety) side by side, ``ANJO_SLEEP_CONCURRENCY``
+  at once (8 by default, ``parallel``); the general gate's log-probabilities at the server's 16.
 
 Notice and inquiry (Task 17) are no-op ports unless the night runs with ``--mind``
 (``NightOptions.mind_inquiry``), which builds MIND's ports (``app/mind_night.py``). Task 16's
@@ -33,7 +35,7 @@ from datetime import date
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep import baseten_api, meta_api
+from anjo.sleep import baseten_api, meta_api, parallel
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
@@ -135,14 +137,15 @@ class AppGates:
     """The three gates on one server. General and safety keep the base side for the whole run;
     collapse is per person, over their fields."""
 
-    def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]]) -> None:
+    def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]], *, workers: int) -> None:
         self._client = client
         self._fields = fields
-        self._general = GeneralGate(client)
-        self._safety = SafetyGate(client, load_cases)
+        self._workers = workers  # the generation gates' calls at once (ANJO_SLEEP_CONCURRENCY)
+        self._general = GeneralGate(client)  # log-probabilities only: the server's concurrency
+        self._safety = SafetyGate(client, load_cases, workers=workers)
 
     def for_person(self, user_id: str) -> Mapping[str, GateCheck]:
-        collapse = CollapseGate(self._client, self._fields(user_id))
+        collapse = CollapseGate(self._client, self._fields(user_id), workers=self._workers)
         return {"general": self._general.check, "collapse": collapse.check, "safety": self._safety.check}
 
 
@@ -169,11 +172,12 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     recall = MiniLmRecall(evidence_store, until=options.night)
     context = TrainingContext(TrainingBriefs(brief_store), recall, RECALL)
     ledger = Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
+    calls = parallel.concurrency(os.environ)  # a value it can't run at stops the night before it starts
 
     def practice(chat: ChatFn, night: date) -> FullPractice:
         return FullPractice(chat=chat, client=client, adapter=registry.last_promoted, snapshot=context.snapshot,
                             seed=night_settings.seed, scenes=night_settings.practice_scenes,
-                            teacher=night_settings.practice_teacher)
+                            teacher=night_settings.practice_teacher, concurrency=calls)
 
     homework = WonderHomework(wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(),
                               evidence=evidence_store, ledger=ledger, names=person_names)
@@ -186,7 +190,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         spark_chat=baseten_api.chat,
         probes=SealedProbes(Path(_env(SEALED_ENV)), options.personas, seed=night_settings.seed, chat=meta_api.chat),
         chooser=StateChooser(), policy=build_policy(), practice=practice,
-        decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(client, field_domains(options.personas)),
+        decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(client, field_domains(options.personas), workers=calls),
         registry=registry, notifier=OutreachNotifier(),
         note_writer=GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed),
         note_check=passes_reply_check, ledger=ledger,
@@ -194,7 +198,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         settings=night_settings, prices=night_prices,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=night_prices.serve_gpu_per_hour),
         intentions=LedgerIntentions(), homework=homework,
-        wake=serving.wake, sleep=serving.sleep_now,
+        wake=serving.wake, sleep=serving.sleep_now, retries=client.retries,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(),
     )
 

@@ -10,7 +10,10 @@
 | 4 | the person's adapter | C, byte-identical to 2C |
 
 ``reply`` only reads: it writes no history, no evidence and no memory (RF5). It never touches the
-judge brief or the scorer, which hold held-out preferences no arm may see.
+judge brief or the scorer, which hold held-out preferences no arm may see. It is ``ask`` after
+``prepare``: ``prepare`` reads the person's ports (the adapter, context C, the stored evidence) and
+calls no model; ``ask`` calls the model and reads nothing else, so the morning run can prepare every
+question on one thread and ask them side by side.
 """
 from __future__ import annotations
 
@@ -49,6 +52,17 @@ class ArmReply:
     prompt_tokens: int
     dropped_ids: tuple[str, ...] = ()
     choice: TasteChoice | None = None
+
+
+@dataclass(frozen=True)
+class Question:
+    """What one arm will ask about one probe: read from the ports, before any model call."""
+
+    arm: Arm
+    probe: Probe
+    adapter: CheckpointRef | None
+    context: str | None
+    dropped_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,10 +156,10 @@ def reply_seed(run_seed: int, probe_id: str, arm: Arm) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
-def reply(
+def prepare(
     arm: Arm, user_id: str, probe: Probe, *, deps: ArmDeps, donor: str | None = None,
-) -> ArmReply:
-    """``arm``'s answer to ``probe`` for ``user_id``.
+) -> Question:
+    """What ``arm`` will ask about ``probe`` for ``user_id``: its adapter and context, no model call.
 
     ``donor`` is for callers that name one (arm 3x): any donor other than the registered one is
     refused before a single adapter is asked for.
@@ -161,6 +175,12 @@ def reply(
         context = _context(user_id, probe, deps)
         if arm == "2F":
             context, dropped = _with_all_evidence(context, probe, user_id, deps)
+    return Question(arm, probe, adapter, context, dropped)
+
+
+def ask(question: Question, *, deps: ArmDeps) -> ArmReply:
+    """The model's answer to a prepared question: its only port is the model (or its log-probabilities)."""
+    probe, adapter, context, dropped = question.probe, question.adapter, question.context, question.dropped_ids
     if probe.kind == "taste_ab":
         choice = forced_choice(deps.logprobs, adapter, context, probe)
         tokens = sum(estimate_tokens(m["content"]) for m in present(probe, (0, 1), context))
@@ -170,6 +190,13 @@ def reply(
         messages.insert(0, {"role": "system", "content": context})
     result = deps.model.complete(
         adapter, messages, temperature=deps.temperature,
-        seed=reply_seed(deps.run_seed, probe.id, arm),
+        seed=reply_seed(deps.run_seed, probe.id, question.arm),
     )
     return ArmReply(result.text, result.input_tokens, dropped)
+
+
+def reply(
+    arm: Arm, user_id: str, probe: Probe, *, deps: ArmDeps, donor: str | None = None,
+) -> ArmReply:
+    """``arm``'s answer to ``probe`` for ``user_id``: ``prepare``, then ``ask``."""
+    return ask(prepare(arm, user_id, probe, deps=deps, donor=donor), deps=deps)

@@ -71,10 +71,15 @@ class Chat:
         self.dragged = dragged_by_ckpt
         self.word = field_word
         self.seeds: list[int | None] = []
+        self.caps: list[tuple[bool, int | None]] = []
 
-    def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float, seed: int | None = None) -> ChatResult:
+    def complete(
+        self, adapter: Any, messages: list[dict[str, str]], *, temperature: float, seed: int | None = None,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
         self.seeds.append(seed)
         content = messages[-1]["content"]
+        self.caps.append((content.startswith("# collapse_judge_v1"), max_tokens))
         if content.startswith("# collapse_judge_v1"):
             reply = content.split("<reply>")[1]
             return _reply("YES" if self.word in reply else "NO")
@@ -93,6 +98,15 @@ def test_collapse_gate_counts_only_prompts_outside_the_field_and_rejects_drag() 
     assert ok.passed and ok.value == 5.0
     bad = CollapseGate(Chat({1, 2}), ["recycling"], prompts=prompts, thresholds=LIMITS).check(CKPT)
     assert not bad.passed and bad.value == 10.0 and bad.reason is not None and "c02" in bad.reason
+
+
+def test_the_collapse_verdict_is_capped_and_the_replies_it_judges_are_not() -> None:
+    from anjo.sleep.gates.collapse import VERDICT_MAX_TOKENS
+
+    chat = Chat({1})
+    CollapseGate(chat, ["recycling"], prompts=_prompts(21), thresholds=LIMITS, workers=1).check(CKPT)
+    assert VERDICT_MAX_TOKENS == 8 and {cap for judged, cap in chat.caps if judged} == {VERDICT_MAX_TOKENS}
+    assert {cap for judged, cap in chat.caps if not judged} == {None}  # a reply is judged whole, at the client's cap
 
 
 class SafetyChat:

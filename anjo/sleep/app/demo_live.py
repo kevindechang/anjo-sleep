@@ -235,7 +235,8 @@ class GlimmerArms:
 def glimmer_deps(user_id: str, serving: Serving, *, load_wait_s: float) -> Callable[[date], ArmDeps]:
     """The arms' ports for ``user_id``, as the morning run wires them, on one client that waits up to
     ``load_wait_s`` for an adapter folder Glimmer can't see yet: 0 on the live page, where a visitor
-    waits on the answer, ``client.LOAD_WAIT_S`` for the pre-generated pairs."""
+    waits on the answer, ``client.LOAD_WAIT_S`` for the pre-generated pairs. A visitor's answer sends each
+    request once (``VllmClient.once``), as a turn does; a pre-generated pair sends a lost one again."""
     from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
     from anjo.sleep.app.storage import brief_store, checkpoint_registry, evidence_store
     from anjo.sleep.context.brief_store import ServedBriefs
@@ -244,7 +245,8 @@ def glimmer_deps(user_id: str, serving: Serving, *, load_wait_s: float) -> Calla
 
     def deps(until: date) -> ArmDeps:
         if not made:
-            made.append(serving.client().with_load_wait(load_wait_s))
+            client = serving.client().with_load_wait(load_wait_s)
+            made.append(client if load_wait_s else client.once())
         model = made[0]
         return ArmDeps(
             model=model, adapters=checkpoint_registry(), logprobs=model, donors={}, until=until,

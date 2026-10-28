@@ -1,0 +1,195 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
+"""One request lost on the way to Glimmer no longer fails a whole night (night 1's rerun, 2026-10-28:
+the safety gate died on a ReadTimeout after 300 s for a request Modal never delivered).
+
+The night's client sends a request lost in transport again, at most twice, with a short pause; a
+status from the server is an answer and is never sent again. A warm server gets a shorter timeout
+per attempt than a cold start does, and every attempt of one request still ends inside the 300 s
+one request could always take. One client never has more requests in flight than one server
+container takes. A chat turn and the live page send once. The night log counts what was sent
+again, step by step. Fakes only: no network."""
+from __future__ import annotations
+
+import json
+import threading
+import time
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+
+from anjo.sleep.serving import client as vllm
+from anjo.sleep.serving import config
+from anjo.sleep.serving.client import ServingError, VllmClient
+from anjo.sleep.tests.test_adapter_load import ADAPTER, MESSAGES, LiveVllm, Waits
+
+COMPLETIONS = "/v1/completions"
+
+
+class Lossy(LiveVllm):
+    """vLLM behind a proxy that loses requests: the first ``lose`` requests to each path in ``paths``
+    never come back (``error``), and each request's read timeout is kept."""
+
+    def __init__(self, lose: int, paths: tuple[str, ...] = (COMPLETIONS,), error: type[httpx.TransportError] = httpx.ReadTimeout) -> None:
+        super().__init__()
+        self.lose, self.lost_paths, self.error = lose, paths, error
+        self.timeouts: list[tuple[str, float]] = []
+        self.seen: dict[str, int] = {}
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.timeouts.append((path, request.extensions["timeout"]["read"]))
+        self.seen[path] = self.seen.get(path, 0) + 1
+        if path in self.lost_paths and self.seen[path] <= self.lose:
+            raise self.error("lost on the way", request=request)
+        return super().__call__(request)
+
+
+def _client(fake: Any, waits: Waits) -> VllmClient:
+    return VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(fake),
+                      adapters_dir=config.ADAPTERS_DIR, clock=waits.clock, sleep=waits.sleep)
+
+
+def test_transport_error_retries_then_succeeds() -> None:
+    fake, waits = Lossy(lose=1, paths=(COMPLETIONS, vllm.LOAD_PATH)), Waits()
+    client = _client(fake, waits)
+    assert client.complete(ADAPTER, MESSAGES, temperature=1.0, seed=3).text == "hello"
+    assert fake.seen[COMPLETIONS] == 2 and fake.seen[vllm.LOAD_PATH] == 2  # the load is sent again too
+    assert waits.slept == [vllm.BACKOFF_S[0]] * 2
+    assert client.retries() == 2 and client.on(date(2026, 11, 1)).retries() == 2  # its copies share the count
+
+
+def test_transport_error_gives_up_after_three_attempts() -> None:
+    fake, waits = Lossy(lose=99, error=httpx.ConnectError), Waits()
+    client = _client(fake, waits)
+    with pytest.raises(ServingError, match="failed in transport") as raised:
+        client.complete(None, MESSAGES, temperature=1.0, seed=3)
+    assert "hi" not in str(raised.value)
+    assert vllm.ATTEMPTS == 3 and fake.seen[COMPLETIONS] == 3 and fake.seen["/tokenize"] == 2
+    assert waits.slept == list(vllm.BACKOFF_S) and client.retries() == 2
+
+
+@pytest.mark.parametrize("status", [400, 429, 500, 503])
+def test_status_error_is_not_retried(status: int) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(status, json={"error": "busy"})
+
+    seen: list[str] = []
+    waits = Waits()
+    client = _client(answer, waits)
+    with pytest.raises(ServingError, match=str(status)):
+        client.complete(None, MESSAGES, temperature=1.0)
+    assert seen == ["/tokenize"] and waits.slept == []  # the server answered: an answer is never sent again
+    assert client.retries() == 0
+
+
+def test_warm_attempt_timeout_is_shorter_than_cold() -> None:
+    fake, waits = Lossy(lose=0), Waits()
+    client = _client(fake, waits)
+    client.complete(None, MESSAGES, temperature=1.0)
+    first, *after = (timeout for _, timeout in fake.timeouts)
+    assert first == vllm.REQUEST_TIMEOUT_S  # the first request after a wake may meet a cold start
+    assert after == [vllm.WARM_TIMEOUT_S] * 2 and vllm.WARM_TIMEOUT_S < vllm.REQUEST_TIMEOUT_S
+    waits.now += config.SCALEDOWN_S  # silent past Modal's scale-down: the container may be gone
+    client.complete(None, MESSAGES, temperature=1.0)
+    assert fake.timeouts[3][1] == vllm.REQUEST_TIMEOUT_S
+
+    # every attempt of one request, and the pauses between, end inside what one request could always take
+    assert vllm.ATTEMPTS * vllm.WARM_TIMEOUT_S + sum(vllm.BACKOFF_S) <= vllm.REQUEST_TIMEOUT_S
+
+    class Hangs(Lossy):  # a lost request hangs until its attempt's timeout
+        def __init__(self, waits: Waits, paths: tuple[str, ...]) -> None:
+            super().__init__(lose=99, paths=paths)
+            self.waits = waits
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path in self.lost_paths:
+                self.waits.now += request.extensions["timeout"]["read"]
+            return super().__call__(request)
+
+    waits = Waits()
+    warm = Hangs(waits, (COMPLETIONS,))  # the chat's ids came back; every completion is then lost
+    with pytest.raises(ServingError, match="failed in transport"):
+        VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(warm), clock=waits.clock,
+                   sleep=waits.sleep).complete(None, MESSAGES, temperature=1.0)
+    assert [t for path, t in warm.timeouts if path == COMPLETIONS] == [vllm.WARM_TIMEOUT_S] * 3
+    assert waits.now == 3 * vllm.WARM_TIMEOUT_S + sum(vllm.BACKOFF_S) <= vllm.REQUEST_TIMEOUT_S
+
+    waits = Waits()
+    cold = Hangs(waits, ("/tokenize",))  # the first request after a wake is lost: it had the whole 300 s
+    with pytest.raises(ServingError, match="failed in transport"):
+        VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(cold), clock=waits.clock,
+                   sleep=waits.sleep).complete(None, MESSAGES, temperature=1.0)
+    assert [t for _, t in cold.timeouts] == [vllm.REQUEST_TIMEOUT_S] and waits.now == vllm.REQUEST_TIMEOUT_S
+
+
+def test_in_flight_never_exceeds_server_slots() -> None:
+    class Busy(LiveVllm):
+        def __init__(self) -> None:
+            super().__init__()
+            self.now = self.most = 0
+            self.lock = threading.Lock()
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            with self.lock:
+                self.now += 1
+                self.most = max(self.most, self.now)
+            try:
+                time.sleep(0.01)
+                return super().__call__(request)
+            finally:
+                with self.lock:
+                    self.now -= 1
+
+    fake = Busy()
+    client = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(fake),
+                        adapters_dir=config.ADAPTERS_DIR)
+    copies = [client, client.on(date(2026, 11, 1)), client.with_load_wait(0)]
+    threads = [threading.Thread(target=lambda i=i: copies[i % 3].complete(ADAPTER, MESSAGES, temperature=1.0, seed=i))
+               for i in range(40)]  # more threads than any step runs, through every copy at once
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert 1 < fake.most <= config.CONCURRENT_REQUESTS
+
+
+def test_night_log_counts_retries(tmp_path: Path) -> None:
+    from anjo.sleep.night import daily
+    from anjo.sleep.night.run import run_night_batch_with
+    from anjo.sleep.sim.day import DayRun
+    from anjo.sleep.tests.night_fakes import NIGHT, World, step
+    from anjo.sleep.types import NightResult
+
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    reads = iter([0, 2, 2, 5])  # the client's running count, read as practice and the gates start and end
+    result = run_night_batch_with(world.deps(retries=lambda: next(reads)), {"p1": NIGHT})["p1"]
+    assert step(result.log_path, "practice")["retries"] == 2 and step(result.log_path, "gates")["retries"] == 3
+
+    quiet = World(tmp_path / "quiet")
+    quiet.plan("p1", NIGHT)
+    calm = run_night_batch_with(quiet.deps(), {"p1": NIGHT})["p1"]
+    assert "retries" not in step(calm.log_path, "practice") and "retries" not in step(calm.log_path, "gates")
+
+    class Ports:
+        def __init__(self) -> None:
+            self.reads = iter([7, 8])
+
+        def retries(self) -> int:
+            return next(self.reads)
+
+    at = datetime(2026, 10, 30, 2, 0, tzinfo=daily.TAIPEI)
+    markers = tmp_path / "markers"
+    daily.write_marker(markers, "founder", date(2026, 10, 29), 1, DayRun((at, at), 4, 0, ()))
+    folder = tmp_path / "night"
+    folder.mkdir()
+    daily.run_night_phase("acct", "founder", at, markers=markers, morning=lambda *a: Ports(),
+                          nights=lambda **kw: {"acct": NightResult("rejected", None, None, {}, (), 0.0, {}, folder / "log.jsonl")},
+                          score=lambda *a, **kw: None)
+    [morning] = [json.loads(line) for line in (folder / "log.jsonl").read_text().splitlines()]
+    assert morning["step"] == "morning" and morning["retries"] == 1  # a count, never what was sent

@@ -129,7 +129,14 @@ def test_the_night_offers_studies_through_wonder_homework_and_runs_full_practice
     assert homework._names is person_names  # the search screen knows the person's names
     practice: Any = deps.practice(lambda *a, **k: None, date(2026, 10, 28))  # type: ignore[arg-type]
     assert isinstance(practice, FullPractice) and practice.max_spark_calls == 1 + 2 * 16
+    assert practice._workers == 8  # ANJO_SLEEP_CONCURRENCY unset: eight calls at once
     assert (deps.settings.practice_scenes, deps.settings.practice_teacher) == (16, True)
+    monkeypatch.setenv("ANJO_SLEEP_CONCURRENCY", "1")
+    serial: Any = night.build(NoTrainer(), NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"}))
+    assert serial.practice(lambda *a, **k: None, date(2026, 10, 28))._workers == 1
+    gates: Any = deps.gates
+    assert gates._safety._workers == 8 and gates.for_person("synthetic-founder")["collapse"].__self__._workers == 8
+    assert serial.gates._safety._workers == 1  # generation gates follow the setting
     chosen = night.build(NoTrainer(), NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"},
                                                    practice_scenes=20, practice_teacher=False))
     assert (chosen.settings.practice_scenes, chosen.settings.practice_teacher) == (20, False)
@@ -232,3 +239,20 @@ def test_a_simulated_day_on_its_own_holds_the_night_lock(monkeypatch: pytest.Mon
         seen.clear()
         inside: Any = sim_transport.simulate("synthetic-founder", "founder", 3, 7)
     assert inside == "day" and seen == ["busy"]
+
+
+def test_the_morning_counts_requests_the_judge_and_glimmer_sent_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import morning
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    monkeypatch.setenv(morning.DONORS_ENV, "synthetic-founder=synthetic-donor")
+    monkeypatch.setattr(morning, "load_sealed", lambda path: [])
+    ports = morning.build("synthetic-founder", "founder", date(2026, 10, 28))
+    judge: Any = ports.judge
+    assert ports.retries() == 0
+    judge.chat.keywords["retries"].counted()  # the Meta API answered 429, and the judge's call went again
+    assert ports.retries() == 1 and ports.concurrency == 8

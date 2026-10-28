@@ -6,19 +6,30 @@ repr: errors name the provider, the model and the HTTP status, never a response 
 transport error's text, and they don't chain the transport's exception. No object here holds a
 key.
 
-There are no retries. The caller retries if it wants to, and ``budget.py`` debits every attempt,
-failed ones included (Task 5).
+There are no retries unless the caller passes ``Retries``: then a reply of 429 or 5xx (the
+provider was busy, and charged nothing) is asked for again, ``Retries.attempts`` in all, after the
+provider's ``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or the backoff in ``BACKOFF_S``.
+Any other status, and a transport failure, is raised at once. Each call still counts once in what
+the caller meters: a retried status carries no tokens. ``budget.py`` debits every attempt the caller
+makes, failed ones included (Task 5).
 """
 from __future__ import annotations
 
 import logging
+import math
 import os
-from dataclasses import dataclass
-from typing import Any
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, Final
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
+BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and the third, without a Retry-After
+RETRY_AFTER_MAX_S: Final = 30.0  # the longest a provider's Retry-After is waited for
 
 
 class ModelApiError(RuntimeError):
@@ -53,6 +64,30 @@ class ChatResult:
     finish_reason: str | None
 
 
+@dataclass(frozen=True)
+class Retries:
+    """How a call answered 429 or 5xx goes again: ``len(BACKOFF_S) + 1`` attempts in all. ``counted``
+    hears each one sent again (the night log's count)."""
+
+    sleep: Callable[[float], None] = time.sleep
+    counted: Callable[[], None] = field(default=lambda: None)
+
+    def pause(self, attempt: int, response: httpx.Response) -> float | None:
+        """The wait before sending again after ``response`` on ``attempt`` (from 0); None: never again."""
+        if response.status_code not in RETRY_STATUSES or attempt >= len(BACKOFF_S):
+            return None
+        return _retry_after(response.headers.get("retry-after")) or BACKOFF_S[attempt]
+
+
+def _retry_after(value: str | None) -> float | None:
+    """A Retry-After in seconds, capped; None for an HTTP date or anything else."""
+    try:
+        seconds = float(value) if value is not None else math.nan
+    except ValueError:
+        return None
+    return min(seconds, RETRY_AFTER_MAX_S) if math.isfinite(seconds) and seconds > 0 else None
+
+
 def read_key(env_var: str) -> str:
     """The key in ``env_var``, or ``MissingApiKey`` naming the variable (never a value)."""
     key = os.environ.get(env_var, "").strip()
@@ -73,9 +108,10 @@ def post_chat(
     temperature: float | None,
     transport: httpx.BaseTransport | None,
     max_tokens: int | None = None,
+    retries: Retries | None = None,
 ) -> ChatResult:
     """POST one chat completion to ``url`` and parse the reply. ``max_tokens`` caps the reply
-    (sent as ``max_completion_tokens``)."""
+    (sent as ``max_completion_tokens``); ``retries`` sends a busy provider's 429 or 5xx again."""
     body: dict[str, Any] = {"model": model, "messages": messages}
     if tools is not None:
         body["tools"] = tools
@@ -88,6 +124,11 @@ def post_chat(
     try:
         with httpx.Client(timeout=timeout_s, transport=transport) as client:
             response = client.post(url, json=body, headers=headers)
+            attempt = 0
+            while retries is not None and (pause := retries.pause(attempt, response)) is not None:
+                retries.counted()
+                retries.sleep(pause)
+                response, attempt = client.post(url, json=body, headers=headers), attempt + 1
     except httpx.TimeoutException:
         raise ModelApiError(f"{where} timed out after {timeout_s:g}s") from None
     except httpx.HTTPError as exc:

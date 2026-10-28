@@ -525,17 +525,17 @@ class NightRunner:
 
     # ── the GPU steps ────────────────────────────────────────────────────────
 
-    def _serving(self, p: _Night, part: str, started: float) -> float:
-        seconds = max(0.0, self._timer() - started)
+    def _serving(self, p: _Night, part: str, started: tuple[float, int]) -> dict[str, Any]:
+        seconds, retries = max(0.0, self._timer() - started[0]), self.deps.retries() - started[1]
         p.spend.add(part, seconds / 3600.0 * self.deps.prices.serve_gpu_per_hour)  # type: ignore[arg-type]
-        return seconds
+        return {"seconds": seconds, **({"retries": retries} if retries else {})}  # requests sent again: a count
 
     def _practice(self, p: _Night) -> Mapping[str, Any]:
         kept = self.deps.transcripts(p.uid).for_night(p.night)
         if kept:  # a rerun of the night reuses the practice it already paid for
             p.store.add([transcript.evidence() for transcript in kept])
             return {"scenes": len(kept), "reused": True, "homework": None}
-        started = self._timer()
+        started = self._timer(), self.deps.retries()
         p.spend.part = "practice"
         runner = self.deps.practice(p.spend.wrap_chat(self.deps.spark_chat), p.night)
         with self._metered(p, "practice", "practice", runner.max_spark_calls):
@@ -549,7 +549,7 @@ class NightRunner:
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, "seconds": self._serving(p, "practice", started)}
+                "homework": None, **self._serving(p, "practice", started)}
 
     def _dataset(self, p: _Night) -> Mapping[str, Any]:
         settings = self.deps.settings
@@ -585,12 +585,12 @@ class NightRunner:
     def _gates(self, p: _Night) -> Mapping[str, Any]:
         assert p.checkpoint is not None
         woke = self._wake_again(p)  # training takes long enough for Modal to idle out
-        started = self._timer()
+        started = self._timer(), self.deps.retries()
         for name, check in self.deps.gates.for_person(p.uid).items():
             p.gates[name] = check(p.checkpoint)
         p.gated = True
         return {"gates": {name: gate_record(result) for name, result in p.gates.items()},
-                "seconds": self._serving(p, "gates", started),
+                **self._serving(p, "gates", started),
                 **({} if woke is None else {"wake_seconds": woke})}
 
     def _promote(self, p: _Night) -> Mapping[str, Any]:

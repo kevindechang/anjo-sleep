@@ -361,6 +361,7 @@ these names; their values never enter the repo:
 | `ANJO_SLEEP_INSTANCE_TYPE` | `ml.g6e.xlarge` (default) or `ml.g6e.2xlarge`; read by `deploy` only, which the `--instance-type` option overrides |
 | `ANJO_SLEEP_PRICES` | `spark_in,spark_out,train_gpu_hour,serve_gpu_hour`; the first two are Muse Spark 1.3's standard list prices, `1.25,4.25` (Meta's pricing page, checked 2026-10-28; Wonder's `4.00/20.00` is fixed in `homework/agent.py`); the last follows the chosen type: `2.61` on g6e.xlarge, `2.81` on g6e.2xlarge |
 | `VERTEX_MIN_CONSENT_VERSION` | `6`: the AI consent version the Gemma talker's gate asks for. Without it the consent gate fails closed and a flagged turn never reaches the talker |
+| `ANJO_SLEEP_CONCURRENCY` | optional: how many of a night step's model calls run at once in practice, the collapse and safety gates and the morning run, 1 to 16; `8` when unset, `1` for one at a time as before Oct 28 (`anjo/sleep/parallel.py`). The general gate, log-probabilities only, keeps the server's 16. |
 | `GCP_PROJECT`, `GCP_LOCATION` | the frontier talker's Vertex project |
 | `RESEND_API_KEY` | needed to create password accounts: production mode refuses password registration without email |
 

@@ -332,6 +332,8 @@ class NightDeps:
     wake: Callable[[], WakeResult] | None = None
     # Puts Glimmer back to sleep when the batch ends, however it ends; None sleeps nothing (Modal idles out).
     sleep: Callable[[], None] | None = None
+    # The Glimmer client's running count of requests it sent again (``VllmClient.retries``); logged per step.
+    retries: Callable[[], int] = field(default=lambda: 0)
 
 
 @dataclass(frozen=True)

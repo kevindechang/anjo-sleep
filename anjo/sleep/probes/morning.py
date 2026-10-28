@@ -17,23 +17,33 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
 - Every paid call is held first, the way ``night/holds.py`` does it: the arms on ``modal_usd`` and
   ``baseten_sleep_usd``, the judge on ``meta_usd``. The judge's hold is taken before any arm runs, so
   a pool without room stops the run before the first call.
+- With ``concurrency`` above 1 every arm's question is prepared first, on the calling thread
+  (``arms.prepare``: adapters, context C, the stored evidence), then the questions are asked side by
+  side, then every (pair, probe) is judged side by side, at most ``concurrency`` at once
+  (``parallel.Calls``). Replies and outcomes are gathered by arm, pair and probe, never by when they
+  came back, so the score file is the serial run's given the same replies. The holds' bounds still
+  cover the worst case: the judge's counts calls, and the GPU bills wall time, which calls in
+  parallel only shorten.
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import Bound, Ledger
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
-from anjo.sleep.probes.arms import ARMS, Arm, ArmDeps, ArmReply, DonorError, reply
+from anjo.sleep.parallel import Calls
+from anjo.sleep.probes.arms import ARMS, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
 from anjo.sleep.probes.clients import AdapterRegistry
 from anjo.sleep.probes.score import (
     REPORTED,
@@ -42,7 +52,7 @@ from anjo.sleep.probes.score import (
     PairwiseJudge,
     ProbeOutcome,
     Verdict,
-    pair_outcomes,
+    probe_outcome,
     score_outcomes,
 )
 from anjo.sleep.reports import results
@@ -79,6 +89,8 @@ class Morning:
     timer: Callable[[], float] = time.monotonic
     wake: Callable[[], WakeResult] | None = None  # wakes Glimmer before any arm calls it
     sleep: Callable[[], None] | None = None  # puts it back to sleep when the run ends, however it ends
+    concurrency: int = 1  # model calls at once (``parallel.Calls``); 1 is the serial run
+    retries: Callable[[], int] = field(default=lambda: 0)  # the arms' running count of requests sent again (the night log's)
 
 
 @dataclass(frozen=True)
@@ -99,12 +111,16 @@ class _Pinned:
 
 
 class _Counting:
+    """The judge, its calls counted for the hold: every call, from any thread."""
+
     def __init__(self, inner: PairwiseJudge) -> None:
         self._inner = inner
+        self._lock = threading.Lock()
         self.calls = 0
 
     def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
-        self.calls += 1
+        with self._lock:
+            self.calls += 1
         return self._inner.verdict(probe, first, second)
 
 
@@ -145,18 +161,42 @@ def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome]) -> 
 
 
 def _answer(
-    user_id: str, probes: Sequence[Probe], deps: ArmDeps,
+    user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls,
 ) -> tuple[dict[Arm, list[ArmReply]], dict[str, str]]:
-    replies: dict[Arm, list[ArmReply]] = {}
+    """Every arm's questions prepared here, in arm and probe order, then asked side by side."""
+    questions: dict[Arm, list[Question]] = {}
     unavailable: dict[str, str] = {}
     for arm in ARM_ORDER:
         try:
-            replies[arm] = [reply(arm, user_id, p, deps=deps) for p in probes]
+            questions[arm] = [prepare(arm, user_id, p, deps=deps) for p in probes]
         except DonorError:
             if arm != "3x":
                 raise
             unavailable[arm] = DONOR_UNAVAILABLE  # a code: score files hold ids, codes and numbers only
-    return replies, unavailable
+    answers = iter(calls.map(partial(ask, deps=deps), [q for asked in questions.values() for q in asked]))
+    return {arm: [next(answers) for _ in asked] for arm, asked in questions.items()}, unavailable
+
+
+def _comparisons(replies: Mapping[Arm, Sequence[ArmReply]]) -> list[tuple[str, Arm, Arm]]:
+    """Each arm against arm 1, then the headline pairs whose arms both answered, in file order."""
+    found = [(f"{arm}_vs_1", arm, BASELINE) for arm in ARM_ORDER if arm != BASELINE and arm in replies]
+    return found + [(name, a, b) for name, (a, b) in PAIRS.items() if a in replies and b in replies]
+
+
+def _judged(
+    probes: Sequence[Probe], replies: Mapping[Arm, Sequence[ArmReply]], judge: PairwiseJudge, calls: Calls,
+) -> list[tuple[str, Arm, Arm, list[ProbeOutcome]]]:
+    """Every comparison's per-probe outcomes, judged side by side, gathered by comparison and probe."""
+    comparisons = _comparisons(replies)
+    jobs = [(first, second, index) for _, first, second in comparisons for index in range(len(probes))]
+
+    def outcome(job: tuple[Arm, Arm, int]) -> ProbeOutcome:
+        first, second, index = job
+        return probe_outcome(probes[index], replies[first][index], replies[second][index], judge)
+
+    found = calls.map(outcome, jobs)
+    size = len(probes)
+    return [(name, a, b, found[n * size:(n + 1) * size]) for n, (name, a, b) in enumerate(comparisons)]
 
 
 def _worst_judge_calls(probes: Sequence[Probe]) -> int:
@@ -215,23 +255,19 @@ def _run_morning(
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
                                  lambda: morning.prices.serve_gpu_per_hour * max(0.0, morning.timer() - started) / 3600.0))
-        replies, unavailable = _answer(user_id, probes, deps)
+        calls = Calls(morning.concurrency)
+        replies, unavailable = _answer(user_id, probes, deps, calls)
         config = BootstrapConfig.from_thresholds()
         rows: list[dict[str, object]] = []
         stats: dict[str, dict[str, dict[str, object]]] = {}
         pairs: dict[str, dict[str, dict[str, object]]] = {}
-
-        def compare(name: str, first: Arm, second: Arm, into: dict[str, dict[str, dict[str, object]]], key: str) -> None:
-            found = pair_outcomes(probes, replies[first], replies[second], judge)
-            into[key] = _stats(score_outcomes(probes, [f.outcome for f in found], bootstrap=config))
+        for name, first, second, found in _judged(probes, replies, judge, calls):
+            scored = _stats(score_outcomes(probes, [f.outcome for f in found], bootstrap=config))
+            if second == BASELINE:  # the arms are sorted when written; the pairs keep _comparisons' order
+                stats[first] = scored
+            else:
+                pairs[name] = scored
             rows.extend(_rows(name, probes, found))
-
-        for arm in ARM_ORDER:
-            if arm != BASELINE and arm in replies:
-                compare(f"{arm}_vs_1", arm, BASELINE, stats, arm)
-        for name, (first, second) in PAIRS.items():
-            if first in replies and second in replies:
-                compare(name, first, second, pairs, name)
     stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
         "night": night.isoformat(), "label": label, "probes": len(probes),
@@ -239,6 +275,7 @@ def _run_morning(
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
     }
+    record["seconds"] = round(morning.timer() - started, 3)  # the arms and the judge, wall time
     if woke is not None:
         record["wake_seconds"] = woke.seconds
     folder.mkdir(parents=True, exist_ok=True)

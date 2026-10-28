@@ -233,7 +233,8 @@ def _report(
     results: Sequence[NightResult], *, fake: bool, days: int, sha: str, scores: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     summaries = [_normal(json.loads((r.log_path.parent / SUMMARY).read_text(encoding="utf-8"))) for r in results]
-    digest = hashlib.sha256(json.dumps([summaries, list(scores)], sort_keys=True, default=str).encode()).hexdigest()
+    timeless = [{k: v for k, v in sc.items() if k != "seconds"} for sc in scores]  # a morning's wall time varies
+    digest = hashlib.sha256(json.dumps([summaries, timeless], sort_keys=True, default=str).encode()).hexdigest()
     nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
                "cost_usd": s["cost_usd"], **_trained(r)}

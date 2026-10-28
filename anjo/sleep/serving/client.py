@@ -29,7 +29,25 @@ yet is asked for again for up to ``LOAD_WAIT_S``: a warm Modal container sees a 
 demo's pre-generated pairs); a chat turn and the live demo page load once (``load_adapter`` with no
 wait, ``with_load_wait(0)``). A later 404 naming a loaded adapter (its container restarted and forgot
 it) loads it again and tries once more. SageMaker's shim fetches and loads each adapter itself, so its
-client has no ``adapters_dir`` and never loads.
+client has no ``adapters_dir`` and never loads. One client serves many threads at once (the night's
+calls run side by side, ``parallel.Calls``): ``httpx.Client`` may be shared between threads, the
+loaded set changes only under one lock its copies share, and each adapter loads under a lock of its
+own, so threads that first name an adapter together load it once, and a call to one already loaded
+never waits behind another's load.
+
+**A request lost on the way goes again** (the night of 2026-10-28 failed its safety gate on one
+request Modal's proxy never delivered). The night's client sends a request that got no status back
+(``TransportFailed``) again, ``ATTEMPTS`` in all, after a short pause (``BACKOFF_S``): every request
+is an idempotent post (``/tokenize``, ``/v1/completions`` with its seed, an adapter load), so a repeat
+gives the same answer. A status is an answer and never goes again. Until the server has answered
+within its scale-down window an attempt may wait out a cold start (``REQUEST_TIMEOUT_S``); after that
+it gives up at ``WARM_TIMEOUT_S``. All the attempts of one request end within ``REQUEST_TIMEOUT_S`` of
+the first (warm: 3 x 90 + 2 + 4 = 276 s), so no bound built on one request's time changes. ``once()``
+sends each request once with the full timeout, as before: the live page, where a visitor waits. A
+client and its copies hold at most ``config.CONCURRENT_REQUESTS`` requests in flight, all one Modal
+container takes, so none waits in Modal's queue behind the client's own; ``retries()`` counts the
+requests sent again, for the night log. A turn's poster (``app.runtime``) is its own ``HttpPoster``,
+under its 20 s deadline, and never retries.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -43,9 +61,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from typing import Any, Final, Protocol, TypeVar
 
@@ -58,7 +77,14 @@ from anjo.sleep.types import CheckpointRef
 TOP_P: Final = 0.95
 TOP_K: Final = 64
 MAX_TOKENS: Final = 1024
-REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own limit
+REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own limit; one request's whole bound
+# The night's client sends a request lost in transport (no status came back) again: every night post
+# is idempotent, and its seed fixed, so a repeat gives the same answer. One attempt at a warm server
+# gives up at WARM_TIMEOUT_S, 2.25 times the slowest warm completion seen (40 s at 1,024 tokens, 16 at
+# once), so three attempts and their pauses (3 x 90 + 2 + 4 = 276 s) end inside REQUEST_TIMEOUT_S.
+WARM_TIMEOUT_S: Final = 90.0
+BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
+ATTEMPTS: Final = len(BACKOFF_S) + 1
 
 # Waking a scaled-to-zero server (``wake``): poll until it answers, under one hard total timeout.
 WAKE_TOTAL_TIMEOUT_S: Final = 600.0  # a cold start of the 30B model, with room to spare
@@ -81,6 +107,10 @@ class ServingError(RuntimeError):
 class ModelNotFound(ServingError):
     """The server answered 404: it doesn't serve the model named. A restarted container has
     forgotten the adapters loaded into it."""
+
+
+class TransportFailed(ServingError):
+    """The request or its reply was lost on the way: no status came back."""
 
 
 class GlimmerNotReady(ServingError):
@@ -207,25 +237,27 @@ class HttpPoster:
     def close(self) -> None:
         self._http.close()
 
-    def _send(self, path: str, body: Mapping[str, Any]) -> httpx.Response:
+    def _send(self, path: str, body: Mapping[str, Any], timeout_s: float | None) -> httpx.Response:
+        timeout = httpx.USE_CLIENT_DEFAULT if timeout_s is None else timeout_s
         try:
-            return self._http.post(path, json=dict(body))
+            return self._http.post(path, json=dict(body), timeout=timeout)
         except httpx.HTTPError as error:
-            raise ServingError(f"{path} failed in transport ({type(error).__name__})") from None
+            raise TransportFailed(f"{path} failed in transport ({type(error).__name__})") from None
 
-    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        response = self._send(path, body)
+    def post(self, path: str, body: Mapping[str, Any], *, timeout_s: float | None = None) -> dict[str, Any]:
+        """``timeout_s`` is this request's alone; None keeps the poster's."""
+        response = self._send(path, body, timeout_s)
         if response.status_code == 404:
             raise ModelNotFound(f"{path} returned HTTP 404")
         if response.is_error:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
 
-    def load_adapter(self, name: str, folder: str) -> bool:
+    def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
         other failure is ``ServingError`` naming the endpoint, never what the server said."""
-        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder})
+        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder}, timeout_s)
         if response.status_code == 400 and _ALREADY_LOADED in response.content:
             return True
         if response.status_code == 404:
@@ -235,8 +267,14 @@ class HttpPoster:
         return True
 
 
+class Loader(Protocol):
+    """What loads an adapter into vLLM (``HttpPoster.load_adapter``)."""
+
+    def load_adapter(self, name: str, folder: str) -> bool: ...
+
+
 def load_adapter(
-    poster: HttpPoster, name: str, folder: str, *, wait_s: float = 0.0,
+    poster: Loader, name: str, folder: str, *, wait_s: float = 0.0,
     clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Load adapter ``name`` from ``folder/name`` into the server; one already loaded counts. A folder
@@ -275,6 +313,88 @@ def utc_today() -> date:
     return datetime.now(timezone.utc).date()
 
 
+class _Sent:
+    """What a client and its copies share about their requests: the slots one client may fill at once
+    (``config.CONCURRENT_REQUESTS``, all one container takes), when the server last answered, and how
+    many requests went again."""
+
+    def __init__(self) -> None:
+        self.slots = threading.BoundedSemaphore(config.CONCURRENT_REQUESTS)
+        self._lock = threading.Lock()
+        self._answered: float | None = None
+        self._retries = 0
+
+    def warm(self, now: float) -> bool:
+        """Whether the server answered within its scale-down window (``config.SCALEDOWN_S``)."""
+        with self._lock:
+            return self._answered is not None and now - self._answered < config.SCALEDOWN_S
+
+    def answered(self, now: float) -> None:
+        with self._lock:
+            self._answered = now if self._answered is None else max(self._answered, now)
+
+    def retried(self) -> None:
+        with self._lock:
+            self._retries += 1
+
+    @property
+    def retries(self) -> int:
+        with self._lock:
+            return self._retries
+
+
+@dataclass(frozen=True)
+class _Requests:
+    """``Poster`` and ``Loader`` for one client. Each request takes one of the client's slots; one lost
+    in transport (``TransportFailed``) goes again, ``attempts`` in all, after the pauses in
+    ``BACKOFF_S``. An attempt gives up at a warm server's timeout, or at ``cold_s`` until the server
+    has answered within its scale-down window, and never later than ``cold_s`` after the first began.
+    A status is an answer, and never goes again. A poster other than ``HttpPoster`` keeps its own
+    timeout (SageMaker's), and reports no transport failure apart from the rest, so it is never retried."""
+
+    poster: Poster
+    sent: _Sent
+    attempts: int
+    cold_s: float
+    clock: Callable[[], float]
+    sleep: Callable[[float], None]
+
+    def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        poster = self.poster
+        if isinstance(poster, HttpPoster):
+            return self._send(lambda timeout: poster.post(path, body, timeout_s=timeout))
+        return self._send(lambda timeout: poster.post(path, body))
+
+    def load_adapter(self, name: str, folder: str) -> bool:
+        poster = self.poster
+        if not isinstance(poster, HttpPoster):
+            raise ServingError("only a server that reads adapters from a folder loads one")
+        return self._send(lambda timeout: poster.load_adapter(name, folder, timeout_s=timeout))
+
+    def close(self) -> None:
+        self.poster.close()
+
+    def _send(self, attempt: Callable[[float], T]) -> T:
+        deadline = self.clock() + self.cold_s
+        for pause in (*BACKOFF_S[: self.attempts - 1], None):
+            try:
+                with self.sent.slots:
+                    got = attempt(self._timeout(deadline))
+            except TransportFailed:
+                if pause is None or deadline - self.clock() <= pause:
+                    raise
+                self.sent.retried()
+                self.sleep(pause)
+                continue
+            self.sent.answered(self.clock())
+            return got
+        raise AssertionError("the last attempt returns or raises")
+
+    def _timeout(self, deadline: float) -> float:
+        warm = self.attempts > 1 and self.sent.warm(self.clock())
+        return min(WARM_TIMEOUT_S if warm else self.cold_s, deadline - self.clock())
+
+
 class VllmClient:
     """``ModelClient`` and ``TokenLogprobs`` over one vLLM server: Modal's https URL with its
     bearer token, or any other ``Poster`` (``VllmClient.over``). ``on(day)`` dates its prompts
@@ -292,23 +412,26 @@ class VllmClient:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         poster = HttpPoster(base_url, token, transport=transport, timeout_s=timeout_s)
-        self._setup(poster, max_tokens, None if adapters_dir is None else poster, adapters_dir)
         self._load_wait_s, self._clock, self._sleep = load_wait_s, clock, sleep
+        self._setup(poster, max_tokens, adapters_dir, timeout_s)
 
     @classmethod
     def over(cls, poster: Poster, *, max_tokens: int = MAX_TOKENS) -> VllmClient:
         """A client over ``poster``, whose server loads adapters itself (SageMaker's shim)."""
         client = cls.__new__(cls)
-        client._setup(poster, max_tokens, None, None)
         client._load_wait_s, client._clock, client._sleep = LOAD_WAIT_S, time.monotonic, time.sleep
+        client._setup(poster, max_tokens, None, REQUEST_TIMEOUT_S)
         return client
 
-    def _setup(self, poster: Poster, max_tokens: int, loader: HttpPoster | None, adapters_dir: str | None) -> None:
+    def _setup(self, poster: Poster, max_tokens: int, adapters_dir: str | None, cold_s: float) -> None:
         self._strength = config.reasoning_strength()
         self._poster, self._max_tokens = poster, max_tokens
+        self._requests = _Requests(poster, _Sent(), ATTEMPTS, cold_s, self._clock, self._sleep)
         self._day: date | None = None
-        self._loader, self._adapters_dir = loader, adapters_dir
+        self._adapters_dir = adapters_dir
         self._loaded: set[str] = set()
+        self._loading: dict[str, threading.Lock] = {}  # one lock per adapter, held while it loads
+        self._load_lock = threading.Lock()  # guards both; shared with every copy ``on``, ``with_load_wait`` and ``once`` make
 
     def on(self, day: date) -> VllmClient:
         """This client, its prompts dated ``day``; the poster is shared."""
@@ -324,6 +447,23 @@ class VllmClient:
         waiting.__dict__.update(self.__dict__)
         waiting._load_wait_s = seconds
         return waiting
+
+    def once(self) -> VllmClient:
+        """This client, sending each request once with the full ``REQUEST_TIMEOUT_S``, as a turn does: for
+        an answer someone is waiting on (the live page). Its slots and its count are shared."""
+        single = type(self).__new__(type(self))
+        single.__dict__.update(self.__dict__)
+        single._requests = replace(self._requests, attempts=1)
+        return single
+
+    @property
+    def attempts(self) -> int:
+        """How many times one request lost in transport is sent at most."""
+        return self._requests.attempts
+
+    def retries(self) -> int:
+        """How many requests this client and its copies have sent again, so far."""
+        return self._requests.sent.retries
 
     @property
     def load_wait_s(self) -> float:
@@ -349,13 +489,13 @@ class VllmClient:
         self._poster.close()
 
     def _post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self._poster.post(path, body)
+        return self._requests.post(path, body)
 
     def _tokens(self, body: Mapping[str, Any]) -> list[int]:
-        return tokens(self._poster, body)
+        return tokens(self._requests, body)
 
     def _prompt(self, model: str, messages: Sequence[Mapping[str, Any]]) -> list[int]:
-        return reply_prompt(self._poster, model, messages, self._strength, self._day or utc_today())
+        return reply_prompt(self._requests, model, messages, self._strength, self._day or utc_today())
 
     def _served(self, adapter: CheckpointRef | None, call: Callable[[str], T]) -> T:
         """``call`` with the model to name. An adapter trained under another rendering is refused
@@ -365,23 +505,36 @@ class VllmClient:
             raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
                                f"not {self.rendering}; it is never served under another")
         model = model_name(adapter)
-        if adapter is None or self._loader is None:
+        if adapter is None or self._adapters_dir is None:
             return call(model)
         self._ensure_loaded(model)
         try:
             return call(model)
         except ModelNotFound:
-            self._loaded.discard(model)
+            with self._load_lock:
+                self._loaded.discard(model)
             self._ensure_loaded(model)
             return call(model)
 
+    def _is_loaded(self, name: str) -> bool:
+        with self._load_lock:
+            return name in self._loaded
+
     def _ensure_loaded(self, name: str) -> None:
-        """Load ``name`` unless this client has (``load_adapter``, waiting ``load_wait_s``)."""
-        if name in self._loaded or self._loader is None or self._adapters_dir is None:
+        """Load ``name`` unless this client has (``load_adapter``, waiting ``load_wait_s``). A thread
+        that asks while another loads it waits for that load rather than sending its own; a call to an
+        adapter already loaded never waits on any load."""
+        if self._adapters_dir is None or self._is_loaded(name):
             return
-        load_adapter(self._loader, name, self._adapters_dir, wait_s=self._load_wait_s,
-                     clock=self._clock, sleep=self._sleep)
-        self._loaded.add(name)
+        with self._load_lock:
+            loading = self._loading.setdefault(name, threading.Lock())
+        with loading:
+            if self._is_loaded(name):
+                return
+            load_adapter(self._requests, name, self._adapters_dir, wait_s=self._load_wait_s,
+                         clock=self._clock, sleep=self._sleep)
+            with self._load_lock:
+                self._loaded.add(name)
 
     def complete(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], *, temperature: float,
