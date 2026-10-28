@@ -74,6 +74,13 @@ class PracticeRun:
     critic_usd: float = 0.0
     flagged: int = 0  # full practice: candidates the critic listed as missing a constraint, over kept scenes
 
+    def spend_record(self) -> dict[str, Any]:
+        """Full practice's counts for the night log: Spark Open's by role, who played each role, and a
+        third-party critic's calls and dollars; empty for practice that has none."""
+        return {**({"spark": self.spark, "capped_scenes": self.capped_scenes} if self.spark else {}),
+                **({"roles": dict(self.roles), "flagged": self.flagged} if self.roles else {}),
+                **({"critic": dict(self.third_party), "critic_usd": self.critic_usd} if self.third_party else {})}
+
 
 def has_cue(message: str) -> bool:
     folded = " ".join(message.casefold().split())

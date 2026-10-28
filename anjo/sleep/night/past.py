@@ -37,6 +37,7 @@ DATED_FIRST: Final = ("morning", "dailies", "modal_train", "colab_train", "colab
 # Colab's list price, 100 compute units for $9.99, rounded up: a night trained on Colab (the train
 # runner ``colab``) settles compute units (``colab_train:``, a life's ``colab_life:``), not dollars.
 COLAB_USD_PER_CU: Final = 0.10
+GATED: Final = ("promoted", "rejected")  # a deep night that reached the gates: one whose cost prices the next
 ATTEMPT: Final = re.compile(r"^(?P<base>.+):a(?P<n>\d+)$")  # ``holds.attempt_key``'s suffix
 NIGHTS: Final = "anjo.sleep.app.ownership:night_logs"  # where the sleep host keeps a person's nights
 _NONE: Final[Mapping[str, Any]] = MappingProxyType({})
@@ -188,11 +189,12 @@ def her_spend(
 
 def measured_deep(
     history: Sequence[Summary], settlements: Mapping[str, float], person: str, night: date,
-    settings: Mapping[str, bool], *, batches: Mapping[str, int] = _NONE, units: Mapping[str, float] = _NONE,
+    settings: Mapping[str, object], *, batches: Mapping[str, int] = _NONE, units: Mapping[str, float] = _NONE,
 ) -> tuple[float, ...]:
     """What her last ``MEASURED_NIGHTS`` deep nights before ``night`` at ``settings`` (their ``sleep``
-    records' ``core``, ``channel`` and ``practice_fresh``) settled at, newest first: every job dated on
-    the night, its morning included, Wonder's studies left out (held back apart)."""
+    records' ``gpu``, ``core``, ``channel`` and ``practice_fresh``) settled at, newest first: every job
+    dated on the night, its morning included, Wonder's studies left out (held back apart). Only a night
+    that reached the gates (promoted or rejected) counts: a failed or nothing-new one is no deep night's price."""
     by_night: dict[date, float] = {}
     for job, (dated, usd) in _dated_spend(settlements, person, batches, units).items():
         if not job.startswith("night:homework:"):
@@ -200,7 +202,8 @@ def measured_deep(
     found: list[float] = []
     for summary in sorted(history, key=lambda s: str(s.get("night")), reverse=True):
         on, sleep = _night(summary), summary.get("sleep")
-        if on is None or on >= night or not isinstance(sleep, Mapping) or sleep.get("kind") != "deep":
+        if on is None or on >= night or not isinstance(sleep, Mapping) or sleep.get("kind") != "deep" \
+                or summary.get("status") not in GATED:
             continue
         if all(sleep.get(key) == value for key, value in settings.items()) and by_night.get(on, 0.0) > 0:
             found.append(by_night[on])

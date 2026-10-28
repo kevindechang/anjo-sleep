@@ -67,6 +67,7 @@ from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS
 from anjo.sleep.gates.safety import SKIPPED_REASON
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.sleep_pressure import (
+    MAX_CATCH_UP_DAYS,
     MEASURED_MARGIN,
     MEASURED_NIGHTS,
     MEASURED_REUSED_USD,
@@ -76,6 +77,7 @@ from anjo.sleep.night.sleep_pressure import (
     SleepPolicyError,
     SleepState,
     decide,
+    fits,
     sleep_pressure,
 )
 from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
@@ -227,6 +229,11 @@ class Projection:
     def policy(self, policy: SleepPolicy) -> SleepPolicy:
         """``policy`` with its deep night sized by this setting's GPU and MIND's core."""
         return replace(policy, gpu=self.settings.gpu, core=self.settings.mind_core)
+
+    def practice_reused(self) -> Projection:
+        """This setting's nights with practice already paid for (a rerun's: 2026-10-29's shape)."""
+        return replace(self, trained={line: 0.0 if line.startswith("practice") else usd
+                                      for line, usd in self.trained.items()})
 
 
 # ── the night as logged ──────────────────────────────────────────────────────
@@ -476,8 +483,11 @@ class Usage:
 
 
 # The headline's two people, steady months (estimates until real traces replace them): an active one
-# talks every day and leaves about half a day's worth of items, so pressure builds to a deep sleep in a
-# few days; a quiet one leaves too little for pressure, and sleeps deep only at ``max_days``.
+# talks every day and leaves about half a day's worth of items, so pressure builds toward a deep sleep in
+# a few days; a quiet one leaves too little for pressure, and sleeps deep only at ``max_days``. Whether
+# the active one's pressure buys more deep nights is the cap's call: at a fresh practice's price both get
+# the same number (the active one sleeps hers early, then naps at the cap); only at a reused practice's
+# price does the active one sleep deep more.
 ACTIVE: Final = Usage("active", (DayLoad(turns=30, evidence=5),) * MONTH_NIGHTS)
 QUIET: Final = Usage("quiet", (DayLoad(turns=4, evidence=1),) * MONTH_NIGHTS)
 
@@ -486,28 +496,31 @@ def month_from_trace(trace: Sequence[DayLoad], policy: SleepPolicy, projection: 
                      study_usd: float = UNITS.homework_usd, measured: Sequence[float] = ()) -> MonthTrace:
     """Each day's night, decided as the live nights decide it (a deep night priced on her last measured
     ones, ``measured`` before the month and the month's own, newest first, or the model's before she has
-    one; the month's later nights and Wonder's room held back), at the projection's costs: a deep night, a
-    nap's own lines, nothing on a capped nap (its extract waits), and a Wonder study a night
+    one; the month's later nights, owed days and Wonder's room held back), at the projection's costs: a
+    deep night, a nap's own lines, nothing on a capped nap (its day's extract owed), the owed days' extract
+    on the next night with room (at most ``MAX_CATCH_UP_DAYS``), and a Wonder study a night
     (``study_usd``) until its month's dollars are spent, never on a capped nap."""
     policy = projection.policy(policy)
     nap_usd = math.fsum(projection.quiet.values())
-    spent, wonder, turns, evidence, last_deep, past = 0.0, 0.0, 0, 0, None, tuple(measured)
+    spent, wonder, turns, evidence, last_deep, past, owed = 0.0, 0.0, 0, 0, None, tuple(measured), 0
     nights: list[TracedNight] = []
     for i, day in enumerate(trace):
         turns, evidence = turns + day.turns, evidence + day.evidence
         since = None if i == 0 else i - (0 if last_deep is None else last_deep)
         state = SleepState(new_turns=turns, new_evidence=evidence, open_high_risk=day.high_risk,
                            days_since_deep=since, month_spent_usd=spent, nights_left=len(trace) - i - 1,
-                           wonder_left_usd=WONDER_MONTH_USD - wonder, measured_deep_usd=past[:MEASURED_NIGHTS])
+                           wonder_left_usd=WONDER_MONTH_USD - wonder, measured_deep_usd=past[:MEASURED_NIGHTS],
+                           owed_days=owed)
+        caught = min(owed, MAX_CATCH_UP_DAYS) if fits(state, policy, policy.nap_usd) else 0  # else at_cap: no extract
+        catch_up = caught * projection.quiet["extract"]
+        state = replace(state, month_spent_usd=spent + catch_up, owed_days=owed - caught)
         made = decide(state, policy, pressure=sleep_pressure(state))
         study = 0.0 if made.capped else min(study_usd, WONDER_MONTH_USD - wonder)
-        own = projection.deep if made.kind == "deep" else 0.0 if made.capped else nap_usd
+        own = catch_up + (projection.deep if made.kind == "deep" else 0.0 if made.capped else nap_usd)
         nights.append(TracedNight(made.kind, made.reason, made.pressure, made.threshold, own + study, made.capped))
-        spent, wonder = spent + own + study, wonder + study
+        spent, wonder, owed = spent + own + study, wonder + study, owed - caught + int(made.capped)
         if made.kind == "deep":
-            past = (projection.deep, *past)[:MEASURED_NIGHTS]
-        if made.kind == "deep":
-            turns, evidence, last_deep = 0, 0, i
+            turns, evidence, last_deep, past = 0, 0, i, (projection.deep, *past)[:MEASURED_NIGHTS]
     return MonthTrace(tuple(nights))
 
 
@@ -563,17 +576,23 @@ def _projection_report(found: Sequence[Projection], usages: Sequence[Usage], pol
     out.append(row("deep estimate", lambda p: p.policy(policy).deep_usd))
     out.append(row("quiet night", lambda p: math.fsum(p.quiet.values())))
     out.append(row("nap encode", lambda p: p.nap_encode))
-    months = {p.settings.name: _months(p, usages, policy) for p in found}
-    for i, usage in enumerate(usages):
-        out.append(row(f"month, {usage.name}", lambda p, i=i: months[p.settings.name][i].usd))
-        out.append(f"  {'  deep nights':<16}" + "".join(f"{months[p.settings.name][i].deep:>14}" for p in found))
+    for label, reused in (("month", False), ("reused", True)):
+        months = {p.settings.name: _months(p.practice_reused() if reused else p, usages, policy) for p in found}
+        for i, usage in enumerate(usages):
+            out.append(row(f"{label}, {usage.name}", lambda p, i=i: months[p.settings.name][i].usd))
+            out.append(f"  {'  deep nights':<16}" + "".join(f"{months[p.settings.name][i].deep:>14}" for p in found))
     out.append(row("worst case", lambda p: month(math.fsum(p.trained.values()), 0.0, trained_share=1.0)))
     out.append(row("morning (out)", lambda p: p.morning))
     out.append(row("spark cap bound", lambda p: p.spark_bound))
     out.append(f"  a month: its days through the nap-or-deep decision (a deep night with its morning, a nap its "
                f"quiet night, Wonder a ${UNITS.homework_usd:g} study a night until its ${WONDER_MONTH_USD:g} is spent), "
-               f"under the ${policy.month_usd:g} cap with the month's later nights held back; worst case: every "
-               f"night trained, no cap (ceiling ${CEILING_USD:g}). The morning run and MIND are outside the ceiling.")
+               f"under the ${policy.month_usd:g} cap with the month's later nights held back, practice fresh each "
+               f"deep night (month) or reused (a rerun's, already paid: 2026-10-29's ${MEASURED_REUSED_USD:.2f} shape); worst "
+               f"case: every night trained, no cap (ceiling ${CEILING_USD:g}). The morning run and MIND are outside "
+               "the ceiling.")
+    out.append("  deep nights: at a fresh practice's price the cap, not her pressure, sets how many, so an active and"
+               " a quiet month can sleep deep alike (the active one early, then naps at the cap); the active one sleeps"
+               " deep more only at a reused practice's price")
     out.extend(_estimate_notes(found, policy))
     out.append("  measured: extract, brief, training (this night); gates, the morning's arms and the cold start "
                "anchored on 2026-10-29, practice on 2026-10-28; the rest estimated (night.cost.UNITS)")

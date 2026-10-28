@@ -74,6 +74,7 @@ MEASURED_MARGIN: Final = 0.15  # on the highest of them: a base side recomputed 
 # a busy day's brief folds more), rounded up. Wonder's study is held back apart (``SleepState.wonder_left_usd``);
 # the nap's latent encode is planned, not live.
 NAP_USD: Final = 0.10
+MAX_CATCH_UP_DAYS: Final = 7  # days capped naps left unextracted that one night extracts; the rest stay owed
 
 # The stand-in's saturation counts and weights (estimates). The live night of 2026-10-28 extracted
 # 10 items from one simulated day, so about one full day of evidence saturates its term.
@@ -108,6 +109,7 @@ class SleepState:
     practice_fresh: bool = True  # False: a rerun of the night, its practice already paid for
     base_cached: bool = False  # the gates' base side known to be cached (a live night can't know before the wake)
     measured_deep_usd: tuple[float, ...] = ()  # her last deep nights' settled dollars at tonight's settings, newest first
+    owed_days: int = 0  # days capped naps left unextracted, each held back like a nap until a night extracts it
 
 
 @dataclass(frozen=True)
@@ -181,9 +183,9 @@ def deep_estimate(state: SleepState, policy: SleepPolicy) -> float:
 
 
 def fits(state: SleepState, policy: SleepPolicy, tonight_usd: float) -> bool:
-    """Tonight's cost fits under the month's cap with every later night of the month held back as a nap
-    and Wonder's room left held back too, so the month as a whole stays under it."""
-    held_back = max(0, state.nights_left) * policy.nap_usd + max(0.0, state.wonder_left_usd)
+    """Tonight's cost fits under the month's cap with every later night of the month and every owed day
+    held back as a nap and Wonder's room left held back too, so the month as a whole stays under it."""
+    held_back = (max(0, state.nights_left) + max(0, state.owed_days)) * policy.nap_usd + max(0.0, state.wonder_left_usd)
     return state.month_spent_usd + tonight_usd + held_back <= policy.month_usd + 1e-9
 
 

@@ -53,7 +53,6 @@ from datetime import date, datetime, timedelta
 from typing import Any, Final
 
 from anjo.sleep.night.deps import (
-    ALL_ACTIONS,
     STUDY_ACTIONS,
     MindCall,
     NightDeps,
@@ -68,16 +67,7 @@ from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
 from anjo.sleep.night.meter import SpendMeter, WonderMeter, WonderSpent
 from anjo.sleep.night.past import paid_within, spent_within
-from anjo.sleep.night.sleep_night import (
-    CAPPED_WHY,
-    DEFER_WHY,
-    deferred_days,
-    deferred_note,
-    mind_on,
-    put_off,
-    sleep_step,
-    unnoticed,
-)
+from anjo.sleep.night.sleep_night import CAPPED_WHY, DEFER_WHY, catch_up, deferred_note, mind_on, offered_tonight, owed_tonight, put_off, sleep_step, unnoticed
 from anjo.sleep.night.state import GPU_STEPS as GPU_STEPS
 from anjo.sleep.night.state import PersonNight, checkpoint_id, note_error, safe_error, study_outcome
 from anjo.sleep.night.state import Window as Window
@@ -314,10 +304,8 @@ class NightRunner:
     def _extract(self, p: PersonNight) -> Mapping[str, Any]:
         p.spend.part = "extract"
         source = self.deps.extractor(p.spend.wrap_extract(self.deps.extract_chat))
-        behind = deferred_days(summaries(self.deps.logs(p.uid)), p.night)  # days capped naps left: first
-        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS * (1 + len(behind))):
-            for day, window, as_of in behind:
-                source.extract_day(p.uid, day, window, as_of)
+        with self._metered(p, "extract", "extract", EXTRACT_MAX_CALLS * (1 + len(owed := owed_tonight(self.deps, p)))):
+            catch_up(source, p, owed)  # the days capped naps left, oldest first (sleep_night), then tonight's
             items = source.extract_day(p.uid, p.night, p.window, p.as_of)
         since = self._since(p)
         fresh = [
@@ -329,8 +317,7 @@ class NightRunner:
         for item in items:
             kinds[item.kind] = kinds.get(item.kind, 0) + 1
         return {"items": len(items), "kinds": kinds, "new_since_last_training": len(fresh),
-                "min_new_examples": self.deps.settings.min_new_examples, "training_night": p.due,
-                **({"caught_up": [day.isoformat() for day, _, _ in behind]} if behind else {})}
+                "min_new_examples": self.deps.settings.min_new_examples, "training_night": p.due}
 
     def _since(self, p: PersonNight) -> date | None:
         """The last trained night: the night of the checkpoint that serves, which the next night
@@ -403,19 +390,11 @@ class NightRunner:
             p.targets.record_expectation(made)
         return made.id
 
-    def _offered(self, p: PersonNight) -> frozenset[str]:
-        offered = set(ALL_ACTIONS)
-        if not self.deps.homework.available or p.capped:  # a capped nap pays for no study
-            offered -= STUDY_ACTIONS
-        if not self._mind() or p.napped:  # a nap's question stays live for her next deep sleep
-            offered.discard("inquire")
-        return frozenset(offered)
-
     def _choose(self, p: PersonNight) -> Mapping[str, Any]:
         deps = self.deps
         raw = self._raw(p)
         state = points.build(raw)
-        offered = self._offered(p)
+        offered = offered_tonight(deps, p)
         ctx = ChoiceContext(policy=deps.policy, allowance=p.wonder.allowance(p.actions_left), allowed_actions=offered)
         choice = deps.chooser.choose("away", deps.chooser.derive(state), ctx)
         p.choices.append(choice)
@@ -424,11 +403,9 @@ class NightRunner:
         cap = deps.settings.wonder_usd_month
         month = {"cap_usd": cap, "spent_usd": round(p.wonder_month_spent, 6),
                  "left_usd": round(max(0.0, cap - p.wonder_month_spent), 6)}
-        homework = "available" if deps.homework.available else "no-op: no study offered"
+        homework = (CAPPED_WHY if p.capped else "available") if deps.homework.available else "no-op: no study offered"
         if deps.homework.available and month["left_usd"] <= 0:
             homework = f"capped: the monthly Wonder cap of ${cap:.2f} is spent, so no study runs"
-        elif deps.homework.available and p.capped:
-            homework = CAPPED_WHY
         done: dict[str, Any] = {
             "action": action, "target_id": choice.target_id, "offered": sorted(offered),
             "allowance": {"actions_left": p.actions_left, "calls_left": p.wonder.calls_left, "usd_left": p.wonder.usd_left},
@@ -531,9 +508,7 @@ class NightRunner:
                 "targets": {"teacher": run.teacher_targets, "glimmer": len(run.transcripts) - run.teacher_targets,
                             "teacher_share": round(share, 4)},
                 "teacher_alarm": share > TEACHER_ALARM_SHARE,  # the critic alone promoted the teacher this often
-                "homework": None, **({"spark": run.spark, "capped_scenes": run.capped_scenes} if run.spark else {}),
-                **({"roles": dict(run.roles), "flagged": run.flagged} if run.roles else {}),
-                **({"critic": dict(run.third_party), "critic_usd": run.critic_usd} if run.third_party else {}), **channel,
+                "homework": None, **run.spend_record(), **channel,
                 **self._serving(p, "practice", started)}
 
     def _dataset(self, p: PersonNight) -> Mapping[str, Any]:
