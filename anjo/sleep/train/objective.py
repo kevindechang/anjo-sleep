@@ -17,12 +17,19 @@ Two more switches ride on ``sft_dpo_seed`` and are refused with any other object
 tonight's slot trains off the forgetting anchors' activation basis, or a random basis of the same shape
 (the ablation), and the fold keeps the projection (``sleep_protect.py``). The night ships the anchor rows.
 
+``ANJO_SLEEP_CAPACITY=1`` (2026-10-29, the knowledge ceiling's capacity point on a night) trains at the
+most rank the server takes (``MAX_LORA_RANK``) and ``CAPACITY_PASSES`` passes over the night's rows, one
+row a step, in place of the step plan; the rates, rows and DPO pass stay the recipe's. With any objective
+(``sft_dpo_seed`` carries it to the loss as ``terms.passes``; the others in the host's step plan), never
+with the fold, whose long-term adapter is at that rank already.
+
 Each switch off (unset, blank or ``0``) is today's night. The live comparison's matched control is no
 switch: it is set per run (``sim.accelerated --match-file``), so no host setting can pad a real night.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Final
 
 from anjo.sleep.night.dreams import Terms
@@ -33,6 +40,8 @@ OBJECTIVE_ENV: Final = "ANJO_SLEEP_OBJECTIVE"
 FOLD_ENV: Final = "ANJO_SLEEP_ADAPTER_FOLD"
 DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
 PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
+CAPACITY_ENV: Final = "ANJO_SLEEP_CAPACITY"
+CAPACITY_PASSES: Final = 3
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft_dpo", "sft", "sft_dpo_seed")
 DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo"
 SEED_OBJECTIVE: Final[Objective] = "sft_dpo_seed"
@@ -75,8 +84,12 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     if protect != "off" and not fold:
         raise ObjectiveError(f"{PROTECT_ENV} runs only with {OBJECTIVE_ENV}={SEED_OBJECTIVE} and {FOLD_ENV}=1: "
                              "the fold keeps tonight's slot apart from the long-term adapter")
+    capacity = _on(environ, CAPACITY_ENV)
+    if capacity and fold:
+        raise ObjectiveError(f"{CAPACITY_ENV} runs without {FOLD_ENV}: the fold's adapter is at the server's rank already")
     try:
-        return LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, protect=protect)
+        cfg = LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, protect=protect)
+        return replace(cfg, r=MAX_LORA_RANK, passes=CAPACITY_PASSES) if capacity else cfg
     except LoraCfgError as error:
         raise ObjectiveError(str(error)) from None
 

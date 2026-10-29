@@ -41,7 +41,7 @@ from anjo.sleep.serving import config
 from anjo.sleep.tests.night_fakes import World, step, window
 from anjo.sleep.train import colab_train, objective, sleep_fold, sleep_job, sleep_loss, terms
 from anjo.sleep.train.dataset import Dataset, Example
-from anjo.sleep.train.lora import LoraCfg, LoraCfgError, training_config
+from anjo.sleep.train.lora import LoraCfg, LoraCfgError, StepPlan, plan_steps, training_config
 from anjo.sleep.types import Evidence, Probe
 
 NIGHT = date(2026, 10, 29)
@@ -221,6 +221,43 @@ def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night()
         LoraCfg(objective="sft", fold_rank=32)
     with pytest.raises(LoraCfgError):
         LoraCfg(objective="sft_dpo_seed", fold_rank=8)  # the long-term slot holds at least a night
+
+
+def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> None:
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
+    cfg = objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"})
+    assert (cfg.objective, cfg.r, cfg.passes, cfg.fold_rank) == ("sft_dpo_seed", config.MAX_LORA_RANK, 3, None)
+    assert objective.night_terms({**seed, objective.CAPACITY_ENV: "1"}) == Terms(seed=True)  # the same rows
+    off = objective.night_cfg({**seed, objective.CAPACITY_ENV: "0"})
+    assert off == objective.night_cfg(seed) == LoraCfg(objective="sft_dpo_seed") and off.passes is None
+    assert plan_steps(40, cfg) == StepPlan(accumulation=1, epochs=3, steps_per_epoch=40)
+    sent = training_config(cfg, 12, warm=True, revision="a" * 40, night=NIGHT)
+    assert sent["terms"] == {"fold_rank": None, "dreams": False, "passes": 3} and (sent["r"], sent["alpha"]) == (32, 64)
+    assert (sent["accumulation"], sent["epochs"]) == (1, 3) and sent["learning_rate"] == cfg.warm_lr  # the recipe's rates
+    assert colab_train.load_config(json.dumps(sent))["terms"]["passes"] == 3
+    for bad in (0, 5, True, "3"):
+        with pytest.raises(ValueError):
+            colab_train.load_config(json.dumps({**sent, "terms": {**sent["terms"], "passes": bad}}))
+    assert training_config(off, 12, warm=True, revision="a" * 40, night=NIGHT)["terms"] == {"fold_rank": None, "dreams": False}
+    plain = objective.night_cfg({objective.CAPACITY_ENV: "1"})  # today's objective: the host's step plan carries it
+    sent_plain = training_config(plain, 12, warm=False, revision="a" * 40, night=NIGHT)
+    assert (plain.objective, sent_plain["r"], sent_plain["accumulation"], sent_plain["epochs"]) == ("sft_dpo", 32, 1, 3)
+    assert "terms" not in sent_plain and colab_train.load_config(json.dumps(sent_plain))["epochs"] == 3
+    for bad_env in ({**seed, objective.CAPACITY_ENV: "1", objective.FOLD_ENV: "1"}, {**seed, objective.CAPACITY_ENV: "yes"}):
+        with pytest.raises(objective.ObjectiveError):
+            objective.night_cfg(bad_env)
+    for bad_cfg in ({"passes": 0}, {"passes": 5}, {"passes": 3, "match_by_night": ((NIGHT, 5.0),)}):
+        with pytest.raises(LoraCfgError):
+            LoraCfg(objective="sft_dpo", **bad_cfg)
+
+
+def test_the_job_plans_the_seed_loss_from_the_recipe_passes_included() -> None:
+    sent = training_config(LoraCfg(objective="sft_dpo_seed", r=32, passes=3), 12, warm=False, revision="a" * 40,
+                           night=NIGHT)
+    plan = sleep_job.seed_plan(sleep_loss, sent, eot=11, pad=0, long_term_rank=0, begun=0.0)
+    assert (plan.passes, plan.min_steps, plan.lr, plan.long_term_rank, plan.stretch_s) == (3, 8, 2e-4, 0, 0.0)
+    plain = training_config(LoraCfg(objective="sft_dpo_seed"), 12, warm=False, revision="a" * 40, night=NIGHT)
+    assert sleep_job.seed_plan(sleep_loss, plain, eot=11, pad=0, long_term_rank=0, begun=0.0).passes == 0
 
 
 def test_the_seed_recipe_reaches_the_script_and_a_folded_night_starts_a_fresh_slot() -> None:
@@ -449,6 +486,25 @@ def test_with_seeding_on_the_dpo_step_is_todays() -> None:
     assert 0.1 * plan.dpo_lr <= dpo["max_update"] <= 3.2 * plan.dpo_lr < plan.lr / 100
     with_dpo_lr = sleep_loss.train_terms(_tiny(torch), batch, replace(plan, dpo_lr=plan.lr))["dpo"]
     assert with_dpo_lr["max_update"] > 10 * dpo["max_update"]  # what sharing the SFT rate would have done
+
+
+def test_with_passes_the_main_block_takes_one_row_a_step_each_pass_and_the_dpo_block_is_todays() -> None:
+    torch = _torch()
+    pairs = tuple(sleep_loss.PairSeq((1, i), (6, 11), (7, 11)) for i in range(2, 7))
+    batch = sleep_loss.Batch(
+        sft=tuple(sleep_loss.Seq((1, i), (3, 11)) for i in range(2, 9)), pairs=pairs,
+        seeds=tuple(sleep_loss.SeedSeq((1, i), (9, 9, 1, i), (4, 5, 11)) for i in range(2, 6)),
+    )
+    plan = _plan(min_steps=4)
+    step_plan = sleep_loss.train_terms(_tiny(torch), batch, plan)
+    passes = sleep_loss.train_terms(_tiny(torch), batch, replace(plan, passes=3))
+    rows = sum(passes["rows"][term] for term in ("sft", "seed", "imitate"))
+    assert step_plan["accumulation"] > 1 and step_plan["epochs"] == 1  # the step plan: a few accumulated steps
+    assert (passes["accumulation"], passes["epochs"]) == (1, 3)
+    assert passes["steps"] - passes["dpo"]["steps"] == 3 * rows  # one row a step, three times over
+    assert passes["dpo"] == {**step_plan["dpo"], "max_update": passes["dpo"]["max_update"]}  # DPO keeps today's plan
+    with pytest.raises(ValueError, match="time budget"):
+        sleep_loss.train_terms(_tiny(torch), batch, replace(plan, passes=3, stretch_s=60.0))
 
 
 def test_the_schedule_is_todays_cosine_with_warmup_step_for_step() -> None:

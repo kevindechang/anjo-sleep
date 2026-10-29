@@ -84,7 +84,7 @@ DAYS: Final = "anjo.sleep.app.history_source:synthetic_day_text"
 # Each claim and what it is compared with: the live comparison's arms (tools.sleep_objective_live).
 CEILING: Final = "contamination by design: trained on the set's own statements, never a result"
 PAIRS: Final = (("seed", "today"), ("fold", "seed"), ("protect", "fold"), ("protect", "protect_random"),
-                ("dreams", "seed_matched"))
+                ("dreams", "seed_matched"), ("seed_cap", "seed"))
 _ARM: Final = re.compile(r"[a-z][a-z_]{0,31}")
 _ACCOUNT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _STOP: Final = frozenset(

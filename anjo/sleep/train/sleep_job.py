@@ -178,6 +178,17 @@ def _channel(ct: Any, cfg: dict[str, Any], model: Any, tokenizer: Any, prev: str
     return soft, cm, {**opened, "rows_with_state": len(found) - 1}
 
 
+def seed_plan(loss: Any, cfg: Mapping[str, Any], *, eot: int, pad: int, long_term_rank: int, begun: float) -> Any:
+    """The one loss's ``Plan`` from the recipe: its rates and step rule, capacity's ``passes`` (0: the step
+    plan), the matched control's budget and the channel's deadline."""
+    ch = cfg.get("channel")
+    return loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
+                     seed=cfg["seed"], eot=eot, pad=pad, dpo_lr=cfg["dpo_learning_rate"], long_term_rank=long_term_rank,
+                     dreams=cfg["terms"]["dreams"], stretch_s=cfg.get("match_minutes", 0.0) * 60.0,
+                     deadline=begun + 60.0 * ch["max_minutes"] if ch else float("inf"),
+                     passes=cfg["terms"].get("passes", 0))
+
+
 def train(ct: Any, cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, template: dict[str, str], kept: Kept,
           pairs: Kept, rows: list[dict[str, Any]], model: Any, prev: str | None, out: Path,
           begun: float) -> dict[str, Any]:  # pragma: no cover - needs the training stack
@@ -194,11 +205,8 @@ def train(ct: Any, cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any
     soft, cm, opened = channel
     guarded = protection(ct, cfg, model, batch.anchors, frozen)
     eot = tokenizer.convert_tokens_to_ids(ct.REPLY_END)
-    plan = loss.Plan(lr=cfg["learning_rate"], min_steps=cfg["min_optimizer_steps"], beta=cfg["dpo_beta"],
-                     seed=cfg["seed"], eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
-                     dpo_lr=cfg["dpo_learning_rate"], long_term_rank=frozen, dreams=cfg["terms"]["dreams"],
-                     stretch_s=cfg.get("match_minutes", 0.0) * 60.0,
-                     deadline=begun + 60.0 * ch["max_minutes"] if ch else float("inf"))
+    plan = seed_plan(loss, cfg, eot=eot, pad=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eot,
+                     long_term_rank=frozen, begun=begun)
     try:
         terms = loss.train_terms(model, batch, plan, soft=soft)
     finally:

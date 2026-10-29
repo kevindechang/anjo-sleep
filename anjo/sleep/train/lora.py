@@ -10,7 +10,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
 - lr 2e-4, or 5e-5 for a warm start on the last promoted adapter; fixed seeds;
 - at least ``min_optimizer_steps`` updates: a tiny night with batch 1 and accumulation 16 would
   make one or two, so accumulation shrinks to ``n // min_optimizer_steps`` (between 1 and 16) and,
-  if that still falls short, epochs rise to at most 4 (``plan_steps``);
+  if that still falls short, epochs rise to at most 4 (``plan_steps``); with ``passes`` (capacity,
+  ``objective.CAPACITY_ENV``) every row is its own step, ``passes`` times over;
 - ``max_seq_length`` at least 8,192 with ``packing=False``;
 - ``objective``: ``sft`` (the recipe's default), or ``sft_dpo`` (Task 7), which adds a DPO pass on the
   night's (best, worst) practice pairs after SFT, at Meta's TRL settings (beta 0.1, lr 5e-6: the LoRA scale), with
@@ -104,6 +105,9 @@ class LoraCfg:
     # The live comparison's matched control only: each night's training budget in minutes (its reference
     # arm's, serving included), which the job fills by the clock; every real night leaves it empty.
     match_by_night: tuple[tuple[date, float], ...] = ()
+    # Capacity (objective.CAPACITY_ENV): the main block's passes over its rows at one row a step, in place
+    # of the step plan; None is the step plan. Never with a matched control, which trains by the clock.
+    passes: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.r, bool) or not isinstance(self.r, int) or not 1 <= self.r <= MAX_RANK:
@@ -139,6 +143,9 @@ class LoraCfg:
         if self.match_by_night and (self.dreams or len(set(nights)) != len(nights)
                                     or not all(0 < minutes <= MAX_MATCH_MINUTES for _, minutes in self.match_by_night)):
             raise LoraCfgError(f"a matched control has one budget a night, up to {MAX_MATCH_MINUTES:g} minutes, and no dreams")
+        if self.passes is not None and (isinstance(self.passes, bool) or not 1 <= self.passes <= self.max_epochs
+                                        or self.match_by_night):
+            raise LoraCfgError(f"passes are 1 to {self.max_epochs}, and never with a matched control's budget")
 
     @property
     def alpha(self) -> int:
@@ -160,6 +167,8 @@ def plan_steps(n_examples: int, cfg: LoraCfg) -> StepPlan:
     """Accumulation and epochs that give at least ``min_optimizer_steps`` updates, within caps."""
     if n_examples < 1:
         raise LoraCfgError("a training night has at least one example")
+    if cfg.passes is not None:  # capacity: every row its own step, each pass
+        return StepPlan(accumulation=1, epochs=cfg.passes, steps_per_epoch=n_examples)
     accumulation = max(1, min(cfg.max_accumulation, n_examples // cfg.min_optimizer_steps))
     per_epoch = math.ceil(n_examples / (cfg.batch_size * accumulation))
     epochs = 1
@@ -202,7 +211,8 @@ def training_config(
     fixed |= {} if channel is None else {"channel": dict(channel)}
     if cfg.objective == "sft_dpo_seed":
         fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams,
-                            **({} if cfg.protect == "off" else {"protect": cfg.protect})}}
+                            **({} if cfg.protect == "off" else {"protect": cfg.protect}),
+                            **({} if cfg.passes is None else {"passes": cfg.passes})}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.
     rate = cfg.warm_lr if warm and cfg.fold_rank is None else cfg.lr
     if cfg.match_by_night:
