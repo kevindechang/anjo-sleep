@@ -154,7 +154,13 @@ def serving_morning_path(results_root: Path, life_id: str) -> Path:
 def _probe(life_id: str, row: Mapping[str, Any]) -> Probe:
     pid = str(row["probe"])
     kind = str(row["kind"])
-    source = pid if kind != "new_work" else pid.rsplit("-", 1)[0] if "-" in pid else pid
+    raw_sources = row.get("source_ids")
+    if isinstance(raw_sources, list) and raw_sources:
+        source_ids = tuple(str(s) for s in raw_sources)
+    elif kind == "new_work":
+        source_ids = (pid,)
+    else:
+        source_ids = (pid,)
     return Probe(
         id=pid,
         person_id=life_id,
@@ -162,7 +168,7 @@ def _probe(life_id: str, row: Mapping[str, Any]) -> Probe:
         prompt="",
         options=None,
         expected=None,
-        source_ids=(source,),
+        source_ids=source_ids,
     )
 
 
@@ -207,13 +213,15 @@ def _pool_comparison(
             wins = life_outcomes.count("win")
             ties = life_outcomes.count("tie")
             losses = life_outcomes.count("loss")
+            life_score = (wins + 0.5 * ties) / n
             per_life[life_id] = {
                 "n": n,
                 "wins": wins,
                 "ties": ties,
                 "losses": losses,
-                "score": (wins + 0.5 * ties) / n,
-                "ahead": (wins + 0.5 * ties) / n > 0.5,
+                "score": life_score,
+                "ahead": life_score > 0.5,
+                "behind": life_score < 0.5,
             }
     if not probes:
         return None
@@ -289,16 +297,27 @@ def _life_ahead(record: Mapping[str, Any], comparison: str, dimension: Dimension
     return float(pooled["score"]) > 0.5
 
 
+def _life_behind(cell: Mapping[str, Any]) -> bool:
+    if "behind" in cell:
+        return bool(cell["behind"])
+    if "score" in cell:
+        return float(cell["score"]) < 0.5
+    return False
+
+
 def _headline_outcome(stats: Mapping[str, Any] | None, *, reverse: bool = False) -> Outcome3:
     if stats is None or stats.get("n", 0) == 0:
         return "inconclusive"
     raw = _thresholds()["win"]
     ci = stats.get("ci")
     lower = float(ci[0]) if isinstance(ci, list) and len(ci) == 2 else None
+    upper = float(ci[1]) if isinstance(ci, list) and len(ci) == 2 else None
     score = float(stats["score"])
     share = stats.get("decisive_share")
     decisive = float(share) if share is not None else None
-    lives_ahead = sum(1 for life in stats.get("per_life", {}).values() if life.get("ahead"))
+    per_life = stats.get("per_life", {})
+    lives_ahead = sum(1 for life in per_life.values() if life.get("ahead"))
+    lives_behind = sum(1 for life in per_life.values() if _life_behind(life))
     need_lives = int(raw["lives_ahead_at_least"])
     checks_win = (
         lower is not None
@@ -309,12 +328,12 @@ def _headline_outcome(stats: Mapping[str, Any] | None, *, reverse: bool = False)
         and lives_ahead >= need_lives
     )
     checks_loss = (
-        lower is not None
-        and lower < (1.0 - float(raw["ci_lower_bound_above"]))
+        upper is not None
+        and upper < (1.0 - float(raw["ci_lower_bound_above"]))
         and score <= (1.0 - float(raw["overall_score_at_least"]))
         and decisive is not None
         and decisive <= (1.0 - float(raw["decisive_share_at_least"]))
-        and lives_ahead <= (int(raw["lives_total"]) - need_lives)
+        and lives_behind >= need_lives
     )
     if reverse:
         checks_win, checks_loss = checks_loss, checks_win
@@ -443,7 +462,7 @@ def run(
     if len(lives) != 3 or len(pair_lives) != 2 or single_life not in lives:
         raise FinalError("final test expects 3 lives, a pair of 2 and one single life")
     for life_id in lives:
-        if score_path(results_root, life_id).exists() and rerun_reason is None:
+        if score_path(results_root, life_id).exists():
             raise FinalError(f"{life_id} already has {FINAL_NAME}; the first score stands")
 
     life_records: dict[str, dict[str, Any]] = {}

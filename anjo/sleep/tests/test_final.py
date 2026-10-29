@@ -229,17 +229,86 @@ def test_donor_never_changes_after_draw(root: Path) -> None:
     assert report["donors"] == DONORS
     alt = {**DONORS, SINGLE: "someone-else"}
     with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
-        report2 = final.run(
-            TAG,
-            root,
-            LIVES,
-            donors=alt,
-            pair_lives=PAIR,
-            single_life=SINGLE,
-            git=FREEZE_SHA,
-            rerun_reason="infra",
-        )
-    assert report2["donors"] == alt
+        with pytest.raises(final.FinalError, match="already has final.json"):
+            final.run(
+                TAG,
+                root,
+                LIVES,
+                donors=alt,
+                pair_lives=PAIR,
+                single_life=SINGLE,
+                git=FREEZE_SHA,
+                rerun_reason="infra",
+            )
+    stored = json.loads(final.score_path(root, PAIR[0]).read_text(encoding="utf-8"))
+    assert stored["donors"] == DONORS
+
+
+def test_rerun_reason_does_not_overwrite_existing_score(root: Path) -> None:
+    _rig_all_wins(root)
+    _run(root)
+    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
+        with pytest.raises(final.FinalError, match="already has final.json"):
+            final.run(
+                TAG,
+                root,
+                LIVES,
+                donors=DONORS,
+                pair_lives=PAIR,
+                single_life=SINGLE,
+                git=FREEZE_SHA,
+                rerun_reason="infra",
+            )
+
+
+def test_loss_uses_ci_upper_bound() -> None:
+    stats = {
+        "n": 100,
+        "score": 0.4,
+        "decisive_share": 0.4,
+        "ci": [0.1, 0.8],
+        "per_life": {
+            "a": {"ahead": False, "behind": True},
+            "b": {"ahead": False, "behind": True},
+            "c": {"ahead": False, "behind": True},
+        },
+    }
+    assert final._headline_outcome(stats) == "inconclusive"
+
+
+def test_loss_needs_two_lives_strictly_behind() -> None:
+    stats = {
+        "n": 100,
+        "score": 0.4,
+        "decisive_share": 0.4,
+        "ci": [0.1, 0.3],
+        "per_life": {
+            "a": {"ahead": False, "behind": True},
+            "b": {"ahead": False, "behind": False},
+            "c": {"ahead": False, "behind": False},
+        },
+    }
+    assert final._headline_outcome(stats) == "inconclusive"
+
+
+def test_fairness_new_work_does_not_merge_life_into_one_block() -> None:
+    records = {
+        life: {
+            "outcomes": [
+                {
+                    "probe": f"{life}-new_work-{i:02d}",
+                    "kind": "new_work",
+                    "pair": final.COMP_4V2C,
+                    "outcome": "win" if i <= 15 else "loss",
+                }
+                for i in range(1, 26)
+            ]
+        }
+        for life in ("life-a", "life-b", "life-c")
+    }
+    stats = final._fairness_new_work(records, final.COMP_4V2C)
+    assert stats is not None
+    assert final._fairness_outcome(stats) != "win"
 
 
 def test_unpromoted_donor_marks_specificity_inconclusive(root: Path) -> None:
