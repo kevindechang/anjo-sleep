@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+from anjo.sleep.app.night import SEALED_ENV
+from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.morning import NO_VERDICT
 from anjo.sleep.probes.score import (
     REPORTED,
@@ -69,6 +72,31 @@ def pooled_personas() -> tuple[str, ...]:
     return tuple(_thresholds()["development"]["pooled_lives"])
 
 
+def min_probes_per_dimension() -> int:
+    return int(_thresholds()["development"]["min_probes_per_dimension"])
+
+
+def sealed_dir(path: Path | None = None) -> Path:
+    """Directory of ``<persona>.jsonl`` sealed probes (same layout as the morning run)."""
+    if path is not None:
+        return path
+    raw = os.environ.get(SEALED_ENV, "").strip()
+    if not raw:
+        raise DevelopmentError(f"{SEALED_ENV} is not set; probe ids need the registered sealed set")
+    return Path(raw)
+
+
+@lru_cache(maxsize=32)
+def _registered_probes(directory: str, persona: str) -> dict[str, Probe]:
+    path = Path(directory) / f"{persona}.jsonl"
+    if not path.is_file():
+        raise DevelopmentError(f"sealed probes missing for persona {persona}: {path.name}")
+    by_id = {probe.id: probe for probe in load_sealed(path)}
+    if not by_id:
+        raise DevelopmentError(f"sealed probes for persona {persona} are empty")
+    return by_id
+
+
 def _accounts(parser: argparse.ArgumentParser, pairs: Sequence[str]) -> dict[str, str]:
     found: dict[str, str] = {}
     for pair in pairs:
@@ -112,16 +140,24 @@ def latest_full_score(root: Path, account: str) -> dict[str, Any]:
     return best[1]
 
 
-def _probe(row: Mapping[str, Any], person: str) -> Probe:
+def _probe(
+    row: Mapping[str, Any],
+    person: str,
+    persona: str,
+    *,
+    probes_root: Path,
+) -> Probe:
     probe_id = str(row["probe"])
     kind = str(row["kind"])
-    if kind == "new_work":
-        source = str(row.get("source") or f"{probe_id}-src")
-    elif kind == "taste_ab":
-        source = str(row.get("source") or probe_id)
-    else:
-        source = probe_id
-    return Probe(probe_id, person, cast(ProbeKind, kind), "", None, None, (source,))
+    registered = _registered_probes(str(probes_root.resolve()), persona)
+    if probe_id not in registered:
+        raise DevelopmentError(f"probe {probe_id!r} is not in the sealed set for {persona}")
+    sealed = registered[probe_id]
+    if kind != sealed.kind:
+        raise DevelopmentError(
+            f"score row kind {kind!r} disagrees with sealed {sealed.kind!r} for {probe_id}"
+        )
+    return Probe(probe_id, person, cast(ProbeKind, kind), "", None, None, sealed.source_ids)
 
 
 def _outcome(row: Mapping[str, Any]) -> Outcome | None:
@@ -139,9 +175,10 @@ def pooled_rows(
     pair: str,
     *,
     kinds: frozenset[str] | None = None,
+    probes_root: Path | None = None,
 ) -> list[tuple[Probe, Outcome]]:
     """Every judged probe outcome for ``pair`` across the pooled accounts."""
-    found: list[tuple[Probe, Outcome]] = []
+    pending: list[tuple[Mapping[str, Any], str, str, Outcome]] = []
     for persona, account in accounts.items():
         record = latest_full_score(root, account)
         for row in record.get("outcomes", ()):
@@ -153,8 +190,14 @@ def pooled_rows(
             outcome = _outcome(row)
             if outcome is None:
                 continue
-            found.append((_probe(row, account), outcome))
-    return found
+            pending.append((row, account, persona, outcome))
+    if not pending:
+        return []
+    sealed = sealed_dir(probes_root)
+    return [
+        (_probe(row, account, persona, probes_root=sealed), outcome)
+        for row, account, persona, outcome in pending
+    ]
 
 
 def _kinds_for_dimension(dimension: str) -> frozenset[str]:
@@ -169,7 +212,7 @@ def score_pooled(
     bootstrap: BootstrapConfig | None = None,
 ) -> tuple[int, int, int, float, tuple[float, float], float | None]:
     if not rows:
-        return 0, 0, 0, 0.5, (0.5, 0.5), None
+        return 0, 0, 0, 0.5, (0.0, 0.0), None
     probes, outcomes = zip(*rows, strict=True)
     dims = dimension_of()
     if any(dims[p.kind] not in (dimension, REPORTED) for p in probes):
@@ -183,7 +226,11 @@ def score_pooled(
 
 
 def _loss_rule(rule: WinRule) -> WinRule:
-    return WinRule(1.0 - rule.ci_above, 1.0 - rule.score_at_least, 1.0 - rule.decisive_at_least)
+    return WinRule(
+        round(1.0 - rule.ci_above, 12),
+        round(1.0 - rule.score_at_least, 12),
+        round(1.0 - rule.decisive_at_least, 12),
+    )
 
 
 def label_headline(
@@ -228,6 +275,39 @@ def label_fairness(
     return "inconclusive"
 
 
+def _pool_ready(
+    rows: Sequence[tuple[Probe, Outcome]],
+    accounts: Mapping[str, str],
+) -> bool:
+    """Every pooled life contributed at least one judged probe, with enough per dimension."""
+    n = len(rows)
+    if n < min_probes_per_dimension():
+        return False
+    lives = {probe.person_id for probe, _ in rows}
+    return len(lives) == len(accounts)
+
+
+def _label_comparison(
+    pair: str,
+    *,
+    rows: Sequence[tuple[Probe, Outcome]],
+    accounts: Mapping[str, str],
+    wins: int,
+    ties: int,
+    losses: int,
+    score: float,
+    ci: tuple[float, float],
+    decisive: float | None,
+    rule: WinRule,
+    margin: float,
+) -> Label:
+    if not _pool_ready(rows, accounts):
+        return "inconclusive"
+    if pair in FAIRNESS:
+        return label_fairness(ci=ci, score=score, decisive=decisive, rule=rule, margin=margin)
+    return label_headline(ci=ci, score=score, decisive=decisive, rule=rule)
+
+
 def _result_line(
     pair: str,
     dimension: str,
@@ -262,6 +342,7 @@ def comparisons(
     accounts: Mapping[str, str],
     *,
     bootstrap: BootstrapConfig | None = None,
+    probes_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Every registered development comparison and dimension, pooled over ``accounts``."""
     _validate_accounts(accounts)
@@ -270,20 +351,56 @@ def comparisons(
     lines: list[dict[str, Any]] = []
     for pair in HEADLINE:
         for dimension in DIMENSIONS:
-            rows = pooled_rows(root, accounts, pair, kinds=_kinds_for_dimension(dimension))
+            rows = pooled_rows(
+                root,
+                accounts,
+                pair,
+                kinds=_kinds_for_dimension(dimension),
+                probes_root=probes_root,
+            )
             wins, ties, losses, score, ci, decisive = score_pooled(
                 rows, dimension, bootstrap=bootstrap
             )
-            label = label_headline(ci=ci, score=score, decisive=decisive, rule=rule)
+            label = _label_comparison(
+                pair,
+                rows=rows,
+                accounts=accounts,
+                wins=wins,
+                ties=ties,
+                losses=losses,
+                score=score,
+                ci=ci,
+                decisive=decisive,
+                rule=rule,
+                margin=margin,
+            )
             lines.append(
                 _result_line(pair, dimension, wins, ties, losses, score, ci, decisive, label)
             )
     for pair in FAIRNESS:
-        rows = pooled_rows(root, accounts, pair, kinds=frozenset({"new_work"}))
+        rows = pooled_rows(
+            root,
+            accounts,
+            pair,
+            kinds=frozenset({"new_work"}),
+            probes_root=probes_root,
+        )
         wins, ties, losses, score, ci, decisive = score_pooled(
             rows, "knowledge", bootstrap=bootstrap
         )
-        label = label_fairness(ci=ci, score=score, decisive=decisive, rule=rule, margin=margin)
+        label = _label_comparison(
+            pair,
+            rows=rows,
+            accounts=accounts,
+            wins=wins,
+            ties=ties,
+            losses=losses,
+            score=score,
+            ci=ci,
+            decisive=decisive,
+            rule=rule,
+            margin=margin,
+        )
         lines.append(
             _result_line(pair, "knowledge", wins, ties, losses, score, ci, decisive, label)
         )
@@ -295,6 +412,7 @@ def read(
     accounts: Mapping[str, str],
     *,
     bootstrap: BootstrapConfig | None = None,
+    probes_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Header line plus every comparison line."""
     _validate_accounts(accounts)
@@ -303,7 +421,7 @@ def read(
         "personas": dict(sorted(accounts.items())),
         "probe_set": FULL_SET,
     }
-    return [header, *comparisons(root, accounts, bootstrap=bootstrap)]
+    return [header, *comparisons(root, accounts, bootstrap=bootstrap, probes_root=probes_root)]
 
 
 def main(
@@ -312,6 +430,7 @@ def main(
     root: Path | None = None,
     out: Callable[[str], None] = print,
     bootstrap: BootstrapConfig | None = None,
+    probes_root: Path | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
         description="Development go/no-go from pooled full morning scores."
@@ -325,10 +444,17 @@ def main(
     parser.add_argument(
         "--account", action="append", default=[], help="<persona>=<account id>, four personas"
     )
+    parser.add_argument(
+        "--sealed-dir",
+        type=Path,
+        default=None,
+        help=f"sealed probe files (default: ${SEALED_ENV})",
+    )
     args = parser.parse_args(argv)
     accounts = _accounts(parser, args.account)
     base = results_root(args.root or root)
-    for line in read(base, accounts, bootstrap=bootstrap):
+    sealed = sealed_dir(args.sealed_dir or probes_root)
+    for line in read(base, accounts, bootstrap=bootstrap, probes_root=sealed):
         out(json.dumps(line, separators=(",", ":")))
     return 0
 
