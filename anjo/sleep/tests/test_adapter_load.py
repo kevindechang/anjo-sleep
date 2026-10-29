@@ -296,3 +296,65 @@ def test_modal_stages_an_adapter_through_its_serve_class(monkeypatch: pytest.Mon
     assert "private" not in str(raised.value) and ADAPTER.id not in str(raised.value)
     assert found == [(config.serve_app_name(config.SERVING), "Serve")] * 3  # the deterministic app by default
     assert serve.asked == [ADAPTER.id, backend.STAGE_TIMEOUT_S] * 3
+
+
+@pytest.mark.parametrize("diagnostic", [
+    f"The model `{ADAPTER.id}` does not exist.",
+    f"LoRA adapter '{ADAPTER.id}' not found",
+    f"Adapter {ADAPTER.id} is not loaded",
+])
+def test_a_missing_adapter_400_reloads_once(diagnostic: str) -> None:
+    fake = LiveVllm()
+    failures = 0
+    sticky_failure = False
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        nonlocal failures
+        if request.url.path == "/v1/completions" and (failures == 0 or sticky_failure):
+            failures += 1
+            fake.loaded.clear()  # another workload or restart forgot it after tokenization
+            return httpx.Response(400, json={"error": {"message": diagnostic}})
+        return fake(request)
+
+    client = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(serve),
+                        adapters_dir=config.ADAPTERS_DIR)
+    assert client.complete(ADAPTER, MESSAGES, temperature=1.0).text == "hello"
+    assert len(fake.loads) == 2 and failures == 1
+    sticky_failure = True
+    with pytest.raises(ServingError, match="HTTP 400"):
+        client.continuation_logprobs(ADAPTER, MESSAGES, " A")
+    assert len(fake.loads) == 3 and failures == 3  # one recovery only, even for scoring
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "maximum context length is 32768 tokens",
+    "top_k must be greater than 0",
+    "LoRA adapter p-bbbbbbbbbbbb-n1 not found",  # not the requested adapter
+])
+def test_other_400s_never_reload(diagnostic: str) -> None:
+    fake = LiveVllm()
+    completions = 0
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        nonlocal completions
+        if request.url.path == "/v1/completions":
+            completions += 1
+            return httpx.Response(400, json={"detail": diagnostic})
+        return fake(request)
+
+    client = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(serve),
+                        adapters_dir=config.ADAPTERS_DIR)
+    with pytest.raises(ServingError, match="HTTP 400"):
+        client.complete(ADAPTER, MESSAGES, temperature=1.0)
+    assert len(fake.loads) == 1 and completions == 1
+
+
+def test_load_4xx_uses_the_safe_diagnostic_without_exposing_paths() -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, json={"detail": "Adapter " + ADAPTER.id
+                                                + " is not loaded; path: /private/adapter"})))
+    with pytest.raises(ServingError) as raised:
+        poster.load_adapter(ADAPTER.id, "/private/adapter")
+    assert "is not loaded" in str(raised.value) and "/private/adapter" not in str(raised.value)

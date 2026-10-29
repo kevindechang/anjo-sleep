@@ -133,11 +133,12 @@ MAX_MODEL_LEN: Final = 32_768
 MAX_OUTPUT_TOKENS: Final = 4096
 # LoRA sizing (the memory math is in deploy/dev_host.md). Task 5 trains rank 16, and Meta's
 # recipe ranges up to 32, so the server takes rank 32 at most. About 6 to 8 adapters are live at
-# once (Kevin, Tessa, three lives and the arm-3x donors): all 8 fit on the GPU, and the CPU keeps
-# 16 warm so a ninth swaps in without reading the volume. vLLM queues a request past these.
+# once (Kevin, Tessa, three lives and the arm-3x donors): all 8 fit on the GPU. Two workloads
+# share that GPU; keep 32 on CPU to reduce cold reads as practice cycles per-case adapters
+# beside morning's adapters. GPU slots stay at 8 to preserve its memory budget.
 MAX_LORA_RANK: Final = 32
 MAX_LORAS: Final = 8
-MAX_CPU_LORAS: Final = 16
+MAX_CPU_LORAS: Final = 32
 GPU_MEMORY_UTILIZATION: Final = 0.92
 
 ADAPTER_NAME = re.compile(r"p-[0-9a-f]{8,64}-n[0-9]{1,5}")

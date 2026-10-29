@@ -209,3 +209,70 @@ def test_a_2xx_that_is_not_json_names_its_status() -> None:
 
     with pytest.raises(ServingError, match=f"^{COMPLETIONS} sent a reply that is not JSON \\(HTTP 200\\)$"):
         HttpPoster(URL, "tok", transport=httpx.MockTransport(page)).post(COMPLETIONS, BODY)
+
+
+def test_long_scoring_reads_past_300_s_without_reposting() -> None:
+    waits = Waits()
+    fake = Held(waits, work_s=850.0)
+    client = _night(fake, waits)
+    body = {"model": config.MODEL, "prompt": [1] * 32000, "prompt_logprobs": 0, "max_tokens": 1}
+    client._requests.post(COMPLETIONS, body)
+    assert waits.now == 850.0 and _methods(fake).count("POST") == 1
+    assert _methods(fake).count("GET") > 4 and client.retries() == 0
+
+
+def test_long_generation_budget_scales_and_is_capped() -> None:
+    waits = Waits()
+    fake = Held(waits, work_s=850.0)
+    client = _night(fake, waits)
+    assert client.complete(None, MESSAGES, temperature=1.0, max_tokens=4000).text == "hello"
+    assert waits.now == 850.0 and _methods(fake).count("POST") == 1
+    assert vllm.result_timeout(COMPLETIONS, {"prompt": [1] * 100000, "max_tokens": 100000}) == vllm.MAX_RESULT_TIMEOUT_S
+    assert vllm.result_timeout("/tokenize", {"prompt": [1] * 32000}) == vllm.REQUEST_TIMEOUT_S
+
+
+def test_load_result_gets_its_cold_read_budget_without_reposting() -> None:
+    waits = Waits()
+    methods: list[str] = []
+    ready = 850.0
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        left = ready - waits.now
+        timeout = request.extensions["timeout"]["read"]
+        wait = min(left, HOLD_S)
+        if wait > timeout:
+            waits.now += timeout
+            raise httpx.ReadTimeout("slow disk", request=request)
+        waits.now += wait
+        if waits.now < ready:
+            return httpx.Response(303, headers={"location": f"{vllm.LOAD_PATH}?call=load"})
+        return httpx.Response(200, text="loaded")
+
+    client = VllmClient(URL, "tok", transport=httpx.MockTransport(serve), clock=waits.clock, sleep=waits.sleep)
+    assert client._requests.load_adapter(ADAPTER.id, "/adapters/" + ADAPTER.id)
+    assert waits.now == ready and methods.count("POST") == 1 and methods.count("GET") > 4
+
+
+@pytest.mark.parametrize("once,timeout", [(True, 300.0), (False, 200.0)])
+def test_extended_result_budgets_preserve_explicit_and_once_deadlines(once: bool, timeout: float) -> None:
+    waits = Waits()
+    fake = Held(waits, work_s=850.0)
+    client = VllmClient(URL, "tok", transport=httpx.MockTransport(fake), timeout_s=timeout,
+                        clock=waits.clock, sleep=waits.sleep)
+    if once:
+        client = client.once()
+    with pytest.raises(vllm.ResultUnread):
+        client.complete(None, MESSAGES, temperature=1.0, max_tokens=4000)
+    assert waits.now == timeout and _methods(fake).count("POST") == 1
+
+
+def test_long_scoring_failure_stops_at_its_bound_without_reposting() -> None:
+    waits = Waits()
+    fake = Held(waits, work_s=3000.0)
+    client = _night(fake, waits)
+    body = {"model": config.MODEL, "prompt": [1] * 32000, "prompt_logprobs": 0, "max_tokens": 1}
+    with pytest.raises(vllm.ResultUnread):
+        client._requests.post(COMPLETIONS, body)
+    assert waits.now == vllm.result_timeout(COMPLETIONS, body)
+    assert _methods(fake).count("POST") == 1

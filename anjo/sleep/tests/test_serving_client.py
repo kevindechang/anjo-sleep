@@ -278,3 +278,78 @@ def test_models_asks_the_server_once_in_a_slot_and_max_tokens_is_read_only() -> 
     with pytest.raises(ServingError, match="/v1/models"):
         flaky.models()
     assert asked == [("GET", "/v1/models")]  # sent once: a request lost in transport doesn't go again
+
+
+@pytest.mark.parametrize("payload", [
+    {"error": {"message": "maximum context length is 32768 tokens; requested 33000 tokens"}},
+    {"detail": "maximum context length is 32768 tokens; requested 33000 tokens"},
+    {"message": "maximum context length is 32768 tokens; requested 33000 tokens"},
+])
+def test_4xx_keeps_the_diagnostic(payload: dict[str, Any]) -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, json=payload)))
+    with pytest.raises(ServingError, match="HTTP 400: maximum context length is 32768 tokens"):
+        poster.post("/v1/completions", {"prompt": [1, 2]})
+
+
+@pytest.mark.parametrize("payload", [
+    {"detail": [{"msg": "invalid", "input": "private words"}]},
+    {"error": "private words"},
+])
+def test_validation_objects_are_never_logged(payload: dict[str, Any]) -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(422, json=payload)))
+    with pytest.raises(ServingError) as raised:
+        poster.post("/tokenize", {"prompt": "private words"})
+    assert str(raised.value) == "/tokenize returned HTTP 422"
+
+
+@pytest.mark.parametrize("message", [
+    "Invalid prompt: private words",
+    "decoded 'private words'; tokens [1, 2]",
+    "private words",
+])
+def test_4xx_never_logs_unrecognized_prompt_echoes(message: str) -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, json={"error": {"message": message}})))
+    with pytest.raises(ServingError) as raised:
+        poster.post("/v1/completions", {"prompt": [1, 2]})
+    assert "private words" not in str(raised.value) and "[1, 2]" not in str(raised.value)
+
+
+def test_4xx_truncates_only_the_safe_clause() -> None:
+    from anjo.sleep.serving.client import ERROR_MESSAGE_CHARS, HttpPoster
+
+    message = "maximum context length is " + "3" * 500 + " tokens; prompt: private words"
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, json={"error": {"message": message}})))
+    with pytest.raises(ServingError) as raised:
+        poster.post("/v1/completions", {"prompt": [1, 2]})
+    diagnostic = str(raised.value).split(": ", 1)[1]
+    assert len(diagnostic) == ERROR_MESSAGE_CHARS and "private words" not in diagnostic
+
+
+def test_non_json_4xx_does_not_expose_the_body() -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, text="private words")))
+    with pytest.raises(ServingError) as raised:
+        poster.post("/v1/completions", {})
+    assert str(raised.value) == "/v1/completions returned HTTP 400"
+
+
+def test_parameter_diagnostic_keeps_its_reason_and_discards_echoed_suffix() -> None:
+    from anjo.sleep.serving.client import HttpPoster
+
+    poster = HttpPoster("https://serve.example", "tok", transport=httpx.MockTransport(
+        lambda request: httpx.Response(400, json={"detail": "top_k must be greater than 0; input: private words"})))
+    with pytest.raises(ServingError) as raised:
+        poster.post("/v1/completions", {"prompt": [1, 2]})
+    assert str(raised.value) == "/v1/completions returned HTTP 400: top_k must be greater than 0"

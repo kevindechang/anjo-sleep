@@ -28,7 +28,7 @@ import httpx
 # its own give-up on a request vLLM was slow to answer (2026-10-29: one /tokenize cut at 10 s, no vLLM
 # line for it, under a 16-wide burst): the same case. An adapter load meets none of this, never sent again.
 PROXY_STATUSES: Final = frozenset({408, 502, 503, 504})
-RESULT_HOPS: Final = 4  # Modal's 303s one post follows: 300 s holds two 150 s waits; never forever
+RESULT_HOPS: Final = 32  # room for the longest result budget at 150 s/hop; redirect loops stay bounded
 HOP_PAUSE_S: Final = 2.0  # before a result GET that failed asks again; doubled each time
 HOP_PAUSE_MAX_S: Final = 16.0
 
