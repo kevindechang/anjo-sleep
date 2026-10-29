@@ -241,7 +241,8 @@ def ready(night: Night, ckpt: CheckpointRef) -> None:
     except ServingError:
         raise ExampleError(
             f"the server doesn't serve adapter {ckpt.id} yet: Modal loads a new adapter only when the "
-            "server container starts. Run `modal app stop anjo-sleep-serve`, deploy it again "
+            "server container starts. Run `modal app stop "
+            f"{config.serve_app_name(config.serve_precision())}`, deploy it again "
             f"(modal deploy anjo/sleep/serving/modal_app.py), then re-run with --adapter {ckpt.id}"
         ) from None
     night.say(f"serving {ckpt.id}")

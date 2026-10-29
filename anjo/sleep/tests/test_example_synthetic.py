@@ -415,7 +415,7 @@ def test_the_probe_failure_names_the_exact_reuse_command(tmp_path: Path) -> None
 
     message = str(raised.value)
     adapter = message.rsplit("--adapter ", 1)[1].strip()
-    assert "modal app stop anjo-sleep-serve" in message and adapter.startswith("p-")
+    assert f"modal app stop {config.serve_app_name(config.serve_precision())}" in message and adapter.startswith("p-")
 
 
 # ── Her chooser ───────────────────────────────────────────────────────────────

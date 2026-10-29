@@ -461,7 +461,8 @@ def _awake(live: bool, start: Callable[[list[str]], object] = subprocess.Popen) 
 
 def _pins(settings_: ServeConfig) -> dict[str, str]:
     return {"glimmer_revision": settings_.pinned_revision(), "vllm_version": settings_.vllm_version,
-            "precision": settings_.precision.name, "reasoning_strength": config.reasoning_strength()}
+            "precision": settings_.precision.name, "reasoning_strength": config.reasoning_strength(),
+            "deterministic": "1" if settings_.deterministic else "0"}
 
 
 def _step(args: argparse.Namespace, data: DataDir, backend: backends.Backend, out: Out) -> int:
