@@ -78,10 +78,13 @@ def test_a_day_the_writer_misplaces_once_is_asked_again_and_the_life_passes(tmp_
     # Act
     made = gen_batch.generate_life(SPEC, _backend(tmp_path, writer), log)
 
-    # Assert: one attempt; the day asked twice, the second ask logged as retry 1, with no text
+    # Assert: one attempt; the day asked twice, the second ask logged as retry 1, with no text; the
+    # first ask's call keeps why its reply was refused, as counts
     assert made.attempts == 1 and not log.failures and writer.days.count(day) == 2
     writes = [(c.days, c.retry) for c in log.calls if c.kind == "write"]
     assert writes == [(1 + n, 0) for n in range(day)] + [(day, 1)] + [(n, 0) for n in range(day + 1, LIFE_DAYS + 1)]
+    why = {(c.days, c.retry): (c.refused_field, c.missing, c.extra) for c in log.calls if c.kind == "write"}
+    assert why.pop((day, 0)) == ("placed", 1, 1) and set(why.values()) == {(None, None, None)}
     assert all(set(c.to_json()) == set(calls.Call.__dataclass_fields__) for c in log.calls)
     assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
 
@@ -103,9 +106,11 @@ def test_a_day_misplaced_on_every_ask_fails_the_attempt_with_its_counts(tmp_path
     assert (raw["step"], raw["day"], raw["field"], raw["reason"]) == ("writer", day, "placed",
                                                                       "a beat is unplaced or unknown")
     assert (raw["missing"], raw["extra"]) == (1, 1) and "i9.x" not in json.dumps(raw)  # counts, never the keys
-    retries = [call["retry"] for found in data.call_logs().values() for call in found
-               if call["kind"] == "write" and call["days"] == day]
-    assert retries == list(range(1 + generate.DAY_RETRIES))
+    asks = [call for found in data.call_logs().values() for call in found
+            if call["kind"] == "write" and call["days"] == day]
+    assert [call["retry"] for call in asks] == list(range(1 + generate.DAY_RETRIES))
+    assert {(call["refused_field"], call["missing"], call["extra"]) for call in asks} == {("placed", 1, 1)}
+    assert "i9.x" not in json.dumps(data.call_logs())
 
 
 def test_apds_own_writer_is_asked_once_as_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

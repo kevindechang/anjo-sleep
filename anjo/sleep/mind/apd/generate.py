@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
@@ -294,11 +294,21 @@ def _write_day(
             text = answered(reply, model)
             return _read_day(text, beats, nothing_placed=model in BY_MODEL)
         except GenerationFailed as failed:
+            if isinstance(chat, Refusals):
+                chat.refused(failed.field, failed.missing, failed.extra)
             if text is None or retries >= day_retries(model):
                 raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
                                 answer_chars=None if text is None else len(text),
                                 finish_reason=reply.finish_reason) from None
             retries += 1
+
+
+@runtime_checkable
+class Refusals(Protocol):
+    """A chat that keeps why the reply it last answered couldn't be read (``backend.CountedChat``):
+    the field and, for ``placed``, the counts; never the text."""
+
+    def refused(self, field: str | None, missing: int | None, extra: int | None) -> None: ...
 
 
 def day_retries(model: str) -> int:

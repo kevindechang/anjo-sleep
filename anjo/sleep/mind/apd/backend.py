@@ -518,6 +518,7 @@ class CountedChat:
     usd: float = 0.0
     halt: threading.Event | None = None
     log: CallLog | None = None  # each try, when the caller keeps them
+    _answered: int | None = field(default=None, init=False, repr=False)  # the last answered try's index in ``log``
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
                  temperature: float | None = None) -> ChatResult:
@@ -549,6 +550,11 @@ class CountedChat:
                          reply=result)
             return result
 
+    def refused(self, field: str | None, missing: int | None, extra: int | None) -> None:
+        """The reply last answered couldn't be read (``generate.Refusals``): its logged call keeps why."""
+        if self.log is not None and self._answered is not None:
+            self.log.mark_refused(self._answered, field, missing, extra)
+
     def _watch(self, given_up: GivenUp | None) -> None:
         """The try just logged, given up on: marked ``leaked`` in the log if its place is freed for it."""
         if given_up is not None and self.log is not None:
@@ -559,9 +565,12 @@ class CountedChat:
                 wait_s: float | None = None) -> None:
         self.usd += usd
         if self.log is not None:
-            self.log.add(messages, tokens_in, tokens_out, usd, failed=failed,
-                         reply_chars=None if reply is None else len(reply.text),
-                         finish=None if reply is None else reply.finish_reason, rate_limited=rate_limited, wait_s=wait_s)
+            index = self.log.add(messages, tokens_in, tokens_out, usd, failed=failed,
+                                 reply_chars=None if reply is None else len(reply.text),
+                                 finish=None if reply is None else reply.finish_reason, rate_limited=rate_limited,
+                                 wait_s=wait_s)
+            if reply is not None:
+                self._answered = index
 
 
 def spark_rate(prices: Prices | None) -> Rate | None:
