@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
@@ -54,22 +54,28 @@ def fit_from_logs(
     personas_dir: Path = PERSONAS_DIR,
     split: Split = "development",
     lives: Sequence[tuple[str, str]] | None = None,
+    report_counts: Callable[[int, int], None] | None = None,
 ) -> Coefficients:
-    """Fit the registered coefficients from development lives' resolved expectations in ``log_roots``.
+    """Fit development expectations, bootstrapping missing ones from D0 study choices in ``log_roots``.
 
     ``is_synthetic`` is the host's check (``anjo.sleep.app.cleared_sessions.is_synthetic``), passed in
-    because the engine core imports no host module.
+    because the engine core imports no host module. The report_counts callback receives derived
+    and recorded counts of resolved rows passed to the fit; censored rows are excluded.
     """
     if split != "development":
         raise ValueError("the estimator is fitted on development lives only")
     accounts = development_accounts(lives)
     rows: list[FitRow] = []
+    sources: list[bool] = []
     for root in log_roots:
         rows.extend(_fit_rows_from_root(
             root.resolve(), personas_dir=personas_dir, split=split, is_synthetic=is_synthetic,
-            lives=accounts,
+            lives=accounts, on_row=sources.append,
         ))
-    return expect.fit(rows)
+    fitted = expect.fit(rows)
+    if report_counts is not None:
+        report_counts(sum(sources), len(sources) - sum(sources))
+    return fitted
 
 
 def load_estimator(path: Path | None = None) -> Coefficients | None:
@@ -142,6 +148,7 @@ def _persona_for_user(
 def _fit_rows_from_root(
     root: Path, *, personas_dir: Path, split: Split, is_synthetic: Callable[[str], bool],
     lives: Sequence[tuple[str, str]] | None = None,
+    on_row: Callable[[bool], None] | None = None,
 ) -> list[FitRow]:
     accounts = development_accounts(lives)
     nights_dir, life_root, user_id = _layout(root)
@@ -151,7 +158,7 @@ def _fit_rows_from_root(
         raise EstimatorError(f"estimator fit refuses non-synthetic account {user_id!r}")
     persona = _persona_for_user(user_id, personas_dir, accounts)
     life = collect_life(nights_dir, persona, split=split)
-    return _fit_rows(life, nights_dir)
+    return _fit_rows(life, nights_dir, on_row=on_row)
 
 
 def _layout(root: Path) -> tuple[Path, Path, str]:
@@ -169,12 +176,30 @@ def _layout(root: Path) -> tuple[Path, Path, str]:
     return nights_dir, life_root, user_id
 
 
-def _fit_rows(life: mind.LifeRecord, nights_dir: Path) -> list[FitRow]:
+def _fit_rows(
+    life: mind.LifeRecord, nights_dir: Path, *,
+    on_row: Callable[[bool], None] | None = None,
+) -> list[FitRow]:
+    """Development-only bootstrap: recorded expectations take precedence for each choice."""
     if life.split != "development":
         raise ValueError("the estimator is fitted on development lives only")
     end = _virtual(life.last_day + timedelta(days=1))
+    recorded = {(made.target_id, made.made_at): made for made in life.expectations}
     rows: list[FitRow] = []
-    for made in life.expectations:
+    seen: set[tuple[str, datetime]] = set()
+    for made_at, kind, target in _studies(nights_dir, life):
+        key = (target.id, made_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        made = recorded.get(key)
+        derived = made is None
+        if made is None:
+            # The forecast is unused by resolution and fitting; no estimator is needed here.
+            made = Expectation(
+                id=expect.expectation_id(target.id, made_at), target_id=target.id,
+                made_at=made_at, horizon=expect.horizon(target, made_at), p_needed=0.5,
+            )
         outcome = made.outcome
         if outcome is None:
             arrivals = [
@@ -186,50 +211,38 @@ def _fit_rows(life: mind.LifeRecord, nights_dir: Path) -> list[FitRow]:
             outcome = expect.resolve(
                 made, returns=returns, arrivals=arrivals, life_end=end, as_of=end
             )
-        kind_target = _study(nights_dir, life, made)
-        if kind_target is None:
-            continue
-        kind, target = kind_target
         row = expect.fit_row(target, kind, made.made_at, outcome, life.split)
         if row is not None:
             rows.append(row)
+            if on_row is not None:
+                on_row(derived)
     return rows
 
 
-def _study(
-    nights_dir: Path, life: mind.LifeRecord, made: Expectation
-) -> tuple[WantKind, Target] | None:
+def _studies(
+    nights_dir: Path, life: mind.LifeRecord,
+) -> Iterator[tuple[datetime, WantKind, Target]]:
     for night_pick in life.nights:
-        if _night_end(night_pick.night) != made.made_at:
-            continue
-        if night_pick.study.get("D0") != made.target_id:
-            continue
         folder = _folder_for_night(nights_dir, night_pick.night, split=life.split)
         if folder is None:
             continue
-        log = NightLog(folder)
-        for record in log.points():
+        for record in NightLog(folder).points():
             point = points.point_from_record(record)
-            if point.phase != "pre_study" or point.raw.as_of != made.made_at:
+            if point.phase != "pre_study":
                 continue
             choice = point.choice
             if choice is None or choice.want is None:
                 continue
-            if points.study_target(choice, point.raw) != made.target_id:
+            target_id = points.study_target(choice, point.raw)
+            if target_id is None or night_pick.study.get("D0") != target_id:
                 continue
-            target = next((t for t in point.raw.targets if t.id == made.target_id), None)
-            if target is None:
-                continue
-            return choice.want.kind, target
-    return None
+            target = next((t for t in point.raw.targets if t.id == target_id), None)
+            if target is not None:
+                yield point.raw.as_of, choice.want.kind, target
 
 
 def _virtual(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=timezone.utc)
-
-
-def _night_end(night: date) -> datetime:
-    return datetime.combine(night + timedelta(days=1), time.min, tzinfo=timezone.utc)
 
 
 def _folder_for_night(nights_dir: Path, night: date, *, split: Split) -> Path | None:

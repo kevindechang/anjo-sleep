@@ -112,6 +112,9 @@ def describe(chosen: Plan) -> list[str]:
     for account in chosen.accounts:
         state = f"{account.nights} night folders" if account.exists else "missing"
         lines.append(f"  {account.persona} ({account.user_id}): {account.root} - {state}")
+    lines.append(
+        "fit rows: derived=unknown, recorded=unknown (plan reads no nights; counts after fit)"
+    )
     return lines
 
 
@@ -181,8 +184,14 @@ def host_check() -> Callable[[str], bool]:
 def _fit(
     log_roots: Sequence[Path], is_synthetic: Callable[[str], bool], *,
     lives: Sequence[tuple[str, str]] | None = None,
+    out: Callable[[str], None] | None = None,
 ) -> Coefficients:
-    return fit_from_logs(log_roots, is_synthetic=is_synthetic, lives=lives)
+    kwargs: dict[str, Any] = {}
+    if out is not None:
+        kwargs["report_counts"] = lambda derived, recorded: out(
+            f"fit rows: derived={derived}, recorded={recorded} (resolved rows only)"
+        )
+    return fit_from_logs(log_roots, is_synthetic=is_synthetic, lives=lives, **kwargs)
 
 
 def _report(loaded: Coefficients, path: Path, out: Callable[[str], None]) -> None:
@@ -250,7 +259,7 @@ def main(
             path=path,
             replace=reason,
             out=out,
-            fit=fit if fit is not None else partial(_fit, lives=chosen.lives),
+            fit=fit if fit is not None else partial(_fit, lives=chosen.lives, out=out),
         )
     except (Refused, EstimatorError, ResultsError) as refused:
         out(f"refused: {refused}")

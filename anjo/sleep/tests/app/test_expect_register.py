@@ -322,3 +322,104 @@ def test_night_skips_expectation_for_real_person_with_estimator(tmp_path: Path) 
 
 def test_committed_estimator_placeholder_loads_as_none() -> None:
     assert load_estimator(ESTIMATOR) is None
+
+
+@pytest.mark.parametrize("signal", ["return", "arrival", "none"])
+@pytest.mark.parametrize("dated", [False, True])
+def test_derived_choice_matches_recorded_row(tmp_path: Path, signal: str, dated: bool) -> None:
+    from datetime import timedelta
+
+    from anjo.sleep.mind import expect_register
+    from anjo.sleep.mind.collect import collect_life
+    from anjo.sleep.probes import relevance
+    from anjo.sleep.reports.mind import Arrival
+
+    root = _founder_life_with_dual_attempts(tmp_path)
+    folder = root / "nights" / FAKE_NIGHT.isoformat()
+    records = [json.loads(line) for line in (folder / POINTS).read_text().splitlines()]
+    pre = next(record for record in records if record["phase"] == "pre_study")
+    target_id = pre["choice"]["want"]["target_id"]
+    made_at = window(FAKE_NIGHT)[1]
+    for target in pre["targets"]:
+        if target["id"] == target_id:
+            target["revision"], target["acted_revision"] = 9, 2
+            target["check_after"] = (made_at + timedelta(days=3)).isoformat() if dated else None
+    (folder / POINTS).write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    life = collect_life(root, FOUNDER_PERSONA)
+    point = _points(folder / SUMMARY)[0]
+    target = next(t for t in point.raw.targets if t.id == target_id)
+    assert target.person_id == target.label == ""
+    kind = point.choice.want.kind
+    made = expect.expectation(target, kind, made_at, COEFFICIENTS)
+    arrival_day = made_at.date() + timedelta(days=1)
+    life = replace(
+        life, expectations=(), last_day=FAKE_NIGHT + timedelta(days=10),
+        returns={target_id: (arrival_day,)} if signal == "return" else {},
+        arrivals=(Arrival("held-out", arrival_day),),
+        labels=relevance.freeze("prompt", {(target_id, "held-out"): signal == "arrival"}, frozenset()),
+    )
+    derived_sources: list[bool] = []
+    derived = expect_register._fit_rows(life, root / "nights", on_row=derived_sources.append)
+    recorded_sources: list[bool] = []
+    recorded = expect_register._fit_rows(
+        replace(life, expectations=(made,)), root / "nights", on_row=recorded_sources.append,
+    )
+    assert derived == recorded == [
+        expect.fit_row(target, kind, made_at, "not_needed" if signal == "none" else "needed", "development")
+    ]
+    assert derived[0].features.unacted == 7
+    assert derived[0].features.days == (3 if dated else None)
+    assert derived_sources == [True] and recorded_sources == [False]
+
+    # A stored outcome wins even when the person-side evidence would resolve differently.
+    preferred = expect_register._fit_rows(
+        replace(life, expectations=(replace(made, outcome="not_needed"),)), root / "nights",
+    )
+    assert len(preferred) == 1 and not preferred[0].needed
+
+    # Even an early hit cannot rescue a horizon past the life's final day.
+    assert expect_register._fit_rows(
+        replace(life, last_day=arrival_day), root / "nights",
+    ) == []
+    with pytest.raises(ValueError, match="development"):
+        expect_register._fit_rows(replace(life, split="held_out"), root / "nights")
+
+    # Collection and held-out scoring inputs never acquire the fit-only expectations.
+    assert collect_life(root, FOUNDER_PERSONA, split="held_out").expectations == (
+        collect_life(root, FOUNDER_PERSONA).expectations
+    )
+    assert life.expectations == ()
+
+
+def test_fit_reports_recorded_and_derived_resolved_counts(tmp_path: Path) -> None:
+    from anjo.sleep.mind import expect_register
+    from anjo.sleep.mind.collect import collect_life
+
+    root = _founder_life_with_dual_attempts(tmp_path / "derived")
+    recorded_root = _founder_life_with_dual_attempts(tmp_path / "recorded")
+    counts: list[tuple[int, int]] = []
+
+    targets = root / "targets.jsonl"
+    events = [
+        json.loads(line) for line in targets.read_text().splitlines()
+        if json.loads(line).get("op") != "record_expectation"
+    ]
+    targets.write_text("\n".join(
+        json.dumps({**event, "seq": seq}) for seq, event in enumerate(events)
+    ) + "\n")
+    folder = root / "nights" / FAKE_NIGHT.isoformat()
+    records = [json.loads(line) for line in (folder / POINTS).read_text().splitlines()]
+    pre = next(record for record in records if record["phase"] == "pre_study")
+    for target in pre["targets"]:
+        if target["id"] == pre["choice"]["want"]["target_id"]:
+            target["check_after"] = pre["as_of"]
+    (folder / POINTS).write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    fitted = expect_register.fit_from_logs(
+        [root, recorded_root], is_synthetic=lambda uid: True, personas_dir=PERSONAS,
+        report_counts=lambda derived, recorded: counts.append((derived, recorded)),
+    )
+    assert fitted.n == 2 and fitted.base_rate == 0.5
+    assert counts == [(1, 1)]
+
+    assert collect_life(root, FOUNDER_PERSONA).expectations == ()
+    assert collect_life(root, FOUNDER_PERSONA, split="held_out").expectations == ()
