@@ -22,7 +22,7 @@ from anjo.sleep.night.story import MORNING_FAILED, SELF_MODEL_NOT_YET, Failed, N
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
-from anjo.sleep.probes.morning import MorningError, TooManyNoVerdicts
+from anjo.sleep.probes.morning import MorningError, PAIRS, TooManyNoVerdicts
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import CheckpointRef, NightResult
 from anjo.sleep.tests import accelerated_rig
@@ -191,7 +191,7 @@ def test_fake_gate_includes_scoring(capsys: pytest.CaptureFixture[str]) -> None:
     assert report["scored_nights"] == 2
     for scored in report["scores"]:
         assert set(scored["arms"]) == {"1", "2C", "2F", "3", "3x", "4"} and scored["unavailable"] == {}
-        assert set(scored["pairs"]) == {"3_vs_3x", "4_vs_2C"}
+        assert set(scored["pairs"]) == set(PAIRS)
     assert report["scores"][0]["night"] != report["scores"][1]["night"]
 
 
