@@ -41,6 +41,7 @@ same critic agreement, with holds sized for that one case and its own job names.
 scene cost and how often the judge's verdict held when the order was swapped, and never a verdict:
 it has no score, no bound and no switch, whatever its scenes say.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,7 +54,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -66,13 +67,15 @@ from anjo.sleep.practice import critics
 from anjo.sleep.practice.full import CRITIC_TEMPERATURE, SPARK_CAPS, spark_calls
 from anjo.sleep.practice.roles import ROLES_ENV, TODAY, Roles, RolesError, practice_roles
 from anjo.sleep.practice.run import SCENE_TIMEOUT_S, _known
-from anjo.sleep.practice.transcripts import PracticeTranscript
+from anjo.sleep.practice.transcripts import PracticeTranscript, transcript_from_record
 from anjo.sleep.probes.second_judge import MODEL_ID as JUDGE_MODEL
 from anjo.sleep.serving import config
 
 WIRING: Final = "anjo.sleep.app.night:build"
 CRITIC: Final = "anjo.sleep.app.night:deepseek_practice_critic"
-JUDGE: Final = "anjo.sleep.mind.apd.backend:_gemini"  # Vertex, thinking low, its reply cap (no second client)
+JUDGE: Final = (
+    "anjo.sleep.mind.apd.backend:_gemini"  # Vertex, thinking low, its reply cap (no second client)
+)
 JUDGE_FAMILY: Final = "gemini"
 JUDGE_IN_PER_M, JUDGE_OUT_PER_M = 0.75, 3.75  # Gemini 3.8 Flash on Vertex, list price (2026-10-28)
 JUDGE_MAX_OUT: Final = 400 + 512  # the APD path's reply cap and the thinking it reserves
@@ -90,9 +93,13 @@ _Z = statistics.NormalDist().inv_cdf
 SCENES_NEEDED: Final = math.ceil(((_Z(CONFIDENCE) + _Z(POWER)) * WIDEST_SD / MARGIN) ** 2)  # 155
 # Expected prices a call, for the plan's estimate only (holds use the worst case): night.cost.UNITS.
 SPARK_CALL_USD: Final = 0.83 / 33  # the measured practice night: 33 Spark Open calls
-DEEPSEEK_CALL_USD: Final = (6_000 * critics.DEEPSEEK_IN_PER_M + 300 * critics.DEEPSEEK_OUT_PER_M) / 1e6
+DEEPSEEK_CALL_USD: Final = (
+    6_000 * critics.DEEPSEEK_IN_PER_M + 300 * critics.DEEPSEEK_OUT_PER_M
+) / 1e6
 JUDGE_CALL_USD: Final = (5_000 * JUDGE_IN_PER_M + 600 * JUDGE_OUT_PER_M) / 1e6
 ARM_GPU_S: Final = 1174.0 / 16 * 2  # measured serial practice, at 8 at once
+RUN_NAME: Final = "run.json"
+CRITIC_META: Final = "critic_meta.jsonl"
 
 
 @dataclass(frozen=True)
@@ -119,12 +126,22 @@ class _Recorded:
         self.calls: list[tuple[str, ChatResult]] = []
         self._lock = threading.Lock()
 
-    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-                 timeout_s: float, *, temperature: float | None = None, max_tokens: int | None = None) -> ChatResult:
+    def __call__(
+        self,
+        model: Any,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        timeout_s: float,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
         asked = str(messages[-1]["content"])
         if self._scenes is not None and asked.startswith(SCENES_HEAD):
             return self._scenes
-        result = self._chat(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
+        result = self._chat(
+            model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens
+        )
         with self._lock:
             self.calls.append((asked, result))
         return result
@@ -133,7 +150,9 @@ class _Recorded:
         return next((result for asked, result in self.calls if asked.startswith(SCENES_HEAD)), None)
 
     def critic(self) -> list[tuple[str, str]]:
-        return [(asked, result.text) for asked, result in self.calls if asked.startswith(CRITIC_HEAD)]
+        return [
+            (asked, result.text) for asked, result in self.calls if asked.startswith(CRITIC_HEAD)
+        ]
 
     def usd(self, prices: Prices) -> float:
         return sum(spark_usd(prices, r.input_tokens, r.output_tokens) for _, r in self.calls)
@@ -151,7 +170,9 @@ class Read:
 
 def read_verdict(text: str) -> Read | None:
     try:
-        data: Any = json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+        data: Any = json.loads(
+            text.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
+        )
         scores, misses = data["scores"], data.get("misses_constraint", [])
     except (ValueError, KeyError, TypeError):
         return None
@@ -162,23 +183,38 @@ def read_verdict(text: str) -> Read | None:
     order = sorted(scores)
     best = max(order, key=lambda k: (scores[k], -order.index(k)))
     worst = min(order, key=lambda k: (scores[k], order.index(k)))
-    return Read(best, worst if scores[best] > scores[worst] else None,
-                frozenset(m for m in misses if m in scores), len(scores))
+    return Read(
+        best,
+        worst if scores[best] > scores[worst] else None,
+        frozenset(m for m in misses if m in scores),
+        len(scores),
+    )
 
 
-def agreement(name: str, base: Sequence[Read | None], other: Sequence[Read | None]) -> dict[str, Any]:
+def agreement(
+    name: str, base: Sequence[Read | None], other: Sequence[Read | None]
+) -> dict[str, Any]:
     """How often ``other`` agrees with Spark Open's verdicts on the same prompts (agreement, not accuracy)."""
     both = [(a, b) for a, b in zip(base, other, strict=True) if a is not None and b is not None]
     paired = [(a, b) for a, b in both if a.worst is not None and b.worst is not None]
     read = [b for b in other if b is not None]
     letters = sum(b.letters for b in read)
     return {
-        "critic": name, "prompts": len(other), "unreadable": len(other) - len(read),
+        "critic": name,
+        "prompts": len(other),
+        "unreadable": len(other) - len(read),
         "flag_rate": round(sum(len(b.flagged) for b in read) / letters, 4) if letters else None,
-        "agree_best_with_spark": round(sum(a.best == b.best for a, b in both) / len(both), 4) if both else None,
-        "agree_pair_with_spark": round(sum((a.worst is None) == (b.worst is None) for a, b in both) / len(both), 4)
-        if both else None,
-        "agree_worst_with_spark": round(sum(a.worst == b.worst for a, b in paired) / len(paired), 4) if paired else None,
+        "agree_best_with_spark": round(sum(a.best == b.best for a, b in both) / len(both), 4)
+        if both
+        else None,
+        "agree_pair_with_spark": round(
+            sum((a.worst is None) == (b.worst is None) for a, b in both) / len(both), 4
+        )
+        if both
+        else None,
+        "agree_worst_with_spark": round(sum(a.worst == b.worst for a, b in paired) / len(paired), 4)
+        if paired
+        else None,
     }
 
 
@@ -197,24 +233,39 @@ def _spark_calls(roles: Roles, scenes: int) -> int:
 
 def judge_prompt(known: str, first: PracticeTranscript, second: PracticeTranscript) -> str:
     """Two scenes' teacher material, numbered by place only: no arm, role or model is named."""
-    return render(JUDGE_PATH.read_text(encoding="utf-8"), {
-        "KNOWN": known, "MESSAGE_FIRST": first.message, "TARGET_FIRST": first.reply,
-        "REJECTED_FIRST": first.rejected or "(none)", "MESSAGE_SECOND": second.message, "TARGET_SECOND": second.reply,
-        "REJECTED_SECOND": second.rejected or "(none)",
-    })
+    return render(
+        JUDGE_PATH.read_text(encoding="utf-8"),
+        {
+            "KNOWN": known,
+            "MESSAGE_FIRST": first.message,
+            "TARGET_FIRST": first.reply,
+            "REJECTED_FIRST": first.rejected or "(none)",
+            "MESSAGE_SECOND": second.message,
+            "TARGET_SECOND": second.reply,
+            "REJECTED_SECOND": second.rejected or "(none)",
+        },
+    )
 
 
 def _verdict(text: str) -> str | None:
     try:
-        found: Any = json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+        found: Any = json.loads(
+            text.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
+        )
     except ValueError:
         return None
     verdict = found.get("verdict") if isinstance(found, dict) else None
     return verdict if verdict in ("1", "2", "tie") else None
 
 
-def judge_case(ask: Callable[[str], str], known: Callable[[PracticeTranscript], str], scenes: int,
-               arm_a: Sequence[PracticeTranscript], arm_b: Sequence[PracticeTranscript], tally: dict[str, int]) -> list[float]:
+def judge_case(
+    ask: Callable[[str], str],
+    known: Callable[[PracticeTranscript], str],
+    scenes: int,
+    arm_a: Sequence[PracticeTranscript],
+    arm_b: Sequence[PracticeTranscript],
+    tally: dict[str, int],
+) -> list[float]:
     """Arm B's point on each of a case's scenes: judged with A shown first, then B first (a flip or an
     unreadable verdict a tie); a scene one arm dropped is that arm's loss, and one both dropped a tie."""
     by_a, by_b = {t.scene: t for t in arm_a}, {t.scene: t for t in arm_b}
@@ -222,10 +273,15 @@ def judge_case(ask: Callable[[str], str], known: Callable[[PracticeTranscript], 
     for index in range(scenes):
         a, b = by_a.get(index), by_b.get(index)
         if a is None or b is None:
-            tally["dropped_a" if b is not None else "dropped_b" if a is not None else "dropped_both"] += 1
+            tally[
+                "dropped_a" if b is not None else "dropped_b" if a is not None else "dropped_both"
+            ] += 1
             points.append(1.0 if b is not None else 0.0 if a is not None else 0.5)
             continue
-        first, second = _verdict(ask(judge_prompt(known(a), a, b))), _verdict(ask(judge_prompt(known(a), b, a)))
+        first, second = (
+            _verdict(ask(judge_prompt(known(a), a, b))),
+            _verdict(ask(judge_prompt(known(a), b, a))),
+        )
         tally["unreadable"] += (first is None) + (second is None)
         tally["unreadable_scenes"] += first is None or second is None
         b_first = {"2": 1.0, "1": 0.0}.get(first or "tie", 0.5)
@@ -243,17 +299,183 @@ def non_inferior(points: Sequence[float]) -> dict[str, Any]:
     mean = math.fsum(points) / n if n else 0.5
     spread = statistics.stdev(points) if n > 1 else WIDEST_SD
     lower = mean - _Z(CONFIDENCE) * spread / math.sqrt(n) if n else 0.0
-    return {"n": n, "score_b": round(mean, 4), "lower_bound": round(lower, 4), "bar": 0.5 - MARGIN,
-            "confidence": CONFIDENCE, "non_inferior": n >= SCENES_NEEDED and lower > 0.5 - MARGIN}
+    return {
+        "n": n,
+        "score_b": round(mean, 4),
+        "lower_bound": round(lower, 4),
+        "bar": 0.5 - MARGIN,
+        "confidence": CONFIDENCE,
+        "non_inferior": n >= SCENES_NEEDED and lower > 0.5 - MARGIN,
+    }
 
 
-def _save(path: Path, transcripts: Sequence[PracticeTranscript]) -> None:
+def _save(path: Path, transcripts: Sequence[PracticeTranscript], *, case: Case) -> None:
     def plain(value: object) -> object:
         return sorted(value) if isinstance(value, frozenset) else str(value)
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    key = _case_key(case)
     with path.open("a", encoding="utf-8") as out:
-        out.write("".join(json.dumps(asdict(t), default=plain) + "\n" for t in transcripts))
+        for item in transcripts:
+            row = asdict(item)
+            row["case"] = key
+            out.write(json.dumps(row, default=plain) + "\n")
+
+
+def _case_key(case: Case) -> str:
+    return f"{case.user}:{case.persona}:{case.night.isoformat()}"
+
+
+def _run_settings(args: argparse.Namespace, roles_b: Roles) -> dict[str, Any]:
+    return {
+        "arm_a": asdict(TODAY),
+        "arm_b": asdict(roles_b),
+        "wiring": args.wiring,
+        "critic": args.critic,
+        "judge": args.judge,
+        "scenes": args.scenes,
+        "pilot": args.pilot,
+    }
+
+
+def _read_transcripts(path: Path) -> list[tuple[PracticeTranscript, str | None]]:
+    if not path.is_file():
+        return []
+    found: list[tuple[PracticeTranscript, str | None]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        row = json.loads(line)
+        tag = row.get("case")
+        found.append((transcript_from_record(row), None if tag is None else str(tag)))
+    return found
+
+
+def _complete_arm(
+    items: Sequence[tuple[PracticeTranscript, str | None]],
+    case: Case,
+    scenes: int,
+    all_cases: Sequence[Case],
+) -> list[PracticeTranscript] | None:
+    key = _case_key(case)
+    ambiguous = any(c.user == case.user and c.night == case.night and c != case for c in all_cases)
+    attempts: dict[datetime, dict[int, PracticeTranscript]] = {}
+    for item, saved in items:
+        if saved is not None:
+            if saved != key:
+                continue
+        elif item.person_id != case.user or item.night != case.night or ambiguous:
+            continue
+        start = item.created_at - timedelta(seconds=item.scene)
+        attempts.setdefault(start, {})[item.scene] = item
+    if not attempts:
+        return None
+    newest = max(attempts)
+    picked = attempts[newest]
+    if set(picked) != set(range(scenes)):
+        return None
+    return [picked[index] for index in range(scenes)]
+
+
+def _saved_run(out: Path) -> dict[str, Any] | None:
+    path = out / RUN_NAME
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def _settings_error(
+    out: Path, args: argparse.Namespace, roles_b: Roles, *, resume: bool
+) -> str | None:
+    saved = _saved_run(out)
+    if saved is None:
+        if resume and any((out / name).exists() for name in ("arm_a.jsonl", "arm_b.jsonl")):
+            return f"--resume needs {RUN_NAME} in {out} (transcripts without a saved run)"
+        return None
+    current = _run_settings(args, roles_b)
+    for key in ("arm_a", "arm_b", "wiring", "critic", "judge", "scenes", "pilot"):
+        if saved.get(key) != current.get(key):
+            detail = (
+                f"saved run settings differ from this invocation ({key!r} "
+                f"{saved.get(key)!r} != {current.get(key)!r})"
+            )
+            if resume:
+                return f"--resume: {detail}"
+            return f"{out} already has {RUN_NAME} where {detail}"
+    return None
+
+
+def _write_run(out: Path, args: argparse.Namespace, roles_b: Roles) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / RUN_NAME
+    if not path.exists():
+        path.write_text(
+            json.dumps(_run_settings(args, roles_b), sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+def _read_critic_meta(out: Path) -> dict[str, dict[str, Any]]:
+    path = out / CRITIC_META
+    if not path.is_file():
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line:
+            row = json.loads(line)
+            found[str(row["case"])] = row
+    return found
+
+
+def _save_critic_meta(
+    out: Path, case: Case, prompts: Sequence[str], base: Sequence[Read | None]
+) -> None:
+    row = {
+        "case": _case_key(case),
+        "prompts": list(prompts),
+        "base": [
+            {"best": r.best, "worst": r.worst, "flagged": sorted(r.flagged), "letters": r.letters}
+            if r is not None
+            else None
+            for r in base
+        ],
+    }
+    with (out / CRITIC_META).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def _read_from_json(data: dict[str, Any] | None) -> Read | None:
+    if data is None:
+        return None
+    return Read(data["best"], data["worst"], frozenset(data["flagged"]), data["letters"])
+
+
+@dataclass(frozen=True)
+class _Skipped:
+    arm_a: tuple[PracticeTranscript, ...]
+    arm_b: tuple[PracticeTranscript, ...]
+    prompts: tuple[str, ...]
+    base: tuple[Read | None, ...]
+
+
+def _resume_skipped(out: Path, args: argparse.Namespace) -> dict[Case, _Skipped]:
+    arm_a, arm_b = _read_transcripts(out / "arm_a.jsonl"), _read_transcripts(out / "arm_b.jsonl")
+    meta = _read_critic_meta(out)
+    skipped: dict[Case, _Skipped] = {}
+    for case in args.case:
+        complete_a, complete_b = (
+            _complete_arm(arm_a, case, args.scenes, args.case),
+            _complete_arm(arm_b, case, args.scenes, args.case),
+        )
+        if complete_a is None or complete_b is None:
+            continue
+        row = meta.get(_case_key(case), {})
+        skipped[case] = _Skipped(
+            tuple(complete_a),
+            tuple(complete_b),
+            tuple(row.get("prompts", ())),
+            tuple(_read_from_json(item) for item in row.get("base", ())),
+        )
+    return skipped
 
 
 def _load(path: str) -> Any:
@@ -262,67 +484,123 @@ def _load(path: str) -> Any:
 
 
 _DEEPSEEK_WORST: Final = critics.ThirdPartyCritic(
-    "deepseek", lambda prompt: ChatResult("", (), "", 0, 0, "stop"), critics.DEEPSEEK_IN_PER_M,
-    critics.DEEPSEEK_OUT_PER_M).worst_usd
-_LIST: Final = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.50, serve_gpu_per_hour=1.96)
+    "deepseek",
+    lambda prompt: ChatResult("", (), "", 0, 0, "stop"),
+    critics.DEEPSEEK_IN_PER_M,
+    critics.DEEPSEEK_OUT_PER_M,
+).worst_usd
+_LIST: Final = Prices(
+    spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.50, serve_gpu_per_hour=1.96
+)
 
 
-def plan(args: argparse.Namespace, roles_b: Roles, rate: float) -> str:
+def plan(
+    args: argparse.Namespace, roles_b: Roles, rate: float, *, run_cases: int | None = None
+) -> str:
     cases, scenes = len(args.case), len(args.case) * args.scenes
+    to_run = cases if run_cases is None else run_cases
     arms = sum(_spark_calls(r, args.scenes) for r in (TODAY, roles_b))
     new_critic = roles_b.critic != TODAY.critic
-    spark = cases * (arms + (args.scenes if new_critic else 0))  # both arms, and the retest of A's critic
-    deepseek = cases * args.scenes * (2 if new_critic else 0)
-    gpu_s = cases * 2 * ARM_GPU_S + config.SCALEDOWN_S + 180.0
-    expected = (spark * SPARK_CALL_USD + deepseek * DEEPSEEK_CALL_USD + 2 * scenes * JUDGE_CALL_USD
-                + gpu_s * rate / 3600)
+    spark = to_run * (
+        arms + (args.scenes if new_critic else 0)
+    )  # both arms, and the retest of A's critic
+    deepseek = to_run * args.scenes * (2 if new_critic else 0)
+    gpu_s = to_run * 2 * ARM_GPU_S + config.SCALEDOWN_S + 180.0
+    judge_calls = 2 * to_run * args.scenes
+    expected = (
+        spark * SPARK_CALL_USD
+        + deepseek * DEEPSEEK_CALL_USD
+        + judge_calls * JUDGE_CALL_USD
+        + gpu_s * rate / 3600
+    )
     worst_judge = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
-    head = (f"practice A/B pilot, 1 synthetic person-night of {args.scenes} scenes: proves the machinery; prints "
-            "the cost a scene and the judge's agreement across orders, never a verdict") if args.pilot else (
-        f"practice A/B, {cases} synthetic person-nights of {args.scenes} scenes: {scenes} scenes "
-        f"(the bar needs {SCENES_NEEDED})")
-    bar = (f"  bar       none: a pilot prints no score, bound or switch (the full run needs {SCENES_NEEDED} "
-           "scenes)") if args.pilot else (
-        f"  bar       B non-inferior: its {CONFIDENCE:.0%} one-sided lower bound above {0.5 - MARGIN:.2f} "
-        f"(margin {MARGIN}, power {POWER:.0%} at equal arms); a dropped scene is its arm's loss")
+    head = (
+        (
+            f"practice A/B pilot, 1 synthetic person-night of {args.scenes} scenes: proves the machinery; prints "
+            "the cost a scene and the judge's agreement across orders, never a verdict"
+        )
+        if args.pilot
+        else (
+            f"practice A/B, {cases} synthetic person-nights of {args.scenes} scenes: {scenes} scenes "
+            f"(the bar needs {SCENES_NEEDED})"
+        )
+    )
+    bar = (
+        (
+            f"  bar       none: a pilot prints no score, bound or switch (the full run needs {SCENES_NEEDED} "
+            "scenes)"
+        )
+        if args.pilot
+        else (
+            f"  bar       B non-inferior: its {CONFIDENCE:.0%} one-sided lower bound above {0.5 - MARGIN:.2f} "
+            f"(margin {MARGIN}, power {POWER:.0%} at equal arms); a dropped scene is its arm's loss"
+        )
+    )
     lines = [
         head,
         f"  arm A     {asdict(TODAY)} (today)",
         f"  arm B     {asdict(roles_b)}",
         bar,
-        f"  judge     {JUDGE_MODEL} ({JUDGE_FAMILY}, in neither arm), {2 * scenes} calls (both orders), each held "
+        f"  judge     {JUDGE_MODEL} ({JUDGE_FAMILY}, in neither arm), {judge_calls} calls (both orders), each held "
         f"on vertex_usd at ${worst_judge:.3f}",
         f"  spark     {spark} calls at most, an arm at a time on baseten_sleep_usd (peak hold "
         f"${spark_worst_usd(_LIST, max(_spark_calls(r, args.scenes) for r in (TODAY, roles_b))):.2f})",
         f"  deepseek  {deepseek} calls at most, each held on {critics.POOL} at ${_DEEPSEEK_WORST:.3f}",
         f"  gpu       {CASE_MAX_S / 60:.0f} min a case, the wake and the {config.SCALEDOWN_S / 60:.0f}-min idle window "
-        f"held on modal_usd: ${rate * (cases * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600:.2f} at ${rate:.2f}/h",
+        f"held on modal_usd: ${rate * (to_run * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600:.2f} at ${rate:.2f}/h",
         f"  cost      about ${expected:.2f} expected (estimate: ${SPARK_CALL_USD:.3f} a Spark Open call, "
         f"${JUDGE_CALL_USD:.3f} a judge call, {ARM_GPU_S:.0f} GPU-s an arm)",
         "  agreement critic agreement with Spark Open is reported, never a bar",
         "  prints    counts and dollars; never a scene's words",
         f"  saves     both arms' transcripts under --out ({args.out or 'required with --go'})",
     ]
+    if run_cases is not None and run_cases != cases:
+        lines.insert(1, f"  resume    reuse {cases - run_cases} case(s), run {run_cases} case(s)")
     return "\n".join(lines)
 
 
 def main(
-    argv: Sequence[str] | None = None, *, wiring: Callable[[Any, NightOptions], Any] | None = None,
-    critic_port: Callable[[date, Any], Any] | None = None, judge: Callable[[str], tuple[str, int, int]] | None = None,
-    ledger: Any = ..., clock: Callable[[], float] = time.monotonic,
+    argv: Sequence[str] | None = None,
+    *,
+    wiring: Callable[[Any, NightOptions], Any] | None = None,
+    critic_port: Callable[[date, Any], Any] | None = None,
+    judge: Callable[[str], tuple[str, int, int]] | None = None,
+    ledger: Any = ...,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
-    parser = argparse.ArgumentParser(description="Today's practice roles against another setting, plan-first.")
-    parser.add_argument("--case", type=_case, action="append", required=True,
-                        help="a synthetic person's night, user:persona:YYYY-MM-DD (repeat)")
-    parser.add_argument("--arm-b", required=True, help=f"arm B's {ROLES_ENV}, such as critic=deepseek")
+    parser = argparse.ArgumentParser(
+        description="Today's practice roles against another setting, plan-first."
+    )
+    parser.add_argument(
+        "--case",
+        type=_case,
+        action="append",
+        required=True,
+        help="a synthetic person's night, user:persona:YYYY-MM-DD (repeat)",
+    )
+    parser.add_argument(
+        "--arm-b", required=True, help=f"arm B's {ROLES_ENV}, such as critic=deepseek"
+    )
     parser.add_argument("--scenes", type=int, default=16)
-    parser.add_argument("--wiring", default=WIRING, help="the night's NightDeps builder, <module>:<function>")
-    parser.add_argument("--critic", default=CRITIC, help="arm B's third-party critic, <module>:<function>")
+    parser.add_argument(
+        "--wiring", default=WIRING, help="the night's NightDeps builder, <module>:<function>"
+    )
+    parser.add_argument(
+        "--critic", default=CRITIC, help="arm B's third-party critic, <module>:<function>"
+    )
     parser.add_argument("--judge", default=JUDGE, help="the judge's text call, <module>:<function>")
     parser.add_argument("--out", help="where both arms' transcripts go (required with --go)")
     parser.add_argument("--go", action="store_true", help="run it; without it, print the plan only")
-    parser.add_argument("--pilot", action="store_true",
-                        help="one case to prove the machinery: cost a scene and judge agreement, never a verdict")
+    parser.add_argument(
+        "--pilot",
+        action="store_true",
+        help="one case to prove the machinery: cost a scene and judge agreement, never a verdict",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse finished cases already saved under --out (same settings as this invocation)",
+    )
     args = parser.parse_args(argv)
     try:
         roles_b = practice_roles({ROLES_ENV: args.arm_b})
@@ -334,62 +612,136 @@ def main(
         parser.error(f"the judge's family ({JUDGE_FAMILY}) plays in an arm")
     if args.pilot and len(args.case) != 1:
         parser.error("a pilot is one case; the full run takes the rest")
+    skipped: dict[Case, _Skipped] = {}
+    if args.out:
+        mismatch = _settings_error(Path(args.out), args, roles_b, resume=args.resume)
+        if mismatch:
+            parser.error(mismatch)
+    if args.resume:
+        if not args.out:
+            parser.error("--resume needs --out")
+        skipped = _resume_skipped(Path(args.out), args)
+    run_cases = None if not args.resume else len(args.case) - len(skipped)
     if not args.go:
-        print(plan(args, roles_b, _LIST.serve_gpu_per_hour))
+        print(plan(args, roles_b, _LIST.serve_gpu_per_hour, run_cases=run_cases))
         return 0
     if not args.pilot and len(args.case) * args.scenes < SCENES_NEEDED:
         parser.error(f"the bar needs {SCENES_NEEDED} scenes: add cases (or --pilot for one)")
     if not args.out:
         parser.error("--go needs --out")
     build = wiring or _load(args.wiring)
-    deps = [(build(None, _options(case, args.scenes, TODAY)), build(None, _options(case, args.scenes, roles_b)))
-            for case in args.case]  # no trainer: nothing here trains
+    deps = [
+        (
+            build(None, _options(case, args.scenes, TODAY)),
+            build(None, _options(case, args.scenes, roles_b)),
+        )
+        for case in args.case
+    ]  # no trainer: nothing here trains
     book = deps[0][0].ledger if ledger is ... else ledger
-    print(plan(args, roles_b, deps[0][0].prices.serve_gpu_per_hour))
-    return _go(args, roles_b, deps, book, critic_port or _load(args.critic), judge or _load(args.judge), clock)
+    print(plan(args, roles_b, deps[0][0].prices.serve_gpu_per_hour, run_cases=run_cases))
+    return _go(
+        args,
+        roles_b,
+        deps,
+        book,
+        critic_port or _load(args.critic),
+        judge or _load(args.judge),
+        clock,
+        skipped,
+    )
 
 
 def _options(case: Case, scenes: int, roles: Roles) -> NightOptions:
-    return NightOptions(night=case.night, personas={case.user: case.persona}, practice_scenes=scenes,
-                        practice_roles=roles)
+    return NightOptions(
+        night=case.night,
+        personas={case.user: case.persona},
+        practice_scenes=scenes,
+        practice_roles=roles,
+    )
 
 
-def _arm(job: str, arm: str, deps: Any, chat: _Recorded, case: Case, evidence: list[Any], out: Path,
-         ledger: Any) -> Any:
+def _arm(
+    job: str,
+    arm: str,
+    deps: Any,
+    chat: _Recorded,
+    case: Case,
+    evidence: list[Any],
+    out: Path,
+    ledger: Any,
+) -> Any:
     runner = deps.practice(chat, case.night)
-    with held(ledger, f"{job}:spark:{arm}", ("baseten_sleep_usd",),
-              usd(spark_worst_usd(deps.prices, runner.max_spark_calls)), lambda: chat.usd(deps.prices)):
+    with held(
+        ledger,
+        f"{job}:spark:{arm}",
+        ("baseten_sleep_usd",),
+        usd(spark_worst_usd(deps.prices, runner.max_spark_calls)),
+        lambda: chat.usd(deps.prices),
+    ):
         run = runner.run(case.user, case.night, evidence, None, at=datetime.now(UTC))
-    _save(out / f"arm_{arm.lower()}.jsonl", run.transcripts)
-    print(json.dumps({"case": job, "arm": arm, "roles": dict(run.roles), "scenes": len(run.transcripts),
-                      "flagged": run.flagged, "pairs": run.pairs, "teacher_targets": run.teacher_targets,
-                      "usd": {"spark": round(chat.usd(deps.prices), 4), "critic": round(run.critic_usd, 4)}}))
+    _save(out / f"arm_{arm.lower()}.jsonl", run.transcripts, case=case)
+    print(
+        json.dumps(
+            {
+                "case": job,
+                "arm": arm,
+                "roles": dict(run.roles),
+                "scenes": len(run.transcripts),
+                "flagged": run.flagged,
+                "pairs": run.pairs,
+                "teacher_targets": run.teacher_targets,
+                "usd": {
+                    "spark": round(chat.usd(deps.prices), 4),
+                    "critic": round(run.critic_usd, 4),
+                },
+            }
+        )
+    )
     return run
 
 
-def _critics(job: str, deps: Any, prompts: Sequence[str], third: Any, ledger: Any,
-             spend: dict[str, float]) -> tuple[list[Read | None], list[Read | None]]:
+def _critics(
+    job: str, deps: Any, prompts: Sequence[str], third: Any, ledger: Any, spend: dict[str, float]
+) -> tuple[list[Read | None], list[Read | None]]:
     """Arm A's critic prompts asked again: of Spark Open (its retest) and of arm B's critic."""
     retest = _Recorded(deps.spark_chat)
-    with held(ledger, f"{job}:spark:retest", ("baseten_sleep_usd",), usd(spark_worst_usd(deps.prices, len(prompts))),
-              lambda: retest.usd(deps.prices)):
-        again = [read_verdict(retest(SPARK_OPEN, [{"role": "user", "content": p}], None, SCENE_TIMEOUT_S,
-                                     temperature=CRITIC_TEMPERATURE, max_tokens=SPARK_CAPS["critic"]).text)
-                 for p in prompts]
+    with held(
+        ledger,
+        f"{job}:spark:retest",
+        ("baseten_sleep_usd",),
+        usd(spark_worst_usd(deps.prices, len(prompts))),
+        lambda: retest.usd(deps.prices),
+    ):
+        again = [
+            read_verdict(
+                retest(
+                    SPARK_OPEN,
+                    [{"role": "user", "content": p}],
+                    None,
+                    SCENE_TIMEOUT_S,
+                    temperature=CRITIC_TEMPERATURE,
+                    max_tokens=SPARK_CAPS["critic"],
+                ).text
+            )
+            for p in prompts
+        ]
     replies = [third.ask(p) for p in prompts]  # each call held on its own pool
     spend["spark"] += retest.usd(deps.prices)
     spend["critic"] += sum(third.usd(r.input_tokens, r.output_tokens) for r in replies)
     return again, [None if r.finish_reason == "length" else read_verdict(r.text) for r in replies]
 
 
-def _held_judge(judge: Callable[[str], tuple[str, int, int]], ledger: Any, job: str,
-                spend: dict[str, float]) -> Callable[[str], str]:
+def _held_judge(
+    judge: Callable[[str], tuple[str, int, int]], ledger: Any, job: str, spend: dict[str, float]
+) -> Callable[[str], str]:
     numbers = itertools.count(1)
     worst = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
 
     def ask(prompt: str) -> str:
         spent = [0.0]
-        with held(ledger, f"{job}:judge:{next(numbers)}", ("vertex_usd",), usd(worst), lambda: spent[0]):
+        with held(
+            ledger, f"{job}:judge:{next(numbers)}", ("vertex_usd",), usd(worst), lambda: spent[0]
+        ):
             text, tokens_in, tokens_out = judge(prompt)
             spent[0] = (tokens_in * JUDGE_IN_PER_M + tokens_out * JUDGE_OUT_PER_M) / 1e6
         spend["judge"] += spent[0]
@@ -398,14 +750,35 @@ def _held_judge(judge: Callable[[str], tuple[str, int, int]], ledger: Any, job: 
     return ask
 
 
-def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]], ledger: Any,
-        critic_port: Callable[[date, Any], Any], judge: Callable[[str], tuple[str, int, int]],
-        clock: Callable[[], float]) -> int:
+def _go(
+    args: argparse.Namespace,
+    roles_b: Roles,
+    deps: Sequence[tuple[Any, Any]],
+    ledger: Any,
+    critic_port: Callable[[date, Any], Any],
+    judge: Callable[[str], tuple[str, int, int]],
+    clock: Callable[[], float],
+    skipped: dict[Case, _Skipped] | None = None,
+) -> int:
     first = deps[0][0]
     rate, out = first.prices.serve_gpu_per_hour, Path(args.out)
+    _write_run(out, args, roles_b)
+    skipped = skipped or {}
     run_job = f"practice_ab:{'pilot:' if args.pilot else ''}{int(time.time())}"
-    tally = dict.fromkeys(("win", "tie", "loss", "flips", "unreadable", "unreadable_scenes", "dropped_a", "dropped_b",
-                           "dropped_both"), 0)
+    tally = dict.fromkeys(
+        (
+            "win",
+            "tie",
+            "loss",
+            "flips",
+            "unreadable",
+            "unreadable_scenes",
+            "dropped_a",
+            "dropped_b",
+            "dropped_both",
+        ),
+        0,
+    )
     spend = dict.fromkeys(("spark", "critic", "judge", "gpu"), 0.0)
     points: list[float] = []
     base: list[Read | None] = []
@@ -413,33 +786,70 @@ def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]
     other: list[Read | None] = []
     ask = _held_judge(judge, ledger, run_job, spend)
     started = clock()
-    bound = rate * (len(deps) * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600
-    with held(ledger, f"{run_job}:gpu", ("modal_usd",), usd(bound),
-              lambda: rate * (clock() - started + config.SCALEDOWN_S) / 3600):
+    run_cases = len(deps) - len(skipped)
+    bound = rate * (run_cases * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600
+    with held(
+        ledger,
+        f"{run_job}:gpu",
+        ("modal_usd",),
+        usd(bound),
+        lambda: rate * (clock() - started + config.SCALEDOWN_S) / 3600,
+    ):
         if first.wake is not None and not first.wake().ok:
             print(json.dumps({"line": "wake", "ok": False}))
             return 1
         for case, (deps_a, deps_b) in zip(args.case, deps, strict=True):
             job = f"{run_job}:{case.night.isoformat()}:{case.user}"
             evidence = list(deps_a.evidence(case.user).trainable(case.night))
+            known = {e.id: e for e in evidence}
+
+            def known_fn(t: PracticeTranscript) -> str:
+                return str(_known([known[i] for i in t.f_ids if i in known]))
+
+            if stored := skipped.get(case):
+                points += judge_case(ask, known_fn, args.scenes, stored.arm_a, stored.arm_b, tally)
+                if roles_b.critic != TODAY.critic:
+                    retest, new = _critics(
+                        job, deps_a, stored.prompts, critic_port(case.night, ledger), ledger, spend
+                    )
+                    base, again, other = base + list(stored.base), again + retest, other + new
+                continue
             chat_a = _Recorded(deps_a.spark_chat)
             run_a = _arm(job, "A", deps_a, chat_a, case, evidence, out, ledger)
-            replay = chat_a.scenes() if roles_b.person == "spark" else None  # the same messages for both arms
+            if roles_b.critic != TODAY.critic:
+                _save_critic_meta(
+                    out,
+                    case,
+                    [p for p, _ in chat_a.critic()],
+                    [read_verdict(text) for _, text in chat_a.critic()],
+                )
+            replay = (
+                chat_a.scenes() if roles_b.person == "spark" else None
+            )  # the same messages for both arms
             chat_b = _Recorded(deps_b.spark_chat, replay)
             run_b = _arm(job, "B", deps_b, chat_b, case, evidence, out, ledger)
             spend["spark"] += chat_a.usd(deps_a.prices) + chat_b.usd(deps_b.prices)
             spend["critic"] += run_a.critic_usd + run_b.critic_usd
-            known = {e.id: e for e in evidence}
-            points += judge_case(ask, lambda t: _known([known[i] for i in t.f_ids if i in known]), args.scenes,
-                                 run_a.transcripts, run_b.transcripts, tally)
+            points += judge_case(
+                ask, known_fn, args.scenes, run_a.transcripts, run_b.transcripts, tally
+            )
             if roles_b.critic != TODAY.critic:
                 read = [read_verdict(text) for _, text in chat_a.critic()]
-                retest, new = _critics(job, deps_a, [p for p, _ in chat_a.critic()],
-                                       critic_port(case.night, ledger), ledger, spend)
+                retest, new = _critics(
+                    job,
+                    deps_a,
+                    [p for p, _ in chat_a.critic()],
+                    critic_port(case.night, ledger),
+                    ledger,
+                    spend,
+                )
                 base, again, other = base + read, again + retest, other + new
         spend["gpu"] = rate * (clock() - started + config.SCALEDOWN_S) / 3600
     if roles_b.critic != TODAY.critic:
-        for line in (agreement("spark-retest", base, again), agreement(roles_b.critic, base, other)):
+        for line in (
+            agreement("spark-retest", base, again),
+            agreement(roles_b.critic, base, other),
+        ):
             print(json.dumps(line))
     if args.pilot:
         print(json.dumps(pilot_line(tally, len(points), spend)))
@@ -457,11 +867,16 @@ def pilot_line(tally: dict[str, int], scenes: int, spend: dict[str, float]) -> d
     dropped = tally["dropped_a"] + tally["dropped_b"] + tally["dropped_both"]
     judged = scenes - dropped
     total = math.fsum(spend.values())
-    return {"pilot": True, "scenes": scenes,
-            "judge_order_agreement": round(1 - tally["flips"] / judged, 4) if judged else None,
-            "dropped_scenes": dropped, "unreadable_scenes": tally["unreadable_scenes"],
-            "usd": {step: round(value, 4) for step, value in spend.items()} | {"total": round(total, 4)},
-            "usd_per_scene": round(total / scenes, 4) if scenes else None}
+    return {
+        "pilot": True,
+        "scenes": scenes,
+        "judge_order_agreement": round(1 - tally["flips"] / judged, 4) if judged else None,
+        "dropped_scenes": dropped,
+        "unreadable_scenes": tally["unreadable_scenes"],
+        "usd": {step: round(value, 4) for step, value in spend.items()}
+        | {"total": round(total, 4)},
+        "usd_per_scene": round(total / scenes, 4) if scenes else None,
+    }
 
 
 if __name__ == "__main__":
