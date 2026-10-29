@@ -467,33 +467,39 @@ At line 565, added by `fix: Sleep's arms and the demo read her memory without wr
 +
 ```
 
-## `pyproject.toml` (+20 -2)
+## `pyproject.toml` (+14 -2)
 
-At line 70, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 56, added by `feat: MIND's neural core: slots, a surprise-driven fast-weight memory, hazard, missing-step and self-error heads, dreaming, deterministic CPU training and the offline evaluation, on toy lives with counterfactual pairs [mind-core]`:
+
+```diff
++    "torch>=2.11,<3",  # MIND's neural core (anjo/sleep/mind/core), CPU; its tests skip without it
+```
+
+At line 71, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +sleep = ["modal"]  # Anjo Sleep's GPU jobs (anjo/sleep); never installed in the serving venv
 ```
 
-At line 73, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 74, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +testpaths = ["tests", "anjo/sleep/tests"]
 ```
 
-At line 188, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+At line 189, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
 
 ```diff
 +    "anjo.sleep.serving", "anjo.sleep.serving.**", "anjo.sleep.app", "anjo.sleep.app.**",
 ```
 
-At line 190, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 191, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +forbidden_modules = ["anjo.training", "anjo.sleep.train"]
 ```
 
-At line 205, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 206, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +[[tool.importlinter.contracts]]
@@ -503,175 +509,11 @@ At line 205, added by `feat: shared types, ports and model API clients for anjo/
 +forbidden_modules = ["anjo.*", "anjo.sleep.app"]
 +ignore_imports = ["anjo.sleep.app -> anjo.**", "anjo.sleep.app.** -> anjo.**", "anjo.sleep.tests.** -> anjo.**"]
 +unmatched_ignore_imports_alerting = "none"
-+[[tool.importlinter.contracts]]
-+name = "In anjo.sleep only anjo.sleep.app and tests import the web app"
-+type = "forbidden"
-+source_modules = ["anjo.sleep"]
-+forbidden_modules = ["anjo.dashboard"]
-+ignore_imports = ["anjo.sleep.app -> anjo.**", "anjo.sleep.app.** -> anjo.**", "anjo.sleep.tests.** -> anjo.**"]
-+unmatched_ignore_imports_alerting = "none"
 +
 ```
 
-At line 267, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 261, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +    "anjo/sleep",
 ```
-
-## Score tools
-
-**Warm start check.** Compares warm compound and clean-slate morning scores for the same
-development nights, on `3_vs_1` and `3_vs_3x` for knowledge and interaction, and names
-`warm_start` or `clean_slate` only when both dimensions pick that same policy.
-
-```bash
-python -m anjo.sleep.train.warm_start_check --warm warm.jsonl --clean clean.jsonl
-```
-
-It reads those two JSONL files and `anjo/sleep/prereg/thresholds.json` (`--thresholds` points at
-another file). It writes one JSON object per line to stdout. Offline: it costs nothing.
-
-**MIND collect.** Replays deciders D0-D4 on recorded development nights and returns each life's
-record, with held-out `new_work` arrivals and frozen relevance labels. Call `collect_life` or
-`collect_development_lives` in `anjo/sleep/mind/collect.py`.
-
-It reads each night's `summary.json` and `mind_points.jsonl`, and, beside the nights folder,
-`relevance.json`, `targets.jsonl`, `evidence.jsonl` and the persona file. It returns the records.
-With no chat function passed in, D1 stays unobserved and it costs nothing.
-
-**Demo baseline.** Picks the live demo's notes-only baseline, 2C or 2F. The stronger one is the
-arm that arm 4 scores lower against on pooled development `new_work`; a tie or a missing score stays 2C.
-
-```bash
-python -m anjo.sleep.tools.demo_baseline
-```
-
-It reads full-set `development` score files under the results root (`--root`, or
-`$ANJO_DATA_DIR/sleep/results`) and `anjo/sleep/prereg/thresholds.json`. It prints one JSON object
-and leaves `ANJO_SLEEP_DEMO_BASELINE` unset. It costs nothing.
-
-**Morning pairs.** A full morning judges 3 against 3x, 4 against 2C and 4 against 2F
-(`anjo/sleep/probes/morning.py`): 1040 judge calls. It pays for Glimmer and the Muse Spark judge.
-`daily-v1` still judges only arm 3 against arm 1.
-
-## Development read
-
-**Development go/no-go (Oct 31).** Pools the four registered development lives' full morning
-scores, re-bootstraps each headline and fairness comparison per dimension, and labels `win`,
-`loss`, `inconclusive`, or (fairness only) `match`, from `anjo/sleep/prereg/thresholds.json`.
-Stdout is one JSON object per line (ids and numbers only). Offline.
-
-```bash
-python -m anjo.sleep.reports.development --root <dir> --account <persona>=<account id>
-```
-
-Pass `--account` once for each of the four personas in `development.pooled_lives`. `--root`
-defaults to `$ANJO_DATA_DIR/sleep/results`. `--sealed-dir` defaults to `$ANJO_SLEEP_SEALED_DIR`.
-
-It reads each account's newest `night-*.json` under `<root>/<account>/scores/` whose `subset` is
-`full` (a missing, empty or null subset counts as `full`; any other subset is ignored) and the sealed `<persona>.jsonl` probes. It writes no files.
-
-`DevelopmentError`, or argparse, refuses a sealed dir that is unset and, for the rows it keeps (rows of other pairs or kinds and
-`no_verdict` rows are skipped first), a missing or empty sealed file, accounts other than those four personas, a probe or kind the sealed set does not have, an
-outcome other than `win`, `tie`, `loss` or `no_verdict`, a score file that is not `night-NN` or
-has no night, and an account with no full morning score. `no_verdict` rows are dropped. The
-pooled label stays `inconclusive` when judged probes are under
-`development.min_probes_per_dimension` or a pooled life contributed none. A persona whose name
-ends in `_donor`, with `checkpoint_basis` `not_promoted` on that newest full score, is left out
-of the `3_vs_3x` pool only. Headline pairs are `3_vs_1` and `3_vs_3x` (knowledge and
-interaction). Fairness pairs are `4_vs_2C` and `4_vs_2F` on `new_work` only. `match` applies
-only when that comparison is not a win or a loss and the CI lower bound is above
-`fairness.non_inferiority_margin`.
-
-## Final report
-
-**Nov 1 final report and claim table.** `anjo/sleep/reports/final.py` has no CLI:
-`python -m anjo.sleep.reports.final` loads the module and does not read arguments. Call `run`
-with the freeze tag, the results root, the lives, `donors`, `pair_lives`, `single_life` and
-`sealed`. The module names the tag `sleep-freeze`. Notes in `anjo/sleep/prereg/thresholds.json`
-call that freeze Nov 1, and `run` refuses a checkout whose HEAD is not that tag (a caller may pass `git=` in place of
-reading HEAD; tests do).
-
-It reads that thresholds file, resolves the tag with local `git rev-parse`, reads `HEAD`, and
-reads each life's highest-numbered `<results_root>/<life>/scores/night-*.json` whose `label` is
-`final`. It writes `<results_root>/<life>/scores/final.json` once per life, through a temp file.
-No live judging.
-
-`FinalError` refuses a tag that does not resolve to a commit, a `HEAD` that is not that commit,
-a call that is not 3 lives with a pair of 2 whose single life is one of the three, a missing
-`sealed` callable, any life that already has `final.json` (`rerun_reason` does not overwrite),
-a night file whose label is not `final`, `checkpoint_basis` `best`, a life with no scores folder
-or no final morning, an unregistered probe-set name, a probe id outside the registered set, or a
-thresholds file that is not a record.
-
-Knowledge and interaction are claimed separately. The row is `headline` when both `3_vs_1` and
-`3_vs_3x` are wins and both matched-pair lives are ahead on `3_vs_3x`; `base_only` when `3_vs_1`
-is a win and `3_vs_3x` is inconclusive or a loss; otherwise `none`. A life whose `unavailable`
-`3x` is `donor_unavailable` is omitted from the pooled `3_vs_3x` score, that comparison becomes
-`inconclusive`, and that life is not counted as ahead. Fairness is `4_vs_2C` and `4_vs_2F` on
-`new_work` only: `win`, `loss`, `matches` or `inconclusive` from the registered rules. Qualifiers
-`cost` and `memory` are always attached. `style_neutral` is attached when a `3_vs_1` win did not
-stay a win under the style-neutral outcome passed in. A `second_judge` passed in for a dimension
-is stored on that dimension.
-
-## Deterministic serving
-
-Deterministic serving is the default. `ANJO_SLEEP_SERVE_DETERMINISTIC` (`anjo/sleep/serving/config.py`)
-turns it off only when it strips to `0`; unset, empty, `1` and `true` keep it on. The deploy bakes
-the value into the image, so the container reads the same setting. `vllm_env` then sets
-`VLLM_BATCH_INVARIANT=1`. The deploy is a separate Modal app:
-`serve_app_name(precision, deterministic=True)` is `anjo-sleep-serve-det` on the default GPU,
-or the same `-det` suffix on another GPU's name (`anjo-sleep-serve-h100-det` for H100).
-`anjo/sleep/serving/modal_app.py` names the app that way and bakes the flag into the image.
-
-```bash
-ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py  # anjo-sleep-serve-det
-ANJO_SLEEP_SERVE_DETERMINISTIC=0 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py  # anjo-sleep-serve
-```
-
-Set the same value on the host so adapter staging targets that app, and set
-`ANJO_SLEEP_MODAL_URL` to its deployed web URL. Loading the serving module without a pinned
-Glimmer revision raises before anything is built.
-
-vLLM 0.28's LoRA `lora_shrink` kernel splits its sums (split-K) and adds the parts with atomic
-adds, so identical serial requests to an app without it could score differently. On the
-deterministic app, repeats were bit-identical (measured on Modal 2026-10-29 with `adapter_repro`;
-not something the tests can show). On an L40S at 16 requests at once (`gate_bench`, 2026-10-29) it
-decoded 163 tokens/s against 212 without it, about 23% slower, and one night's gate checkpoint side
-took 170 s against 149 s.
-
-## Adapter repeat check
-
-**Repeat scores for a served adapter.** `anjo.sleep.tools.adapter_repro` checks whether adapter
-X scores the same way on repeated serial requests. Without `--go` it prints a plan and sends
-nothing.
-
-```bash
-python -m anjo.sleep.tools.adapter_repro --x p-<hash>-n<N> --y p-<hash>-n<N>
-```
-
-`--x` and `--y` must be two different `p-<hash>-n<night>` names. `--persona` defaults to
-`film_founder`. `--gpu` is `L40S`, `H100` or `A100-80GB` (default: the GPU `serve_precision`
-names). `--usd-per-hour`, when set, must be finite and positive. `--url` overrides
-`ANJO_SLEEP_MODAL_URL`.
-
-It reads up to 30 choices (`MAX_CHOICES`) from that persona's frozen knowledge set
-(even for the plan). With `--go` it scores them one at a time on `EVAL_DAY` (2026-10-28) with the token memo, and reads `/metrics`
-at each pass boundary. Passes: a base reference; A, X three times on the same payloads; B, X
-three times with a new `cache_salt` each pass; C, base then X, Y, X; D, unload and reload X,
-then score X. Stdout is the plan as plain text; with `--go`, JSON lines follow: per-pass hashes,
-log-prob differences, flips and seconds, then a verdict. Prompts and continuations are not
-printed. When a ledger is present, it takes the local night lock and a `modal_usd` hold for the active cap (`CAP_HEADROOM` is 3
-times the estimate) plus wake and the idle window.
-
-It exits 2 before any request when the night lock is held. A missing `ANJO_SLEEP_MODAL_URL`
-(unless `--url` is set) or `ANJO_SLEEP_MODAL_TOKEN` stops it. Wake failure exits 1 and still
-settles the hold. The active cap stops further requests (exit 2, verdict `incomplete`); a
-request already sent may finish. HTTP 400 on `cache_salt` skips the rest of the B passes and
-records that `cache_salt` is unsupported. Any other scoring error is not skipped. The verdict is
-`noise` when every later X pass is within `NOISE_NATS` (0.01) of the earliest X pass,
-`inconclusive` with fewer than two X passes or when H1, H2 and H3 do not match, otherwise those
-ids joined with `+`. Boundary gauges can be stale, so a zero does not prove the server was idle
-during prefill. H2 is a correlation. Two adapters cannot exhaust the 8 and 16 LoRA slots, so an
-inconclusive H3 check does not rule out eviction under other loads.
