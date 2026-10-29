@@ -85,9 +85,10 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
-from typing import Any, Final, Protocol, TypeVar
+from typing import Any, Final, Protocol, TypeVar, cast
 
 import httpx
 
@@ -220,7 +221,7 @@ def wake(
 
 def model_name(adapter: CheckpointRef | None) -> str:
     """What vLLM serves: the adapter's name, or the base model."""
-    return config.MODEL if adapter is None else config.check_adapter_name(adapter.id)
+    return cast(str, config.MODEL if adapter is None else config.check_adapter_name(adapter.id))
 
 
 class Poster(Protocol):
@@ -338,6 +339,22 @@ class HttpPoster:
             raise ServingError(f"{path} returned HTTP {response.status_code}")
         return json_object(path, response.content)
 
+    def metrics(self) -> str:
+        """Authenticated Prometheus scrape, without JSON decoding or transport retries."""
+        try:
+            response = self._http.get("/metrics")
+        except httpx.HTTPError as error:
+            raise TransportFailed(f"/metrics failed in transport ({type(error).__name__})") from None
+        if response.status_code != 200:
+            raise ServingError(f"/metrics returned HTTP {response.status_code}")
+        return cast(str, response.text)
+
+    def unload_adapter(self, name: str, *, timeout_s: float | None = None, hops_s: float | None = None) -> None:
+        """Explicit unload; vLLM may return plain text rather than JSON."""
+        response = self._send("/v1/unload_lora_adapter", {"lora_name": name}, timeout_s, hops_s)
+        if response.is_error:
+            raise ServingError(f"/v1/unload_lora_adapter returned HTTP {response.status_code}")
+
     def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None, hops_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
@@ -381,7 +398,7 @@ def load_adapter(
 def _staged_already(name: str) -> str:
     """A ``Stage`` that copies nothing: the folder a stage puts adapters in, for a client nobody may wait
     on a stage for (``VllmClient.once``)."""
-    return config.STAGED_ADAPTERS_DIR
+    return cast(str, config.STAGED_ADAPTERS_DIR)
 
 
 def _load_once(poster: Loader, name: str, folder: str, stage: Stage | None) -> bool:
@@ -440,20 +457,28 @@ class _Requests:
     clock: Callable[[], float]
     sleep: Callable[[float], None]
     memo: token_memo.TokenMemo | None = None  # ``VllmClient.reusing_tokens``: /tokenize once per body
+    observer: Callable[[str], AbstractContextManager[None]] | None = None
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         poster = self.poster
         if self.memo is not None and path == token_memo.TOKENIZE:
-            return self.memo.post(body, lambda: replace(self, memo=None).post(path, body))
+            return cast(dict[str, Any], self.memo.post(body, lambda: replace(self, memo=None).post(path, body)))
         if isinstance(poster, HttpPoster):
-            return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left))
-        return self._send(lambda timeout, left: poster.post(path, body))
+            return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left), path)
+        return self._send(lambda timeout, left: poster.post(path, body), path)
 
     def load_adapter(self, name: str, folder: str) -> bool:
         poster = self.poster
         if not isinstance(poster, HttpPoster):
             raise ServingError("only a server that reads adapters from a folder loads one")
-        return self._send(lambda timeout, left: poster.load_adapter(name, folder, timeout_s=timeout, hops_s=left))
+        return self._send(lambda timeout, left: poster.load_adapter(name, folder, timeout_s=timeout, hops_s=left), LOAD_PATH)
+
+    def unload_adapter(self, name: str) -> None:
+        poster = self.poster
+        if not isinstance(poster, HttpPoster):
+            raise ServingError("explicit unload requires an HTTP serving client")
+        self._send(lambda timeout, left: poster.unload_adapter(name, timeout_s=timeout, hops_s=left),
+                   "/v1/unload_lora_adapter")
 
     def stage(self, stage: Stage, name: str) -> str | None:
         """``stage`` under one of the client's slots: it is one more input for the container."""
@@ -464,28 +489,30 @@ class _Requests:
     def close(self) -> None:
         self.poster.close()
 
-    def _send(self, attempt: Callable[[float, float], T]) -> T:  # its timeout, and the rest of cold_s for 303 hops
+    def _send(self, attempt: Callable[[float, float], T], path: str) -> T:
         deadline = self.clock() + self.cold_s
         proxied = False  # a status from the proxy has gone again: it never goes a third time
         for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
-            try:
-                with self.sent.slots:
-                    self._refuse_if_down()
-                    got = attempt(self._timeout(deadline, first=tried == 0), deadline - self.clock())
-            except ProxyFailed:
-                if proxied or pause is None or deadline - self.clock() <= pause:
-                    raise
-                proxied = True
-                self.sent.retried()
-                self.sleep(pause)
-                continue
-            except TransportFailed as lost:  # a call that answered 303 is running: never posted again
-                if pause is None or deadline - self.clock() <= pause or isinstance(lost, ResultUnread):
-                    self._check_alive()  # only a request about to give up asks: a restart gets the whole round
-                    raise
-                self.sent.retried()
-                self.sleep(pause)
-                continue
+            # Observer failures must not replay a successful POST (e.g. a failed after-scrape).
+            with nullcontext() if self.observer is None else self.observer(path):
+                try:
+                    with self.sent.slots:
+                        self._refuse_if_down()
+                        got = attempt(self._timeout(deadline, first=tried == 0), deadline - self.clock())
+                except ProxyFailed:
+                    if proxied or pause is None or deadline - self.clock() <= pause:
+                        raise
+                    proxied = True
+                    self.sent.retried()
+                    self.sleep(pause)
+                    continue
+                except TransportFailed as lost:  # a call that answered 303 is running: never posted again
+                    if pause is None or deadline - self.clock() <= pause or isinstance(lost, ResultUnread):
+                        self._check_alive()  # only a request about to give up asks: a restart gets the whole round
+                        raise
+                    self.sent.retried()
+                    self.sleep(pause)
+                    continue
             self.sent.answered(self.clock())
             return got
         raise AssertionError("the last attempt returns or raises")
@@ -604,6 +631,17 @@ class VllmClient:
         reusing._requests = replace(self._requests, memo=token_memo.TokenMemo())
         return reusing
 
+    def observing_requests(self, observer: Callable[[str], AbstractContextManager[None]]) -> VllmClient:
+        """A diagnostic copy bracketing each POST attempt, including loads and tokenizations.
+
+        Token memo hits send nothing and are not observed. GET metrics is never observed,
+        allowing an observer to scrape it without recursion. No request bodies are exposed.
+        """
+        observed = type(self).__new__(type(self))
+        observed.__dict__.update(self.__dict__)
+        observed._requests = replace(self._requests, observer=observer)
+        return observed
+
     @property
     def attempts(self) -> int:
         """How many times one request lost in transport is sent at most."""
@@ -611,7 +649,7 @@ class VllmClient:
 
     def retries(self) -> int:
         """How many requests this client and its copies have sent again, so far."""
-        return self._requests.sent.retries
+        return cast(int, self._requests.sent.retries)
 
     @property
     def load_wait_s(self) -> float:
@@ -620,7 +658,7 @@ class VllmClient:
 
     @property
     def rendering(self) -> str:
-        return framing.rendering(self._strength)
+        return cast(str, framing.rendering(self._strength))
 
     @property
     def max_tokens(self) -> int:
@@ -635,6 +673,26 @@ class VllmClient:
             if isinstance(poster, HttpPoster):
                 return poster.get(WAKE_PATH)
             return poster.post(WAKE_PATH, {})  # SageMaker's shim sends it on as a GET
+
+    def metrics(self) -> str:
+        """The HTTP server's raw gauges, sampled outside a scoring request."""
+        if not isinstance(self._poster, HttpPoster):
+            raise ServingError("/metrics requires an HTTP serving client")
+        with self._requests.sent.slots:
+            return self._poster.metrics()
+
+    def reload_adapter(self, name: str) -> None:
+        """Diagnostic unload then load, invalidating the loaded set shared by client copies.
+
+        Call only with this client's scoring idle; other clients on the server can still race it.
+        """
+        config.check_adapter_name(name)
+        if not isinstance(self._poster, HttpPoster) or self._adapters_dir is None:
+            raise ServingError("explicit reload requires an HTTP client with adapters_dir")
+        with self._load_lock:
+            self._loaded.discard(name)
+        self._requests.unload_adapter(name)
+        self._ensure_loaded(name)
 
     @property
     def adapters_dir(self) -> str | None:
@@ -755,18 +813,27 @@ class VllmClient:
 
     def continuation_logprobs(
         self, adapter: CheckpointRef | None, messages: list[dict[str, str]], continuation: str,
+        *, cache_salt: str | None = None,
     ) -> Sequence[float]:
-        return self._served(adapter, lambda model: self._logprobs(model, messages, continuation))
+        """Prefill scores; an explicit salt isolates this request's V1 prefix-cache blocks.
 
-    def _logprobs(self, model: str, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        Unset preserves the existing payload. A server rejecting the field raises ServingError.
+        """
+        return self._served(adapter, lambda model: self._logprobs(model, messages, continuation, cache_salt))
+
+    def _logprobs(self, model: str, messages: list[dict[str, str]], continuation: str,
+                  cache_salt: str | None = None) -> Sequence[float]:
         prompt = self._prompt(model, messages)
         tail = self._tokens({"model": model, "prompt": framing.clean_text(continuation), "add_special_tokens": False})
         if not tail:
             raise ServingError("the continuation has no tokens")
-        data = self._post("/v1/completions", {
+        body: dict[str, Any] = {
             "model": model, "prompt": prompt + tail, "max_tokens": 1, "temperature": 0.0,
             "prompt_logprobs": 0,
-        })
+        }
+        if cache_salt is not None:
+            body["cache_salt"] = cache_salt
+        data = self._post("/v1/completions", body)
         try:
             scored = data["choices"][0]["prompt_logprobs"][-len(tail):]
             return tuple(float(entry[str(token)]["logprob"]) for entry, token in zip(scored, tail, strict=True))
