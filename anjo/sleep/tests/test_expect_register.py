@@ -127,12 +127,13 @@ def _founder_life_with_dual_attempts(tmp_path: Path) -> Path:
     return life
 
 
-def test_fit_refuses_held_out_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fit_refuses_held_out_rows(tmp_path: Path) -> None:
     from anjo.sleep.mind import expect_register
 
     life = _founder_life_with_dual_attempts(tmp_path)
-    monkeypatch.setattr(expect_register, "is_synthetic", lambda user_id: user_id == "founder")
-    rows = expect_register._fit_rows_from_root(life, personas_dir=PERSONAS, split="development")
+    rows = expect_register._fit_rows_from_root(
+        life, personas_dir=PERSONAS, split="development", is_synthetic=lambda user_id: user_id == "founder"
+    )
     assert len(rows) == 1
     dev_folder = life / "nights" / FAKE_NIGHT.isoformat()
     final_folder = life / "nights" / f"{FAKE_NIGHT.isoformat()}.2"
@@ -153,15 +154,10 @@ def test_fit_refuses_held_out_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         expect.fit([dev_row, expect.FitRow(final_row.features, final_row.needed, "held_out")])
 
 
-def test_fit_refuses_non_synthetic_development_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from anjo.sleep.mind import expect_register
-
+def test_fit_refuses_non_synthetic_development_logs(tmp_path: Path) -> None:
     life = _founder_life_with_dual_attempts(tmp_path)
-    monkeypatch.setattr(expect_register, "is_synthetic", lambda user_id: False)
     with pytest.raises(EstimatorError, match="non-synthetic"):
-        fit_from_logs([life], personas_dir=PERSONAS)
+        fit_from_logs([life], is_synthetic=lambda user_id: False, personas_dir=PERSONAS)
 
 
 def test_expect_register_round_trip_json_hash(tmp_path: Path) -> None:

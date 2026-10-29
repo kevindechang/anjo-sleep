@@ -5,12 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
 
-from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.mind import expect, points
 from anjo.sleep.mind.collect import DEVELOPMENT_LIVES, collect_life
 from anjo.sleep.mind.expect import Coefficients, FitRow, Split
@@ -33,15 +32,22 @@ class EstimatorError(ValueError):
 def fit_from_logs(
     log_roots: Sequence[Path],
     *,
+    is_synthetic: Callable[[str], bool],
     personas_dir: Path = PERSONAS_DIR,
     split: Split = "development",
 ) -> Coefficients:
-    """Fit the registered coefficients from development lives' resolved expectations in ``log_roots``."""
+    """Fit the registered coefficients from development lives' resolved expectations in ``log_roots``.
+
+    ``is_synthetic`` is the host's check (``anjo.sleep.app.cleared_sessions.is_synthetic``), passed in
+    because the engine core imports no host module.
+    """
     if split != "development":
         raise ValueError("the estimator is fitted on development lives only")
     rows: list[FitRow] = []
     for root in log_roots:
-        rows.extend(_fit_rows_from_root(root.resolve(), personas_dir=personas_dir, split=split))
+        rows.extend(_fit_rows_from_root(
+            root.resolve(), personas_dir=personas_dir, split=split, is_synthetic=is_synthetic
+        ))
     return expect.fit(rows)
 
 
@@ -110,7 +116,9 @@ def _persona_for_user(user_id: str, personas_dir: Path) -> Path:
     raise EstimatorError(f"no registered development persona for account {user_id!r}")
 
 
-def _fit_rows_from_root(root: Path, *, personas_dir: Path, split: Split) -> list[FitRow]:
+def _fit_rows_from_root(
+    root: Path, *, personas_dir: Path, split: Split, is_synthetic: Callable[[str], bool]
+) -> list[FitRow]:
     nights_dir, life_root, user_id = _layout(root)
     if user_id not in _DEVELOPMENT_USER_IDS:
         raise EstimatorError(f"estimator fit refuses account {user_id!r}")
