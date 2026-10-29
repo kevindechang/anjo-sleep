@@ -103,6 +103,7 @@ from anjo.sleep.gates.collapse import CollapseGate
 from anjo.sleep.gates.general import GeneralGate
 from anjo.sleep.gates.safety import SafetyGate
 from anjo.sleep.mind.choose import StateChooser
+from anjo.sleep.mind.expect_register import registered_estimator
 from anjo.sleep.night.deps import (
     GateCheck, NightDeps, NightOptions, NightSettings, NoInquiry, NoNotice, Prices, Trainer,
 )
@@ -357,5 +358,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
         core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
                                       channel=dreams_channel(os.environ, channel)),
+        estimator=registered_estimator(),
     )
 
