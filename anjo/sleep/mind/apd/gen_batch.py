@@ -42,7 +42,7 @@ import dataclasses
 import re
 import threading
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -51,14 +51,17 @@ from typing import Final, TypeVar
 
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.mind.apd import failures, gates, generate, readers, repair, retry
-from anjo.sleep.mind.apd.backend import Backend, Flight, GenCalls, Halted, cool_down, held_attempt, life_calls
+from anjo.sleep.mind.apd.backend import (
+    ROOM_WAIT_S, Backend, Flight, GenCalls, Halted, cool_down, generation_wait_s, held_attempt, life_calls,
+)
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
 from anjo.sleep.mind.apd.core_families import texts_digest
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import Draft, GenerationError, GenerationFailed, Generated, ItemPlan, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
 from anjo.sleep.mind.apd.store import DataDir, StoreError
-from anjo.sleep.mind.apd.types import CORE_SPLITS, CoreSplit, Life
+from anjo.sleep.mind.apd.types import CORE_SPLITS, MAX_PREVALENCE, CoreSplit, Life
+from anjo.sleep.waits import locked
 from anjo.sleep.model_api import ChatResult, ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
@@ -66,6 +69,10 @@ SKIPPED: Final = (GenerationError, ModelApiError, gates.GateError)  # a life fai
 NET_DOWN_ATTEMPTS: Final = 3  # attempts in a row across a run that never connected, before it stops (``Breaker``)
 WORKER: Final = "apd-gen"  # the workers' thread names
 T = TypeVar("T")
+# Full life, all attempts and repair rounds, re-asks, admission and 429 waits included.
+_MAX_CALLS: Final = life_calls(MAX_PREVALENCE, day_retries=generate.DAY_RETRIES * generate.REWRITE_ASKS)
+WORKER_TIMEOUT_S: Final = generate.MAX_ATTEMPTS * (
+    (1 + repair.ROUNDS) * (generation_wait_s(_MAX_CALLS) + ROOM_WAIT_S) + retry.ATTEMPT_COOL_DOWN_S)
 
 
 class _NotStarted(Exception):
@@ -96,10 +103,13 @@ class Parallel:
         if kind is not None:
             self._kill()
         self._pool.shutdown(wait=False, cancel_futures=True)  # what has not started never will
+        # Never release MIND's lock beneath a live worker. On error, halt interrupts
+        # model/admission/room waits; the remaining lock acquisitions are bounded too.
+        # Python cannot safely detach or kill a worker stuck in native filesystem I/O.
         while True:
             try:
                 self._pool.shutdown(wait=True)
-            except (KeyboardInterrupt, SystemExit):  # again: the workers are still ending
+            except (KeyboardInterrupt, SystemExit):
                 self._kill()
                 continue
             return
@@ -128,7 +138,9 @@ def _results(futures: Sequence[Future[T]]) -> Iterator[T]:
     failed: BaseException | None = None
     for future in futures:
         try:
-            result = future.result()
+            result = future.result(timeout=WORKER_TIMEOUT_S)
+        except FutureTimeout:
+            raise CallFailed(f"generation worker timed out after {WORKER_TIMEOUT_S:g}s; stopping the run") from None
         except _NotStarted:
             continue
         except Exception as error:  # noqa: BLE001 - kept and raised once the running items finish
@@ -220,8 +232,9 @@ def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
     """One hold's work, after the run's ceiling is checked: the draft ``make`` writes with the
     writer, its life gated, a gate request sent before in the attempt answered from ``memo``;
     ``None`` when the draft broke a rule (recorded)."""
-    if backend.ceiling is not None:
-        backend.ceiling.check()  # before the hold
+    with failing(log, attempt):
+        if backend.ceiling is not None:
+            backend.ceiling.check()  # before the hold; lock timeout ends this attempt too
     if log is not None:
         log.repair = round_
     key = f"{spec.split}:{spec.seed}:{attempt}{f':r{round_}' if round_ else ''}"
@@ -273,7 +286,7 @@ class Breaker:
         self._down: str | None = None  # why it tripped, once it has
 
     def ended(self, error: Exception | None) -> None:
-        with self._lock:
+        with locked(self._lock):
             if self._down is not None:
                 return
             if not (isinstance(error, (CallFailed, ModelApiError)) and retry.connect_failed(error)):
@@ -285,7 +298,7 @@ class Breaker:
 
     def check(self) -> None:
         """``NetworkDown`` once it has tripped."""
-        with self._lock:
+        with locked(self._lock):
             if self._down is not None:
                 raise NetworkDown(self._down)
 

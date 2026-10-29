@@ -67,6 +67,7 @@ from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
 
 if TYPE_CHECKING:  # the limiter waits on this module's halt, so it imports this one
     from anjo.sleep.mind.apd.limiter import Limiter
+from anjo.sleep.waits import locked
 from anjo.sleep.model_api import ChatResult, ModelApiError, RateLimited
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
@@ -202,7 +203,9 @@ def _muse(prompt: str) -> tuple[str, int, int]:
 @functools.cache
 def _vertex() -> Any:
     genai = importlib.import_module("google.genai")
-    return genai.Client(vertexai=True, location=GEMINI_LOCATION)
+    types = importlib.import_module("google.genai.types")
+    return genai.Client(vertexai=True, location=GEMINI_LOCATION,
+                        http_options=types.HttpOptions(timeout=int(GEMINI_JUDGE_TIMEOUT_S * 1000)))
 
 
 def _gemini(prompt: str) -> Reply:
@@ -333,14 +336,14 @@ class GivenUp:
         self._hooks: list[Callable[[], None]] = []
 
     def on_leak(self, hook: Callable[[], None]) -> None:
-        with self._lock:
+        with locked(self._lock):
             if not self._leaked:
                 self._hooks.append(hook)
                 return
         hook()
 
     def leak(self) -> None:
-        with self._lock:
+        with locked(self._lock):
             self._leaked, hooks, self._hooks = True, self._hooks, []
         for hook in hooks:
             hook()
@@ -376,7 +379,7 @@ class _Place:
 
     def release(self) -> bool:
         """Give the place back, if it is still held; whether this call did."""
-        with self._lock:
+        with locked(self._lock):
             limiter, self._limiter = self._limiter, None
         if limiter is not None:
             limiter.release()
@@ -455,33 +458,39 @@ class Flight:
     hold finds no room waits for one of them to end, and stops the run only when none is in flight."""
 
     def __init__(self) -> None:
-        self._changed = threading.Condition()
+        self._lock, self._changed = threading.Lock(), threading.Event()
         self._flying = 0
         self._ended = 0
 
     def board(self) -> int:
         """One more attempt in flight (counted while it reserves); how many have ended so far."""
-        with self._changed:
+        with locked(self._lock):
             self._flying += 1
             return self._ended
 
     def land(self, *, held: bool) -> None:
         """An attempt out of flight; one that held has freed its room."""
-        with self._changed:
+        with locked(self._lock):
             self._flying -= 1
             self._ended += int(held)
-            self._changed.notify_all()
+            self._changed.set()
 
     def room(self, since: int, halt: threading.Event | None) -> bool:
         """After a hold found no room: once an attempt that held has ended since ``since``, True (try
         again); False at once when no other attempt is in flight. ``Halted`` if the command ends."""
-        with self._changed:
-            while self._ended == since:
+        deadline = time.monotonic() + ROOM_WAIT_S
+        while True:
+            with locked(self._lock):
+                if self._ended != since:
+                    return True
                 if self._flying == 0:
                     return False
-                halted(halt)
-                self._changed.wait(ROOM_POLL_S)
-            return True
+                self._changed.clear()
+            halted(halt)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise ModelApiError(f"waiting for budget room timed out after {ROOM_WAIT_S:g}s")
+            self._changed.wait(min(ROOM_POLL_S, left))
 
 
 @dataclass
@@ -673,6 +682,23 @@ def life_calls(prevalence: int, *, day_retries: int = 0) -> GenCalls:
 
 
 WORST_LIFE: Final = life_calls(MAX_PREVALENCE)
+
+
+def generation_wait_s(calls: GenCalls) -> float:
+    """Conservative whole-check bound: admission, every try, backoffs and the 429 budget.
+
+    Use the roomy auditor's allowance for every call, including the reader, so this
+    remains valid for any registered generator/reader without changing their holds.
+    """
+    per_try = retry.reply_timeout_s(AUDITOR_ROOM_TOKENS) + CALL_GRACE_S
+    admission = GEMINI_READ_TIMEOUT_S + CALL_GRACE_S + LEAK_MARGIN_S
+    tries = (calls.spark + calls.muse + calls.roomy) * retry.RATE_LIMIT_ATTEMPTS
+    backoff = sum(retry.backoff(n, lambda: 1.0) for n in range(1, retry.ATTEMPTS))
+    return tries * (per_try + admission + backoff) + retry.RATE_LIMIT_BUDGET_S
+
+
+# A full check plus generous writer re-asks; a waiter must never depend on a notification alone.
+ROOM_WAIT_S: Final = generation_wait_s(life_calls(MAX_PREVALENCE, day_retries=GEN_WRITE_CALLS))
 
 
 def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None, spark_pool: Pool = BASETEN.pool,

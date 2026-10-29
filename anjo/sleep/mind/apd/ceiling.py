@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
+from anjo.sleep.waits import locked
 from anjo.sleep.budget import CAPS, POOLS, Bound, Ledger, Pool, Reservation
 
 DEFAULT_MAX_USD: Final = 20.0
@@ -67,13 +68,13 @@ class RunLedger(Ledger):
     def reserve(self, job: str, pools: tuple[Pool, ...], bound: Bound) -> Reservation | None:
         found = super().reserve(job, pools, bound)
         if found is not None:
-            with self._lock:
+            with locked(self._lock):
                 self._mine[found.job] = found.pools
         return found
 
     def run_usd(self) -> float:
         """What this command's dollar holds have settled; open and released ones add nothing."""
-        with self._lock:
+        with locked(self._lock):
             jobs = [job for job, pools in self._mine.items() if set(pools) <= USD_POOLS]
         return self.settled(jobs)
 
@@ -93,7 +94,7 @@ class Ceiling:
 
     def begin(self, unit: str, total: int | None) -> None:
         """A step of ``total`` units, each a ``unit``, as the stop message counts them."""
-        with self._lock:
+        with locked(self._lock):
             self.unit, self.total, self.done, self.arm_days = unit, total, 0, 0
 
     def check(self) -> None:
@@ -103,12 +104,12 @@ class Ceiling:
             raise CeilingReached(f"this run settled ${spent:.4f}, at or past its {dollars(self.max_usd)} ceiling")
 
     def counted(self) -> None:
-        with self._lock:
+        with locked(self._lock):
             self.done += 1
 
     def life_generated(self, what: str = "life") -> str:
         """One more life (or pair) generated: what this run has settled, and per one."""
-        with self._lock:
+        with locked(self._lock):
             self.done += 1
             lives = self.done
         spent = self.ledger.run_usd()
@@ -118,7 +119,7 @@ class Ceiling:
 
     def arm_ran(self, days: int) -> str:
         """One more life-arm run of ``days`` nights: what this run has settled, and per arm-day."""
-        with self._lock:
+        with locked(self._lock):
             self.done += 1
             self.arm_days += days
             runs, arm_days = self.done, self.arm_days
@@ -129,7 +130,7 @@ class Ceiling:
 
     def stopped(self) -> str:
         """The stop message, once the units in flight have finished."""
-        with self._lock:
+        with locked(self._lock):
             done, total, unit = self.done, self.total, self.unit
         got = f"{done} {unit}" if total is None else f"{done} of {total} {unit}"
         return (f"Ceiling: this run settled ${self.ledger.run_usd():.4f} of its {dollars(self.max_usd)} ceiling "

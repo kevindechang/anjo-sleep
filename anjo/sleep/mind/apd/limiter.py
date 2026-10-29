@@ -24,8 +24,9 @@ from contextlib import contextmanager
 from typing import Any, Final
 
 from anjo.sleep.context.brief import ChatFn
-from anjo.sleep.mind.apd.backend import halted, pause
-from anjo.sleep.model_api import ChatResult
+from anjo.sleep.mind.apd.backend import CALL_GRACE_S, GEMINI_READ_TIMEOUT_S, LEAK_MARGIN_S, halted, pause
+from anjo.sleep.waits import locked
+from anjo.sleep.model_api import ChatResult, ModelApiError
 
 DEFAULT_CONCURRENCY: Final = 4
 DEFAULT_PER_MINUTE: Final = 30.0  # conservative: Vertex's shared quota gives no rate to read
@@ -48,15 +49,22 @@ class Limiter:
         self._next: float | None = None  # the earliest the next call may start
         self._clock, self._sleep = clock, sleep
 
-    def acquire(self, halt: threading.Event | None = None) -> None:
+    def acquire(self, halt: threading.Event | None = None, *,
+                timeout_s: float = GEMINI_READ_TIMEOUT_S + CALL_GRACE_S + LEAK_MARGIN_S) -> None:
         """Take one of the limiter's places, once its paced start has come; ``Halted`` instead
         once ``halt`` is set, whether it waited for its place or its start. ``release`` gives it
         back, from any thread (``backend.bounded``: the call's own, once it really ends)."""
-        while not self._slots.acquire(timeout=None if halt is None else HALT_POLL_S):
+        deadline = self._clock() + timeout_s
+        while True:
             halted(halt)
+            left = deadline - self._clock()
+            if left <= 0:
+                raise ModelApiError(f"waiting for the reader limiter timed out after {timeout_s:g}s")
+            if self._slots.acquire(timeout=min(HALT_POLL_S, left)):
+                break
         try:
             halted(halt)
-            self._wait_for_start(halt)
+            self._wait_for_start(halt, deadline, timeout_s)
         except BaseException:
             self._slots.release()
             raise
@@ -73,12 +81,14 @@ class Limiter:
         finally:
             self.release()
 
-    def _wait_for_start(self, halt: threading.Event | None) -> None:
+    def _wait_for_start(self, halt: threading.Event | None, deadline: float, timeout_s: float) -> None:
         if self.per_minute is None:
             return
-        with self._lock:
+        with locked(self._lock):
             now = self._clock()
             start = now if self._next is None else max(now, self._next)
+            if start > deadline:
+                raise ModelApiError(f"waiting for the reader limiter paced start timed out after {timeout_s:g}s")
             self._next = start + SECONDS_PER_MINUTE / self.per_minute
         if start > now:
             pause(start - now, self._sleep, halt)
