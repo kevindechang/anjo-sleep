@@ -187,7 +187,7 @@ def serve_precision(environ: Mapping[str, str] | None = None) -> Precision:
 
 def serve_deterministic(environ: Mapping[str, str] | None = None) -> bool:
     env = os.environ if environ is None else environ
-    return env.get(DETERMINISTIC_ENV, "").strip() == "1"
+    return env.get(DETERMINISTIC_ENV, "").strip() != "0"
 
 
 def serve_app_name(precision: Precision, *, deterministic: bool | None = None) -> str:
@@ -219,7 +219,7 @@ class ServeConfig:
     ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
     ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without), and
     ``prompt_embeds`` whether a request may send input embeddings (soft tokens; off by default), and
-    ``deterministic`` whether a separate app uses batch-invariant kernels (off by default)."""
+    ``deterministic`` whether a separate app uses batch-invariant kernels (on unless the variable is ``0``)."""
 
     precision: Precision
     revision: str | None
@@ -229,7 +229,7 @@ class ServeConfig:
     hf_secret: str | None = None
     prompt_embeds: bool = False
     max_inputs: int = DEFAULT_MAX_INPUTS
-    deterministic: bool = False
+    deterministic: bool = True
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:

@@ -617,25 +617,29 @@ is stored on that dimension.
 
 ## Deterministic serving
 
-`ANJO_SLEEP_SERVE_DETERMINISTIC` (`anjo/sleep/serving/config.py`) turns deterministic serving on
-only when it strips to `1`. Empty, `0` and `true` stay off. `vllm_env` then sets
+Deterministic serving is the default. `ANJO_SLEEP_SERVE_DETERMINISTIC` (`anjo/sleep/serving/config.py`)
+turns it off only when it strips to `0`; unset, empty, `1` and `true` keep it on. The deploy bakes
+the value into the image, so the container reads the same setting. `vllm_env` then sets
 `VLLM_BATCH_INVARIANT=1`. The deploy is a separate Modal app:
 `serve_app_name(precision, deterministic=True)` is `anjo-sleep-serve-det` on the default GPU,
 or the same `-det` suffix on another GPU's name (`anjo-sleep-serve-h100-det` for H100).
 `anjo/sleep/serving/modal_app.py` names the app that way and bakes the flag into the image.
 
 ```bash
-ANJO_SLEEP_SERVE_DETERMINISTIC=1 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py
+ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py  # anjo-sleep-serve-det
+ANJO_SLEEP_SERVE_DETERMINISTIC=0 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py  # anjo-sleep-serve
 ```
 
-Set the same variable on the diagnostic host so adapter staging targets that app, and set
+Set the same value on the host so adapter staging targets that app, and set
 `ANJO_SLEEP_MODAL_URL` to its deployed web URL. Loading the serving module without a pinned
 Glimmer revision raises before anything is built.
 
 vLLM 0.28's LoRA `lora_shrink` kernel splits its sums (split-K) and adds the parts with atomic
-adds, so identical serial requests to the default app could score differently. On the
+adds, so identical serial requests to an app without it could score differently. On the
 deterministic app, repeats were bit-identical (measured on Modal 2026-10-29 with `adapter_repro`;
-not something the tests can show). Its speed cost against the default app is not yet measured.
+not something the tests can show). On an L40S at 16 requests at once (`gate_bench`, 2026-10-29) it
+decoded 163 tokens/s against 212 without it, about 23% slower, and one night's gate checkpoint side
+took 170 s against 149 s.
 
 ## Adapter repeat check
 
