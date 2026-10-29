@@ -41,7 +41,7 @@ def test_the_digest_moves_with_any_text_its_field_draws_and_no_other(monkeypatch
     truck, furniture = (core_families.texts_digest("core-train", name) for name in ("food truck", "furniture making"))
     pairs_field = core_families.PAIR_TEMPLATES[0].field
     paired = core_families.texts_digest("core-test", pairs_field)
-    pool = tuple(dataclasses.replace(t, disambiguating=t.disambiguating + " Again.") if t.id == "truck-cold-reviews-v2"
+    pool = tuple(dataclasses.replace(t, disambiguating=t.disambiguating + " Again.") if t.id == "truck-cold-reviews-v3"
                  else t for t in core_families._CORE_POOL)
     pair = dataclasses.replace(core_families.PAIR_TEMPLATES[0], ask=core_families.PAIR_TEMPLATES[0].ask + " Again?")
 
