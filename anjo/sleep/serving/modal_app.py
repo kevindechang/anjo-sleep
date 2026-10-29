@@ -26,12 +26,17 @@ commit is in deploy/dev_host.md). Loading this file without a pinned revision ra
 without one fails before anything is built:
 
     ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py
+    ANJO_SLEEP_SERVE_DETERMINISTIC=1 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/serving/modal_app.py
     ANJO_SLEEP_GLIMMER_REVISION=<commit> modal run anjo/sleep/serving/modal_app.py::download_weights
     ANJO_SLEEP_GLIMMER_REVISION=<commit> modal run anjo/sleep/serving/modal_app.py::upload_adapter \
         --folder <dir> --name p-<hash>-n<night>
 
 The deploy-time settings (``config.ServeConfig.from_env``) are baked into the image's environment,
 so the container reads the same values. The image carries only this file and ``config.py``.
+``ANJO_SLEEP_SERVE_DETERMINISTIC=1`` deploys a separate ``anjo-sleep-serve-det`` app
+(or appends ``-det`` to another GPU's name), with ``VLLM_BATCH_INVARIANT=1`` to avoid
+LoRA split-K atomic adds. Set it on the diagnostic host too for adapter staging, and set
+``ANJO_SLEEP_MODAL_URL`` to that app's deployed ``Serve.web`` URL.
 """
 from __future__ import annotations
 
@@ -67,6 +72,8 @@ def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
         env[config.HF_SECRET_ENV] = settings.hf_secret
     if settings.prompt_embeds:
         env[config.PROMPT_EMBEDS_ENV] = "1"
+    if settings.deterministic:
+        env[config.DETERMINISTIC_ENV] = "1"
     if settings.precision is not config.SERVING:  # a second app's GPU; today's image env is unchanged
         env[config.SERVE_GPU_ENV] = settings.precision.gpu
     if settings.max_inputs != config.DEFAULT_MAX_INPUTS:
@@ -77,13 +84,13 @@ def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(f"vllm=={SETTINGS.vllm_version}", "hf_transfer==0.1.9")
-    .env({**config.vllm_env(), **_settings_env(SETTINGS)})
+    .env({**config.vllm_env(SETTINGS), **_settings_env(SETTINGS)})
     # The same import path as on the deploying machine; anjo itself stays a namespace package.
     .add_local_file(_HERE.parent / "__init__.py", "/root/anjo/sleep/__init__.py")
     .add_local_file(_HERE / "__init__.py", "/root/anjo/sleep/serving/__init__.py")
     .add_local_file(_HERE / "config.py", "/root/anjo/sleep/serving/config.py")
 )
-app = modal.App(config.serve_app_name(SETTINGS.precision), image=image)
+app = modal.App(config.serve_app_name(SETTINGS.precision, deterministic=SETTINGS.deterministic), image=image)
 weights = modal.Volume.from_name(config.WEIGHTS_VOLUME, create_if_missing=True)
 adapters = modal.Volume.from_name(config.ADAPTERS_VOLUME, create_if_missing=True)
 serve_secret = modal.Secret.from_name(config.SECRET_NAME)

@@ -2,15 +2,15 @@
 
 Run with --x p-<hash>-n<N> --y p-<hash>-n<N>, optionally --go. Uses the frozen
 knowledge set's first 30 choices, the scorer's fixed date and token memo, serially.
-A repeats identical payloads; B uses a fresh cache_salt per pass; C scores base,
+A base reference precedes A's identical payloads; B uses a fresh cache_salt per pass; C scores base,
 X, Y, X; D explicitly unloads/reloads X and scores again. Never prints prompts or
 continuations. Flips count changed winning choices, only on fully sampled items.
 
-Gauges bracket each POST, including initial tokenizations, loads and D's unload.
-Metrics GETs are not recursively sampled. They are boundary samples, possibly stale: zero does not prove isolation
+Gauges bracket each pass, including initial tokenizations, loads and D's unload.
+POST paths are retained without extra metrics GETs. These pass boundary samples are possibly stale: zero does not prove isolation
 during prefill. H2 is a correlation; two adapters cannot exhaust 8/16 LoRA slots,
 so an inconclusive H3 check does not rule out eviction under many other loads.
-The 15-minute active cap is checked between calls; a request already sent may
+The active cap is three times the plan's estimate, checked between calls; a request already sent may
 finish later. Wake and the server's billed idle window are additional.
 """
 from __future__ import annotations
@@ -41,8 +41,8 @@ from anjo.sleep.tools.knowledge_score import LOAD_S, LOCKED, POOL, PREFILL_S, RO
 from anjo.sleep.types import CheckpointRef
 
 MAX_CHOICES: Final = 30
-PASSES: Final = 11
-MAX_S: Final = 15 * 60.0
+PASSES: Final = 12  # base reference, then A/B/C/D's eleven passes
+CAP_HEADROOM: Final = 3.0
 NOISE_NATS: Final = 0.01
 _GAUGE: Final = re.compile(r'^(vllm:(?:num_requests_running|num_requests_waiting|lora_requests_info))'
                            r'(\{.*\})?\s+(\S+)(?:\s+\S+)?$')
@@ -77,6 +77,7 @@ class Pass:
     scores: tuple[float, ...]
     in_flight: list[dict[str, Any]]
     requests: list[dict[str, Any]] = field(default_factory=list)
+    seconds: float = 0.0
 
 
 class TimeLimit(RuntimeError):
@@ -90,28 +91,33 @@ def choices(the_set: knowledge.KnowledgeSet) -> tuple[Choice, ...]:
 
 def estimate_s(selected: Sequence[Choice]) -> float:
     texts = 1 + len({c.prompt for c in selected}) + len({c.continuation for c in selected})
-    # Every POST, including tokenizations and 3 loads + 1 unload, gets 2 metrics GETs.
-    return float((texts + PASSES * len(selected) + 4) * 3 * ROUND_TRIP_S
+    # Tokenizations, 3 loads + 1 unload, and only 2 metrics GETs per pass.
+    return float((texts + PASSES * len(selected) + 4 + 2 * PASSES) * ROUND_TRIP_S
                  + PASSES * len(selected) * PREFILL_S + 3 * LOAD_S)
+
+
+def active_cap_s(selected: Sequence[Choice]) -> float:
+    return CAP_HEADROOM * estimate_s(selected)
 
 
 def plan(selected: Sequence[Choice], rate: float, gpu: str) -> str:
     seconds = estimate_s(selected)
     expected = rate * (seconds + config.SCALEDOWN_S) / 3600
-    reserved = rate * (MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600
-    texts = 1 + len({c.prompt for c in selected}) + len({c.continuation for c in selected})
+    cap = active_cap_s(selected)
+    reserved = rate * (cap + WAKE_S + config.SCALEDOWN_S) / 3600
     return "\n".join([
         "plan (nothing is sent; add --go to run it):",
-        "  A: X x3; B: X x3, fresh cache_salt each pass; C: base, X, Y, X; D: unload/load X, X",
+        "  reference: base; A: X x3; B: X x3, fresh cache_salt each pass; C: base, X, Y, X; D: unload/load X, X",
         f"  {PASSES} passes x {len(selected)} choices = {PASSES * len(selected)} prefills, "
-        f"{2 * PASSES * len(selected)} scoring metrics reads, "
-        f"plus {2 * (texts + 4)} around tokenizations/load/unload; one request at a time, under the local night lock",
+        f"{2 * PASSES} metrics reads at pass boundaries; "
+        "one request at a time, under the local night lock",
         f"  expected ~{seconds / 60:.1f} active GPU min, plus {config.SCALEDOWN_S / 60:.0f} min idle; "
         f"~${expected:.2f} warm at ${rate:.2f}/h on {gpu}; cold wake adds time/cost",
         f"  measured round trip {ROUND_TRIP_S}s; prefill {PREFILL_S}s; adapter load estimated {LOAD_S}s",
-        f"  active cap {MAX_S / 60:.0f} min; hold ${reserved:.2f} on {POOL}, including wake and idle; "
+        f"  active cap {cap / 60:.1f} min ({CAP_HEADROOM:g}x estimate); "
+        f"hold ${reserved:.2f} on {POOL}, including wake and idle; "
         "settle elapsed plus idle even on failure",
-        "  output: hashes, numeric differences, answer flips and per-choice boundary gauges; no prompt text",
+        "  output: hashes, numeric differences, answer flips, seconds per pass and pass boundary gauges; no prompt text",
         "  gauges can miss short traffic between samples; H2/H3 are diagnostic evidence, not proof",
         f"  needs {backend.MODAL_URL_ENV} (or --url) and {backend.MODAL_TOKEN_ENV}",
     ])
@@ -189,6 +195,7 @@ def pass_line(got: Pass, first: Pass, selected: Sequence[Choice]) -> dict[str, A
     digest = hashlib.sha256(json.dumps(per_item, sort_keys=True, allow_nan=False,
                                       separators=(",", ":")).encode()).hexdigest()
     return {"label": got.label, "adapter": got.adapter, "logprobs_sha256": digest,
+            "reference": first.label, "seconds": got.seconds,
             "max_logprob_diff": _diff(first, got), "flips": flips,
             "in_flight": got.requests, "other_in_flight": any(map(_busy, got.requests))}
 
@@ -201,36 +208,38 @@ def _check_time(clock: Callable[[], float], deadline: float) -> None:
 def run(client: Client, x: str, y: str, selected: Sequence[Choice], *, deadline: float,
         clock: Callable[[], float], out: Callable[[str], None]) -> list[Pass]:
     passes: list[Pass] = []
+    references: dict[str, Pass] = {}
     unsupported = False
     requests: list[dict[str, Any]] = []
 
     @contextmanager
     def observe(path: str) -> Iterator[None]:
         _check_time(clock, deadline)
-        before = parse_metrics(client.metrics())
-        _check_time(clock, deadline)
         try:
             yield
         finally:
-            after = parse_metrics(client.metrics())
-            requests.append({"path": path, "before": before, "after": after})
+            requests.append({"path": path})
 
     client = client.observing_requests(observe)
-    order = [(f"A{n}", "X") for n in range(1, 4)] + [(f"B{n}", "X") for n in range(1, 4)] + [
+    order = [("reference.base", "base")] + [(f"A{n}", "X") for n in range(1, 4)] + [
+        (f"B{n}", "X") for n in range(1, 4)] + [
         ("C.base", "base"), ("C.X1", "X"), ("C.Y", "Y"), ("C.X2", "X"), ("D.X", "X")]
     for label, side in order:
         if label.startswith("B") and unsupported:
             continue
         _check_time(clock, deadline)
+        started = clock()
+        before = parse_metrics(client.metrics())
+        boundary = {"before": before}
         requests = []
-        if label == "D.X":
-            client.reload_adapter(x)
         salt = uuid.uuid4().hex if label.startswith("B") else None
         name = x if side == "X" else y
         ref = None if side == "base" else CheckpointRef(
             name, "adapter_repro", EVAL_DAY, f"{config.ADAPTERS_DIR}/{name}", None, rendering=client.rendering)
         scores, readings = [], []
         try:
+            if label == "D.X":
+                client.reload_adapter(x)
             for choice in selected:
                 _check_time(clock, deadline)
                 values = client.continuation_logprobs(ref, [{"role": "user", "content": choice.prompt}],
@@ -238,17 +247,23 @@ def run(client: Client, x: str, y: str, selected: Sequence[Choice], *, deadline:
                 if not values or any(not math.isfinite(v) for v in values):
                     raise ServingError("scoring returned empty/non-finite log-probabilities")
                 scores.append(math.fsum(values))
-                readings.append(requests[-1])  # this choice's completion, excluding load/tokenization traffic
+                readings.append(boundary)  # shared pass samples, not per-choice occupancy measurements
         except ServingError as error:
             if salt is None or str(error) != "/v1/completions returned HTTP 400":
                 raise
             out(json.dumps({"cache_salt": "unsupported"}))
-            out(json.dumps({"line": "rejected_requests", "in_flight": requests}))
             unsupported = True
+        finally:
+            boundary["after"] = parse_metrics(client.metrics())
+            elapsed = max(0.0, clock() - started)
+            for request in requests:
+                request.update(boundary)
+        if salt is not None and unsupported:
+            out(json.dumps({"line": "rejected_requests", "seconds": elapsed, "in_flight": requests}))
             continue
-        got = Pass(label, side, tuple(scores), readings, requests)
+        got = Pass(label, side, tuple(scores), readings, requests, elapsed)
         passes.append(got)
-        out(json.dumps(pass_line(got, passes[0], selected)))
+        out(json.dumps(pass_line(got, references.setdefault(side, got), selected)))
     return passes
 
 
@@ -283,9 +298,6 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
     if not math.isfinite(rate) or rate <= 0:
         parser.error("--usd-per-hour must be finite and positive")
     out(plan(selected, rate, gpu.name))
-    if estimate_s(selected) > 0.9 * MAX_S:
-        out(json.dumps({"line": "refused", "why": "estimate exceeds 90% of active cap"}))
-        return 2
     if not args.go:
         return 0
     with ExitStack() as stack:
@@ -305,7 +317,8 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             out(json.dumps({"line": "refused", "why": LOCKED}))
             return 2
         reservation = None if book is None else hold(
-            book, f"adapter_repro:{uuid.uuid4().hex}", (POOL,), Bound(rate, MAX_S + WAKE_S + config.SCALEDOWN_S))
+            book, f"adapter_repro:{uuid.uuid4().hex}", (POOL,),
+            Bound(rate, active_cap_s(selected) + WAKE_S + config.SCALEDOWN_S))
         started = clock()
         try:
             woke = wake()
@@ -313,7 +326,7 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             if not woke.ok:
                 return 1
             passes = run(client.on(EVAL_DAY).reusing_tokens().once(), args.x, args.y, selected,
-                         deadline=clock() + MAX_S, clock=clock, out=out)
+                         deadline=clock() + active_cap_s(selected), clock=clock, out=out)
             out(json.dumps({"verdict": verdict(passes), "boundary_samples_only": True}))
             return 0
         except TimeLimit:

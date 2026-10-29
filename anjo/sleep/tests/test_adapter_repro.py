@@ -78,31 +78,33 @@ def test_plan_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(repro, "default_ledger", never)
     lines: list[str] = []
     assert repro.main(ARGS, environ={}, client=never, wake=never, ledger=never, out=lines.append) == 0
-    assert "330" in lines[0] and "660" in lines[0] and "nothing is sent" in lines[0]
+    assert "360" in lines[0] and "24 metrics reads" in lines[0] and "nothing is sent" in lines[0]
     assert repro.estimate_s(repro.choices(repro.knowledge.load("film_founder"))) < 15 * 60
 
 
-def test_sequence_and_every_request_is_bracketed_by_metrics() -> None:
+def test_sequence_and_every_pass_is_bracketed_by_metrics() -> None:
     fake = FakeClient()
     records = run(fake)
     passes = [r for r in records if "label" in r]
-    assert [r["label"] for r in passes] == ["A1", "A2", "A3", "B1", "B2", "B3",
+    assert [r["label"] for r in passes] == ["reference.base", "A1", "A2", "A3", "B1", "B2", "B3",
                                            "C.base", "C.X1", "C.Y", "C.X2", "D.X"]
-    assert [r["adapter"] for r in passes] == ["X"] * 6 + ["base", "X", "Y", "X", "X"]
+    assert [r["adapter"] for r in passes] == ["base"] + ["X"] * 6 + ["base", "X", "Y", "X", "X"]
     calls = [e for e in fake.events if isinstance(e, tuple) and len(e) == 4]
-    assert len(calls) == 330
-    assert calls[:30] == calls[30:60] == calls[60:90]
-    salts = [calls[n][3] for n in (90, 120, 150)]
+    assert len(calls) == 360
+    assert calls[30:60] == calls[60:90] == calls[90:120]
+    salts = [calls[n][3] for n in (120, 150, 180)]
     assert len(set(salts)) == 3 and all(salts)
-    for start in (90, 120, 150):
+    for start in (120, 150, 180):
         assert len({c[3] for c in calls[start:start + 30]}) == 1
-    assert all(c[3] is None for c in calls[:90] + calls[180:])
-    for n, event in enumerate(fake.events):
-        if isinstance(event, tuple) and len(event) == 4:
-            assert fake.events[n - 1] == fake.events[n + 1] == "metrics"
+    assert all(c[3] is None for c in calls[:120] + calls[210:])
+    boundaries = [n for n, event in enumerate(fake.events) if event == "metrics"]
+    assert len(boundaries) == 24
+    for before, after in zip(boundaries[::2], boundaries[1::2], strict=True):
+        assert sum(isinstance(e, tuple) and len(e) == 4 for e in fake.events[before:after]) == 30
     reload_at = fake.events.index(("reload", X))
-    assert sum(isinstance(e, tuple) and len(e) == 4 for e in fake.events[:reload_at]) == 300
-    assert [len(r["in_flight"]) for r in passes] == [30] * 10 + [32]
+    assert sum(isinstance(e, tuple) and len(e) == 4 for e in fake.events[:reload_at]) == 330
+    assert [len(r["in_flight"]) for r in passes] == [30] * 11 + [32]
+    assert all("before" in r and "after" in r for p in passes for r in p["in_flight"])
     assert all(not r["other_in_flight"] for r in passes)
     assert len({r["logprobs_sha256"] for r in passes}) == 1
     assert all(r["max_logprob_diff"] == 0 and r["flips"] == 0 for r in passes)
@@ -114,12 +116,77 @@ def test_unsupported_salt_skips_all_b_and_still_reads_after_error() -> None:
     fake = FakeClient(unsupported=True)
     records = run(fake)
     assert {"cache_salt": "unsupported"} in records
-    assert [r["label"] for r in records if "label" in r] == ["A1", "A2", "A3", "C.base",
+    assert [r["label"] for r in records if "label" in r] == ["reference.base", "A1", "A2", "A3", "C.base",
                                                             "C.X1", "C.Y", "C.X2", "D.X"]
-    assert sum(isinstance(e, tuple) and len(e) == 4 for e in fake.events) == 241
+    assert sum(isinstance(e, tuple) and len(e) == 4 for e in fake.events) == 271
     rejected = next(n for n, event in enumerate(fake.events)
                     if isinstance(event, tuple) and len(event) == 4 and event[3])
     assert fake.events[rejected - 1] == fake.events[rejected + 1] == "metrics"
+    rejected_record = next(r for r in records if r.get("line") == "rejected_requests")
+    assert "before" in rejected_record["in_flight"][0] and "after" in rejected_record["in_flight"][0]
+
+
+def test_base_is_compared_to_an_independent_base_reference() -> None:
+    class DifferentBase(FakeClient):
+        def continuation_logprobs(self, adapter: Any, messages: Any, continuation: str,
+                                  *, cache_salt: str | None = None) -> Sequence[float]:
+            super().continuation_logprobs(adapter, messages, continuation, cache_salt=cache_salt)
+            if adapter is None:
+                completed = sum(isinstance(e, tuple) and len(e) == 4 for e in self.events)
+                return (-1.0 if completed <= 30 else -1.25,)
+            return (-4.0,)
+
+    records = run(DifferentBase())
+    base = next(r for r in records if r.get("label") == "C.base")
+    assert base["reference"] == "reference.base" and base["max_logprob_diff"] == 0.25
+    assert all(r["reference"] == "A1" for r in records if r.get("adapter") == "X")
+
+
+def test_measured_seconds_include_both_metrics_reads_and_reload() -> None:
+    fake = FakeClient()
+    records = run(fake, clock=lambda: len(fake.events) * 0.5)
+    passes = [r for r in records if "label" in r]
+    assert [r["seconds"] for r in passes] == [16.0] * 11 + [17.0]
+
+
+def test_estimate_counts_pass_metrics_and_cap_has_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected = (repro.Choice("q", 0, 2, "q", "a"), repro.Choice("q", 1, 2, "q", "b"))
+    monkeypatch.setattr(repro, "ROUND_TRIP_S", 1.0)
+    monkeypatch.setattr(repro, "PREFILL_S", 2.0)
+    monkeypatch.setattr(repro, "LOAD_S", 3.0)
+    # Four tokenizations, 24 prefills, four load/unload POSTs and 24 metrics GETs.
+    expected = 4 + 24 + 4 + 24 + 24 * 2 + 3 * 3
+    assert repro.estimate_s(selected) == expected
+    assert repro.active_cap_s(selected) == repro.CAP_HEADROOM * expected > expected
+    assert f"active cap {repro.active_cap_s(selected) / 60:.1f} min" in repro.plan(selected, 1.0, "fake")
+
+
+def test_real_client_keeps_post_paths_with_only_pass_boundary_metrics() -> None:
+    events: list[str] = []
+    fake = FakeVllm()
+
+    def server(request: httpx.Request) -> httpx.Response:
+        events.append(request.url.path)
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text=QUIET)
+        if request.url.path.endswith("lora_adapter"):
+            return httpx.Response(200, text="Success")
+        return fake(request)
+
+    selected = (repro.Choice("q", 0, 2, "q", "a"), repro.Choice("q", 1, 2, "q", "b"))
+    owned = VllmClient("https://serve.example", "tok", transport=httpx.MockTransport(server),
+                       adapters_dir=config.ADAPTERS_DIR)
+    try:
+        passes = repro.run(owned.reusing_tokens().once(), X, Y, selected,
+                           deadline=1.0, clock=lambda: 0.0, out=lambda _: None)
+    finally:
+        owned.close()
+    assert events.count("/metrics") == 2 * len(passes) == 24
+    assert [r["path"] for r in passes[0].requests] == [
+        "/tokenize", "/tokenize", "/tokenize", "/v1/completions", "/tokenize", "/v1/completions"]
+    assert [r["path"] for r in passes[-1].requests] == [
+        "/v1/unload_lora_adapter", "/v1/load_lora_adapter", "/v1/completions", "/v1/completions"]
+    assert all(not repro._busy(r) for p in passes for r in p.requests)
 
 
 def test_metrics_sums_workers_and_keeps_optional_lora_gauge() -> None:
