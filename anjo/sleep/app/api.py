@@ -242,4 +242,6 @@ def delete(body: DeleteRequest | None = None, user_id: str = Depends(flagged_use
         if "night lock: still held" in error.report.failures:
             raise HTTPException(status_code=409, detail=DELETE_RUNNING) from None
         raise HTTPException(status_code=500, detail=DELETE_INCOMPLETE) from None
+    except Exception:  # Client setup and lock failures use the same private, retryable response.
+        raise HTTPException(status_code=500, detail=DELETE_INCOMPLETE) from None
     return _delete_out(report)

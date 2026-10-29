@@ -132,6 +132,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "yours_heading": "Your model, night by night",
     "yours_note": "These controls are yours alone: they read and change only your own sleep data.",
     "yours_loading": "Reading your model…",
+    "yours_retry": "Try again",
     "yours_unavailable": "Sign in to the account Anjo Sleep runs for to use these controls.",
     "yours_nights": "Your nights",
     "yours_nights_empty": "No night has finished yet.",

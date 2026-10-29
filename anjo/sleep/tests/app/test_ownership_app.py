@@ -228,6 +228,72 @@ def test_delete_route_maps_a_partial_delete_and_a_held_night_lock(
 # ── delete_all over the real stores ───────────────────────────────────────────
 
 
+def test_delete_route_can_retry_after_remote_failure(api: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.app import ownership
+    from anjo.sleep.app.flags import sleep_enabled_for
+
+    first, second = _seed(ALICE)
+    names = frozenset((first.id, second.id))
+
+    class Remote:
+        name = "remote"
+        calls: list[frozenset[str]] = []
+
+        def remove(self, adapters: frozenset[str]) -> int:
+            self.calls.append(adapters)
+            if len(self.calls) == 1:
+                raise OSError(f"private remote path /{ALICE}/{first.id}")
+            return len(adapters)
+
+    remote = Remote()
+    monkeypatch.setattr(ownership, "_remotes", lambda: (remote,))
+    failed = api.post("/api/sleep/delete", json={"confirm": "delete"})
+    from anjo.sleep.app.api import DELETE_INCOMPLETE
+    from anjo.sleep.app.storage import checkpoint_registry
+
+    assert failed.status_code == 500 and failed.json() == {"detail": DELETE_INCOMPLETE}
+    assert checkpoint_registry().history(ALICE) == []  # local erasers ran despite the failure
+    assert ownership.inventory().read(ALICE) == names
+    assert sleep_enabled_for(ALICE) and ALICE not in ownership.tombstones().all()
+
+    retried = api.post("/api/sleep/delete", json={"confirm": "delete"})
+    assert retried.status_code == 200, retried.text
+    assert remote.calls == [names, names]  # the retry uses the durable inventory
+    assert ownership.inventory().pending() == []
+    assert not sleep_enabled_for(ALICE) and ALICE in ownership.tombstones().all()
+    assert sleep_enabled_for(BOB)
+
+
+@pytest.mark.parametrize("failure", ["client", "lock enter", "lock exit"])
+def test_delete_route_maps_setup_and_lock_errors(
+    api: Any, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    from contextlib import contextmanager
+
+    from anjo.sleep.app import ownership
+    from anjo.sleep.app.api import DELETE_INCOMPLETE
+    from anjo.sleep.app.flags import sleep_enabled_for
+
+    def fail() -> None:
+        raise OSError(f"private path /sleep/{ALICE}")
+
+    if failure == "client":
+        monkeypatch.setattr(ownership, "_remotes", fail)
+    else:
+        @contextmanager
+        def lock(*args: Any) -> Iterator[None]:
+            if failure == "lock enter":
+                fail()
+            yield
+            fail()
+
+        monkeypatch.setattr(ownership, "drain", lock)
+
+    response = api.post("/api/sleep/delete", json={"confirm": "delete"})
+    assert response.status_code == 500 and response.json() == {"detail": DELETE_INCOMPLETE}
+    assert sleep_enabled_for(ALICE) and ALICE not in ownership.tombstones().all()
+
+
 def _events() -> list[it.WorkspaceEvent]:
     ws = it.Workspace()
     entries: list[Any] = [

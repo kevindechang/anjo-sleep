@@ -91,6 +91,7 @@
 
   async function loadNights() {
     const list = byId("yours-nights");
+    byId("yours-retry").hidden = true;
     state("yours-nights-state", copy.yours_loading);
     list.replaceChildren();
     try {
@@ -100,7 +101,9 @@
       return true;
     } catch (error) {
       state("yours-nights-state", emptyAfterDelete(error, copy.yours_nights_empty));
-      return false;
+      const unavailable = error.status === 401 || error.status === 403;
+      byId("yours-retry").hidden = unavailable;
+      return !unavailable;
     }
   }
 
@@ -186,5 +189,6 @@
     });
   });
   byId("yours-since").addEventListener("change", loadChanges);
+  byId("yours-retry").addEventListener("click", refresh);
   start();
 })();
