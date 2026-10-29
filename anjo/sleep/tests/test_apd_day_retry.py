@@ -132,7 +132,7 @@ def test_a_core_attempt_holds_its_day_retries_and_apds_does_not() -> None:
     assert generate.day_retries(str(generators.DEEPSEEK.model)) == retries
     assert generate.day_retries(FIREWORKS.model) == 0
     assert backends.life_calls(6, day_retries=retries).writes == backends.GEN_WRITE_CALLS + retries * LIFE_DAYS
-    assert repair.round_calls(4, {1, 3}, day_retries=retries).writes == repair.round_calls(4, {1, 3}).writes + 2 * retries
+    assert repair.round_calls(4, {1, 3}, day_retries=retries).writes == repair.round_calls(4, {1, 3}).writes + 2 * generate.REWRITE_ASKS * retries
     assert pairs.pair_calls(retries).writes == pairs.PAIR_CALLS.writes + retries * LIFE_DAYS
     # the plan's worst case: a core attempt's writer hold grows by DAY_RETRIES writer calls a day; APD's is unchanged
     core = plan.generate_plan([plan.surface_days(SPEC)], PRICES, RATES, "core-train", provider=FIREWORKS,

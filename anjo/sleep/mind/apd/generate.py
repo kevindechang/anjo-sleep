@@ -21,6 +21,7 @@ times, while any gate fails or an attempt fails; it never looks at an arm.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
 import json
 import re
@@ -73,6 +74,15 @@ KEEP_OFF: Final = "`keep_off` names subjects that belong to the beats: write abo
 # A core split's generator's day that can't be read (``_read_day``) is asked for again, at most this
 # many more times, inside the attempt and its hold (``day_retries``); APD's own writer is asked once.
 DAY_RETRIES: Final = 2
+# A day written again (``repair``) that comes back as it was (``unchanged``) is asked once more,
+# hotter, with this line after ``repair_v1.md``; still unchanged, its round fails at once, before the
+# gates read it again (rule ``UNCHANGED_RULE``). On 2026-10-29 a day's line survived two repair
+# rounds word for word, each round paying for a full read to flag it again. The prompts are unchanged.
+UNCHANGED: Final = "Your last answer gave `before` back unchanged, so `reason` still holds. Write the day again, " \
+                   "changing what `reason` is about; keep the `plant` and `ask` beats."
+UNCHANGED_RULE: Final = "unchanged"
+REWRITE_ASKS: Final = 2  # the most times a day written again is asked: once, and once more if it came back as it was
+REWRITE_TEMPERATURE: Final = 1.0  # the ask again's, above ``WRITE_TEMPERATURE``
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -253,12 +263,13 @@ def _check_model(reply: ChatResult, model: str) -> None:
 
 def writer_messages(
     field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]], beats: Sequence[Beat], *,
-    model: str, repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
+    model: str, repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (), again: bool = False,
 ) -> list[dict[str, Any]]:
     """The writer's call for day ``index`` (from 0): ``life_v1.md`` (and, for a core split's
     generator, ``ALWAYS_PLACED``) and the day's payload; topics to ``keep_off`` add ``KEEP_OFF``
     and the topics; a day written again (``repair``) adds ``repair_v1.md`` and what the repair says
-    (the day as it was, why, the days after it)."""
+    (the day as it was, why, the days after it), and asked ``again`` after it came back as it was,
+    ``UNCHANGED``."""
     payload = {
         "field": field, "day": index + 1, "of": LIFE_DAYS, "date": day.isoformat(), "variation": seed,
         "earlier": list(earlier),
@@ -271,6 +282,7 @@ def writer_messages(
         system, payload = f"{system.rstrip()}\n{KEEP_OFF}\n", {**payload, "keep_off": list(keep_off)}
     if repair is not None:
         system, payload = f"{system.rstrip()}\n\n{REPAIR_PROMPT.read_text(encoding='utf-8')}", {**payload, **repair}
+        system = f"{system.rstrip()}\n{UNCHANGED}" if again else system
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -281,13 +293,46 @@ def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
     beats: Sequence[Beat], repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
 ) -> tuple[list[str], dict[str, int]]:
-    """The day's messages and where its beats are. A core generator's answer that can't be read as
-    a day is asked for again, the same request, up to ``day_retries`` more times; a reply refused
-    by its rule (``answered``) or naming another model is not."""
-    messages = writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair, keep_off=keep_off)
+    """The day's messages and where its beats are. A day written again (``repair``) that comes back
+    as it was is asked once more (``UNCHANGED``, at ``REWRITE_TEMPERATURE``), and fails if it comes
+    back as it was again (``UNCHANGED_RULE``); each such reply is marked (``GivenBack``)."""
+    asked = functools.partial(writer_messages, field, index, day, seed, earlier, beats, model=model, repair=repair,
+                              keep_off=keep_off)
+    found = _asked(chat, model, asked(), index, beats, WRITE_TEMPERATURE)
+    before = () if repair is None else repair.get("before", ())
+    if repair is None or not unchanged(found[0], before):
+        return found
+    _given_back(chat)
+    found = _asked(chat, model, asked(again=True), index, beats, REWRITE_TEMPERATURE)
+    if unchanged(found[0], before):
+        _given_back(chat)
+        raise GenerationFailed("a day written again came back as it was, asked twice", step="writer", day=index + 1,
+                               rule=UNCHANGED_RULE)
+    return found
+
+
+def unchanged(texts: Sequence[str], before: Sequence[str]) -> bool:
+    """Whether a day written again is the day it replaces: as many messages, each its original,
+    case and spacing aside. Compared message by message, never as one text: ``repair_v1.md`` asks to
+    change only what the reason needs, so a correct fix can drop one clause from a long day."""
+    def plain(text: str) -> str:
+        return " ".join(text.split()).lower()
+    return len(texts) == len(before) and all(plain(a) == plain(b) for a, b in zip(texts, before, strict=True))
+
+
+def _given_back(chat: ChatFn) -> None:
+    if isinstance(chat, GivenBack):
+        chat.gave_back()
+
+
+def _asked(chat: ChatFn, model: str, messages: list[dict[str, Any]], index: int, beats: Sequence[Beat],
+           temperature: float) -> tuple[list[str], dict[str, int]]:
+    """One ask for the day: a core generator's answer that can't be read as a day is asked for
+    again, the same request, up to ``day_retries`` more times; a reply refused by its rule
+    (``answered``) or naming another model is not."""
     retries = 0
     while True:
-        reply = chat(model, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+        reply = chat(model, messages, None, TIMEOUT_S, temperature=temperature)
         _check_model(reply, model)
         text: str | None = None
         try:
@@ -301,6 +346,14 @@ def _write_day(
                                 answer_chars=None if text is None else len(text),
                                 finish_reason=reply.finish_reason) from None
             retries += 1
+
+
+@runtime_checkable
+class GivenBack(Protocol):
+    """A chat that marks the reply it last answered as a day written again that came back as it
+    was (``backend.CountedChat``); never the text."""
+
+    def gave_back(self) -> None: ...
 
 
 @runtime_checkable

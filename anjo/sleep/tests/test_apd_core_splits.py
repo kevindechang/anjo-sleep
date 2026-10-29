@@ -24,8 +24,9 @@ from anjo.sleep.night.deps import Prices
 
 # Numbers a core resolution may state that are sums or products of its facts' numbers.
 DERIVED = {
-    "truck-generator-load": {"3,300"}, "furniture-clamp-time": {"9"}, "pottery-kiln-load": {"25"},
-    "bikes-race-service": {"24"}, "photo-wall-length": {"36"}, "theatre-wall-height": {"3"},
+    "truck-generator-load": {"3,300"}, "furniture-clamp-time-v2": {"9"}, "pottery-kiln-load-v2": {"25"},
+    "bikes-race-service-v2": {"24"}, "photo-wall-length": {"36"}, "theatre-wall-height": {"3"},
+    "bake-night-oven-core": {"12", "9"},
 }
 CONCLUSION_WORDS = ("problem", "conflict", "mismatch", "mistake", "fixed by", "fix ", "solution", "diagnos")
 
@@ -57,9 +58,11 @@ def test_splits_hold_out_templates() -> None:
             found = core_families.templates_for(split, name)
             assert len(found) == MAX_PREVALENCE and {t.family for t in found} == set(FAMILIES)
     # core-train keeps APD's development templates unchanged, and they are its only borrowed ones,
-    # but for the reversals it keeps out (their plant line states its outcome)
+    # but for those it keeps out (a plant line stating its outcome, a day only its writing can place)
     kept = {t for t in families.TEMPLATES["development"] if t.id not in core_families.CORE_KEPT_OUT}
-    assert kept <= set(by_split["core-train"]) and len(kept) == len(families.TEMPLATES["development"]) - 1
+    assert core_families.CORE_KEPT_OUT <= {t.id for t in families.TEMPLATES["development"]}
+    assert kept <= set(by_split["core-train"]) and len(kept) == len(families.TEMPLATES["development"]) - len(
+        core_families.CORE_KEPT_OUT)
 
 
 def test_core_split_sizes_and_problem_free_lives() -> None:

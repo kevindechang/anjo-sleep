@@ -39,8 +39,9 @@ GateReader = fakes.FakeGateReader
 @dataclasses.dataclass
 class LeakyDay:
     """The fake writer and extractor, with ``MARK`` added to day ``day`` as first written; a
-    rewrite of it drops it unless ``stubborn``. Only lives of the attempt seeds in ``seeds`` leak
-    (every one when empty). Each write's day and each repair's payload are kept."""
+    rewrite of it drops it unless ``stubborn`` (then it says something new, and ``MARK`` again).
+    Only lives of the attempt seeds in ``seeds`` leak (every one when empty). Each write's day and
+    each repair's payload are kept."""
 
     day: int = LEAKY_DAY
     stubborn: bool = False
@@ -62,7 +63,9 @@ class LeakyDay:
         if not leaks or ("reason" in body and not self.stubborn):
             return result
         day = json.loads(result.text)
-        return dataclasses.replace(result, text=json.dumps({**day, "messages": [*day["messages"], MARK]}))
+        takes = len(self.repairs)  # each rewrite changed, more than a word, and leaking still
+        new = [f"Take {takes}: {' '.join(['again'] * 5 * takes)}."] if "reason" in body else []
+        return dataclasses.replace(result, text=json.dumps({**day, "messages": [*day["messages"], *new, MARK]}))
 
 
 @dataclasses.dataclass
@@ -443,9 +446,10 @@ def test_a_missed_origin_day_is_named_with_why_and_no_other_discoverability_fail
 
 
 def test_a_round_holds_its_writes_and_a_full_read_again() -> None:
-    # days 2 and 4 (indexes 1, 3) written and extracted, and days 3 and 5 to 10 extracted again
+    # days 2 and 4 (indexes 1, 3) written, each asked again once if it comes back unchanged, and
+    # extracted, and days 3 and 5 to 10 extracted again
     full = backends.life_calls(4)
-    assert repair.round_calls(4, {1, 3}) == backends.GenCalls(2 * 2 + 7, full.reads, full.muse)
+    assert repair.round_calls(4, {1, 3}) == backends.GenCalls(2 * 2 + 2 + 7, full.reads, full.muse)
 
 
 def test_the_memo_answers_a_request_it_sent_before_without_a_call() -> None:

@@ -17,7 +17,15 @@ from typing import Final
 
 from anjo.sleep.budget import CAPS, Pool
 from anjo.sleep.mind.apd import colab_vllm, costs, generate
-from anjo.sleep.mind.apd.backend import GEMINI_THINKING, GEN_SPARK_RETRIES, GenCalls, gen_holds, life_calls
+from anjo.sleep.mind.apd.backend import (
+    AUDITOR_ROOM_TOKENS,
+    AUDITOR_ROOMY_ASKS,
+    GEMINI_THINKING,
+    GEN_SPARK_RETRIES,
+    GenCalls,
+    gen_holds,
+    life_calls,
+)
 from anjo.sleep.mind.apd.ceiling import dollars
 from anjo.sleep.mind.apd.intervene import EDIT_SPARK_CALLS
 from anjo.sleep.mind.apd.interventions import EDIT_KINDS
@@ -145,7 +153,8 @@ def _who(on: Pricing, pool: Pool) -> str:
     parts = [*(["writer and extractor (" + on.writer + ")" + asked] if pool == on.write_pool else []),
              *(["gate readers (" + on.reader + ")"] if pool == on.read_pool else []),
              *(["the gates' auditor (Muse Spark)"] if pool == "meta_usd" else [])]
-    extra = f", and {GEN_SPARK_RETRIES} extra tries" if pool != "meta_usd" else ""
+    extra = f", and {GEN_SPARK_RETRIES} extra tries" if pool != "meta_usd" else (
+        f", and {AUDITOR_ROOMY_ASKS} ask with room for {AUDITOR_ROOM_TOKENS:,} tokens for a reply cut at its cap")
     return " and ".join(parts) + extra
 
 

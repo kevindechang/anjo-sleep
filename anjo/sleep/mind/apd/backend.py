@@ -24,7 +24,9 @@ discoverability read for each planted item, an identify call for each and the sc
 tried again from the extra tries (``retry``), each try a call of its own, and a failed try is
 priced at one call's worst case, so the hold stays a true bound; a 429 waits longer (its hint, or
 ``retry.rate_limit_wait``) and is priced at nothing, as it is billed. The Muse auditor, whose hold
-has no extra tries, tries again on a 429 only. A wait or a cool-down (``pause``) ends early once
+has no extra tries, tries again on a 429 only; a reply of its cut at its cap with no JSON object in
+it (its reasoning spent the cap) is asked once more with room for ``AUDITOR_ROOM_TOKENS``, at most
+``AUDITOR_ROOMY_ASKS`` times a hold, which holds that ask at its own cap's worst case (``Room``). A wait or a cool-down (``pause``) ends early once
 the command is ending. Every generation reply goes out
 capped at ``retry.REPLY_MAX_TOKENS`` (``gen_chat``), the cap one call is held for. Side by side, an
 attempt whose hold finds no room waits for the command's other attempts in flight to end
@@ -54,12 +56,12 @@ import httpx
 from anjo.sleep import fireworks_api, meta_api
 from anjo.sleep.budget import Ledger, Pool
 from anjo.sleep.context.brief import ChatFn as BriefChat
-from anjo.sleep.mind.apd import colab_vllm, fakes, retry
+from anjo.sleep.mind.apd import colab_vllm, fakes, gates, retry
 from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.colab_vllm import ColabSession, TunnelOpener
 from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
-from anjo.sleep.mind.apd.judging import MUSE, Rate, TextModel
+from anjo.sleep.mind.apd.judging import MAX_IN_TOKENS, MUSE, Rate, TextModel
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
 
@@ -98,6 +100,11 @@ CALL_GRACE_S: Final = 5.0  # past its own timeout, a generation call is given up
 CALL_POLL_S: Final = 0.1  # how often a caller waiting on a call in flight looks for a kill
 LEAK_MARGIN_S: Final = 30.0  # past its transport timeout, a call given up on gives its limiter place back anyway
 ROOM_POLL_S: Final = 0.1  # how often an attempt waiting for room looks for a kill
+# A gates' auditor reply cut at its cap with no JSON object in it is asked once more with this cap,
+# as the morning judge's is (``probes.score.JUDGE_RETRY_MAX_TOKENS``): on 2026-10-29 Muse Spark spent
+# all 8,192 tokens of an audit reasoning (its other audits that day: 4,614 and 5,965 out).
+AUDITOR_ROOM_TOKENS: Final = 16_384
+AUDITOR_ROOMY_ASKS: Final = 1  # such asks one hold covers
 
 
 @dataclass(frozen=True)
@@ -141,6 +148,7 @@ class Backend:
     repair: bool = False  # a core split's failed attempt has the days a leak, missed origin or audit names rewritten
     keep_failed: bool = False  # a core split's failed attempt is kept under ``quarantine`` (``store``)
     keep_off: bool = False  # a core split's writer is given its life's topics (``generate.KEEP_OFF``)
+    auditor_room: BriefChat | None = None  # the auditor asked with room for ``AUDITOR_ROOM_TOKENS`` (``Room``)
 
 
 def _text(complete: Callable[[str], str]) -> TextModel:
@@ -167,14 +175,13 @@ def fake_backend(provider: SparkProvider = BASETEN) -> Backend:
 # ── Live ──────────────────────────────────────────────────────────────────────
 
 
-def gen_chat(provider: SparkProvider) -> BriefChat:
+def gen_chat(provider: SparkProvider, cap: int = retry.REPLY_MAX_TOKENS) -> BriefChat:
     """Generation's calls: Muse Spark on Meta's API for the auditor, a core split's generator on
     Fireworks for its own id (``generators``), Spark Open on ``provider`` else, every reply capped at
-    ``retry.REPLY_MAX_TOKENS``, the most one call is held for."""
+    ``cap``: ``retry.REPLY_MAX_TOKENS``, the most one call is held for, or the auditor's room."""
 
     def chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
              temperature: float | None = None) -> ChatResult:
-        cap = retry.REPLY_MAX_TOKENS
         if model == "muse-spark":
             return meta_api.chat("muse-spark", messages, tools, timeout_s, temperature=temperature, max_tokens=cap)
         if model in BY_MODEL:
@@ -273,6 +280,7 @@ def live_backend(root: Path, ledger: Ledger, prices: Prices, rates: Mapping[str,
         cli=ColabCli(), tunnels=colab_vllm.ssh_tunnel(root / "ssh"), wait=colab_vllm.ready, spark=provider.chat,
         life_chat=chat, reader=chat, auditor=chat, muse=_muse, gemini=_gemini, provider=provider,
         ledger=ledger, prices=prices, rates=rates, key_dir=root / "ssh",
+        auditor_room=gen_chat(provider, cap=AUDITOR_ROOM_TOKENS),
         preflight=functools.partial(colab_vllm.preflight, COLAB_BIN),
     )
 
@@ -483,24 +491,48 @@ class Retries:
     rate_limits_only: bool = False
     budget: WaitBudget = field(default_factory=WaitBudget)
 
-    def wait(self, error: ModelApiError, attempt: int) -> float | None:
+    def wait(self, error: ModelApiError, attempt: int, failed: int | None = None) -> float | None:
         """The wait before trying again a call whose try ``attempt`` failed with ``error``;
         ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, taken from
-        the attempt's budget, up to ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all; another
-        transient failure ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
+        the attempt's budget; another transient failure ``retry.backoff``, one extra try spent, while
+        the call's ``failed`` tries that weren't 429s (all of them when not given) are fewer than
+        ``retry.ATTEMPTS``. Either way, at most ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all."""
+        if attempt >= retry.RATE_LIMIT_ATTEMPTS:
+            return None
         if retry.rate_limited(error):
             wait = retry.rate_limit_wait(attempt, retry.hint(error), self.rand)
-            if attempt >= retry.RATE_LIMIT_ATTEMPTS or wait > self.budget.left_s:
+            if wait > self.budget.left_s:
                 return None
             self.budget.left_s -= wait
             return wait
-        if self.rate_limits_only or self.left < 1 or attempt >= retry.ATTEMPTS or not retry.transient(error):
+        failed = attempt if failed is None else failed
+        if self.rate_limits_only or self.left < 1 or failed >= retry.ATTEMPTS or not retry.transient(error):
             return None
         self.left -= 1
-        return retry.backoff(attempt, self.rand)
+        return retry.backoff(failed, self.rand)
 
     def pause(self, seconds: float) -> None:
         pause(seconds, self.sleep, self.halt)
+
+
+@dataclass
+class Room:
+    """The auditor's one more ask for a reply cut at its cap with no JSON object to read: ``chat``
+    asks with room for ``AUDITOR_ROOM_TOKENS``; ``left``, the asks its hold still covers."""
+
+    chat: BriefChat
+    left: int = AUDITOR_ROOMY_ASKS
+
+
+def cut_unread(result: ChatResult) -> bool:
+    """A reply cut at its cap with no JSON object in it: nothing the gates can read."""
+    if result.finish_reason != "length":
+        return False
+    try:
+        gates.json_object(result.text)
+    except gates.GateError:
+        return True
+    return False
 
 
 @dataclass
@@ -508,7 +540,8 @@ class CountedChat:
     """Generation's calls to one model family: no call past ``limit`` (the attempt's hold), each
     try priced at ``rate`` as it returns, or at one call's worst case when it fails or is given up
     on in flight (``Abandoned``: what it cost is unknown). A transient failure is tried again while
-    ``retries`` allows. No try starts once ``halt`` is set (``Halted``)."""
+    ``retries`` allows. With a ``room``, a reply cut with nothing to read is asked once more there,
+    its tries priced at that cap's worst. No try starts once ``halt`` is set (``Halted``)."""
 
     inner: BriefChat
     limit: int
@@ -518,26 +551,40 @@ class CountedChat:
     usd: float = 0.0
     halt: threading.Event | None = None
     log: CallLog | None = None  # each try, when the caller keeps them
+    room: Room | None = None  # the auditor's: a cut reply asked once more with room
     _answered: int | None = field(default=None, init=False, repr=False)  # the last answered try's index in ``log``
 
     def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
                  temperature: float | None = None) -> ChatResult:
+        worst = None if self.rate is None else self.rate.worst
+        result = self._tried(self.inner, model, messages, tools, timeout_s, temperature, worst)
+        if self.room is None or self.room.left < 1 or not cut_unread(result):
+            return result
+        self.room.left -= 1
+        roomy = None if self.rate is None else self.rate.usd(MAX_IN_TOKENS, AUDITOR_ROOM_TOKENS)
+        return self._tried(self.room.chat, model, messages, tools, retry.reply_timeout_s(AUDITOR_ROOM_TOKENS),
+                           temperature, roomy)
+
+    def _tried(self, chat: BriefChat, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float,
+               temperature: float | None, worst: float | None) -> ChatResult:
+        """One call through ``chat``, its tries priced at ``worst`` when they fail."""
         if self.calls >= self.limit:
             raise ModelApiError("past the calls this attempt holds")
         self.calls += 1
-        attempt = 1
+        attempt, failed = 1, 0  # the call's tries, and those that failed on other than a 429
         while True:
             halted(self.halt)
             try:
-                result = self.inner(model, messages, tools, timeout_s, temperature=temperature)
+                result = chat(model, messages, tools, timeout_s, temperature=temperature)
             except Abandoned as error:
-                self._priced(messages, 0, 0, 0.0 if self.rate is None else self.rate.worst, failed=True)
+                self._priced(messages, 0, 0, worst or 0.0, failed=True)
                 self._watch(error.given_up)
                 raise
             except ModelApiError as error:
                 limited = retry.rate_limited(error)  # a 429 is billed nothing; another failure at worst
-                wait = None if self.retries is None else self.retries.wait(error, attempt)
-                self._priced(messages, 0, 0, 0.0 if limited or self.rate is None else self.rate.worst, failed=True,
+                failed += not limited
+                wait = None if self.retries is None else self.retries.wait(error, attempt, failed)
+                self._priced(messages, 0, 0, 0.0 if limited else worst or 0.0, failed=True,
                              rate_limited=limited, wait_s=wait)
                 self._watch(error.given_up if isinstance(error, CallTimedOut) else None)
                 if self.retries is None or wait is None:
@@ -549,6 +596,12 @@ class CountedChat:
                          0.0 if self.rate is None else self.rate.usd(result.input_tokens, result.output_tokens),
                          reply=result)
             return result
+
+    def gave_back(self) -> None:
+        """The reply last answered gave a day written again back as it was (``generate.GivenBack``):
+        its logged call keeps that."""
+        if self.log is not None and self._answered is not None:
+            self.log.mark_unchanged(self._answered)
 
     def refused(self, field: str | None, missing: int | None, extra: int | None) -> None:
         """The reply last answered couldn't be read (``generate.Refusals``): its logged call keeps why."""
@@ -581,12 +634,13 @@ def spark_rate(prices: Prices | None) -> Rate | None:
 class GenCalls:
     """The most one generation attempt calls: the writer and extractor (``writes``) and the gates'
     readers (``reads``) on Spark Open, with ``retries`` extra tries they share, and the auditor
-    (``muse``) on Muse Spark."""
+    (``muse``) on Muse Spark, with ``roomy`` more asks with room (``Room``)."""
 
     writes: int
     reads: int
     muse: int
     retries: int = GEN_SPARK_RETRIES
+    roomy: int = AUDITOR_ROOMY_ASKS
 
     @property
     def spark(self) -> int:
@@ -614,7 +668,8 @@ def gen_holds(prices: Prices | None, rates: Mapping[str, Rate] | None, spark_poo
     its reads and as many extra tries at ``read_rate`` there, and the writes' extra tries apart."""
     spark, muse = spark_rate(prices), None if rates is None else rates[MUSE]
     writes = write_rate or spark
-    holds: dict[Pool, float] = {"meta_usd": muse.worst * calls.muse if muse else 0.0}
+    holds: dict[Pool, float] = {"meta_usd": muse.worst * calls.muse + muse.usd(MAX_IN_TOKENS, AUDITOR_ROOM_TOKENS)
+                                * calls.roomy if muse else 0.0}
     if read_pool is None or read_pool == spark_pool:
         reads = read_rate or spark
         holds[spark_pool] = 0.0 if reads is None or writes is None else (
@@ -667,10 +722,11 @@ def held_attempt(backend: Backend, key: str, calls: GenCalls = WORST_LIFE,
                         log=log)
     reads = bounded(backend.reader, halt, cap, backend.read_limit)
     reader = CountedChat(reads, calls.reads, read_rate(backend), retries, halt=halt, log=log)
-    auditor = CountedChat(bounded(backend.auditor, halt), calls.muse,
+    room = None if backend.auditor_room is None else Room(bounded(backend.auditor_room, halt), calls.roomy)
+    auditor = CountedChat(bounded(backend.auditor, halt), calls.muse + calls.roomy,
                           None if backend.rates is None else backend.rates[MUSE],
                           Retries(calls.retries, sleep=backend.sleep, halt=halt, rate_limits_only=True, budget=budget),
-                          halt=backend.halt, log=log)
+                          halt=backend.halt, log=log, room=room)
     if backend.ledger is None:
         yield spark, reader, auditor
         return

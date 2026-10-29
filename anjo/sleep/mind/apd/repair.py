@@ -15,7 +15,9 @@ thrown away whole: the days the failure names are written again, the rest kept.
 - **How a day is written again** (``rewritten``): the writer gets ``life_v1.md``, the same beats
   and ``repair_v1.md``, with the days before it as they now stand, the day as it was, why, and the
   days after it, which it keeps to. The day is extracted again on the targets held before it, its
-  messages' sources tagged by the round so no evidence id is reused. Every later day is extracted
+  messages' sources tagged by the round so no evidence id is reused. A rewrite that comes back as
+  the day was is asked once more, hotter, told so (``generate.UNCHANGED``); still as it was, the
+  round fails at once, before the gates read it again. Every later day is extracted
   again too, its messages unchanged, on the targets then held: a target's label is fixed when it
   is made and comes back with each mention, so a label the rewrite took away must not return on
   a later day. The life and its sealed file are built again from the whole draft, so a planted
@@ -25,8 +27,9 @@ thrown away whole: the days the failure names are written again, the rest kept.
   the ones never read (past a leak's first flag), and the discoverability, identify and audit
   calls whose input changed are paid for.
 - **Held like an attempt:** each round is held before it starts, after the run's ceiling is
-  checked (``gen_batch``), for its writes and extractions and a full read again at worst
-  (``round_calls``), and priced and logged as an attempt is, its calls marked with the round.
+  checked (``gen_batch``), for its writes (each day's ask again included) and extractions and a full
+  read again at worst (``round_calls``), and priced and logged as an attempt is, its calls marked
+  with the round, and a write that came back as its day was marked ``unchanged``.
 - **What a round costs** depends on how early its first day falls and what the extractions change.
   On the fakes, a round that writes day 6 of a six-item life again costs about 63% of the
   attempt's first check (``test_apd_repair``); live, the Muse identify and audit calls weigh more.
@@ -212,12 +215,14 @@ def _dates(text: str) -> list[date]:
 
 
 def round_calls(prevalence: int, days: Collection[int], *, day_retries: int = 0) -> GenCalls:
-    """The most one repair round writing ``days`` (indexes) again calls: a writer and an extractor
-    call for each of them and ``day_retries`` more writer calls each (``generate.day_retries``), an
-    extractor call for each other day after the first of them, and the gates read again in full, as
-    an attempt's are (at worst every window changed)."""
+    """The most one repair round writing ``days`` (indexes) again calls: for each of them, a writer
+    call and ``day_retries`` more (``generate.day_retries``), all asked again once if it comes back
+    as it was (``generate.REWRITE_ASKS``), and an extractor call; an extractor call for each other day
+    after the first of them, and the gates read again in full, as an attempt's are (at worst every
+    window changed)."""
     full = life_calls(prevalence)
-    return GenCalls(len(days) * (1 + day_retries) + LIFE_DAYS - min(days), full.reads, full.muse)
+    writes = len(days) * generate.REWRITE_ASKS * (1 + day_retries)
+    return GenCalls(writes + LIFE_DAYS - min(days), full.reads, full.muse)
 
 
 def rewritten(tried: Tried, found: Mapping[int, Sequence[str]], round_: int,

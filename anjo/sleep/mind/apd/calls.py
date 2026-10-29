@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
@@ -51,6 +52,7 @@ class Call:
     refused_field: str | None = None  # a write whose reply couldn't be read as its day: the field why, never its text
     missing: int | None = None  # and, for ``placed``, the day's beats it left out
     extra: int | None = None  # and the keys it added that are no beat
+    unchanged: bool = False  # a day written again that came back as it was (``generate.unchanged``), never its text
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -64,7 +66,7 @@ class Call:
                    None if finish is None else str(finish), bool(raw.get("rate_limited", False)),
                    None if wait is None else float(wait), bool(raw.get("leaked", False)), int(raw.get("repair") or 0),
                    int(raw.get("retry") or 0), _str(raw.get("refused_field")), _int(raw.get("missing")),
-                   _int(raw.get("extra")))
+                   _int(raw.get("extra")), bool(raw.get("unchanged", False)))
 
 
 def _str(value: Any) -> str | None:
@@ -122,6 +124,10 @@ class CallLog:
         """Call ``index``'s reply couldn't be read as its day (``generate.Refusals``): why, as the
         field and counts, never the text."""
         self.calls[index] = replace(self.calls[index], refused_field=field, missing=missing, extra=extra)
+
+    def mark_unchanged(self, index: int) -> None:
+        """Call ``index`` wrote a day again that came back as it was (``generate.GivenBack``)."""
+        self.calls[index] = replace(self.calls[index], unchanged=True)
 
     def mark_leaked(self, index: int) -> None:
         """Call ``index`` was still in flight when its limiter place was freed for it. A life saved
@@ -200,10 +206,21 @@ def breakdown(logs: Mapping[str, Sequence[Call]]) -> list[str]:
             for round_ in sorted({c.repair for c in calls if c.attempt == attempt}):
                 lines.append(_line(f"{life_id} attempt {attempt + 1} {f'round {round_}' if round_ else 'as written'}",
                                    (c for c in calls if (c.attempt, c.repair) == (attempt, round_))))
+                if round_:
+                    lines.append(_rewrites(f"{life_id} attempt {attempt + 1} round {round_}",
+                                           [c for c in calls if (c.attempt, c.repair, c.kind) == (attempt, round_, "write")]))
     lines.append("Per life:")
     for life_id, calls in sorted(logs.items()):
         lines.append(_line(life_id, calls))
     return lines
+
+
+def _rewrites(label: str, writes: Sequence[Call]) -> str:
+    """A repair round's days written again, how many came back as they were and were asked again
+    (``generate.UNCHANGED``), and how many came back as they were again (the round failed)."""
+    given_back = Counter(c.days for c in writes if c.unchanged)
+    return (f"  {label}: {len({c.days for c in writes})} day(s) written again, {len(given_back)} came back unchanged "
+            f"and was asked again, {sum(1 for n in given_back.values() if n > 1)} still unchanged")
 
 
 def failed_log_id(life_id: str, taken: Collection[str] = ()) -> str:

@@ -172,7 +172,8 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
     if not getattr(args, "repair", False):
         return ()
     return (f"--repair: an attempt failing only a leak, a missed origin day or the script audit takes up to "
-            f"{repair.ROUNDS} repair rounds, each writing at most {repair.REPAIR_DAYS} days again, extracting every "
+            f"{repair.ROUNDS} repair rounds, each writing at most {repair.REPAIR_DAYS} days again (a day that comes "
+            f"back as it was asked once more, held), extracting every "
             f"later day again, and held before it starts at most as an attempt is (a full read again; only "
             f"changed or unread windows are paid for), so the worst case can reach {1 + repair.ROUNDS} times the one "
             f"shown. A round costs a share of the first check that grows the earlier its first day falls: on the "

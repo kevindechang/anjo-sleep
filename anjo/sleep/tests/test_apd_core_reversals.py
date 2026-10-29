@@ -4,7 +4,8 @@ needs, and never what it means; joining it to the earlier fact is the reader's w
 A line that also said the problem was gone (``dry since``, ``loved it``) gave the whole item away on
 its own day, so the leak gate (``leak_v1.md``) failed every life that drew it. APD's own templates
 stay frozen: the one the core drew that states its outcome is kept out of the core's draws instead.
-Pure: no model is called."""
+A plant line also never names the apparent problem beside what dissolves it ("the line on the desk
+top sits in the wax coat" was both halves on one day). Pure: no model is called."""
 from __future__ import annotations
 
 import re
@@ -15,7 +16,8 @@ from anjo.sleep.mind.apd.generate import LIFE_START, _key_terms
 from anjo.sleep.mind.apd.types import CORE_SPLITS, FAMILIES, MAX_PREVALENCE, CoreSplit
 
 # The lines as they were (core-v1), by the id they had, and the id each one has now: a new id where
-# no pinned set names the old one, the same id where the pinned pair specs do (core-test).
+# no pinned set names the old one, the same id where the pinned pair specs do (core-test). A weekday
+# a line named may give way to the date it pins (``test_apd_core_dates``).
 BEFORE = {
     "truck-cold-reviews": "All three reviews were delivery app orders from Monday, when the app's couriers ran an "
                           "hour late, and walk-up customers have said nothing of the kind.",
@@ -35,16 +37,22 @@ BEFORE = {
                         "daylight lamps the same prints look neutral.",
 }
 NOW = {
-    "truck-cold-reviews": "truck-cold-reviews-v2", "furniture-desk-line": "furniture-desk-line-v2",
-    "podcast-download-dip": "podcast-download-dip-v2", "pottery-celadon-lines": "pottery-celadon-lines-v2",
+    "truck-cold-reviews": "truck-cold-reviews-v3", "furniture-desk-line": "furniture-desk-line-v3",
+    "podcast-download-dip": "podcast-download-dip-v3", "pottery-celadon-lines": "pottery-celadon-lines-v2",
     "bikes-brake-squeal": "bikes-brake-squeal-v2", "wedding-salty-lamb": "wedding-salty-lamb",
     "theatre-hoarse-lead": "theatre-hoarse-lead", "photo-green-cast": "photo-green-cast",
 }
-KEPT_OUT = ("reno-damp-patch",)  # APD's, frozen: it states its outcome ("the patch has been dry since")
+GONE = ("truck-cold-reviews-v2", "furniture-desk-line-v2", "podcast-download-dip-v2")  # ids a later rewrite took over
+KEPT_OUT = (
+    "reno-damp-patch",  # APD's, frozen: it states its outcome ("the patch has been dry since")
+    # a day only the day it's said can place ("next Monday", "Friday's order"), or a date inside the life
+    "reno-tile-membrane", "reno-floor-cabinets", "film-rehearsal-late", "bake-night-oven", "bake-online-orders",
+)
 # Words that tell a reader the apparent problem is gone; a reversal's plant line never needs them.
 OUTCOME_WORDS = ("since", "whole", "nothing of the kind", "has gone", "loved", "clearly", "neutral", "level",
                  "without leaking", "is fine", "are fine", "no longer", "as it should", "took it away", "still damp")
 WEEKDAY = re.compile(r"\b(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b")
+WEEKDAYS = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
 DAMP_HOURS = 72  # ``reno-tile-shade``: how long new tiles stay damp, by its plant line
 
 
@@ -65,9 +73,10 @@ def test_each_rewritten_reversal_line_keeps_its_evidence_tokens() -> None:
         rewritten = core_families.template(NOW[old])
         assert rewritten is not None and rewritten.family == "reversal", old
         assert rewritten.disambiguating != line, old
-        assert _key_terms(line) <= _key_terms(rewritten.disambiguating), old  # every number, name and date kept
+        kept = _key_terms(line) - WEEKDAYS  # every number, name and date kept; a weekday may be pinned instead
+        assert kept <= _key_terms(rewritten.disambiguating), old
     renamed = [old for old, new in NOW.items() if new != old]
-    assert all(core_families.template(old) is None for old in renamed)  # an old line keeps no id it never had
+    assert all(core_families.template(old) is None for old in (*renamed, *GONE))  # no id keeps another's text
 
 
 def test_no_reversal_line_the_core_draws_states_its_outcome() -> None:
@@ -76,7 +85,18 @@ def test_no_reversal_line_the_core_draws_states_its_outcome() -> None:
             assert not any(word in t.disambiguating.lower() for word in OUTCOME_WORDS), (split, t.id)
 
 
-def test_the_core_draws_keep_out_apds_reversals_that_state_their_outcome() -> None:
+def test_the_desk_line_states_the_wax_and_never_the_line_it_explains() -> None:
+    desk = core_families.template("furniture-desk-line-v3")
+    assert desk is not None and desk.family == "reversal"
+    line = desk.disambiguating.lower()
+    # the raw facts the reader joins to the crack: when the wax went on, and what the tin warns
+    assert {"6", "10"} <= _key_terms(desk.disambiguating) and "crazes" in line
+    # never the apparent problem beside what dissolves it (``leak_v1.md``: both halves on one day)
+    assert not any(word in line for word in ("crack", "hairline", "the line", "wax coat", "the wood"))
+    assert not WEEKDAY.search(desk.disambiguating)  # nothing a schedule could put before the crack
+
+
+def test_the_core_draws_keep_out_the_apd_templates_it_replaces() -> None:
     drawn = {t.id for split in CORE_SPLITS for t in _drawn(split)}
     apd = {t.id for t in families.TEMPLATES["development"]}
     for kept_out in KEPT_OUT:
