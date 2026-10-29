@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +22,7 @@ from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import NightOptions, Prices
 from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.practice.roles import TODAY, Roles, ROLES_ENV, practice_roles
+from anjo.sleep.practice.transcripts import PracticeTranscript
 from anjo.sleep.tests.test_full_practice import ADAPTER, Glimmer, Spark, _evidence, _scenes, scored
 from anjo.sleep.tests.test_practice_roles import DEEPSEEK, DeepSeek, _critic
 from anjo.sleep.tools import practice_ab
@@ -479,3 +480,78 @@ def test_without_resume_an_existing_out_folder_is_unchanged(
     )
     assert (tmp_path / "arm_a.jsonl").read_text(encoding="utf-8") != before
     assert "reuse" not in capsys.readouterr().out
+
+
+def _tagged_scene(
+    case: practice_ab.Case, scene: int, *, start: datetime
+) -> tuple[PracticeTranscript, str]:
+    return (
+        PracticeTranscript(
+            id=f"pr-{scene}",
+            person_id=case.user,
+            night=case.night,
+            scene=scene,
+            message="m",
+            reply="r",
+            context=None,
+            f_ids=(),
+            ancestry=frozenset(),
+            created_at=start + timedelta(seconds=scene),
+        ),
+        practice_ab._case_key(case),
+    )
+
+
+def test_complete_arm_matches_the_full_case_key_not_just_person_and_night() -> None:
+    saved = practice_ab._case(f"{UID}:film_student:{NIGHTS[0].isoformat()}")
+    other = practice_ab._case(f"{UID}:other:{NIGHTS[0].isoformat()}")
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    items = [_tagged_scene(saved, index, start=start) for index in range(16)]
+    assert practice_ab._complete_arm(items, saved, 16, [saved]) is not None
+    assert practice_ab._complete_arm(items, other, 16, [other]) is None
+
+
+def test_complete_arm_reruns_when_a_later_partial_attempt_exists() -> None:
+    case = practice_ab._case(f"{UID}:film_student:{NIGHTS[0].isoformat()}")
+    full = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    items = [_tagged_scene(case, index, start=full) for index in range(16)]
+    partial = datetime(2026, 10, 18, 14, tzinfo=UTC)
+    items += [_tagged_scene(case, index, start=partial) for index in range(5)]
+    assert practice_ab._complete_arm(items, case, 16, [case]) is None
+
+
+def test_without_resume_refuses_when_run_json_settings_differ(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    _write_run(tmp_path)
+    saved = json.loads((tmp_path / practice_ab.RUN_NAME).read_text(encoding="utf-8"))
+    saved["scenes"] = 8
+    (tmp_path / practice_ab.RUN_NAME).write_text(
+        json.dumps(saved, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit):
+        practice_ab.main(
+            [*ARGS, "--out", str(tmp_path)],
+            wiring=_refuse,
+            critic_port=_refuse,
+            judge=_refuse,
+            ledger=_refuse,
+        )
+
+
+def test_resume_plan_judge_cost_counts_only_cases_that_run(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    _seed_cases(tmp_path, 6, capsys)
+    assert (
+        practice_ab.main(
+            [*ARGS, "--out", str(tmp_path), "--resume"],
+            wiring=_refuse,
+            critic_port=_refuse,
+            judge=_refuse,
+            ledger=_refuse,
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "128 calls (both orders)" in out and "320 calls (both orders)" not in out
