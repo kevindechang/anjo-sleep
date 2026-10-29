@@ -160,6 +160,70 @@ def test_fit_refuses_non_synthetic_development_logs(tmp_path: Path) -> None:
         fit_from_logs([life], is_synthetic=lambda user_id: False, personas_dir=PERSONAS)
 
 
+def _mapped_founder_life(tmp_path: Path, user_id: str) -> Path:
+    original = _founder_life_with_dual_attempts(tmp_path)
+    mapped = original.rename(tmp_path / user_id)
+    # Match the fixture's ownership fields to the account that actually owns the logs.
+    targets = mapped / "targets.jsonl"
+    targets.write_text(targets.read_text(encoding="utf-8").replace('"founder"', json.dumps(user_id)))
+    return mapped
+
+
+def test_fit_mapped_uuid_uses_registered_persona_and_account_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anjo.sleep.mind import expect_register
+
+    user_id = "6f8063cb-7e48-4dc8-8d4e-26665047418e"
+    life = _mapped_founder_life(tmp_path, user_id)
+    seen: list[str] = []
+    fitted_rows: list[list[object]] = []
+
+    def synthetic(uid: str) -> bool:
+        seen.append(uid)
+        return uid == user_id
+
+    # One fixture life gives one row, too few for the solver: check the rows the fit receives.
+    monkeypatch.setattr(expect_register.expect, "fit", lambda rows: fitted_rows.append(list(rows)))
+    fit_from_logs([life], is_synthetic=synthetic, personas_dir=PERSONAS, lives=[("founder", user_id)])
+    assert [len(rows) for rows in fitted_rows] == [1]
+    assert seen == [user_id]
+    with pytest.raises(EstimatorError, match="refuses account"):
+        fit_from_logs([life], is_synthetic=synthetic, personas_dir=PERSONAS)
+    with pytest.raises(EstimatorError, match="non-synthetic"):
+        fit_from_logs(
+            [life], is_synthetic=lambda uid: False, personas_dir=PERSONAS,
+            lives=[("founder", user_id)],
+        )
+    with pytest.raises(EstimatorError, match="refuses account"):
+        fit_from_logs(
+            [life], is_synthetic=synthetic, personas_dir=PERSONAS,
+            lives=[("researcher", "8a701d9d-0730-4df8-914f-4b8f627a6888")],
+        )
+
+
+@pytest.mark.parametrize("user_id", ["u-abcd", "kevin-test"])
+def test_mapped_fit_keeps_collect_refusals(tmp_path: Path, user_id: str) -> None:
+    from anjo.sleep.mind.collect import CollectRefused
+
+    life = _mapped_founder_life(tmp_path, user_id)
+    with pytest.raises(CollectRefused, match="refusing"):
+        fit_from_logs(
+            [life], is_synthetic=lambda uid: True, personas_dir=PERSONAS,
+            lives=[("founder", user_id)],
+        )
+
+
+@pytest.mark.parametrize("lives", [
+    [("stranger", "account")],
+    [("founder", "one"), ("founder", "two")],
+    [("founder", "one"), ("researcher", "one")],
+])
+def test_fit_mapping_cannot_widen_registered_lives(lives) -> None:
+    with pytest.raises(EstimatorError, match="unregistered|duplicate"):
+        fit_from_logs([], is_synthetic=lambda uid: True, lives=lives)
+
+
 def test_expect_register_round_trip_json_hash(tmp_path: Path) -> None:
     path = tmp_path / "estimator.json"
     fitted = expect.Coefficients(0.1, -0.2, 0.05, -0.01, base_rate=0.4, n=9, undated_days=7.0)

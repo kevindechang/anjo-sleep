@@ -16,6 +16,8 @@ from anjo.sleep.tools import fit_estimator
 COEFFICIENTS = expect.Coefficients(
     intercept=-0.5, understand=0.4, unacted=0.3, days=-0.05, base_rate=0.3, n=12
 )
+FOUNDER_ID = "6f8063cb-7e48-4dc8-8d4e-26665047418e"
+RESEARCHER_ID = "8a701d9d-0730-4df8-914f-4b8f627a6888"
 
 
 def _tree(root: Path, counts: dict[str, int]) -> Path:
@@ -77,6 +79,60 @@ def test_results_defaults_to_the_sleep_results_tree(
 
     assert code == 0
     assert f"estimator fit: {data / 'sleep' / 'results'}" in lines[0]
+
+
+def test_mapped_plan_and_fit_use_only_supplied_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = _tree(tmp_path / "results", {"film_founder": 2})
+    for user_id in (FOUNDER_ID, RESEARCHER_ID):
+        folder = results / user_id / "nights" / "2026-10-01"
+        folder.mkdir(parents=True)
+        (folder / "summary.json").write_text("{}", encoding="utf-8")
+    args = [
+        "--results", str(results), "--life", f"founder={FOUNDER_ID}",
+        "--life", f"researcher={RESEARCHER_ID}",
+    ]
+    lines: list[str] = []
+    assert fit_estimator.main(args, out=lines.append) == 0
+    text = "\n".join(lines)
+    assert f"founder ({FOUNDER_ID}): {results / FOUNDER_ID} - 1 night folders" in text
+    assert f"researcher ({RESEARCHER_ID}): {results / RESEARCHER_ID} - 1 night folders" in text
+    assert f"{results / 'film_founder'} - missing" in text
+    assert f"{results / 'film_student'} - missing" in text
+
+    def fit(roots, *, is_synthetic, lives):
+        assert tuple(roots) == (results / FOUNDER_ID, results / RESEARCHER_ID)
+        assert lives == (("founder", FOUNDER_ID), ("researcher", RESEARCHER_ID))
+        assert all(is_synthetic(uid) for _, uid in lives)
+        return COEFFICIENTS
+
+    monkeypatch.setattr(fit_estimator, "fit_from_logs", fit)
+    chosen = fit_estimator.plan(results, [("founder", FOUNDER_ID), ("researcher", RESEARCHER_ID)])
+    fitted = fit_estimator.register(
+        chosen, is_synthetic=lambda uid: uid in {FOUNDER_ID, RESEARCHER_ID},
+        path=tmp_path / "estimator.json", replace=None, out=lines.append,
+        fit=lambda roots, synthetic: fit_estimator._fit(roots, synthetic, lives=chosen.lives),
+    )
+    assert fitted == COEFFICIENTS
+
+
+@pytest.mark.parametrize("lives, message", [
+    ([f"stranger={FOUNDER_ID}"], "unregistered"),
+    ([f"founder={FOUNDER_ID}", f"founder={RESEARCHER_ID}"], "duplicate"),
+    ([f"founder={FOUNDER_ID}", f"researcher={FOUNDER_ID}"], "duplicate"),
+    (["founder=../escape"], "invalid user_id"),
+    (["founder="], "invalid user_id"),
+    (["founder=" + "a" * 65], "invalid user_id"),
+    (["founder"], "STEM=UUID"),
+])
+def test_life_mapping_refused_before_planning(tmp_path: Path, lives: list[str], message: str) -> None:
+    args = ["--results", str(tmp_path)]
+    for life in lives:
+        args.extend(["--life", life])
+    lines: list[str] = []
+    assert fit_estimator.main(args, out=lines.append) == 1
+    assert len(lines) == 1 and message in lines[0]
 
 
 def test_go_fits_saves_and_loads_the_registered_file(tmp_path: Path) -> None:
