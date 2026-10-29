@@ -25,6 +25,7 @@ import importlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -33,6 +34,7 @@ from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.expect_register import (
     ESTIMATOR,
     EstimatorError,
+    development_accounts,
     fit_from_logs,
     load_estimator,
     save_estimator,
@@ -41,6 +43,7 @@ from anjo.sleep.night.nightlog import SUMMARY
 from anjo.sleep.reports.results import ResultsError, results_root
 
 SYNTHETIC: Final = "anjo.sleep.app.cleared_sessions:is_synthetic"
+VALIDATE_USER_ID: Final = "anjo.core.ids:validate_user_id"
 MIN_ROWS: Final = 1  # expect.fit refuses an empty set: one resolved expectation is its minimum
 FitFn = Callable[[Sequence[Path], Callable[[str], bool]], Coefficients]
 
@@ -62,17 +65,33 @@ class Account:
 class Plan:
     results: Path
     accounts: tuple[Account, ...]
+    lives: tuple[tuple[str, str], ...] = DEVELOPMENT_LIVES
 
     @property
     def log_roots(self) -> tuple[Path, ...]:
-        return tuple(account.root for account in self.accounts)
+        selected = {stem for stem, _ in self.lives}
+        return tuple(account.root for account in self.accounts if account.persona in selected)
 
 
-def plan(results: Path) -> Plan:
+def plan(results: Path, lives: Sequence[tuple[str, str]] | None = None) -> Plan:
     """The four registered development accounts under ``results``, without reading a night."""
+    accounts = development_accounts(lives)
+    if lives is not None:
+        validate = _named(VALIDATE_USER_ID)
+        for _, user_id in accounts:
+            try:
+                validate(user_id)
+            except ValueError as error:
+                raise Refused(str(error)) from None
+    mapped = dict(accounts)
     return Plan(
         results,
-        tuple(_account(results, stem, user_id) for stem, user_id in DEVELOPMENT_LIVES),
+        tuple(
+            _account(results, stem, mapped[stem]) if stem in mapped
+            else Account(stem, user_id, results / user_id, False, 0)
+            for stem, user_id in DEVELOPMENT_LIVES
+        ),
+        accounts,
     )
 
 
@@ -97,10 +116,12 @@ def describe(chosen: Plan) -> list[str]:
 
 
 def _fitted(chosen: Plan, *, is_synthetic: Callable[[str], bool], fit: FitFn) -> Coefficients:
-    missing = [account.user_id for account in chosen.accounts if not account.exists]
+    selected = {stem for stem, _ in chosen.lives}
+    accounts = [account for account in chosen.accounts if account.persona in selected]
+    missing = [account.user_id for account in accounts if not account.exists]
     if missing:
         raise Refused(f"missing development account(s) under {chosen.results}: {', '.join(missing)}")
-    real = [account.user_id for account in chosen.accounts if not is_synthetic(account.user_id)]
+    real = [account.user_id for account in accounts if not is_synthetic(account.user_id)]
     if real:
         raise Refused(f"not registered synthetic: {', '.join(real)}")
     try:
@@ -157,8 +178,11 @@ def host_check() -> Callable[[str], bool]:
     return cast(Callable[[str], bool], _named(SYNTHETIC))
 
 
-def _fit(log_roots: Sequence[Path], is_synthetic: Callable[[str], bool]) -> Coefficients:
-    return fit_from_logs(log_roots, is_synthetic=is_synthetic)
+def _fit(
+    log_roots: Sequence[Path], is_synthetic: Callable[[str], bool], *,
+    lives: Sequence[tuple[str, str]] | None = None,
+) -> Coefficients:
+    return fit_from_logs(log_roots, is_synthetic=is_synthetic, lives=lives)
 
 
 def _report(loaded: Coefficients, path: Path, out: Callable[[str], None]) -> None:
@@ -178,7 +202,7 @@ def main(
     out: Callable[[str], None] = print,
     is_synthetic: Callable[[str], bool] | None = None,
     estimator: Path | None = None,
-    fit: FitFn = _fit,
+    fit: FitFn | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
         description="Fit and register the p_needed estimator from development lives."
@@ -191,6 +215,10 @@ def main(
     )
     parser.add_argument("--go", action="store_true", help="fit and register (without: the plan only)")
     parser.add_argument(
+        "--life", action="append", metavar="STEM=UUID",
+        help="map a registered development stem to an account (repeatable)",
+    )
+    parser.add_argument(
         "--replace",
         default=None,
         metavar="REASON",
@@ -199,7 +227,15 @@ def main(
     args = parser.parse_args(argv)
     path = ESTIMATOR if estimator is None else estimator
     try:
-        chosen = plan(results_root(args.results))
+        lives = None
+        if args.life is not None:
+            lives = []
+            for value in args.life:
+                stem, separator, user_id = value.partition("=")
+                if not separator:
+                    raise Refused("--life needs STEM=UUID")
+                lives.append((stem, user_id))
+        chosen = plan(results_root(args.results), lives)
         for line in describe(chosen):
             out(line)
         if not args.go:
@@ -214,7 +250,7 @@ def main(
             path=path,
             replace=reason,
             out=out,
-            fit=fit,
+            fit=fit if fit is not None else partial(_fit, lives=chosen.lives),
         )
     except (Refused, EstimatorError, ResultsError) as refused:
         out(f"refused: {refused}")

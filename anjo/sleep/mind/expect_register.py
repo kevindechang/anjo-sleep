@@ -22,11 +22,29 @@ PERSONAS_DIR: Final = Path(__file__).parents[1] / "personas"
 _VERSION: Final = 1
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COEFF_KEYS: Final = ("intercept", "understand", "unacted", "days", "undated_days")
-_DEVELOPMENT_USER_IDS: Final = frozenset(user_id for _, user_id in DEVELOPMENT_LIVES)
 
 
 class EstimatorError(ValueError):
     """The registered estimator file is missing fields or its hash does not verify."""
+
+
+def development_accounts(
+    lives: Sequence[tuple[str, str]] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Resolve an explicit development mapping without widening the persona allowlist."""
+    if lives is None:
+        return DEVELOPMENT_LIVES
+    stems = {stem for stem, _ in DEVELOPMENT_LIVES}
+    seen_stems: set[str] = set()
+    seen_ids: set[str] = set()
+    for stem, user_id in lives:
+        if stem not in stems:
+            raise EstimatorError(f"unregistered development stem {stem!r}")
+        if stem in seen_stems or user_id in seen_ids:
+            raise EstimatorError(f"duplicate development stem or account: {stem!r}={user_id!r}")
+        seen_stems.add(stem)
+        seen_ids.add(user_id)
+    return tuple(lives)
 
 
 def fit_from_logs(
@@ -35,6 +53,7 @@ def fit_from_logs(
     is_synthetic: Callable[[str], bool],
     personas_dir: Path = PERSONAS_DIR,
     split: Split = "development",
+    lives: Sequence[tuple[str, str]] | None = None,
 ) -> Coefficients:
     """Fit the registered coefficients from development lives' resolved expectations in ``log_roots``.
 
@@ -43,10 +62,12 @@ def fit_from_logs(
     """
     if split != "development":
         raise ValueError("the estimator is fitted on development lives only")
+    accounts = development_accounts(lives)
     rows: list[FitRow] = []
     for root in log_roots:
         rows.extend(_fit_rows_from_root(
-            root.resolve(), personas_dir=personas_dir, split=split, is_synthetic=is_synthetic
+            root.resolve(), personas_dir=personas_dir, split=split, is_synthetic=is_synthetic,
+            lives=accounts,
         ))
     return expect.fit(rows)
 
@@ -109,22 +130,26 @@ def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _persona_for_user(user_id: str, personas_dir: Path) -> Path:
-    for stem, uid in DEVELOPMENT_LIVES:
+def _persona_for_user(
+    user_id: str, personas_dir: Path, lives: Sequence[tuple[str, str]]
+) -> Path:
+    for stem, uid in lives:
         if uid == user_id:
             return personas_dir / f"{stem}.json"
     raise EstimatorError(f"no registered development persona for account {user_id!r}")
 
 
 def _fit_rows_from_root(
-    root: Path, *, personas_dir: Path, split: Split, is_synthetic: Callable[[str], bool]
+    root: Path, *, personas_dir: Path, split: Split, is_synthetic: Callable[[str], bool],
+    lives: Sequence[tuple[str, str]] | None = None,
 ) -> list[FitRow]:
+    accounts = development_accounts(lives)
     nights_dir, life_root, user_id = _layout(root)
-    if user_id not in _DEVELOPMENT_USER_IDS:
+    if user_id not in {uid for _, uid in accounts}:
         raise EstimatorError(f"estimator fit refuses account {user_id!r}")
     if not is_synthetic(user_id):
         raise EstimatorError(f"estimator fit refuses non-synthetic account {user_id!r}")
-    persona = _persona_for_user(user_id, personas_dir)
+    persona = _persona_for_user(user_id, personas_dir, accounts)
     life = collect_life(nights_dir, persona, split=split)
     return _fit_rows(life, nights_dir)
 
