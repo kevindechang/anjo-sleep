@@ -32,8 +32,8 @@ disk (``stage``: ``Serve.stage``, through ``backend.stage_on_modal``) and loads 
 found nowhere is asked for again for up to ``LOAD_WAIT_S``. Only work nobody waits on takes that wait
 (the night, the morning, the demo's pre-generated pairs); a chat turn and the live demo page load once
 (``load_adapter`` with no wait, ``with_load_wait(0)``), and the live page's ``once()`` copy never
-stages: it only tries where a stage puts adapters. A later 404 naming a loaded adapter (its container
-restarted and forgot it) loads it again and tries once more. SageMaker's shim fetches and loads each
+stages: it only tries where a stage puts adapters. A later 404, or a missing-adapter 400 naming the requested adapter, loads it again and tries once
+more (the container may have restarted and forgotten it). SageMaker's shim fetches and loads each
 adapter itself, so its client has no ``adapters_dir`` and never loads. One client serves many threads at once (the night's
 calls run side by side, ``parallel.Calls``): ``httpx.Client`` may be shared between threads, the
 loaded set changes only under one lock its copies share, and each adapter loads under a lock of its
@@ -49,8 +49,9 @@ gives the same answer. A status is an answer and never goes again, but for a 408
 while vLLM was healthy: that post goes again once, inside the same attempts. Until the server has answered
 within its scale-down window an attempt may wait out a cold start (``REQUEST_TIMEOUT_S``); after that
 a first attempt gives up at ``WARM_TIMEOUT_S``, and any later one, which may meet a restarted
-container, gets the rest of the budget. All the attempts of one request end within
-``REQUEST_TIMEOUT_S`` of the first, so no bound built on one request's time changes. ``once()``
+container, gets the rest of the budget. Transport retries end within
+``REQUEST_TIMEOUT_S`` of the first. Night result reads after a 303 get a work-scaled bound
+(``result_timeout``); explicit deadlines and ``once()`` keep their original bounds. ``once()``
 sends each request once with the full timeout, as before: the live page, where a visitor waits. A
 client and its copies hold at most ``config.CONCURRENT_REQUESTS`` requests in flight, all one Modal
 container takes, so none waits in Modal's queue behind the client's own; ``retries()`` counts the
@@ -68,7 +69,7 @@ caught. A turn's poster (``app.runtime``) is its own ``HttpPoster``, under its 2
 never retries.
 
 **A long call is read from Modal's result URL** (``serving.redirect``), on the server's own host, inside
-the request's bound, never posted again; any other redirect is a ``ServingError`` naming its status.
+the request's result-read bound, never posted again; any other redirect is a ``ServingError`` naming its status.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -76,12 +77,13 @@ by the app, never here), or the SageMaker endpoint's signed envelope
 (``serving.sagemaker.invoke.SageMakerPoster``). The serving backend (``serving.backend``) picks one.
 The URL is https, or plain http on a loopback host only (``check_url``): the local end of an SSH
 tunnel to Glimmer on Colab (``serving.colab_vllm``), which never leaves this machine.
-Errors name the endpoint and the status, never a message's words.
+Errors name the endpoint and status; 4xx diagnostics retain only recognized safe clauses.
 """
 from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -107,7 +109,14 @@ REQUEST_TIMEOUT_S: Final = 300.0  # a cold start waits inside the server's own l
 # gives up at WARM_TIMEOUT_S, past the 150 s at which Modal answers any request it holds with a 303 the
 # client follows (at 90 s, warm completions of 128 s and 147 s were cut and sent again): only a request
 # with no status by then is lost. Hops after a 303, and any later attempt, get the rest of
-# REQUEST_TIMEOUT_S (300 - 165 - 2 = 133 s after a warm timeout): all of them end inside it.
+# REQUEST_TIMEOUT_S (300 - 165 - 2 = 133 s after a warm timeout) for transport retries.
+# A confirmed-running call's result GETs instead use the request-specific result budget below.
+# Result reads can outlast transport retries when independent clients queue on one GPU.
+LOAD_RESULT_TIMEOUT_S: Final = 900.0  # cold adapter reads, including the other workload's queue
+MAX_RESULT_TIMEOUT_S: Final = 1800.0
+PREFILL_TOKENS_PER_S: Final = 32.0  # conservative shared-GPU allowance, not a throughput claim
+DECODE_TOKENS_PER_S: Final = 4.0
+ERROR_MESSAGE_CHARS: Final = 384
 WARM_TIMEOUT_S: Final = 165.0
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and before the third
 ATTEMPTS: Final = len(BACKOFF_S) + 1
@@ -226,7 +235,7 @@ def model_name(adapter: CheckpointRef | None) -> str:
 
 class Poster(Protocol):
     """One JSON POST to a vLLM path, read back as a JSON object. Raises ``ServingError`` naming
-    the path and the status, never the body."""
+    the path and status, with a sanitized 4xx diagnostic."""
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]: ...
 
@@ -243,6 +252,79 @@ def json_object(path: str, raw: bytes | str, status: int | None = None) -> dict[
     if not isinstance(data, dict):
         raise ServingError(f"{path} sent a reply that is not an object{named}")
     return data
+
+
+def error_message(response: httpx.Response, body: Mapping[str, Any]) -> str:
+    """A bounded, recognized 4xx diagnostic clause, never arbitrary prompt-bearing text.
+
+    Validation detail/input objects and unrecognized free text are never logged.
+    """
+    if not 400 <= response.status_code < 500:
+        return ""
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    error = data.get("error", data) if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return ""
+    message = error.get("message", error.get("detail"))
+    if not isinstance(message, str):
+        return ""
+
+    # Free-form messages can contain decoded token-id prompts we cannot redact by comparison.
+    # Keep only recognized diagnostic clauses with numeric values or the requested model name.
+    model = body.get("model", body.get("lora_name"))
+    adapter = re.escape(model) if isinstance(model, str) and config.ADAPTER_NAME.fullmatch(model) else r"(?!)"
+    patterns = (
+        r"(?:maximum context length is|maximum model length is|prompt length is) [0-9]+ tokens"
+        r"(?:; requested [0-9]+ tokens)?",
+        r"(?:top_k|top_p|temperature|max_tokens|prompt_logprobs|seed) must be "
+        r"(?:greater than|less than|at least|at most|between)? ?-?[0-9]+(?:\.[0-9]+)?"
+        r"(?: and -?[0-9]+(?:\.[0-9]+)?)?",
+        r"(?:model|(?:lora[ _-]*)?adapter)\s+['\"`]?" + adapter
+        + r"['\"`]?\s+(?:was |is )?(?:not found|not loaded|does not exist|has already been loaded)",
+    )
+    for pattern in patterns:
+        found = re.search(pattern, message, re.IGNORECASE)
+        if found is not None:
+            return found.group()[:ERROR_MESSAGE_CHARS]
+    return "diagnostic withheld (unrecognized free text)"
+
+
+def response_error(path: str, response: httpx.Response, body: Mapping[str, Any]) -> ServingError:
+    message = error_message(response, body)
+    named = f"{path} returned HTTP {response.status_code}"
+    # Match the actual requested adapter before redacting quoted values. Arbitrary validation
+    # errors and the base model never trigger an adapter reload.
+    model = body.get("model")
+    missing = False
+    if response.status_code == 400 and isinstance(model, str) and config.ADAPTER_NAME.fullmatch(model):
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        error = data.get("error", data) if isinstance(data, dict) else None
+        raw = error.get("message", error.get("detail")) if isinstance(error, dict) else None
+        if isinstance(raw, str):
+            missing = bool(re.search(
+                r"(?:model|(?:lora[ _-]*)?adapter)\s+['\"`]?" + re.escape(model)
+                + r"['\"`]?\s+(?:was |is )?(?:not found|not loaded|does not exist)", raw, re.IGNORECASE))
+    kind = ModelNotFound if response.status_code == 404 or missing else ServingError
+    return kind(named + (f": {message}" if message else ""))
+
+
+def result_timeout(path: str, body: Mapping[str, Any]) -> float:
+    """Bound result GETs by work; the POST/transport retry budget stays unchanged."""
+    if path == LOAD_PATH:
+        return LOAD_RESULT_TIMEOUT_S
+    if path != "/v1/completions":
+        return REQUEST_TIMEOUT_S
+    prompt = body.get("prompt", ())
+    count = len(prompt) if isinstance(prompt, list) else 0
+    output = body.get("max_tokens", 0)
+    decode = output / DECODE_TOKENS_PER_S if isinstance(output, int) and output > 0 else 0.0
+    return min(MAX_RESULT_TIMEOUT_S, max(REQUEST_TIMEOUT_S, count / PREFILL_TOKENS_PER_S + decode))
 
 
 def is_loopback(host: str) -> bool:
@@ -313,12 +395,10 @@ class HttpPoster:
              hops_s: float | None = None) -> dict[str, Any]:
         """``timeout_s`` is this request's alone (None: the poster's); ``hops_s`` bounds its 303 hops too."""
         response = self._send(path, body, timeout_s, hops_s)
-        if response.status_code == 404:
-            raise ModelNotFound(f"{path} returned HTTP 404")
         if response.status_code in PROXY_STATUSES:
             raise ProxyFailed(f"{path} returned HTTP {response.status_code}")
         if response.is_error:
-            raise ServingError(f"{path} returned HTTP {response.status_code}")
+            raise response_error(path, response, body)
         return json_object(path, response.content, response.status_code)
 
     def answers(self, timeout_s: float) -> bool:
@@ -358,14 +438,15 @@ class HttpPoster:
     def load_adapter(self, name: str, folder: str, *, timeout_s: float | None = None, hops_s: float | None = None) -> bool:
         """vLLM's runtime load of adapter ``name`` from ``folder`` on the server: True once it is
         loaded (one loaded already counts), False when the server finds no adapter there (404). Any
-        other failure is ``ServingError`` naming the endpoint, never what the server said."""
-        response = self._send(LOAD_PATH, {"lora_name": name, "lora_path": folder}, timeout_s, hops_s)
+        other failure is ``ServingError`` with the endpoint and a recognized safe 4xx diagnostic."""
+        body = {"lora_name": name, "lora_path": folder}
+        response = self._send(LOAD_PATH, body, timeout_s, hops_s)
         if response.status_code == 400 and _ALREADY_LOADED in response.content:
             return True
         if response.status_code == 404:
             return False
         if response.is_error:
-            raise ServingError(f"{LOAD_PATH} returned HTTP {response.status_code}")
+            raise response_error(LOAD_PATH, response, body)
         return True
 
 
@@ -464,14 +545,16 @@ class _Requests:
         if self.memo is not None and path == token_memo.TOKENIZE:
             return cast(dict[str, Any], self.memo.post(body, lambda: replace(self, memo=None).post(path, body)))
         if isinstance(poster, HttpPoster):
-            return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left), path)
+            return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left),
+                              path, result_s=result_timeout(path, body))
         return self._send(lambda timeout, left: poster.post(path, body), path)
 
     def load_adapter(self, name: str, folder: str) -> bool:
         poster = self.poster
         if not isinstance(poster, HttpPoster):
             raise ServingError("only a server that reads adapters from a folder loads one")
-        return self._send(lambda timeout, left: poster.load_adapter(name, folder, timeout_s=timeout, hops_s=left), LOAD_PATH)
+        return self._send(lambda timeout, left: poster.load_adapter(name, folder, timeout_s=timeout, hops_s=left),
+                          LOAD_PATH, result_s=LOAD_RESULT_TIMEOUT_S)
 
     def unload_adapter(self, name: str) -> None:
         poster = self.poster
@@ -489,8 +572,12 @@ class _Requests:
     def close(self) -> None:
         self.poster.close()
 
-    def _send(self, attempt: Callable[[float, float], T], path: str) -> T:
-        deadline = self.clock() + self.cold_s
+    def _send(self, attempt: Callable[[float, float], T], path: str, *, result_s: float | None = None) -> T:
+        started = self.clock()
+        deadline = started + self.cold_s
+        # Explicit short deadlines and visitor-facing once() copies retain their existing bounds.
+        extended = self.attempts > 1 and self.cold_s == REQUEST_TIMEOUT_S
+        result_deadline = started + max(self.cold_s, (result_s or 0.0) if extended else 0.0)
         proxied = False  # a status from the proxy has gone again: it never goes a third time
         for tried, pause in enumerate((*BACKOFF_S[: self.attempts - 1], None)):
             # Observer failures must not replay a successful POST (e.g. a failed after-scrape).
@@ -498,7 +585,7 @@ class _Requests:
                 try:
                     with self.sent.slots:
                         self._refuse_if_down()
-                        got = attempt(self._timeout(deadline, first=tried == 0), deadline - self.clock())
+                        got = attempt(self._timeout(deadline, first=tried == 0), result_deadline - self.clock())
                 except ProxyFailed:
                     if proxied or pause is None or deadline - self.clock() <= pause:
                         raise
@@ -731,7 +818,7 @@ class VllmClient:
     def _served(self, adapter: CheckpointRef | None, call: Callable[[str], T]) -> T:
         """``call`` with the model to name. An adapter trained under another rendering is refused
         before anything is sent; one the server reads from a folder is loaded before its first use, and
-        loaded again once if the server has forgotten it (a 404)."""
+        loaded again once if the server has forgotten it (404, or a matching missing-adapter 400)."""
         if adapter is not None and adapter.rendering != self.rendering:
             raise ServingError(f"adapter {adapter.id} was trained under rendering {adapter.rendering}, "
                                f"not {self.rendering}; it is never served under another")
