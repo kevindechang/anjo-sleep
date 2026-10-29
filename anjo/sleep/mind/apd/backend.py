@@ -483,21 +483,25 @@ class Retries:
     rate_limits_only: bool = False
     budget: WaitBudget = field(default_factory=WaitBudget)
 
-    def wait(self, error: ModelApiError, attempt: int) -> float | None:
+    def wait(self, error: ModelApiError, attempt: int, failed: int | None = None) -> float | None:
         """The wait before trying again a call whose try ``attempt`` failed with ``error``;
         ``None``: it isn't tried again. A 429 waits its hint or ``retry.rate_limit_wait``, taken from
-        the attempt's budget, up to ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all; another
-        transient failure ``retry.backoff``, up to ``retry.ATTEMPTS``, one extra try spent."""
+        the attempt's budget; another transient failure ``retry.backoff``, one extra try spent, while
+        the call's ``failed`` tries that weren't 429s (all of them when not given) are fewer than
+        ``retry.ATTEMPTS``. Either way, at most ``retry.RATE_LIMIT_ATTEMPTS`` tries of the call in all."""
+        if attempt >= retry.RATE_LIMIT_ATTEMPTS:
+            return None
         if retry.rate_limited(error):
             wait = retry.rate_limit_wait(attempt, retry.hint(error), self.rand)
-            if attempt >= retry.RATE_LIMIT_ATTEMPTS or wait > self.budget.left_s:
+            if wait > self.budget.left_s:
                 return None
             self.budget.left_s -= wait
             return wait
-        if self.rate_limits_only or self.left < 1 or attempt >= retry.ATTEMPTS or not retry.transient(error):
+        failed = attempt if failed is None else failed
+        if self.rate_limits_only or self.left < 1 or failed >= retry.ATTEMPTS or not retry.transient(error):
             return None
         self.left -= 1
-        return retry.backoff(attempt, self.rand)
+        return retry.backoff(failed, self.rand)
 
     def pause(self, seconds: float) -> None:
         pause(seconds, self.sleep, self.halt)
@@ -525,7 +529,7 @@ class CountedChat:
         if self.calls >= self.limit:
             raise ModelApiError("past the calls this attempt holds")
         self.calls += 1
-        attempt = 1
+        attempt, failed = 1, 0  # the call's tries, and those that failed on other than a 429
         while True:
             halted(self.halt)
             try:
@@ -536,7 +540,8 @@ class CountedChat:
                 raise
             except ModelApiError as error:
                 limited = retry.rate_limited(error)  # a 429 is billed nothing; another failure at worst
-                wait = None if self.retries is None else self.retries.wait(error, attempt)
+                failed += not limited
+                wait = None if self.retries is None else self.retries.wait(error, attempt, failed)
                 self._priced(messages, 0, 0, 0.0 if limited or self.rate is None else self.rate.worst, failed=True,
                              rate_limited=limited, wait_s=wait)
                 self._watch(error.given_up if isinstance(error, CallTimedOut) else None)

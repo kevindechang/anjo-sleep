@@ -347,6 +347,58 @@ def test_an_attempt_out_of_429_budget_fails_recorded_and_the_next_cools_down(
         (n, "RateLimited", 4) for n in range(generate.MAX_ATTEMPTS)]
 
 
+class Scripted:
+    """A gate reader that fails its first tries as scripted (a 429 or another error), then answers."""
+
+    def __init__(self, *errors: str) -> None:
+        self.errors, self.calls, self.inner = list(errors), 0, fakes.FakeGateReader()
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        self.calls += 1
+        if self.errors:
+            error = self.errors.pop(0)
+            raise RateLimited(error) if error == VERTEX_429 else ModelApiError(error)
+        result: ChatResult = self.inner(model, messages, tools, timeout_s, temperature=temperature)
+        return result
+
+
+VERTEX_504 = "Gemini on Vertex returned HTTP 504"
+LEAK = [{"role": "system", "content": "# leak_v1"}, {"role": "user", "content": "{}"}]
+
+
+@pytest.mark.parametrize(("errors", "tries"), [
+    ([VERTEX_504, VERTEX_429, VERTEX_504], 4),  # 2026-10-29: the 504 on try 3 ended the call at 3 of its 5
+    ([VERTEX_504, VERTEX_429, VERTEX_504, VERTEX_429], 5),
+    ([VERTEX_429, VERTEX_429, VERTEX_429, VERTEX_504], 5),
+])
+def test_a_5xx_after_a_429_is_tried_again_within_the_calls_five_tries(errors: list[str], tries: int) -> None:
+    # Arrange
+    chat = Scripted(*errors)
+    counted = backends.CountedChat(chat, 1, None, backends.Retries(rand=lambda: 0.0, sleep=lambda _s: None))
+
+    # Act
+    counted("gemini", LEAK, None, 1.0)
+
+    # Assert: answered on its last try; each 5xx spent one billed extra try, a 429 none
+    assert chat.calls == tries and tries <= retry.RATE_LIMIT_ATTEMPTS
+    assert counted.retries is not None
+    assert counted.retries.left == backends.GEN_SPARK_RETRIES - errors.count(VERTEX_504)
+
+
+@pytest.mark.parametrize(("errors", "tries"), [
+    ([VERTEX_504] * 3, retry.ATTEMPTS),  # at most three tries of 5xx and timeouts, as ever
+    ([VERTEX_429, VERTEX_504, VERTEX_504, VERTEX_504], 4),
+    ([VERTEX_429, VERTEX_429, VERTEX_429, VERTEX_429, VERTEX_504], retry.RATE_LIMIT_ATTEMPTS),
+])
+def test_a_call_still_ends_at_three_5xx_or_five_tries_in_all(errors: list[str], tries: int) -> None:
+    chat = Scripted(*errors, VERTEX_504)
+    counted = backends.CountedChat(chat, 1, None, backends.Retries(rand=lambda: 0.0, sleep=lambda _s: None))
+    with pytest.raises(ModelApiError, match="HTTP 504"):
+        counted("gemini", LEAK, None, 1.0)
+    assert chat.calls == tries
+
+
 def test_a_429_never_spends_the_billed_extra_tries() -> None:
     tries = backends.Retries(left=0)
     assert tries.wait(RateLimited(VERTEX_429), 1) is not None and tries.left == 0
