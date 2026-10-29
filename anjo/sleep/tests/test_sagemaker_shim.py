@@ -188,7 +188,7 @@ def test_the_container_serves_from_s3_weights_with_the_registered_flags(tmp_path
     assert command[command.index("--port") + 1] == str(shim.VLLM_PORT) != str(shim.SHIM_PORT)
     sizes = {flag: command[command.index(flag) + 1] for flag in
              ("--max-lora-rank", "--max-loras", "--max-cpu-loras", "--max-model-len", "--quantization")}
-    assert sizes == {"--max-lora-rank": "32", "--max-loras": "8", "--max-cpu-loras": "16",
+    assert sizes == {"--max-lora-rank": "32", "--max-loras": "8", "--max-cpu-loras": "32",
                      "--max-model-len": str(config.MAX_MODEL_LEN), "--quantization": "fp8"}
     assert "--enable-lora" in command and "--language-model-only" in command
     env = shim.vllm_env({})

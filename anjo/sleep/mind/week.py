@@ -71,7 +71,7 @@ def slices(events: Sequence[WorkspaceEvent]) -> tuple[NightSlice, ...]:
     boundaries = tuple((i, night) for n, (i, night) in enumerate(starts)
                        if n == 0 or starts[n - 1][1] != night)
     if any(a[1] >= b[1] for a, b in zip(boundaries, boundaries[1:])):
-        raise ValueError('nights must advance monotonically')
+        raise ValueError('nights must advance in date order')
     return tuple(NightSlice(night, tuple(events[i:boundaries[n + 1][0] if n + 1 < len(boundaries)
                                                else len(events)]))
                  for n, (i, night) in enumerate(boundaries))
