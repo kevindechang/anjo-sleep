@@ -66,7 +66,7 @@ from anjo.sleep.practice import critics
 from anjo.sleep.practice.full import CRITIC_TEMPERATURE, SPARK_CAPS, spark_calls
 from anjo.sleep.practice.roles import ROLES_ENV, TODAY, Roles, RolesError, practice_roles
 from anjo.sleep.practice.run import SCENE_TIMEOUT_S, _known
-from anjo.sleep.practice.transcripts import PracticeTranscript
+from anjo.sleep.practice.transcripts import PracticeTranscript, transcript_from_record
 from anjo.sleep.probes.second_judge import MODEL_ID as JUDGE_MODEL
 from anjo.sleep.serving import config
 
@@ -93,6 +93,8 @@ SPARK_CALL_USD: Final = 0.83 / 33  # the measured practice night: 33 Spark Open 
 DEEPSEEK_CALL_USD: Final = (6_000 * critics.DEEPSEEK_IN_PER_M + 300 * critics.DEEPSEEK_OUT_PER_M) / 1e6
 JUDGE_CALL_USD: Final = (5_000 * JUDGE_IN_PER_M + 600 * JUDGE_OUT_PER_M) / 1e6
 ARM_GPU_S: Final = 1174.0 / 16 * 2  # measured serial practice, at 8 at once
+RUN_NAME: Final = "run.json"
+CRITIC_META: Final = "critic_meta.jsonl"
 
 
 @dataclass(frozen=True)
@@ -256,6 +258,110 @@ def _save(path: Path, transcripts: Sequence[PracticeTranscript]) -> None:
         out.write("".join(json.dumps(asdict(t), default=plain) + "\n" for t in transcripts))
 
 
+def _case_key(case: Case) -> str:
+    return f"{case.user}:{case.persona}:{case.night.isoformat()}"
+
+
+def _run_settings(args: argparse.Namespace, roles_b: Roles) -> dict[str, Any]:
+    return {"arm_a": asdict(TODAY), "arm_b": asdict(roles_b), "wiring": args.wiring, "critic": args.critic,
+            "judge": args.judge, "scenes": args.scenes, "pilot": args.pilot}
+
+
+def _read_transcripts(path: Path) -> list[PracticeTranscript]:
+    if not path.is_file():
+        return []
+    return [transcript_from_record(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _complete_arm(items: Sequence[PracticeTranscript], case: Case, scenes: int) -> list[PracticeTranscript] | None:
+    picked: dict[int, PracticeTranscript] = {}
+    for item in items:
+        if item.person_id != case.user or item.night != case.night:
+            continue
+        found = picked.get(item.scene)
+        if found is None or item.created_at > found.created_at:
+            picked[item.scene] = item
+    if set(picked) != set(range(scenes)):
+        return None
+    return [picked[index] for index in range(scenes)]
+
+
+def _saved_run(out: Path) -> dict[str, Any] | None:
+    path = out / RUN_NAME
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def _settings_error(out: Path, args: argparse.Namespace, roles_b: Roles) -> str | None:
+    saved = _saved_run(out)
+    if saved is None:
+        if any((out / name).exists() for name in ("arm_a.jsonl", "arm_b.jsonl")):
+            return f"--resume needs {RUN_NAME} in {out} (transcripts without a saved run)"
+        return None
+    current = _run_settings(args, roles_b)
+    for key in ("arm_a", "arm_b", "wiring", "critic", "judge", "scenes", "pilot"):
+        if saved.get(key) != current.get(key):
+            return (f"--resume: saved run settings differ from this invocation ({key!r} "
+                    f"{saved.get(key)!r} != {current.get(key)!r})")
+    return None
+
+
+def _write_run(out: Path, args: argparse.Namespace, roles_b: Roles) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / RUN_NAME
+    if not path.exists():
+        path.write_text(json.dumps(_run_settings(args, roles_b), sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_critic_meta(out: Path) -> dict[str, dict[str, Any]]:
+    path = out / CRITIC_META
+    if not path.is_file():
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line:
+            row = json.loads(line)
+            found[str(row["case"])] = row
+    return found
+
+
+def _save_critic_meta(out: Path, case: Case, prompts: Sequence[str], base: Sequence[Read | None]) -> None:
+    row = {"case": _case_key(case), "prompts": list(prompts),
+           "base": [{"best": r.best, "worst": r.worst, "flagged": sorted(r.flagged), "letters": r.letters}
+                    if r is not None else None for r in base]}
+    with (out / CRITIC_META).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def _read_from_json(data: dict[str, Any] | None) -> Read | None:
+    if data is None:
+        return None
+    return Read(data["best"], data["worst"], frozenset(data["flagged"]), data["letters"])
+
+
+@dataclass(frozen=True)
+class _Skipped:
+    arm_a: tuple[PracticeTranscript, ...]
+    arm_b: tuple[PracticeTranscript, ...]
+    prompts: tuple[str, ...]
+    base: tuple[Read | None, ...]
+
+
+def _resume_skipped(out: Path, args: argparse.Namespace) -> dict[Case, _Skipped]:
+    arm_a, arm_b = _read_transcripts(out / "arm_a.jsonl"), _read_transcripts(out / "arm_b.jsonl")
+    meta = _read_critic_meta(out)
+    skipped: dict[Case, _Skipped] = {}
+    for case in args.case:
+        complete_a, complete_b = _complete_arm(arm_a, case, args.scenes), _complete_arm(arm_b, case, args.scenes)
+        if complete_a is None or complete_b is None:
+            continue
+        row = meta.get(_case_key(case), {})
+        skipped[case] = _Skipped(tuple(complete_a), tuple(complete_b), tuple(row.get("prompts", ())),
+                                 tuple(_read_from_json(item) for item in row.get("base", ())))
+    return skipped
+
+
 def _load(path: str) -> Any:
     module, _, name = path.partition(":")
     return getattr(importlib.import_module(module), name)
@@ -267,13 +373,14 @@ _DEEPSEEK_WORST: Final = critics.ThirdPartyCritic(
 _LIST: Final = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.50, serve_gpu_per_hour=1.96)
 
 
-def plan(args: argparse.Namespace, roles_b: Roles, rate: float) -> str:
+def plan(args: argparse.Namespace, roles_b: Roles, rate: float, *, run_cases: int | None = None) -> str:
     cases, scenes = len(args.case), len(args.case) * args.scenes
+    to_run = cases if run_cases is None else run_cases
     arms = sum(_spark_calls(r, args.scenes) for r in (TODAY, roles_b))
     new_critic = roles_b.critic != TODAY.critic
-    spark = cases * (arms + (args.scenes if new_critic else 0))  # both arms, and the retest of A's critic
-    deepseek = cases * args.scenes * (2 if new_critic else 0)
-    gpu_s = cases * 2 * ARM_GPU_S + config.SCALEDOWN_S + 180.0
+    spark = to_run * (arms + (args.scenes if new_critic else 0))  # both arms, and the retest of A's critic
+    deepseek = to_run * args.scenes * (2 if new_critic else 0)
+    gpu_s = to_run * 2 * ARM_GPU_S + config.SCALEDOWN_S + 180.0
     expected = (spark * SPARK_CALL_USD + deepseek * DEEPSEEK_CALL_USD + 2 * scenes * JUDGE_CALL_USD
                 + gpu_s * rate / 3600)
     worst_judge = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
@@ -296,13 +403,15 @@ def plan(args: argparse.Namespace, roles_b: Roles, rate: float) -> str:
         f"${spark_worst_usd(_LIST, max(_spark_calls(r, args.scenes) for r in (TODAY, roles_b))):.2f})",
         f"  deepseek  {deepseek} calls at most, each held on {critics.POOL} at ${_DEEPSEEK_WORST:.3f}",
         f"  gpu       {CASE_MAX_S / 60:.0f} min a case, the wake and the {config.SCALEDOWN_S / 60:.0f}-min idle window "
-        f"held on modal_usd: ${rate * (cases * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600:.2f} at ${rate:.2f}/h",
+        f"held on modal_usd: ${rate * (to_run * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600:.2f} at ${rate:.2f}/h",
         f"  cost      about ${expected:.2f} expected (estimate: ${SPARK_CALL_USD:.3f} a Spark Open call, "
         f"${JUDGE_CALL_USD:.3f} a judge call, {ARM_GPU_S:.0f} GPU-s an arm)",
         "  agreement critic agreement with Spark Open is reported, never a bar",
         "  prints    counts and dollars; never a scene's words",
         f"  saves     both arms' transcripts under --out ({args.out or 'required with --go'})",
     ]
+    if run_cases is not None and run_cases != cases:
+        lines.insert(1, f"  resume    reuse {cases - run_cases} case(s), run {run_cases} case(s)")
     return "\n".join(lines)
 
 
@@ -323,6 +432,8 @@ def main(
     parser.add_argument("--go", action="store_true", help="run it; without it, print the plan only")
     parser.add_argument("--pilot", action="store_true",
                         help="one case to prove the machinery: cost a scene and judge agreement, never a verdict")
+    parser.add_argument("--resume", action="store_true",
+                        help="reuse finished cases already saved under --out (same settings as this invocation)")
     args = parser.parse_args(argv)
     try:
         roles_b = practice_roles({ROLES_ENV: args.arm_b})
@@ -334,8 +445,17 @@ def main(
         parser.error(f"the judge's family ({JUDGE_FAMILY}) plays in an arm")
     if args.pilot and len(args.case) != 1:
         parser.error("a pilot is one case; the full run takes the rest")
+    skipped: dict[Case, _Skipped] = {}
+    if args.resume:
+        if not args.out:
+            parser.error("--resume needs --out")
+        mismatch = _settings_error(Path(args.out), args, roles_b)
+        if mismatch:
+            parser.error(mismatch)
+        skipped = _resume_skipped(Path(args.out), args)
+    run_cases = None if not args.resume else len(args.case) - len(skipped)
     if not args.go:
-        print(plan(args, roles_b, _LIST.serve_gpu_per_hour))
+        print(plan(args, roles_b, _LIST.serve_gpu_per_hour, run_cases=run_cases))
         return 0
     if not args.pilot and len(args.case) * args.scenes < SCENES_NEEDED:
         parser.error(f"the bar needs {SCENES_NEEDED} scenes: add cases (or --pilot for one)")
@@ -345,8 +465,9 @@ def main(
     deps = [(build(None, _options(case, args.scenes, TODAY)), build(None, _options(case, args.scenes, roles_b)))
             for case in args.case]  # no trainer: nothing here trains
     book = deps[0][0].ledger if ledger is ... else ledger
-    print(plan(args, roles_b, deps[0][0].prices.serve_gpu_per_hour))
-    return _go(args, roles_b, deps, book, critic_port or _load(args.critic), judge or _load(args.judge), clock)
+    print(plan(args, roles_b, deps[0][0].prices.serve_gpu_per_hour, run_cases=run_cases))
+    return _go(args, roles_b, deps, book, critic_port or _load(args.critic), judge or _load(args.judge), clock,
+               skipped)
 
 
 def _options(case: Case, scenes: int, roles: Roles) -> NightOptions:
@@ -400,9 +521,11 @@ def _held_judge(judge: Callable[[str], tuple[str, int, int]], ledger: Any, job: 
 
 def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]], ledger: Any,
         critic_port: Callable[[date, Any], Any], judge: Callable[[str], tuple[str, int, int]],
-        clock: Callable[[], float]) -> int:
+        clock: Callable[[], float], skipped: dict[Case, _Skipped] | None = None) -> int:
     first = deps[0][0]
     rate, out = first.prices.serve_gpu_per_hour, Path(args.out)
+    _write_run(out, args, roles_b)
+    skipped = skipped or {}
     run_job = f"practice_ab:{'pilot:' if args.pilot else ''}{int(time.time())}"
     tally = dict.fromkeys(("win", "tie", "loss", "flips", "unreadable", "unreadable_scenes", "dropped_a", "dropped_b",
                            "dropped_both"), 0)
@@ -413,7 +536,8 @@ def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]
     other: list[Read | None] = []
     ask = _held_judge(judge, ledger, run_job, spend)
     started = clock()
-    bound = rate * (len(deps) * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600
+    run_cases = len(deps) - len(skipped)
+    bound = rate * (run_cases * CASE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600
     with held(ledger, f"{run_job}:gpu", ("modal_usd",), usd(bound),
               lambda: rate * (clock() - started + config.SCALEDOWN_S) / 3600):
         if first.wake is not None and not first.wake().ok:
@@ -422,16 +546,29 @@ def _go(args: argparse.Namespace, roles_b: Roles, deps: Sequence[tuple[Any, Any]
         for case, (deps_a, deps_b) in zip(args.case, deps, strict=True):
             job = f"{run_job}:{case.night.isoformat()}:{case.user}"
             evidence = list(deps_a.evidence(case.user).trainable(case.night))
+            known = {e.id: e for e in evidence}
+
+            def known_fn(t: PracticeTranscript) -> str:
+                return str(_known([known[i] for i in t.f_ids if i in known]))
+
+            if stored := skipped.get(case):
+                points += judge_case(ask, known_fn, args.scenes, stored.arm_a, stored.arm_b, tally)
+                if roles_b.critic != TODAY.critic:
+                    retest, new = _critics(job, deps_a, stored.prompts, critic_port(case.night, ledger), ledger,
+                                           spend)
+                    base, again, other = base + list(stored.base), again + retest, other + new
+                continue
             chat_a = _Recorded(deps_a.spark_chat)
             run_a = _arm(job, "A", deps_a, chat_a, case, evidence, out, ledger)
+            if roles_b.critic != TODAY.critic:
+                _save_critic_meta(out, case, [p for p, _ in chat_a.critic()],
+                                  [read_verdict(text) for _, text in chat_a.critic()])
             replay = chat_a.scenes() if roles_b.person == "spark" else None  # the same messages for both arms
             chat_b = _Recorded(deps_b.spark_chat, replay)
             run_b = _arm(job, "B", deps_b, chat_b, case, evidence, out, ledger)
             spend["spark"] += chat_a.usd(deps_a.prices) + chat_b.usd(deps_b.prices)
             spend["critic"] += run_a.critic_usd + run_b.critic_usd
-            known = {e.id: e for e in evidence}
-            points += judge_case(ask, lambda t: _known([known[i] for i in t.f_ids if i in known]), args.scenes,
-                                 run_a.transcripts, run_b.transcripts, tally)
+            points += judge_case(ask, known_fn, args.scenes, run_a.transcripts, run_b.transcripts, tally)
             if roles_b.critic != TODAY.critic:
                 read = [read_verdict(text) for _, text in chat_a.critic()]
                 retest, new = _critics(job, deps_a, [p for p, _ in chat_a.critic()],
