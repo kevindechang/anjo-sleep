@@ -143,6 +143,42 @@ files. The example trains and serves Glimmer with the engine's own rows, prompt 
 adapter is served only under the rendering it was trained under. The training and serving parts were written against Modal's documented API and run only
 with your keys.
 
+## Score tools
+
+**Warm start check.** Compares warm compound and clean-slate morning scores for the same
+development nights, on `3_vs_1` and `3_vs_3x` for knowledge and interaction, and names
+`warm_start` or `clean_slate` only when both dimensions pick that same policy.
+
+```bash
+python -m anjo.sleep.train.warm_start_check --warm warm.jsonl --clean clean.jsonl
+```
+
+It reads those two JSONL files and `anjo/sleep/prereg/thresholds.json` (`--thresholds` points at
+another file). It writes one JSON object per line to stdout. Offline: it costs nothing.
+
+**MIND collect.** Replays deciders D0-D4 on recorded development nights and returns each life's
+record, with held-out `new_work` arrivals and frozen relevance labels. Call `collect_life` or
+`collect_development_lives` in `anjo/sleep/mind/collect.py`.
+
+It reads each night's `summary.json` and `mind_points.jsonl`, and, beside the nights folder,
+`relevance.json`, `targets.jsonl`, `evidence.jsonl` and the persona file. It returns the records.
+With no chat function passed in, D1 stays unobserved and it costs nothing.
+
+**Demo baseline.** Picks the live demo's notes-only baseline, 2C or 2F. The stronger one is the
+arm that arm 4 scores lower against on pooled development `new_work`; a tie or a missing score stays 2C.
+
+```bash
+python -m anjo.sleep.tools.demo_baseline
+```
+
+It reads full-set `development` score files under the results root (`--root`, or
+`$ANJO_DATA_DIR/sleep/results`) and `anjo/sleep/prereg/thresholds.json`. It prints one JSON object
+and leaves `ANJO_SLEEP_DEMO_BASELINE` unset. It costs nothing.
+
+**Morning pairs.** A full morning judges 3 against 3x, 4 against 2C and 4 against 2F
+(`anjo/sleep/probes/morning.py`): 1040 judge calls. It pays for Glimmer and the Muse Spark judge.
+`daily-v1` still judges only arm 3 against arm 1.
+
 ## Running the tests
 
 ```bash
