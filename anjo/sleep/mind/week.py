@@ -23,6 +23,7 @@ from anjo.sleep.types import Evidence, Expectation, Target
 class NightSlice:
     night: date
     events: tuple[WorkspaceEvent, ...]
+    alone: bool = False
 
 
 @dataclass(frozen=True)

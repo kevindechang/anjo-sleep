@@ -62,7 +62,7 @@ def render(history: WeekHistory, trace: ProbeTrace) -> str:
              f'As of {history.as_of.isoformat()}; digest {history.digest}.', '',
              'Synthetic evidence only. Credences are heuristic. A reply difference is not a quality score.', '']
     for night in history.nights:
-        lines += [f'## {night.night.isoformat()}', '']
+        lines += [f'## {night.night.isoformat()}' + (' (alone)' if night.alone else ''), '']
         if not night.events:
             lines += ['- No inquiry log recorded for this night.', '']
         moments = tuple(m for m in history.moments if (m.night or m.at.date()) == night.night)
@@ -92,7 +92,7 @@ def to_json(history: WeekHistory, trace: ProbeTrace) -> str:
     comparison = _comparison(trace)
     trace = _public_trace(trace)
     document = {'as_of': history.as_of.isoformat(), 'digest': history.digest,
-                'nights': [{'night': n.night.isoformat(), 'event_seqs': [e.step.seq for e in n.events]}
+                'nights': [{'night': n.night.isoformat(), 'alone': n.alone, 'event_seqs': [e.step.seq for e in n.events]}
                            for n in history.nights],
                 'moments': [asdict(m) for m in history.moments], 'probe': asdict(trace),
                 'recorded_outcomes_undated': history.recorded_outcomes, 'comparison': comparison,

@@ -26,6 +26,11 @@ one clock. A start after that is refused before any day is simulated or any nigh
         --simulate anjo.sleep.app.sim_transport:simulate --morning anjo.sleep.app.morning:build --user <account id> --persona film_founder \\
         --days 2                                                   # starts two days ago; --start 2026-10-01 dates it earlier
 
+``--alone-from N`` stops person messages from 1-based day N, retaining a positive empty day
+window. Quiet nights are stamped ``alone``. With MIND on they request deep sleep so the
+pressure/empty-evidence nap guards do not defer inquiry; the monthly cap still wins. Training
+still requires new evidence. An unfocused inquiry pass runs if the chooser did not inquire. Mornings retain their normal failed/nap guards and sealed probes.
+
 Each night naps or sleeps deep by the same decision as every night (``night/sleep_pressure.py``,
 under the wiring's policy), and the report says which. After each night that slept deep the morning
 probe run scores every arm (`probes.morning`), or the subset ``ANJO_SLEEP_MORNING_SUBSET`` names
@@ -188,11 +193,11 @@ def _check_window(user_id: str, day: DayRun, last_end: datetime | None) -> None:
 
 
 def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None,
-           probes: str | None = None) -> None:
+           probes: str | None = None, alone: bool = False) -> None:
     """Add the run's labels to the night's summary, atomically, and the probe set its morning asks."""
     path = result.log_path.parent / SUMMARY
     summary = json.loads(path.read_text(encoding="utf-8"))
-    summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index})
+    summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index, "alone": alone})
     if probes is not None:
         summary[MORNING_PROBES] = probes
     if vm is not None:
@@ -227,12 +232,15 @@ def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult)
 def run_accelerated_batch(
     lives: Sequence[tuple[str, Persona]], days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
     label: str = "development", sweep: Sweep | None = None, require_sha: str | None = None,
+    alone_from: int | None = None,
 ) -> dict[str, list[NightResult]]:
     """Run ``days`` days for every life in lockstep; each night is the life's own virtual date, in
     the past (``check_dates``, before anything runs). A final run on real code must be on the frozen
     ``require_sha`` (or the rig's), refused first of all, before ``check_dates``, any day or any night."""
     if days < 1:
         raise ValueError("days is at least 1")
+    if alone_from is not None and not 1 <= alone_from <= days:
+        raise ValueError("--alone-from must be between 1 and --days (inclusive)")
     kind = _check_label(label)
     if len({uid for uid, _ in lives}) != len(lives):
         raise ValueError("each life has its own user id")
@@ -242,21 +250,31 @@ def run_accelerated_batch(
     last_end: dict[str, datetime] = {}
     for i in range(days):
         night = start + timedelta(days=i)
+        alone = alone_from is not None and i + 1 >= alone_from
         runs: dict[str, DayRun] = {}
         for uid, person in lives:
-            day = rig.simulate(uid, person, i, seed)
+            if alone:
+                # A positive, disjoint wall window without waking a transport or sending a turn.
+                began = max(rig.now(), last_end.get(uid, datetime.min.replace(tzinfo=timezone.utc)))
+                day = DayRun((began, max(rig.now(), began + timedelta(microseconds=1))), 0, 0, ())
+            else:
+                day = rig.simulate(uid, person, i, seed)
             _check_window(uid, day, last_end.get(uid))
             last_end[uid] = day.window[1]
             if rig.on_day is not None:
                 rig.on_day(uid, (day.window[1] - day.window[0]).total_seconds())
             runs[uid] = day
-        results = run_night_batch_with(rig.deps_for(night), {uid: night for uid in runs}, accelerated=True,
+        deps = rig.deps_for(night)
+        if alone and deps.settings.mind_inquiry:
+            # Quiet inquiry needs a waking night; retain the month's cap and the training threshold.
+            deps = replace(deps, settings=replace(deps.settings, force_deep=True, quiet_inquiry=True))
+        results = run_night_batch_with(deps, {uid: night for uid in runs}, accelerated=True,
                                        days=runs, sweep=sweep if i == 0 else None,
                                        as_of={uid: day_window(night)[1] for uid in runs})
         for uid, result in results.items():
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
             _stamp(result, sha=sha, label=kind, day_index=i, vm=vm,
-                   probes=None if rig.score is None else probe_set(rig.subset))
+                   probes=None if rig.score is None else probe_set(rig.subset), alone=alone)
             out[uid].append(result)
         if rig.score is not None:
             for uid, result in results.items():
@@ -268,10 +286,11 @@ def run_accelerated_batch(
 def run_accelerated(
     user_id: str, person: Persona, days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
     label: str = "development", sweep: Sweep | None = None, require_sha: str | None = None,
+    alone_from: int | None = None,
 ) -> list[NightResult]:
     """One life: a batch of one."""
     return run_accelerated_batch([(user_id, person)], days, start, rig=rig, seed=seed, label=label,
-                                 sweep=sweep, require_sha=require_sha)[user_id]
+                                 sweep=sweep, require_sha=require_sha, alone_from=alone_from)[user_id]
 
 
 # ── the command line ─────────────────────────────────────────────────────────
@@ -314,7 +333,7 @@ def _report(
     summaries = [_normal(json.loads((r.log_path.parent / SUMMARY).read_text(encoding="utf-8"))) for r in results]
     timeless = [{k: v for k, v in sc.items() if k != "seconds"} for sc in scores]  # a morning's wall time varies
     digest = hashlib.sha256(json.dumps([summaries, timeless], sort_keys=True, default=str).encode()).hexdigest()
-    nights = [{"night": s["night"], "status": s["status"], "failed_at": s["failed_at"],
+    nights = [{"night": s["night"], "alone": s.get("alone", False), "status": s["status"], "failed_at": s["failed_at"],
                "checkpoint": (s["checkpoint"] or {}).get("id") if isinstance(s["checkpoint"], dict) else None,
                "cost_usd": s["cost_usd"], "sleep": (s.get("sleep") or {}).get("kind"), "morning": morning_outcome(r),
                **_trained(r)}
@@ -342,7 +361,7 @@ def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: 
 
 
 def _fake(days: int, start: date | None, seed: int, mind: bool, label: str,
-          parser: argparse.ArgumentParser) -> int:
+          parser: argparse.ArgumentParser, alone_from: int | None = None) -> int:
     """The whole loop on fakes: no model, no GPU, no network, no data dir, on the rig's fake clock.
     ``mind`` turns on MIND's inquiry on a fake thinker. A fake run is not on git, so a final one
     (``label``) needs no ``--require-sha`` and any given one is ignored."""
@@ -352,7 +371,7 @@ def _fake(days: int, start: date | None, seed: int, mind: bool, label: str,
     start = _dated(parser, start, days, clock.now)
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
         fake = rig_module.FakeAccelerated(Path(root), clock=clock, mind_from=start if mind else None)
-        results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed, label=label)
+        results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed, label=label, alone_from=alone_from)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
         return _exit(results)  # while the run's folder still holds its logs
@@ -450,7 +469,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                       score=score, subset=subset, require_sha=args.require_sha, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
-                                                label=args.label, sweep=swept)
+                                                label=args.label, sweep=swept, alone_from=args.alone_from)
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None
     sha = git_sha()
@@ -465,6 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=2)
     parser.add_argument("--start", type=date.fromisoformat, default=None,
                         help="the first virtual date, in the past (default: today minus --days)")
+    parser.add_argument("--alone-from", type=int, help="first day without person messages (1-based, through --days)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--label", choices=LABELS, default="development")
     parser.add_argument("--wiring", help="the app's NightDeps builder, <module>:<function>")
@@ -480,8 +500,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days is at least 1")
+    if args.alone_from is not None and not 1 <= args.alone_from <= args.days:
+        parser.error("--alone-from must be between 1 and --days (inclusive)")
     if args.fake:  # a fake run is not on git: it ignores --require-sha, well-formed or not
-        return _fake(args.days, args.start, args.seed, args.mind, args.label, parser)
+        return _fake(args.days, args.start, args.seed, args.mind, args.label, parser, args.alone_from)
     if args.require_sha is not None and not is_sha(args.require_sha):
         parser.error("--require-sha is a full 40-character hex git sha")
     return _real(args, parser)

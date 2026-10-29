@@ -38,6 +38,7 @@ class Records:
     common: str = ''  # the full served brief, verbatim; never a report excerpt
     mind_evidence_ids: tuple[str, ...] = ()
     resolution: ResolutionInputs | None = None
+    alone_nights: tuple[date, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,9 +113,13 @@ def host_records(user: str, persona: str, as_of: datetime) -> Records:
     known = {e.target_id for e in stored} | {e.target_id for e in expectations}
     known |= {t for q in fold_to(events, as_of.date()).questions for t in q.target_ids}
     fixed = tuple(t for t in targets.targets() if t.id in known)
+    from anjo.sleep.night.nightlog import summaries
+
+    alone = tuple(date.fromisoformat(s['night']) for s in
+                  summaries(_named('anjo.sleep.app.ownership:night_logs')(user)) if s.get('alone') is True)
     return Records(log.path, events, fixed, expectations, stored,
                    _named(storage + 'checkpoint_registry')().last_promoted(user), latest.served, mind_ids,
-                   host_resolution(user, persona_path))
+                   host_resolution(user, persona_path), alone)
 
 
 def host_model(as_of: datetime) -> ModelClient:
@@ -184,7 +189,7 @@ def _window(source: Records, start: date, end: date, as_of: datetime) -> WeekHis
                     resolution=source.resolution)
     by_night = {n.night: n for n in whole.nights}
     calendar = tuple(start + timedelta(days=i) for i in range((end - start).days + 1))
-    return replace(whole, nights=tuple(by_night.get(n, NightSlice(n, ())) for n in calendar),
+    return replace(whole, nights=tuple(replace(by_night.get(n, NightSlice(n, ())), alone=n in source.alone_nights) for n in calendar),
                    moments=tuple(m for m in whole.moments if start <= (m.night or m.at.date()) <= end))
 
 
@@ -223,7 +228,7 @@ def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = prin
             f'${(tokens * prices[0] + 2 * 1024 * prices[1]) / 1_000_000:.6f} at supplied USD/million prices')
     out(f'log: {source.log_path}')
     out(f'window: {args.start} through {end} ({args.days} calendar nights)')
-    out('recorded nights: ' + (', '.join(n.night.isoformat() for n in chosen.nights if n.events) or 'none'))
+    out('recorded nights: ' + (', '.join(n.night.isoformat() + (' (alone)' if n.alone else '') for n in chosen.nights if n.events or n.alone) or 'none'))
     out('events per kind: ' + str(dict(sorted(counts.items()))))
     out(f'probes: 1 prompt x 2 replies; estimated input tokens {tokens}; estimated cost {cost}')
     out(f'adapter: {source.adapter.id if source.adapter else "base"}; model: {MODEL}; temperature: 0; run seed: 0')

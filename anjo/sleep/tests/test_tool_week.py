@@ -142,7 +142,7 @@ def test_renderers_are_deterministic() -> None:
     assert json.loads(to_json(chosen, trace))['digest'] == chosen.digest
 
 
-def test_host_omits_future_target_and_freezes_person_brief(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_host_omits_future_target_and_freezes_person_brief(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """All stores are in-memory fakes: no host or data-directory access."""
     from types import SimpleNamespace
 
@@ -150,7 +150,11 @@ def test_host_omits_future_target_and_freezes_person_brief(monkeypatch: pytest.M
     latest = SimpleNamespace(night=day(3), compiled_at=night(3), folded=(),
                              served='A fixed synthetic brief' + ' detail' * 100 + '\n  Verbatim tail.\n')
     later = SimpleNamespace(night=day(9), compiled_at=night(9), served='Future brief', folded=())
+    folder = tmp_path / 'nights' / 'quiet'
+    folder.mkdir(parents=True)
+    (folder / 'summary.json').write_text(json.dumps({'night': day(3).isoformat(), 'alone': True}))
     ports = {
+        'anjo.sleep.app.ownership:night_logs': lambda _: folder.parent,
         'anjo.core.ids:validate_user_id': lambda _: None,
         'anjo.sleep.app.storage:workspace_log': lambda _: SimpleNamespace(
             path=Path('/fixture/log'), events=fixture_events),
@@ -164,6 +168,8 @@ def test_host_omits_future_target_and_freezes_person_brief(monkeypatch: pytest.M
     monkeypatch.setattr(week, 'host_check', lambda: lambda _: True)
     monkeypatch.setattr(week, 'host_resolution', lambda *_: None)
     loaded = week.host_records(PERSON, 'film_founder', night(3))
+    assert loaded.alone_nights == (day(3),)
+    assert week._window(loaded, day(1), day(3), night(3)).nights[-1].alone
     assert loaded.targets == TARGETS
     assert loaded.common == latest.served
     assert latest.served in week._briefs(loaded, day(3), night(3))[0]
@@ -186,7 +192,7 @@ def test_window_includes_the_last_nights_midnight_clock(tmp_path: Path) -> None:
     assert week.main([*args(root), '--days', '1', '--go'], out=lambda _: None,
                      records=lambda *_: loaded, model_factory=lambda _: FakeModel()) == 0
     document = json.loads((root / 'week.json').read_text())
-    assert document['nights'] == [{'night': day(1).isoformat(), 'event_seqs': [0]}]
+    assert document['nights'] == [{'night': day(1).isoformat(), 'event_seqs': [0], 'alone': False}]
     assert document['digest'] == applied.event.after
 
 
@@ -288,3 +294,13 @@ def test_markdown_keeps_expectations_on_a_night_without_inquiry() -> None:
     assert 'No inquiry log recorded' in markdown
     assert 'expectation made' in markdown and 'expectation resolved' in markdown
     assert 'returns only' in markdown
+
+
+def test_plan_marks_quiet_nights_alone(tmp_path: Path) -> None:
+    lines: list[str] = []
+    data = replace(source(), alone_nights=(day(3), day(4)))
+    assert week.main(args(tmp_path / 'out'), out=lines.append, records=lambda *_: data) == 0
+    timeline = next(line for line in lines if line.startswith('recorded nights:'))
+    assert f'{day(3).isoformat()} (alone)' in timeline
+    assert f'{day(4).isoformat()} (alone)' in timeline  # even without workspace events
+    assert f'{day(1).isoformat()} (alone)' not in timeline

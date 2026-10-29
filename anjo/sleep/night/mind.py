@@ -409,7 +409,7 @@ class MindNight:
 
     # ── step 4 ───────────────────────────────────────────────────────────────
 
-    def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome:
+    def inquire(self, call: MindCall, question_id: str | None) -> InquiryOutcome:
         log = self._log(call.user_id)
         events = log.events()
         before = kernel.fold(events)
