@@ -467,6 +467,28 @@ At line 565, added by `fix: Sleep's arms and the demo read her memory without wr
 +
 ```
 
+## `anjo/training/registry.json` (+15 -0)
+
+At line 41, added by `chore: register Glimmer's licence in the training registry [task4]`; `fix: keep the Glimmer registry note under the 300-byte glue line cap`:
+
+```diff
++    {
++      "id": "muse-glimmer-30b",
++      "kind": "model",
++      "status": "candidate",
++      "license": "Apache-2.0",
++      "uses": ["base"],
++      "covers": ["meta-models/Muse-Glimmer-30B"],
++      "caps": [],
++      "evidence": {"source_url": "https://huggingface.co/meta-models/Muse-Glimmer-30B/tree/cec94fcfd6512f2cfe708138c32533b346ea4f69",
++        "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
++        "card_sha256": "2ba646dcbe5b3b97daedc59e64ef19505312fa99b6598cacc0b82d93f4d74163"},
++      "checked_by": null,
++      "checked_on": null,
++      "notes": "Hackathon sleep base (Task 4); nightly LoRA adapters train on it. Read 2026-10-30: card tagged apache-2.0, LICENSE Apache 2.0. USAGE_POLICY.md (SHA-256 98a14dab9fd97de1666dc8589d399efab1e7fc3ba4e6230d037d6637ba9481d3) must be named in a NOTICE."
++    },
+```
+
 ## `pyproject.toml` (+14 -2)
 
 At line 56, added by `feat: MIND's neural core: slots, a surprise-driven fast-weight memory, hazard, missing-step and self-error heads, dreaming, deterministic CPU training and the offline evaluation, on toy lives with counterfactual pairs [mind-core]`:
