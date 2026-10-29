@@ -239,15 +239,17 @@ class _Served:
                            revision[:12], (serve.revision or "none")[:12])
         return canonical({
             "model": config.MODEL, "root": root, "revision": revision, "precision": vars(serve.precision),
-            "vllm": serve.vllm_version, "backend": self._backend, "rendering": self._client.rendering,
+            "vllm": serve.vllm_version, "deterministic": serve.deterministic, "backend": self._backend,
+            "rendering": self._client.rendering,
             "max_tokens": self._client.max_tokens, "top_p": TOP_P, "top_k": TOP_K, "day": EVAL_DAY.isoformat(),
         })
 
 
 def gate_cache(serving: backend.Serving, client: VllmClient) -> BaseCache:
     """The base model's gate answers kept across nights, keyed on what the server reports (``_Served``)
-    and everything else it answers by: precision, vLLM release, backend, rendering, sampling, reply
-    cap and the gates' date. A server that can't be asked is a miss, never a hit."""
+    and everything else it answers by: precision, vLLM release, deterministic kernels, backend,
+    rendering, sampling, reply cap and the gates' date. A server that can't be asked is a miss, never
+    a hit."""
     return BaseCache(JsonlBaseStore(data_root() / SLEEP_DIR / GATE_BASE_FILE, codec=CODEC),
                      serving=_Served(serving.name, client))
 

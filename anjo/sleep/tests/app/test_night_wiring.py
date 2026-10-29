@@ -168,6 +168,19 @@ def test_cache_misses_when_the_server_revision_changes(monkeypatch: pytest.Monke
     assert len(calls) == 8
 
 
+def test_cache_misses_when_deterministic_serving_flips(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from anjo.sleep.app import night
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv(config.DETERMINISTIC_ENV, raising=False)  # batch-invariant kernels by default
+    calls: list[int] = []
+    served = f"/weights/{config.MODEL}/{'a' * 40}"
+    assert _base(night, ModelsServer(served), calls) == [0, 1, True] and len(calls) == 2
+    assert _base(night, ModelsServer(served), calls) == [0, 1, True] and len(calls) == 2  # read back
+    monkeypatch.setenv(config.DETERMINISTIC_ENV, "0")
+    assert _base(night, ModelsServer(served), calls) == [0, 1, True] and len(calls) == 4  # a new key
+
+
 def test_unreachable_models_endpoint_is_a_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from anjo.sleep.app import night
 

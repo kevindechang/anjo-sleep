@@ -5,11 +5,12 @@ only from a seed the prereg ledger committed before its freeze; a live command r
 pushed ledger, never a stand-in."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from anjo.sleep.mind.apd import pilot
+from anjo.sleep.mind.apd import fakes, pilot
 from anjo.sleep.mind.apd.__main__ import REFUSED_CODE
 from anjo.sleep.mind.apd.__main__ import main as apd_main
 from anjo.sleep.mind.apd.store import DataDir, StoreError
@@ -77,6 +78,17 @@ def test_every_session_of_a_pilot_serves_what_its_first_did(tmp_path: Path) -> N
     (tmp_path / "serving_pin.json").write_text('{"glimmer_revision": "' + "b" * 40 + '"}')
     assert apd_main(["--fake", "--data", str(tmp_path), "timing"], out=lines.append) == REFUSED_CODE
     assert lines[-1].startswith("Refused: this pilot serves another") and not any("serving Glimmer" in x for x in lines)
+
+
+def test_the_pin_records_deterministic_serving_so_a_flip_is_refused(tmp_path: Path) -> None:
+    from anjo.sleep.mind.apd.__main__ import _pins
+
+    on, off = _pins(replace(fakes.SETTINGS, deterministic=True)), _pins(replace(fakes.SETTINGS, deterministic=False))
+    assert (on["deterministic"], off["deterministic"]) == ("1", "0")
+    data = DataDir(tmp_path)
+    data.pin_serving(on)
+    with pytest.raises(StoreError, match="deterministic"):
+        data.pin_serving(off)
 
 
 def test_bad_adapters_are_refused_before_the_vm_boots(tmp_path: Path) -> None:
