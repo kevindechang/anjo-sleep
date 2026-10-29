@@ -156,7 +156,7 @@ class Inquiry(Protocol):
 
     def results(self, call: MindCall) -> tuple[Result, ...]: ...
 
-    def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome: ...
+    def inquire(self, call: MindCall, question_id: str | None) -> InquiryOutcome: ...
 
     def share(self, call: MindCall) -> tuple[Result, ...]: ...
 
@@ -177,7 +177,7 @@ class NoInquiry:
     def results(self, call: MindCall) -> tuple[Result, ...]:
         return tuple(call.targets.results())
 
-    def inquire(self, call: MindCall, question_id: str) -> InquiryOutcome:
+    def inquire(self, call: MindCall, question_id: str | None) -> InquiryOutcome:
         raise RuntimeError("no inquiry port")
 
     def share(self, call: MindCall) -> tuple[Result, ...]:
@@ -378,6 +378,7 @@ class NightSettings:
     practice_scenes: int = 16  # full practice's scenes a night, 16 to 20
     practice_teacher: bool = True  # full practice's Spark Open teacher candidate
     mind_inquiry: bool = False  # MIND's inquiry in the night (Task 17: steps 2b, 4 and 10); off is Task 7a's night
+    quiet_inquiry: bool = False  # accelerated alone nights: run the controller even without a chosen question
     force_deep: bool = False  # a deep sleep tonight whatever the pressure (``--force-deep``); the month's cap still wins
 
 

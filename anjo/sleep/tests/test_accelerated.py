@@ -191,7 +191,7 @@ def test_a_real_run_does_not_turn_a_late_accelerated_error_into_a_system_exit(
     monkeypatch.setattr(accelerated, "run_accelerated_batch", late)
     args = argparse.Namespace(wiring="builtins:print", simulate="builtins:print", morning="builtins:print",
                               users=["u1"], personas=["film_founder"], label="final", require_sha=head,
-                              days=2, start=START, seed=1, mind=False, match_file=None)
+                              days=2, start=START, seed=1, mind=False, match_file=None, alone_from=None)
     with pytest.raises(AcceleratedError, match="window"):  # a mid-run failure still raises, not a clean exit
         accelerated._real(args, argparse.ArgumentParser())
 

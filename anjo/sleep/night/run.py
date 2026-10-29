@@ -131,6 +131,7 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "dream": ("new", None),
     "sleep": ("new", None),
     "probes": ("new", None),
+    "inquire": ("new", None),
     "choose": ("new", None),
     "brief": ("new", None),
     "practice": ("new", None),
@@ -241,6 +242,7 @@ class NightRunner(CoreSteps):
                 *self._dreams(p),
                 ("probes", self._probes),
                 ("choose", self._choose),
+                *((("inquire", self._quiet_inquire),) if self.deps.settings.quiet_inquiry and self._mind() else ()),
                 ("brief", self._brief),
             ):
                 if (why := put_off(self.deps, p, step)) is not None:
@@ -667,10 +669,18 @@ class NightRunner(CoreSteps):
             }
         }
 
-    def _inquire(self, p: PersonNight, choice: Choice) -> Mapping[str, Any]:
-        if choice.question_id is None:
+    def _quiet_inquire(self, p: PersonNight) -> Mapping[str, Any]:
+        """An alone night still visits the controller when the chooser found no live question."""
+        if p.napped:
+            return {"deferred": True, "why": DEFER_WHY}  # the monthly cap still wins
+        if p.inquiry is not None:
+            return {"already_ran": True}
+        return self._inquire(p, None)
+
+    def _inquire(self, p: PersonNight, choice: Choice | None) -> Mapping[str, Any]:
+        if choice is not None and choice.question_id is None:
             raise ValueError("an inquire choice names its question")
-        outcome = self.deps.inquiry.inquire(self._call(p, "inquire"), choice.question_id)
+        outcome = self.deps.inquiry.inquire(self._call(p, "inquire"), None if choice is None else choice.question_id)
         if outcome.result is not None:
             p.targets.add_result(outcome.result)
         if outcome.research_calls > 0:  # only research is paid; thinker cycles are her own Glimmer
