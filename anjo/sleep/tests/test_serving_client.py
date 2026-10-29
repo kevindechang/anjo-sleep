@@ -112,6 +112,72 @@ def test_a_burst_asks_for_the_header_once() -> None:
     assert len(_headers(fake)) == 1 and sum(path == "/v1/completions" for path, _, _ in fake.requests) == 16
 
 
+def _tokenized(fake: FakeVllm) -> list[dict[str, Any]]:
+    return [body for path, body, _ in fake.requests if path == "/tokenize"]
+
+
+def test_a_reusing_client_asks_tokenize_once_per_body_whatever_model_it_names() -> None:
+    """Live 2026-10-29 (knowledge_score, one at a time): an adapter's 202 choices took 277-300 s, 405 of
+    its 608 posts /tokenize at ~0.45 s a round trip, asking each adapter the ids the base had given. An
+    adapter is saved without a tokenizer, so vLLM tokenizes for it with the base's: a reusing copy asks
+    /tokenize once per body, the model aside, and its copies share the ids. Completions always go."""
+    fake = FakeVllm()
+    reusing = _client(fake).on(NIGHT).reusing_tokens()
+    question = [{"role": "user", "content": "q"}]
+    scores = [reusing.continuation_logprobs(adapter, question, " A") for adapter in (None, ADAPTER, None)]
+    scores.append(reusing.once().continuation_logprobs(ADAPTER, question, " A"))  # a copy shares the ids
+    assert len(set(map(tuple, scores))) == 1
+    assert [body.get("prompt") for body in _tokenized(fake)] == [None, config.USER_CHANNEL, " A"]  # chat, header, tail
+    assert {body["model"] for body in _tokenized(fake)} == {config.MODEL}  # the first side's, the base's
+    completions = [body for path, body, _ in fake.requests if path == "/v1/completions"]
+    assert [body["model"] for body in completions] == [config.MODEL, ADAPTER.id, config.MODEL, ADAPTER.id]
+    assert all(body["prompt"] == [1, 2, 3, 5, 6, 9, 8] for body in completions)
+    reusing.continuation_logprobs(ADAPTER, question, " B")  # a new line: its tail alone
+    reusing.on(date(2026, 10, 29)).continuation_logprobs(ADAPTER, question, " B")  # a new date: its chat alone
+    assert [body.get("prompt") for body in _tokenized(fake)][3:] == [" B", None]
+    _client(fake).on(NIGHT).continuation_logprobs(ADAPTER, question, " A")  # a plain client asks every time
+    assert len(_tokenized(fake)) == 5 + 3
+
+
+def test_a_client_keeps_one_connection_for_its_posts() -> None:
+    """One at a time, a round trip is the scorer's whole cost: the client's posts share one kept-alive
+    connection (``httpx.Client``'s pool), never a TCP and TLS handshake each. A loopback server counts them."""
+    import http.server
+
+    opened: list[int] = []
+
+    class Vllm(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"  # keeps a connection open, as Modal's proxy may
+
+        def setup(self) -> None:
+            opened.append(1)
+            super().setup()
+
+        def do_POST(self) -> None:
+            path, body = self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            answer = FakeVllm()(httpx.Request("POST", f"http://x{path}", json=body,
+                                              headers={"authorization": self.headers["Authorization"]}))
+            self.send_response(answer.status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer.content)))
+            self.end_headers()
+            self.wfile.write(answer.content)
+
+        def log_message(self, *_args: object) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Vllm)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = VllmClient(f"http://127.0.0.1:{server.server_address[1]}", "tok").on(NIGHT)
+        for continuation in (" A", " B", " C"):
+            client.continuation_logprobs(None, [{"role": "user", "content": "q"}], continuation)
+        client.close()
+    finally:
+        server.shutdown()
+    assert len(opened) == 1  # 3 x (chat, tail, completion) and the header: ten posts, one connection
+
+
 def test_an_adapter_is_never_served_under_another_rendering() -> None:
     fake = FakeVllm()
     for rendering in (None, framing.rendering("high"), "g000000000000/low"):

@@ -194,9 +194,14 @@ class FakeClient:
         self.rendering = "r1"
         self.sent: list[tuple[str | None, list[dict[str, str]], str]] = []
         self.days: list[date] = []
+        self.reusing = False  # whether the scorer asked for a copy that tokenizes each text once
 
     def on(self, day: date) -> FakeClient:
         self.days.append(day)
+        return self
+
+    def reusing_tokens(self) -> FakeClient:
+        self.reusing = True
         return self
 
     def continuation_logprobs(self, adapter: Any, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
@@ -227,6 +232,7 @@ def test_scoring_is_weights_only(tmp_path: Path, capsys: pytest.CaptureFixture[s
     lines = _run(tmp_path, client, {"seed": "acct-seed", "today": "acct-today"}, lambda account, window: [], capsys)
     items = _items()
     assert client.days and set(client.days) == {EVAL_DAY}  # one fixed date on every side
+    assert client.reusing  # each text tokenized once for the run, not once an adapter
     assert all(messages == [{"role": "user", "content": knowledge.PROMPT}] for _, messages, _ in client.sent)
     assert knowledge.PROMPT.strip() and not any(item.choices[item.answer] in knowledge.PROMPT for item in items)
     scored = {name for name, _, _ in client.sent}
@@ -412,20 +418,56 @@ def test_repeat_scores_the_base_and_one_adapter_again_and_prints_the_receipt(
     client = FakeClient({_adapter("seed", 1): {item.statement for item in items}})
     lines = _run(tmp_path, client, {"seed": "acct-seed"}, lambda account, window: [], capsys, "--repeat")
     choices = sum(len(item.choices) for item in items)
-    assert len(client.sent) == 5 * choices
-    assert [name for name, _, _ in client.sent[-2 * choices:]] == [None] * choices + [_adapter("seed", 1)] * choices
+    first, second = _adapter("seed", 1), _adapter("seed", 2)
+    order = [None, first, None, first, second]  # the receipt right after its sides: a cap that stops the run spares it
+    assert [name for name, _, _ in client.sent] == [name for name in order for _ in range(choices)]
+    sides = [line for line in lines if line.get("line") == "side"]  # each side's seconds, as it finishes
+    assert [(line["scored"], line["again"]) for line in sides] == [
+        ("base", False), (first, False), ("base", True), (first, True), (second, False)]
+    assert all(isinstance(line["seconds"], float) and line["seconds"] >= 0 for line in sides)
     repeats = {line["scored"]: line for line in lines if line.get("line") == "repeat"}
     assert set(repeats) == {"base", _adapter("seed", 1)}
     for line in repeats.values():  # the same server, the same numbers: the receipt says so
         assert line["max_logprob_diff"] == 0.0 and line["accuracy_diff"] == 0.0 and line["flipped"] == []
         assert line["items"] == len(items) and line["reproducible"] is True
     truths = frozenset(item.statement for item in items)
-    drifting = _Drifting(3 * choices, truths)  # the base, then two nights, then the base again finds them all
+    drifting = _Drifting(2 * choices, truths)  # the base, then night 1, then the base again finds them all
     lines = _run(tmp_path, drifting, {"seed": "acct-seed"}, lambda account, window: [], capsys, "--repeat")
     base = next(line for line in lines if line.get("line") == "repeat" and line["scored"] == "base")
     assert base["max_logprob_diff"] == pytest.approx(7.0) and base["reproducible"] is False
     assert base["accuracy_diff"] == pytest.approx(1.0) and base["flipped"] == sorted(item.id for item in items)
     assert not any(item.statement in json.dumps(lines) for item in items)
+
+
+def test_the_plan_estimates_from_the_measured_round_trip_and_refuses_a_run_past_the_cap(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Live 2026-10-29: a 21-side run planned at 38.9 min (0.5 s a call, a guess) hit the 60-min cap after
+    13 sides, its repeats unscored. The plan now prices a side's completions from the measured round trip,
+    tokenizes once for the run, and refuses a run whose estimate passes the cap: name fewer arms."""
+    items, never = _items(), _Never()
+    arms = ("seed", "seed_cap", "today", "fold", "protect", "protect_random", "dreams", "seed_matched", "spare")
+    for arm in arms:
+        _life(tmp_path, f"acct-{arm}", arm, 3)
+    argv = [arg for arm in arms for arg in ("--account", f"{arm}={'acct-' + arm}")]
+    assert knowledge_score.main([*argv[:12], "--repeat"], environ={}, client=never, wake=never, ledger=never,
+                                root=tmp_path, day_text=never) == 0  # six arms, 2026-10-29's run: 21 sides fit
+    out = capsys.readouterr().out
+    assert f"{knowledge_score.ROUND_TRIP_S} s a round trip" in out and "past the scorer's" not in out
+    assert knowledge_score.main([*argv[:16], "--repeat"], environ={}, client=never, wake=never, ledger=never,
+                                root=tmp_path, day_text=never) == 0  # eight: 27 sides still fit
+    assert "past the scorer's" not in capsys.readouterr().out
+    assert knowledge_score.main([*argv, "--repeat", "--go"], environ={}, client=never, wake=never, ledger=never,
+                                root=tmp_path, day_text=never) == 2  # nine: past the cap, nothing held or sent
+    out = capsys.readouterr().out
+    assert "past the scorer's 60-min cap" in out and "--account" in out
+    choices = sum(len(item.choices) for item in items)
+    lives = {"seed": knowledge_score.nights(tmp_path, "acct-seed")}
+    seconds = knowledge_score.estimate_s(knowledge.load("film_founder"), lives, {}, repeat=True)
+    texts = 1 + len({item.prompt for item in items}) + len({choice for item in items for choice in item.choices})
+    per_choice = knowledge_score.ROUND_TRIP_S + knowledge_score.PREFILL_S  # one completion a choice, once tokenized
+    assert seconds == pytest.approx(6 * choices * per_choice + texts * knowledge_score.ROUND_TRIP_S
+                                    + 3 * knowledge_score.LOAD_S)  # base, 3 nights, 2 repeats; 3 loads
+    assert texts < 2 * choices  # the old way asked two tokenizations a choice of every side
 
 
 def test_a_pick_that_changes_on_a_near_tie_is_not_reproduced() -> None:

@@ -15,6 +15,8 @@ directly, never reasoning first, and the prompt is token for token a training ro
 - ``continuation_logprobs`` scores a continuation token by token: the same ids, then the
   continuation's, and ``/v1/completions`` returns the prompt's log-probabilities with
   ``prompt_logprobs``, one generated token at most. Only the continuation's tokens are scored.
+  A ``reusing_tokens`` copy asks ``/tokenize`` once per body, whatever model it names
+  (``serving.token_memo``): the knowledge scorer's, which scores the same lines on many adapters.
 
 An adapter is served only under the rendering it was trained under (``CheckpointRef.rendering``);
 any other is refused with ``ServingError``, before a request is sent.
@@ -90,8 +92,9 @@ from typing import Any, Final, Protocol, TypeVar
 import httpx
 
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.serving import config, framing, redirect, soft_tokens
+from anjo.sleep.serving import config, framing, redirect, soft_tokens, token_memo
 from anjo.sleep.serving.redirect import PROXY_STATUSES
+from anjo.sleep.serving.sent import Sent
 from anjo.sleep.types import CheckpointRef
 
 TOP_P: Final = 0.95
@@ -419,45 +422,6 @@ def utc_today() -> date:
     return datetime.now(timezone.utc).date()
 
 
-class _Sent:
-    """What a client and its copies share about their requests: the slots one client may fill at once
-    (``config.CONCURRENT_REQUESTS``, all one container takes), when the server last answered, and how
-    many requests went again."""
-
-    def __init__(self) -> None:
-        self.slots = threading.BoundedSemaphore(config.CONCURRENT_REQUESTS)
-        self._lock = threading.Lock()
-        self._answered: float | None = None
-        self._retries = 0
-        self._down_until = float("-inf")  # the server answered nothing, not even WAKE_PATH: refuse until then
-
-    def down(self, now: float) -> bool:
-        with self._lock:
-            return now < self._down_until
-
-    def down_until(self, until: float) -> None:
-        with self._lock:
-            self._down_until = max(self._down_until, until)
-
-    def warm(self, now: float) -> bool:
-        """Whether the server answered within its scale-down window (``config.SCALEDOWN_S``)."""
-        with self._lock:
-            return self._answered is not None and now - self._answered < config.SCALEDOWN_S
-
-    def answered(self, now: float) -> None:
-        with self._lock:
-            self._answered = now if self._answered is None else max(self._answered, now)
-
-    def retried(self) -> None:
-        with self._lock:
-            self._retries += 1
-
-    @property
-    def retries(self) -> int:
-        with self._lock:
-            return self._retries
-
-
 @dataclass(frozen=True)
 class _Requests:
     """``Poster`` and ``Loader`` for one client. Each request takes one of the client's slots; one lost
@@ -470,14 +434,17 @@ class _Requests:
     timeout (SageMaker's), and reports no transport failure apart from the rest, so it is never retried."""
 
     poster: Poster
-    sent: _Sent
+    sent: Sent
     attempts: int
     cold_s: float
     clock: Callable[[], float]
     sleep: Callable[[float], None]
+    memo: token_memo.TokenMemo | None = None  # ``VllmClient.reusing_tokens``: /tokenize once per body
 
     def post(self, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
         poster = self.poster
+        if self.memo is not None and path == token_memo.TOKENIZE:
+            return self.memo.post(body, lambda: replace(self, memo=None).post(path, body))
         if isinstance(poster, HttpPoster):
             return self._send(lambda timeout, left: poster.post(path, body, timeout_s=timeout, hops_s=left))
         return self._send(lambda timeout, left: poster.post(path, body))
@@ -582,7 +549,7 @@ class VllmClient:
     ) -> None:
         self._strength = config.reasoning_strength()
         self._poster, self._max_tokens = poster, max_tokens
-        self._requests = _Requests(poster, _Sent(), ATTEMPTS, cold_s, self._clock, self._sleep)
+        self._requests = _Requests(poster, Sent(), ATTEMPTS, cold_s, self._clock, self._sleep)
         self._day: date | None = None
         self._adapters_dir = adapters_dir
         self._stage = stage
@@ -628,6 +595,14 @@ class VllmClient:
         switched.__dict__.update(self.__dict__)
         switched._soft = (rows, encode)
         return switched
+
+    def reusing_tokens(self) -> VllmClient:
+        """This client, asking ``/tokenize`` once per body whatever model it names, for a run that scores the
+        same lines on many adapters (``serving.token_memo``, which says why that is sound); copies share it."""
+        reusing = type(self).__new__(type(self))
+        reusing.__dict__.update(self.__dict__)
+        reusing._requests = replace(self._requests, memo=token_memo.TokenMemo())
+        return reusing
 
     @property
     def attempts(self) -> int:
