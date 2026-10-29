@@ -96,6 +96,7 @@ GEMINI_LOCATION: Final = "global"
 GEMINI_THINKING: Final = "low"  # the floor 3.7 and 3.8 accept on Vertex
 GEMINI_THINKING_RESERVE: Final = 512  # thought tokens come out of max_output_tokens on 3.x
 GEMINI_READ_TIMEOUT_S: Final = 120.0  # a Gemini gate read's whole wait: a verdict, not a Spark Open decode
+GEMINI_JUDGE_TIMEOUT_S: Final = 300.0  # a judge reply's whole wait; a 429, a 5xx or a timeout is asked again
 CALL_GRACE_S: Final = 5.0  # past its own timeout, a generation call is given up on (``bounded``)
 CALL_POLL_S: Final = 0.1  # how often a caller waiting on a call in flight looks for a kill
 LEAK_MARGIN_S: Final = 30.0  # past its transport timeout, a call given up on gives its limiter place back anyway
@@ -208,11 +209,17 @@ def _gemini(prompt: str) -> tuple[str, int, int]:
     model, types = second_judge.MODEL_ID, importlib.import_module("google.genai.types")
     config = types.GenerateContentConfig(
         temperature=0.0, max_output_tokens=JUDGE_MAX_TOKENS + GEMINI_THINKING_RESERVE,
-        thinking_config=types.ThinkingConfig(thinking_level=GEMINI_THINKING))
-    try:
-        reply = _vertex().models.generate_content(model=model, contents=prompt, config=config)
-    except Exception as error:  # noqa: BLE001 - the SDK's errors share no base; each is a failed call
-        raise ModelApiError(f"Gemini on Vertex: {type(error).__name__}") from None
+        thinking_config=types.ThinkingConfig(thinking_level=GEMINI_THINKING),
+        http_options=types.HttpOptions(timeout=int(GEMINI_JUDGE_TIMEOUT_S * 1000)))
+    for attempt in range(1, retry.RATE_LIMIT_ATTEMPTS + 1):
+        try:
+            reply = _vertex().models.generate_content(model=model, contents=prompt, config=config)
+            break
+        except Exception as error:  # noqa: BLE001 - the SDK's errors share no base; each is a failed call
+            failure = _vertex_error(error, GEMINI_JUDGE_TIMEOUT_S)
+            if attempt == retry.RATE_LIMIT_ATTEMPTS or not retry.transient(failure):
+                raise failure from None
+            time.sleep(retry.rate_limit_wait(attempt, getattr(failure, "retry_after_s", None)))
     usage = reply.usage_metadata
     out = int(usage.candidates_token_count or 0) + int(usage.thoughts_token_count or 0)  # both billed as output
     return reply.text or "", int(usage.prompt_token_count or 0), out
