@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import re
 from datetime import date
 from pathlib import Path
@@ -21,7 +22,7 @@ from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.sweep import LOCK_NAME
 from anjo.sleep.probes.arms import ArmDeps
-from anjo.sleep.probes.morning import DAILY, Morning, subset_probes
+from anjo.sleep.probes.morning import DAILY, JUDGE_RETRY_SHARE, JUDGE_USD_PER_CALL, Morning, subset_probes
 from anjo.sleep.probes.score import MuseJudge
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, StoreSpy, probe, taste
@@ -77,6 +78,15 @@ class Gemini:
         return _verdict(prompt, "Kind: vocab" not in prompt), 2000, 300
 
 
+class FailingSpark(Spark):
+    """Muse Spark whose second call fails in a way ``_judged`` doesn't catch: one call is already spent."""
+
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, **_: Any) -> ChatResult:
+        if self.prompts:
+            raise PermissionError("the judge's key is gone")
+        return super().__call__(model, messages, tools, timeout_s)
+
+
 class World:
     def __init__(self, tmp_path: Path, *, synthetic: bool = True) -> None:
         self.root, self.synthetic, self.out = tmp_path / "results", synthetic, tmp_path / "out"
@@ -122,6 +132,13 @@ class World:
         said: list[str] = []
         argv = ["--persona", "film_founder", *(a for account in accounts for a in ("--account", account)), *extra]
         return second.main(argv, ports=self.ports, root=self.root, out=said.append), said
+
+
+class NotWaking(World):
+    """The same world, its serving app not answering the wake."""
+
+    def wake(self) -> WakeResult:
+        return WakeResult(1.0, False)
 
 
 def _json(said: list[str]) -> list[dict[str, Any]]:
@@ -199,3 +216,44 @@ def test_each_refusal_comes_before_any_call_hold_or_write(tmp_path: Path) -> Non
         assert each.ledger.open_holds() == () and not each.out.exists()
     with pytest.raises(SystemExit):  # the pairs need a folder of their own
         World(tmp_path / "no-out").run("--go")
+
+
+def test_out_inside_the_sleep_folders_is_refused_before_anything_is_held_or_sent(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    inside = world.root / USER / "scores" / "pairs"
+    code, said = world.run("--out", str(inside), "--go")
+    assert code == 1 and len(said) == 1 and "--out" in said[0] and "sleep folders" in said[0]
+    assert world.model.adapters == [] and world.spark.prompts == [] and world.gemini.prompts == []
+    assert world.woke == 0 and world.ledger.open_holds() == () and not inside.exists()
+
+
+def test_the_hold_covers_each_judges_retries_on_each_morning(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    jobs, _ = second.plan({"seed": USER}, "film_founder", world.ports, world.root)
+    cost = second.spend(jobs)
+    retries = math.ceil(2 * 11 * JUDGE_RETRY_SHARE)  # each judge's allowance on one morning, as _judge_job sets it
+    held = cost.calls + 2 * len(jobs) * retries  # two judges, two mornings
+    assert (len(jobs), {len(job.probes) for job in jobs}, retries) == (2, {11}, 3)
+    assert cost.calls == 44 and held == 56
+    assert cost.spark_hold == pytest.approx(held * JUDGE_USD_PER_CALL)
+    assert cost.gemini_hold == pytest.approx(held * second.GEMINI_WORST_USD)
+
+
+def test_a_morning_that_fails_mid_judging_still_settles_the_spark_spend(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.spark = FailingSpark()  # the second Spark call raises where _judged doesn't catch it
+    with pytest.raises(PermissionError):
+        world.run("--out", str(world.out), "--go")
+    assert world.ledger.open_holds() == ()  # every hold settled or released on the way out
+    settled = world.ledger.settlements()
+    spark_job = next(job for job in settled if ":spark:a" in job)
+    assert settled[spark_job] == pytest.approx(2 * JUDGE_USD_PER_CALL)  # the two calls made, not zero
+
+
+def test_a_glimmer_that_did_not_wake_is_refused_with_its_holds_settled(tmp_path: Path) -> None:
+    world = NotWaking(tmp_path)
+    code, said = world.run("--out", str(world.out), "--go")
+    assert code == 1 and said[-1] == "refused: the serving app did not wake: nothing was judged"
+    assert world.model.adapters == [] and world.spark.prompts == [] and world.gemini.prompts == []
+    assert world.ledger.open_holds() == ()
+    assert (world.out / "pairs.jsonl").read_text(encoding="utf-8") == ""

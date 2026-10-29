@@ -31,7 +31,9 @@ alone here. The pairs themselves (the prompt, both replies, each judge's outcome
 call and the retry share, settled at its tokens), Gemini on ``vertex_usd`` (its worst call: a full Spark
 prompt's tokens and its reply cap, settled at its tokens). **Refused** before anything is called, held or
 written: an account not registered synthetic, a morning whose checkpoint isn't in the account's promoted
-history or whose probes aren't the ones daily-v1 asks now, and a held night lock; the run holds it.
+history or whose probes aren't the ones daily-v1 asks now, a held night lock, and an ``--out`` inside the
+sleep folders; the run holds it. A Glimmer that doesn't wake is refused the same way, its holds settled at
+nothing.
 """
 from __future__ import annotations
 
@@ -83,9 +85,10 @@ from anjo.sleep.types import CheckpointRef, Probe
 
 JUDGED: Final = ("new_work", "vocab", "tone_hold")  # daily-v1's kinds a judge reads
 ASKED: Final[tuple[Arm, ...]] = ("1", "3")
+JUDGES: Final = 2  # Muse Spark and Gemini: each allows its own retries on each morning (``_judge_job``)
 GEMINI: Final = "anjo.sleep.mind.apd.backend:_gemini"  # Vertex, thinking low, its reply cap (practice_ab's judge call)
 VERTEX_POOL: Final[Pool] = "vertex_usd"
-GEMINI_WORST_USD: Final = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
+GEMINI_WORST_USD: Final[float] = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
 # Muse Spark's expected call, an estimate: its median reply on Teo's night 1 (2026-10-28, 257 calls), a 3,000-token prompt.
 SPARK_IN_TOKENS: Final = 3_000
 SPARK_OUT_TOKENS: Final = 2_558
@@ -164,7 +167,9 @@ def plan(accounts: Mapping[str, str], persona: str, ports: Ports,
 def spend(jobs: Sequence[Job]) -> Spend:
     pairs = sum(len(job.probes) for job in jobs)
     replies, calls = len(ASKED) * pairs, 2 * pairs
-    held_calls = calls + math.ceil(calls * JUDGE_RETRY_SHARE)
+    # Each judge may ask its unreadable answers once more, per morning: the worst case ``_judge_job`` allows.
+    retries = JUDGES * sum(math.ceil(2 * len(job.probes) * JUDGE_RETRY_SHARE) for job in jobs)
+    held_calls = calls + retries
     prices, units = jobs[0].morning.prices, Units()
     spark_call = (SPARK_IN_TOKENS * prices.spark_in_per_m + SPARK_OUT_TOKENS * prices.spark_out_per_m) / 1e6
     return Spend(replies, calls, prices.serve_gpu_per_hour, replies * ARM_CALL_S + WAKE_TOTAL_TIMEOUT_S + SCALEDOWN_S,
@@ -216,18 +221,21 @@ class _Metered:
 
     def usd(self) -> float:
         with self._lock:
-            return (self._in * JUDGE_IN_PER_M + self._out * JUDGE_OUT_PER_M) / 1e6 + self._failed * GEMINI_WORST_USD
+            spent: float = (self._in * JUDGE_IN_PER_M + self._out * JUDGE_OUT_PER_M) / 1e6 + self._failed * GEMINI_WORST_USD
+            return spent
 
 
 def _judged(judge: Any, probe: Probe, first: str, second: str) -> tuple[str, bool] | None:
     try:
-        return judge_orders(judge, probe, first, second)
+        found: tuple[str, bool] = judge_orders(judge, probe, first, second)
+        return found
     except (NoVerdict, JudgeError, ModelApiError):
         return None  # no verdict from this judge on this probe: counted, never scored
 
 
-def _judge_job(job: Job, ports: Ports, meter: _Metered) -> tuple[list[dict[str, Any]], float]:
-    """One morning's pairs asked again and judged by both judges: the pairs, and what Muse Spark spent."""
+def _judge_job(job: Job, ports: Ports, meter: _Metered, spark_spent: list[float]) -> list[dict[str, Any]]:
+    """One morning's pairs asked again and judged by both judges: the pairs, its Muse Spark spend added to
+    ``spark_spent`` in a ``finally`` so a morning that fails partway still settles the calls it made."""
     morning, muse = job.morning, job.morning.judge
     assert isinstance(muse, MuseJudge)  # the plan refused any other
     if morning.wake is not None and not morning.wake().ok:
@@ -241,8 +249,11 @@ def _judge_job(job: Job, ports: Ports, meter: _Metered) -> tuple[list[dict[str, 
     gemini = _Counting(SecondJudge(meter, muse.brief_for, ports.backfill.is_synthetic), retries)
     before = _judge_usage(morning)
     tasks = [(index, judge) for index in range(len(job.probes)) for judge in (spark, gemini)]
-    found = calls.map(lambda task: _judged(task[1], job.probes[task[0]], replies["3"][task[0]].text,
-                                           replies["1"][task[0]].text), tasks)
+    try:
+        found = calls.map(lambda task: _judged(task[1], job.probes[task[0]], replies["3"][task[0]].text,
+                                               replies["1"][task[0]].text), tasks)
+    finally:  # ``Calls.map`` waits for in-flight calls before it raises: the reading is complete
+        spark_spent[0] += _judge_spend(spark, morning, before)[0]
     dims, pairs = dimension_of(), []
     for index, probe in enumerate(job.probes):
         by_spark, by_gemini = found[2 * index], found[2 * index + 1]
@@ -251,7 +262,7 @@ def _judge_job(job: Job, ports: Ports, meter: _Metered) -> tuple[list[dict[str, 
                       "spark": by_spark and by_spark[0], "spark_flip": bool(by_spark and by_spark[1]),
                       "gemini": by_gemini and by_gemini[0], "gemini_flip": bool(by_gemini and by_gemini[1]),
                       "prompt": probe.prompt, "replies": {arm: replies[arm][index].text for arm in ASKED}})
-    return pairs, _judge_spend(spark, morning, before)[0]
+    return pairs
 
 
 def run(jobs: Sequence[Job], ports: Ports, folder: Path, cost: Spend, *,
@@ -271,8 +282,7 @@ def run(jobs: Sequence[Job], ports: Ports, folder: Path, cost: Spend, *,
             with (folder / PAIRS_FILE).open("w", encoding="utf-8") as written:
                 for job in jobs:
                     with phase(job.morning.sleep):  # Glimmer sleeps once, when the outer phase ends
-                        found, spent = _judge_job(job, ports, meter)
-                    spark_spent[0] += spent
+                        found = _judge_job(job, ports, meter, spark_spent)
                     written.writelines(json.dumps(pair, ensure_ascii=False) + "\n" for pair in found)
                     pairs += found
     except NightBusy as busy:
@@ -348,6 +358,10 @@ def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None, root:
         parser.error("--go writes the pairs to --out DIR, never to a person's sleep folder")
     found = ports or app_ports()
     try:
+        folders = results_root(root)
+        if args.out is not None and args.out.resolve().is_relative_to(folders.resolve()):
+            raise Refused(f"--out {args.out} is inside the sleep folders ({folders}): the pairs go in a "
+                          "folder of their own, never a person's sleep folder")
         jobs, missing = plan(accounts, args.persona, found, root)
         for line in missing:
             out(json.dumps(line))
@@ -362,6 +376,9 @@ def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None, root:
         pairs = run(jobs, found, args.out, cost)
     except Refused as refused:
         out(f"refused: {refused}")
+        return 1
+    except GlimmerNotReady:  # the holds' context managers settled them on the way out
+        out("refused: the serving app did not wake: nothing was judged")
         return 1
     for line in report(pairs):
         out(json.dumps(line))
