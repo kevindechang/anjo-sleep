@@ -294,5 +294,5 @@ def test_modal_stages_an_adapter_through_its_serve_class(monkeypatch: pytest.Mon
     with pytest.raises(ServingError, match="staging") as raised:
         backend.stage_on_modal(ADAPTER.id)  # a wedged container never takes the input: bounded, then an error
     assert "private" not in str(raised.value) and ADAPTER.id not in str(raised.value)
-    assert found == [(config.APP_NAME, "Serve")] * 3
+    assert found == [(config.serve_app_name(config.SERVING), "Serve")] * 3  # the deterministic app by default
     assert serve.asked == [ADAPTER.id, backend.STAGE_TIMEOUT_S] * 3
