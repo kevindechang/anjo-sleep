@@ -4,8 +4,8 @@ that is serving after the night.
 ``run_morning`` answers each of the person's sealed probes with every arm (``arms.reply``), judges
 each arm against arm 1 in both orders (``score.score``; ``taste_ab`` by log-probability, no judge),
 and writes ``scores/night-NN.json`` in the layout ``reports.results`` reads: per arm and dimension,
-the tie-inclusive score against arm 1 (arm 1 is 0.5 against itself by definition), plus the two
-headline pairs (3 against 3x, 4 against 2C). The file holds numbers, the night, the label and the
+the tie-inclusive score against arm 1 (arm 1 is 0.5 against itself by definition), plus the headline
+pairs (3 against 3x, 4 against 2C, 4 against 2F). The file holds numbers, the night, the label and the
 checkpoint id, never a reply or a probe, and nothing is written to history, evidence or memory (RF5).
 
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
@@ -91,7 +91,7 @@ from anjo.sleep.types import CheckpointRef, Probe
 
 ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2F", "3", "3x", "4")
 BASELINE: Final[Arm] = "1"
-PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C")}
+PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C"), "4_vs_2F": ("4", "2F")}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 # The judge's hold a call, and what a call that reported no usage (or failed) settles at, marked estimated.
 JUDGE_USD_PER_CALL: Final = 0.02
@@ -142,7 +142,7 @@ class ProbeSubset:
 
 # Committed 2026-10-28, before any daily result: arm 3 against arm 1 is the question a daily night
 # answers (did tonight's weights help); 14 of the 80 probes, every kind with a judge or a log-prob,
-# pushback left to the full runs. 22 judge calls and 28 replies, against the full run's 910 and 480.
+# pushback left to the full runs. 22 judge calls and 28 replies, against the full run's 1040 and 480.
 DAILY: Final = ProbeSubset(name="daily-v1", arms=("1", "3"), per_kind=MappingProxyType(
     {"new_work": 5, "vocab": 3, "tone_hold": 3, "taste_ab": 3, "pushback": 0}))
 SUBSETS: Final = MappingProxyType({DAILY.name: DAILY})

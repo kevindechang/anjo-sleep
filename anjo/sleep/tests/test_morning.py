@@ -18,7 +18,7 @@ from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ARMS, ArmDeps
-from anjo.sleep.probes.morning import Morning, MorningError, _rows, run_morning
+from anjo.sleep.probes.morning import Morning, MorningError, PAIRS, _rows, run_morning
 from anjo.sleep.probes.score import ProbeOutcome, Verdict
 from anjo.sleep.reports import results
 from anjo.sleep.stops import BudgetStop
@@ -115,7 +115,7 @@ def test_every_arm_is_scored_on_both_dimensions(tmp_path: Path) -> None:
     assert {d: v["score"] for d, v in record["arms"]["1"].items()} == {"knowledge": 0.5, "interaction": 0.5, "overall": 0.5}
     for arm in ARMS - {"1"}:
         assert set(record["arms"][arm]) == {"knowledge", "interaction", "overall"}
-    assert set(record["pairs"]) == {"3_vs_3x", "4_vs_2C"}
+    assert set(record["pairs"]) == set(PAIRS)
     assert rig.judge.calls > 0 and record["unavailable"] == {} and record["checkpoint_basis"] == "promoted"
 
 
@@ -134,7 +134,7 @@ def test_a_donor_that_never_promoted_leaves_3x_unavailable_not_invented(tmp_path
     rig = Rig(tmp_path, donor=False)
     record = json.loads(rig.run().path.read_text(encoding="utf-8"))
     assert "3x" not in record["arms"] and record["unavailable"] == {"3x": "donor_unavailable"}  # a code, no text
-    assert "3_vs_3x" not in record["pairs"] and "4_vs_2C" in record["pairs"]
+    assert "3_vs_3x" not in record["pairs"] and {"4_vs_2C", "4_vs_2F"} <= set(record["pairs"])
 
 
 def test_paid_calls_are_held_first_and_settled(tmp_path: Path) -> None:
@@ -266,7 +266,7 @@ def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
     rig.morning = replace(rig.morning, judge=MuseJudge(chat=chat, brief_for=lambda pid: "brief"))
     done = rig.run()  # the run ends and writes its file: an unreadable verdict never crashes the morning
     record = json.loads(done.path.read_text(encoding="utf-8"))
-    comparisons = {f"{a}_vs_1" for a in ARMS - {"1"}} | {"3_vs_3x", "4_vs_2C"}
+    comparisons = {f"{a}_vs_1" for a in ARMS - {"1"}} | set(PAIRS)
     # q1's first answer was unreadable, and its one retry, with more room, gave the verdict.
     assert chat.caps[:2] == [("ONCE", None), ("ONCE", JUDGE_RETRY_MAX_TOKENS)]
     assert {r["outcome"] for r in record["outcomes"] if r["probe"] == "q1"} <= {"win", "tie", "loss"}
@@ -274,9 +274,9 @@ def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
     assert record["no_verdict"] == dict.fromkeys(comparisons, 1) and done.no_verdict == len(comparisons)
     assert [r["outcome"] for r in record["outcomes"] if r["probe"] == "q2"] == ["no_verdict"] * len(comparisons)
     assert record["pairs"]["4_vs_2C"]["overall"]["n"] == 5  # every probe but q2
-    # Retries are a share of the run's judge calls (70 here: 7): q1's, then q2's until they ran out.
+    # Retries are a share of the run's judge calls (80 here: 8): q1's, then q2's until they ran out.
     retried = [asked for asked, cap in chat.caps if cap == JUDGE_RETRY_MAX_TOKENS]
-    assert retried == ["ONCE"] + ["NEVER"] * 6 and math.ceil(70 * JUDGE_RETRY_SHARE) == 7
+    assert retried == ["ONCE"] + ["NEVER"] * 7 and math.ceil(80 * JUDGE_RETRY_SHARE) == 8
     assert {cap for asked, cap in chat.caps if asked == "PLAIN"} == {None}  # a readable answer: one call, the provider's cap
     assert JUDGE_RETRY_MAX_TOKENS >= 8_944  # the longest judge answer seen (Teo's night 1, 257 calls)
     # Every call, retries included, is counted, and the judge's hold covers them all: no overage.

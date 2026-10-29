@@ -14,7 +14,7 @@ import pytest
 
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ARMS, ArmDeps
-from anjo.sleep.probes.morning import DAILY, Morning, MorningError, ProbeSubset, run_morning, subset_probes
+from anjo.sleep.probes.morning import DAILY, Morning, MorningError, PAIRS, ProbeSubset, run_morning, subset_probes
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, FakeRegistry, StoreSpy, ckpt, probe, taste
 from anjo.sleep.types import ProbeKind
@@ -86,7 +86,7 @@ def test_daily_morning_subset_is_fixed_and_full_run_unchanged(tmp_path: Path) ->
     morning, model = _morning(tmp_path / "full", probes, Judge())
     full = json.loads(run_morning("p1", NIGHT, ckpt("p1", 1), morning=morning, label="final").path.read_text(encoding="utf-8"))
     assert set(full) == FULL_KEYS and full["probes"] == 80 and set(full["arms"]) == set(ARMS)
-    assert set(full["pairs"]) == {"3_vs_3x", "4_vs_2C"}
+    assert set(full["pairs"]) == set(PAIRS)
     assert {p.prompt for p in probes if p.kind != "taste_ab"} <= _asked(model)
 
     final, _ = _morning(tmp_path / "final", probes, Judge())
