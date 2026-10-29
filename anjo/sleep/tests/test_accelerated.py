@@ -57,6 +57,60 @@ def test_accelerated_results_are_labeled(tmp_path: Path, person: Persona) -> Non
         run_accelerated("u3", FOUNDER, 1, START, rig=fake.rig(), label="draft")
 
 
+# ── a final run must be on the frozen code (Task 12b) ─────────────────────────
+
+
+def test_final_label_without_require_sha_is_refused_on_real_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake = FakeAccelerated(tmp_path)
+    touched: list[object] = []
+
+    def simulate(uid: str, person: object, i: int, seed: int) -> DayRun:
+        touched.append(uid)
+        raise AssertionError("a refused run simulates no day")
+
+    def deps_for(night: date) -> NightDeps:
+        touched.append(night)
+        raise AssertionError("a refused run runs no night")
+
+    rig = replace(fake.rig(sha=None), simulate=simulate, deps_for=deps_for)  # sha=None: this commit's code
+    with pytest.raises(AcceleratedError, match="frozen"):
+        run_accelerated("u1", FOUNDER, 1, START, rig=rig, label="final")
+    assert touched == [] and fake.world.events == []
+    real = ["--wiring", "x:y", "--simulate", "x:z", "--morning", "x:w", "--days", "2", "--start", "2026-10-20",
+            "--user", "u1", "--persona", "film_founder", "--label", "final"]
+    with pytest.raises(SystemExit):  # the command refuses it before any sweep, VM or call
+        accelerated.main(real)
+    assert "require-sha" in capsys.readouterr().err
+
+
+def test_accelerated_refuses_when_head_differs_from_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    wrong = "0" * 40 if accelerated.git_sha() != "0" * 40 else "f" * 40
+    with pytest.raises(AcceleratedError, match="frozen"):
+        run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(sha=None), label="final", require_sha=wrong)
+    assert fake.world.events == []  # refused before any day simulated or night run
+
+
+def test_accelerated_accepts_matching_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    head = accelerated.git_sha()
+    results = run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(sha=None), label="final", require_sha=head)
+    assert [r.status for r in results] == ["promoted"]
+    summary = _summary(results[0].log_path)
+    assert summary["git_sha"] == head and summary["label"] == "final"
+
+
+def test_fake_final_runs_ignore_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    results = run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(), label="final", require_sha="0" * 40)
+    assert [r.status for r in results] == ["promoted"]
+    assert _summary(results[0].log_path)["git_sha"] == FAKE_SHA  # a fake run's own sha, not the given one
+    assert accelerated.main(["--fake", "--days", "1", "--label", "final"]) == 0
+    assert accelerated.main(["--fake", "--days", "1", "--label", "final", "--require-sha", "0" * 40]) == 0
+
+
 def test_two_accelerated_days_extract_separate_evidence(tmp_path: Path) -> None:
     fake = FakeAccelerated(tmp_path)
     run_accelerated("u1", FOUNDER, 2, START, rig=fake.rig())
