@@ -48,6 +48,8 @@ class AttemptFailure:
     rate_limits: int = 0  # the attempt's tries answered 429
     waits_s: tuple[float, ...] = ()  # the waits they were tried again after
     killed: bool = False  # cut short by a kill (``backend.Halted``), not failed
+    missing: int | None = None  # a day's beats its ``placed`` left out (``generate.GenerationFailed``)
+    extra: int | None = None  # the keys its ``placed`` added that are no beat
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -57,7 +59,8 @@ class AttemptFailure:
         return cls(int(raw["attempt"]), str(raw["step"]), str(raw["error"]), str(raw["reason"]), _int(raw.get("day")),
                    _int(raw.get("item")), _str(raw.get("field")), _str(raw.get("rule")), _int(raw.get("reply_chars")),
                    _int(raw.get("answer_chars")), _str(raw.get("finish_reason")), int(raw.get("rate_limits") or 0),
-                   tuple(float(wait) for wait in raw.get("waits_s") or ()), bool(raw.get("killed", False)))
+                   tuple(float(wait) for wait in raw.get("waits_s") or ()), bool(raw.get("killed", False)),
+                   _int(raw.get("missing")), _int(raw.get("extra")))
 
 
 def _int(found: object) -> int | None:
@@ -70,7 +73,8 @@ def _str(found: object) -> str | None:
 
 def of_rule(attempt: int, failed: GenerationFailed) -> AttemptFailure:
     return AttemptFailure(attempt, failed.step or "rule", type(failed).__name__, str(failed), failed.day, failed.item,
-                          failed.field, failed.rule, failed.reply_chars, failed.answer_chars, failed.finish_reason)
+                          failed.field, failed.rule, failed.reply_chars, failed.answer_chars, failed.finish_reason,
+                          missing=failed.missing, extra=failed.extra)
 
 
 def of_verdicts(attempt: int, life: Life, verdicts: Sequence[GateVerdict]) -> tuple[AttemptFailure, ...]:

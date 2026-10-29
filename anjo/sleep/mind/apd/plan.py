@@ -24,7 +24,7 @@ from anjo.sleep.mind.apd.interventions import EDIT_KINDS
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, POOLS, Rate
 from anjo.sleep.mind.apd.generate import LifeSpec
 from anjo.sleep.mind.apd.generators import SPARK, Generator
-from anjo.sleep.mind.apd.pairs import LAST_DAY, OUTCOME_DAYS, PAIR_CALLS, PAIR_EXPECTED, PAIR_ITEMS
+from anjo.sleep.mind.apd.pairs import LAST_DAY, OUTCOME_DAYS, PAIR_EXPECTED, PAIR_ITEMS, pair_calls
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.resume import KILL_RUNS
 from anjo.sleep.mind.apd.timing import Timing, cu, kill_cu
@@ -104,6 +104,7 @@ class Pricing:
     read_pool: Pool
     muse: Rate
     thinks: bool  # the reader is billed for its thoughts (Gemini)
+    day_retries: int = 0  # the more times the writer is asked for a day it answered unreadably
 
 
 def pricing(prices: Prices, rates: Mapping[str, Rate], provider: SparkProvider, generator: Generator = SPARK,
@@ -114,7 +115,8 @@ def pricing(prices: Prices, rates: Mapping[str, Rate], provider: SparkProvider, 
     read = spark if reader.model is None or reader_rate is None else reader_rate
     return Pricing("Spark Open" if generator.model is None else generator.name, write, provider.pool,
                    "Spark Open" if reader.model is None else f"Gemini ({reader.model})", read,
-                   reader.pool_on(provider), rates[MUSE], reader.model is not None)
+                   reader.pool_on(provider), rates[MUSE], reader.model is not None,
+                   generate.day_retries(generator.writes_with(provider)))
 
 
 def expected(tokens: costs.AttemptTokens, on: Pricing) -> dict[Pool, float]:
@@ -139,7 +141,8 @@ def _pools(on: Pricing) -> tuple[Pool, ...]:
 
 
 def _who(on: Pricing, pool: Pool) -> str:
-    parts = [*(["writer and extractor (" + on.writer + ")"] if pool == on.write_pool else []),
+    asked = f", each day asked up to {on.day_retries} more times" if on.day_retries else ""
+    parts = [*(["writer and extractor (" + on.writer + ")" + asked] if pool == on.write_pool else []),
              *(["gate readers (" + on.reader + ")"] if pool == on.read_pool else []),
              *(["the gates' auditor (Muse Spark)"] if pool == "meta_usd" else [])]
     extra = f", and {GEN_SPARK_RETRIES} extra tries" if pool != "meta_usd" else ""
@@ -190,7 +193,7 @@ def pairs_plan(count: int, prices: Prices, rates: Mapping[str, Rate], *, provide
                reader_rate: Rate | None = None) -> Plan:
     """Generating ``count`` counterfactual pairs, each attempt held for both histories."""
     on = pricing(prices, rates, provider, generator, generator_rate, reader, reader_rate)
-    worst = _worst(on, prices, rates, PAIR_CALLS)
+    worst = _worst(on, prices, rates, pair_calls(on.day_retries))
     attempts = count * generate.MAX_ATTEMPTS
     holds = tuple(Hold(pool, worst[pool], attempts, f"{pool} per pair attempt: " + (
         f"{LIFE_DAYS} days written and extracted once and each history's {len(OUTCOME_DAYS)} outcomes extracted, "
@@ -218,7 +221,7 @@ def generate_plan(lives: Sequence[Sequence[int]], prices: Prices, rates: Mapping
     """Generating one life per entry of ``lives``, each its items' surface days: each attempt held
     for its own items, and expected by its own calls' shapes (``costs``) on each pool."""
     count, on = len(lives), pricing(prices, rates, provider, generator, generator_rate, reader, reader_rate)
-    worst = [_worst(on, prices, rates, life_calls(len(items))) for items in lives]
+    worst = [_worst(on, prices, rates, life_calls(len(items), day_retries=on.day_retries)) for items in lives]
     each = [life_expected(items, on) for items in lives]
     attempts = count * generate.MAX_ATTEMPTS
     sized = "sized to its life's planted items; the mean shown"

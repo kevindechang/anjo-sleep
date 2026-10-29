@@ -178,7 +178,8 @@ def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
     recorded (its last check's verdicts, or the rule a draft broke)."""
     memo: dict[str, ChatResult] = {}  # the attempt's gate replies, by request, shared by its rounds
     seed, writes = generate.attempt_seed(spec.seed, attempt), backend.generator.writes_with(backend.provider)
-    tried = _checked(spec, backend, log, attempt, 0, life_calls(spec.prevalence), memo,
+    retries = generate.day_retries(writes)  # each day's asks again, held with the attempt and its rounds
+    tried = _checked(spec, backend, log, attempt, 0, life_calls(spec.prevalence, day_retries=retries), memo,
                      lambda chat: generate.drafted(spec.field, spec.families, spec.prevalence, seed, split=spec.split,
                                                    chat=chat, model=writes, keep_off=backend.keep_off))
     round_ = 0
@@ -190,7 +191,8 @@ def _attempt(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
             failed_at(log, *failures.of_verdicts(attempt, tried.life, tried.verdicts))
             return None
         round_ += 1
-        tried = _checked(spec, backend, log, attempt, round_, repair.round_calls(spec.prevalence, found), memo,
+        tried = _checked(spec, backend, log, attempt, round_,
+                         repair.round_calls(spec.prevalence, found, day_retries=retries), memo,
                          partial(repair.rewritten, tried, found, round_))
     return None if tried is None else Generated(tried.life, tried.problems, attempt + 1, tried.verdicts, round_)
 

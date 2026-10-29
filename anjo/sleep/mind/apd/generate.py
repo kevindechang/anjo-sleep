@@ -70,6 +70,9 @@ ALWAYS_PLACED: Final = "Always include `placed`, even on a day with nothing to p
 KEEP_OFF: Final = "`keep_off` names subjects that belong to the beats: write about them only in a `plant` or `ask` " \
                   "message, never in another message or on another day: no progress, plans, purchases, repairs or " \
                   "decisions about them. Move the project on through other work, and never say how anything feels."
+# A core split's generator's day that can't be read (``_read_day``) is asked for again, at most this
+# many more times, inside the attempt and its hold (``day_retries``); APD's own writer is asked once.
+DAY_RETRIES: Final = 2
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -88,16 +91,21 @@ class GenerationFailed(ValueError):
     and where, none of any reply's text: the ``step`` (``writer``, ``extractor``, ``planted fact``
     or ``pair``), the ``day`` (1 to ``LIFE_DAYS``), the planted ``item`` (its number), and for a
     reply that couldn't be read the ``field`` it lacked, the ``rule`` that refused it
-    (``generators.Refused``), its length and its answer's, and its finish reason."""
+    (``generators.Refused``), its length and its answer's, and its finish reason; for a day's
+    ``placed``, how many of its beats it left out (``missing``) and how many keys it added that are
+    no beat (``extra``)."""
 
-    WHERE: Final = ("step", "day", "item", "field", "rule", "reply_chars", "answer_chars", "finish_reason")
+    WHERE: Final = ("step", "day", "item", "field", "rule", "reply_chars", "answer_chars", "finish_reason",
+                    "missing", "extra")
 
     def __init__(self, message: str, *, step: str | None = None, day: int | None = None, item: int | None = None,
                  field: str | None = None, rule: str | None = None, reply_chars: int | None = None,
-                 answer_chars: int | None = None, finish_reason: str | None = None) -> None:
+                 answer_chars: int | None = None, finish_reason: str | None = None, missing: int | None = None,
+                 extra: int | None = None) -> None:
         super().__init__(message)
         self.step, self.day, self.item, self.field, self.rule = step, day, item, field, rule
         self.reply_chars, self.answer_chars, self.finish_reason = reply_chars, answer_chars, finish_reason
+        self.missing, self.extra = missing, extra
 
     def at(self, **where: Any) -> GenerationFailed:
         """The same failure located further; what it already says is kept."""
@@ -273,16 +281,30 @@ def _write_day(
     chat: ChatFn, model: str, field: str, index: int, day: date, seed: int, earlier: Sequence[Mapping[str, Any]],
     beats: Sequence[Beat], repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
 ) -> tuple[list[str], dict[str, int]]:
-    reply = chat(model, writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair,
-                                        keep_off=keep_off), None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
-    _check_model(reply, model)
-    text: str | None = None
-    try:
-        text = answered(reply, model)
-        return _read_day(text, beats, nothing_placed=model in BY_MODEL)
-    except GenerationFailed as failed:
-        raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
-                        answer_chars=None if text is None else len(text), finish_reason=reply.finish_reason) from None
+    """The day's messages and where its beats are. A core generator's answer that can't be read as
+    a day is asked for again, the same request, up to ``day_retries`` more times; a reply refused
+    by its rule (``answered``) or naming another model is not."""
+    messages = writer_messages(field, index, day, seed, earlier, beats, model=model, repair=repair, keep_off=keep_off)
+    retries = 0
+    while True:
+        reply = chat(model, messages, None, TIMEOUT_S, temperature=WRITE_TEMPERATURE)
+        _check_model(reply, model)
+        text: str | None = None
+        try:
+            text = answered(reply, model)
+            return _read_day(text, beats, nothing_placed=model in BY_MODEL)
+        except GenerationFailed as failed:
+            if text is None or retries >= day_retries(model):
+                raise failed.at(step="writer", day=index + 1, reply_chars=len(reply.text),
+                                answer_chars=None if text is None else len(text),
+                                finish_reason=reply.finish_reason) from None
+            retries += 1
+
+
+def day_retries(model: str) -> int:
+    """How many more times ``model``'s unreadable day is asked for: ``DAY_RETRIES`` for a core
+    split's generator, none for Spark Open (APD's registered writer)."""
+    return DAY_RETRIES if model in BY_MODEL else 0
 
 
 def answered(reply: ChatResult, model: str) -> str:
@@ -312,13 +334,15 @@ def _read_day(text: str, beats: Sequence[Beat], *, nothing_placed: bool = False)
     if nothing_placed and not beats and placed in (None, [], {}):
         placed = {}
     if not isinstance(placed, dict):
-        raise GenerationFailed("a day doesn't say where its beats are", field="placed")
+        raise GenerationFailed("a day doesn't say where its beats are", field="placed", missing=len(beats), extra=0)
     return [t.strip() for t in texts], _check_placed(placed, beats, len(texts))
 
 
 def _check_placed(placed: dict[Any, Any], beats: Sequence[Beat], count: int) -> dict[str, int]:
-    if set(placed) != {b.id for b in beats}:
-        raise GenerationFailed("a beat is unplaced or unknown", field="placed")
+    ids = {b.id for b in beats}
+    if set(placed) != ids:
+        raise GenerationFailed("a beat is unplaced or unknown", field="placed", missing=len(ids - set(placed)),
+                               extra=len(set(placed) - ids))
     spots = list(placed.values())
     if not all(isinstance(p, int) and not isinstance(p, bool) and 0 <= p < count for p in spots):
         raise GenerationFailed("a beat points outside the day's messages", field="placed")

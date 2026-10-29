@@ -146,7 +146,8 @@ def test_reader_holds_on_its_own_pool(tmp_path: Path) -> None:
     events = read_records(tmp_path / "budget.jsonl", PLAIN)
     held = {str(e["job"]).rsplit(":", 2)[-2]: e for e in events if e["op"] == "reserve"}
     assert held["reader"]["pools"] == ["vertex_mind_usd"] and held["spark"]["pools"] == [FIREWORKS.pool]
-    reads, writes = backends.life_calls(spec.prevalence).reads, backends.GEN_WRITE_CALLS
+    reads = backends.life_calls(spec.prevalence).reads
+    writes = backends.life_calls(spec.prevalence, day_retries=generate.DAY_RETRIES).writes  # DeepSeek's days asked again
     assert float(held["reader"]["amount"]) == pytest.approx((reads + retries) * READ_RATE.worst)
     assert float(held["spark"]["amount"]) == pytest.approx((writes + retries) * WRITE_RATE.worst)
     assert expected["vertex_mind_usd"] == pytest.approx(float(held["reader"]["amount"]))

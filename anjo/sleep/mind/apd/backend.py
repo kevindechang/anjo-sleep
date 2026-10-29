@@ -584,12 +584,13 @@ class GenCalls:
         return self.writes + self.reads + self.retries
 
 
-def life_calls(prevalence: int) -> GenCalls:
+def life_calls(prevalence: int, *, day_retries: int = 0) -> GenCalls:
     """One life's attempt with ``prevalence`` planted items: a writer and an extractor call a day,
-    each item's reads and identify call, and the script audit."""
+    and ``day_retries`` more writer calls a day (``generate.day_retries``), each item's reads and
+    identify call, and the script audit."""
     if not 0 <= prevalence <= MAX_PREVALENCE:
         raise ValueError(f"prevalence must be 0 to {MAX_PREVALENCE}")
-    return GenCalls(GEN_WRITE_CALLS, prevalence * GEN_READS_PER_ITEM, prevalence + 1)
+    return GenCalls(GEN_WRITE_CALLS + day_retries * LIFE_DAYS, prevalence * GEN_READS_PER_ITEM, prevalence + 1)
 
 
 WORST_LIFE: Final = life_calls(MAX_PREVALENCE)
