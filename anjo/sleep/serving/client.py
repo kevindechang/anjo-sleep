@@ -42,9 +42,9 @@ never waits behind another's load.
 request Modal's proxy never delivered). The night's client sends a request that got no status back
 (``TransportFailed``) again, ``ATTEMPTS`` in all, after a short pause (``BACKOFF_S``): every request
 is an idempotent post (``/tokenize``, ``/v1/completions`` with its seed, an adapter load), so a repeat
-gives the same answer. A status is an answer and never goes again, but for a 502, 503 or 504
-(``PROXY_STATUSES``), which Modal's proxy sends by itself (night 1's morning, 2026-10-29, failed on one
-while vLLM was healthy): that request goes again once, inside the same attempts. Until the server has answered
+gives the same answer. A status is an answer and never goes again, but for a 408, 502, 503 or 504
+(``PROXY_STATUSES``), which Modal's proxy sends by itself (2026-10-29: a morning's 502, a /tokenize's 408)
+while vLLM was healthy: that post goes again once, inside the same attempts. Until the server has answered
 within its scale-down window an attempt may wait out a cold start (``REQUEST_TIMEOUT_S``); after that
 a first attempt gives up at ``WARM_TIMEOUT_S``, and any later one, which may meet a restarted
 container, gets the rest of the budget. All the attempts of one request end within
@@ -65,11 +65,8 @@ busy past the bound looks the same, and an engine that stalls while the API serv
 caught. A turn's poster (``app.runtime``) is its own ``HttpPoster``, under its 20 s deadline, and
 never retries.
 
-**A long call is read from Modal's result URL** (``serving.redirect``: past 150 s Modal answers 303 to a
-URL that serves the result to a GET; mornings of 2026-10-24/25 read that empty 303 as "not JSON").
-``HttpPoster`` follows it on the server's own host only, inside the request's one bound, and never posts a
-call that answered 303 again; a result still unread then is ``TransportFailed``, and any other redirect a
-``ServingError`` naming its status.
+**A long call is read from Modal's result URL** (``serving.redirect``), on the server's own host, inside
+the request's bound, never posted again; any other redirect is a ``ServingError`` naming its status.
 
 Each request is one POST of a JSON body to a vLLM path, through a ``Poster``: ``HttpPoster`` over
 Modal's https URL with the bearer token (``ANJO_SLEEP_MODAL_URL``, ``ANJO_SLEEP_MODAL_TOKEN``, read
@@ -400,17 +397,22 @@ def tokens(poster: Poster, body: Mapping[str, Any]) -> list[int]:
     return ids
 
 
+def reply_header(poster: Poster, model: str) -> list[int]:
+    """The reply's channel header (``config.USER_CHANNEL``) as ``model``'s ids."""
+    return tokens(poster, {"model": model, "prompt": config.USER_CHANNEL, "add_special_tokens": False})
+
+
 def reply_prompt(
     poster: Poster, model: str, messages: Sequence[Mapping[str, Any]], strength: str, day: date,
+    header: Callable[[str], Sequence[int]] | None = None,
 ) -> list[int]:
-    """The ids Glimmer is prompted with, as a training row's prompt: the cleaned chat with the
-    generation prompt, rendered at ``strength`` on ``day``, then the reply's header."""
+    """The ids Glimmer is prompted with, as a training row's prompt: the cleaned chat with the generation
+    prompt, rendered at ``strength`` on ``day``, then the reply's header (``header``'s when given)."""
     chat = tokens(poster, {
         "model": model, "messages": framing.clean_messages(messages), "add_generation_prompt": True,
         "chat_template_kwargs": framing.template_kwargs(strength, day),
     })
-    header = tokens(poster, {"model": model, "prompt": config.USER_CHANNEL, "add_special_tokens": False})
-    return chat + header
+    return chat + list(reply_header(poster, model) if header is None else header(model))
 
 
 def utc_today() -> date:
@@ -585,6 +587,8 @@ class VllmClient:
         self._adapters_dir = adapters_dir
         self._stage = stage
         self._loaded: set[str] = set()
+        self._headers: dict[str, tuple[int, ...]] = {}  # the reply's header per model (``_header``), and its lock
+        self._header_lock = threading.Lock()  # both shared with every copy: /tokenize slowed to 11 s in a burst
         self._loading: dict[str, threading.Lock] = {}  # one lock per adapter, held while it loads
         self._load_lock = threading.Lock()  # guards both; shared with every copy ``on``, ``with_load_wait`` and ``once`` make
         self._soft: tuple[soft_tokens.EmbeddingRows, Callable[[soft_tokens.Matrix], str]] | None = None
@@ -684,7 +688,12 @@ class VllmClient:
         return tokens(self._requests, body)
 
     def _prompt(self, model: str, messages: Sequence[Mapping[str, Any]]) -> list[int]:
-        return reply_prompt(self._requests, model, messages, self._strength, self._day or utc_today())
+        return reply_prompt(self._requests, model, messages, self._strength, self._day or utc_today(), self._header)
+
+    def _header(self, model: str) -> tuple[int, ...]:
+        """The reply's header as ``model``'s ids, asked once per model for the client's life (a burst waits)."""
+        with self._header_lock:  # never empty: a header is a few ids
+            return self._headers.get(model) or self._headers.setdefault(model, tuple(reply_header(self._requests, model)))
 
     def _served(self, adapter: CheckpointRef | None, call: Callable[[str], T]) -> T:
         """``call`` with the model to name. An adapter trained under another rendering is refused

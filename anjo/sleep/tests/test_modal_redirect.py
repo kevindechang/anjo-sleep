@@ -134,7 +134,7 @@ def _methods(fake: Held) -> list[str]:
     return [method for method, url, *_ in fake.seen if COMPLETIONS in url]
 
 
-@pytest.mark.parametrize("failure", [httpx.RemoteProtocolError, httpx.ConnectError, 502, 503, 504])
+@pytest.mark.parametrize("failure", [httpx.RemoteProtocolError, httpx.ConnectError, 408, 502, 503, 504])
 def test_a_result_get_that_fails_is_asked_again_and_never_posted_again(
     failure: int | type[httpx.TransportError],
 ) -> None:
