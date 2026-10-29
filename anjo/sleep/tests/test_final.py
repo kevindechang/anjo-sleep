@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -12,6 +13,8 @@ import pytest
 
 from anjo.sleep.lives import draw as lives_draw
 from anjo.sleep.reports import final
+from anjo.sleep.tests.sleep_fakes import probe, taste
+from anjo.sleep.types import Probe
 
 FREEZE_SHA = "a" * 40
 TAG = "sleep-freeze"
@@ -25,6 +28,42 @@ DONORS = lives_draw.donor_map(
     ),
     lives_draw.Life("life-c", "p2", "music", "line", "t", ()),
 )
+
+
+def _sealed_catalog() -> dict[str, list[Probe]]:
+    """Registered probes for test lives: ``new_work`` blocks follow held-out source ids, not probe ids."""
+    found: dict[str, list[Probe]] = {}
+    for life in LIVES:
+        rows: list[Probe] = []
+        for i in range(40):
+            for kind in ("new_work", "vocab"):
+                pid = f"{life}-{kind}-{i}"
+                src = (f"{life}-nw-src-{i // 2}",) if kind == "new_work" else ()
+                rows.append(probe(pid, kind, person=life, source_ids=src))
+        for i in range(40):
+            rows.append(probe(f"{life}-th-{i}", "tone_hold", person=life))
+            rows.append(taste(f"{life}-ta-{i}", person=life, source=f"shared-taste-{i}"))
+        for i in range(1, 30):
+            rows.append(
+                probe(
+                    f"{life}-new_work-{i:02d}",
+                    "new_work",
+                    person=life,
+                    source_ids=(f"{life}-item-{(i - 1) // 5}",),
+                )
+            )
+        rows.append(
+            probe(f"{life}-mark", "new_work", person=life, source_ids=(f"{life}-mark-src",))
+        )
+        found[life] = rows
+    return found
+
+
+_SEALED = _sealed_catalog()
+
+
+def _sealed(user_id: str) -> Sequence[Probe]:
+    return _SEALED[user_id]
 
 
 def _write_morning(
@@ -123,6 +162,7 @@ def _run(root: Path, **kwargs: Any) -> dict[str, Any]:
             pair_lives=PAIR,
             single_life=SINGLE,
             git=FREEZE_SHA,
+            sealed=_sealed,
             **kwargs,
         )
 
@@ -306,9 +346,35 @@ def test_fairness_new_work_does_not_merge_life_into_one_block() -> None:
         }
         for life in ("life-a", "life-b", "life-c")
     }
-    stats = final._fairness_new_work(records, final.COMP_4V2C)
+    registries = {
+        life: final.registered_probes(life, records[life], _sealed, results_root=Path("/unused"))
+        for life in records
+    }
+    stats = final._fairness_new_work(records, registries, final.COMP_4V2C)
     assert stats is not None
     assert final._fairness_outcome(stats) != "win"
+
+
+def test_pooled_scoring_refuses_probe_ids_missing_from_registered_set() -> None:
+    records = {
+        "life-a": {
+            "outcomes": [
+                {
+                    "probe": "not-in-set",
+                    "kind": "new_work",
+                    "pair": final.COMP_3V1,
+                    "outcome": "win",
+                },
+            ]
+        }
+    }
+    registries = {
+        "life-a": final.registered_probes(
+            "life-a", records["life-a"], _sealed, results_root=Path("/unused")
+        )
+    }
+    with pytest.raises(final.FinalError, match="not in the registered set"):
+        final._pool_comparison(records, registries, final.COMP_3V1, "knowledge")
 
 
 def test_unpromoted_donor_marks_specificity_inconclusive(root: Path) -> None:

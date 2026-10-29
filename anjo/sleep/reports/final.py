@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+from anjo.sleep.probes.morning import MORNING_PROBES, SUBSETS, subset_probes
 from anjo.sleep.probes.score import BootstrapConfig, Outcome, score_outcomes
+from anjo.sleep.reports.results import FULL_SET
 from anjo.sleep.types import Probe
 
 Outcome3 = Literal["win", "loss", "inconclusive"]
@@ -130,6 +132,51 @@ def _night_number(path: Path) -> int:
     return int(suffix)
 
 
+def _night_summary_probe_set(results_root: Path, life_id: str, night_iso: str) -> str | None:
+    """The accelerated night's ``morning_probes`` when the score file names the night only."""
+    folder = results_root / life_id / "nights"
+    if not folder.is_dir():
+        return None
+    for summary in folder.glob("*/summary.json"):
+        record = _json(summary)
+        if str(record.get("night", summary.parent.name)) != night_iso:
+            continue
+        named = record.get(MORNING_PROBES)
+        if named is not None:
+            return str(named)
+    return None
+
+
+def _probe_set_name(record: Mapping[str, Any], results_root: Path, life_id: str) -> str:
+    subset = record.get("subset")
+    if subset is not None:
+        return str(subset)
+    night = record.get("night")
+    if isinstance(night, str):
+        from_summary = _night_summary_probe_set(results_root, life_id, night)
+        if from_summary is not None:
+            return str(from_summary)
+    return str(FULL_SET)
+
+
+def registered_probes(
+    life_id: str,
+    record: Mapping[str, Any],
+    sealed: Callable[[str], Sequence[Probe]],
+    *,
+    results_root: Path,
+) -> dict[str, Probe]:
+    """Probe ids in the set the morning score registered, with held-out ``source_ids`` for blocks."""
+    name = _probe_set_name(record, results_root, life_id)
+    probes = list(sealed(life_id))
+    if name != FULL_SET:
+        subset = SUBSETS.get(name)
+        if subset is None:
+            raise FinalError(f"{life_id}: probe set {name!r} is not registered")
+        probes = subset_probes(probes, subset)
+    return {p.id: p for p in probes}
+
+
 def serving_morning_path(results_root: Path, life_id: str) -> Path:
     """The morning score for the checkpoint serving after the life's last night."""
     folder = results_root / life_id / SCORES
@@ -151,29 +198,19 @@ def serving_morning_path(results_root: Path, life_id: str) -> Path:
     return best[1]
 
 
-def _probe(life_id: str, row: Mapping[str, Any]) -> Probe:
+def _probe(life_id: str, row: Mapping[str, Any], registry: Mapping[str, Probe]) -> Probe:
     pid = str(row["probe"])
-    kind = str(row["kind"])
-    raw_sources = row.get("source_ids")
-    if isinstance(raw_sources, list) and raw_sources:
-        source_ids = tuple(str(s) for s in raw_sources)
-    elif kind == "new_work":
-        source_ids = (pid,)
-    else:
-        source_ids = (pid,)
-    return Probe(
-        id=pid,
-        person_id=life_id,
-        kind=kind,
-        prompt="",
-        options=None,
-        expected=None,
-        source_ids=source_ids,
-    )
+    if pid not in registry:
+        raise FinalError(f"{life_id}: probe {pid!r} is not in the registered set for this score")
+    found = registry[pid]
+    if found.person_id != life_id:
+        return replace(found, person_id=life_id)
+    return found
 
 
 def _pool_comparison(
     life_records: Mapping[str, Mapping[str, Any]],
+    registries: Mapping[str, Mapping[str, Probe]],
     comparison: str,
     dimension: Dimension,
     *,
@@ -206,7 +243,7 @@ def _pool_comparison(
                 continue
             typed = cast(Outcome, outcome)
             life_outcomes.append(typed)
-            probes.append(_probe(life_id, row))
+            probes.append(_probe(life_id, row, registries[life_id]))
             outcomes.append(typed)
         if life_outcomes:
             n = len(life_outcomes)
@@ -428,10 +465,12 @@ def _qualifiers(
 
 def _fairness_new_work(
     life_records: Mapping[str, Mapping[str, Any]],
+    registries: Mapping[str, Mapping[str, Probe]],
     comparison: str,
 ) -> dict[str, Any] | None:
     return _pool_comparison(
         life_records,
+        registries,
         comparison,
         "knowledge",
         kinds=frozenset({NEW_WORK}),
@@ -452,6 +491,7 @@ def run(
     rerun_reason: str | None = None,
     style_neutral: Mapping[str, Outcome3 | None] | None = None,
     second_judge: Mapping[str, Any] | None = None,
+    sealed: Callable[[str], Sequence[Probe]] | None = None,
 ) -> dict[str, Any]:
     """Score held-out lives once; refuse wrong code or an existing per-life ``final.json``."""
     expected = freeze_sha(freeze_tag, repo)
@@ -472,13 +512,23 @@ def run(
         record = {**record, "life_id": life_id, "_morning_path": str(path)}
         life_records[life_id] = record
 
+    if sealed is None:
+        raise FinalError("sealed probes are required to map score rows to bootstrap blocks")
+    registries = {
+        life_id: registered_probes(
+            life_id, life_records[life_id], sealed, results_root=results_root
+        )
+        for life_id in lives
+    }
+
     excluded = _donor_excluded_lives(life_records)
     dim_report: dict[str, Any] = {}
     all_quals: list[dict[str, Any]] = []
     for dimension in DIMENSIONS:
-        vs1_stats = _pool_comparison(life_records, COMP_3V1, dimension)
+        vs1_stats = _pool_comparison(life_records, registries, COMP_3V1, dimension)
         vs3x_stats = _pool_comparison(
             life_records,
+            registries,
             COMP_3V3X,
             dimension,
             exclude_lives=excluded,
@@ -505,7 +555,7 @@ def run(
 
     fairness_report: dict[str, Any] = {}
     for comp in (COMP_4V2C, COMP_4V2F):
-        stats = _fairness_new_work(life_records, comp)
+        stats = _fairness_new_work(life_records, registries, comp)
         outcome = _fairness_outcome(stats)
         fairness_report[comp] = {"outcome": outcome, "new_work": stats}
 
@@ -539,6 +589,7 @@ __all__ = [
     "FinalReport",
     "freeze_sha",
     "git_sha",
+    "registered_probes",
     "run",
     "score_path",
     "serving_morning_path",
