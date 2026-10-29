@@ -85,7 +85,6 @@ from anjo.sleep.types import CheckpointRef, Probe
 
 JUDGED: Final = ("new_work", "vocab", "tone_hold")  # daily-v1's kinds a judge reads
 ASKED: Final[tuple[Arm, ...]] = ("1", "3")
-JUDGES: Final = 2  # Muse Spark and Gemini: each allows its own retries on each morning (``_judge_job``)
 GEMINI: Final = "anjo.sleep.mind.apd.backend:_gemini"  # Vertex, thinking low, its reply cap (practice_ab's judge call)
 VERTEX_POOL: Final[Pool] = "vertex_usd"
 GEMINI_WORST_USD: Final[float] = (SPARK_MAX_IN_TOKENS * JUDGE_IN_PER_M + JUDGE_MAX_OUT * JUDGE_OUT_PER_M) / 1e6
@@ -132,6 +131,12 @@ class Spend:
 
 def _job(arm: str, account: str, persona: str, record: Mapping[str, Any], ports: morning_backfill.Ports) -> Job:
     night = date.fromisoformat(str(record["night"]))
+    rows = [row for row in record.get("outcomes") or ()
+            if isinstance(row, Mapping) and row.get("pair") == PAIR and row.get("kind") in JUDGED]
+    if any("probe" not in row or "outcome" not in row for row in rows):  # a malformed row is refused up front
+        raise Refused(f"{arm} {night}: the morning's stored outcomes are malformed: a {PAIR} row of a judged "
+                      f"kind names no probe or outcome")
+    stored = {str(row["probe"]): str(row["outcome"]) for row in rows}
     checkpoint = {c.id: c for c in ports.registry.history(account)}.get(str(record.get("checkpoint")))
     if checkpoint is None:
         raise Refused(f"{arm} {night}: the checkpoint its morning scored isn't in the account's promoted history")
@@ -139,8 +144,6 @@ def _job(arm: str, account: str, persona: str, record: Mapping[str, Any], ports:
     if not isinstance(morning.judge, MuseJudge):
         raise Refused("the morning's judge isn't Muse Spark's: there is no brief to share with Gemini")
     probes = tuple(p for p in subset_probes(list(morning.sealed(account)), DAILY) if p.kind in JUDGED)
-    stored = {str(row["probe"]): str(row["outcome"]) for row in record.get("outcomes", ())
-              if row.get("pair") == PAIR and row.get("kind") in JUDGED}
     if set(stored) != {p.id for p in probes}:
         raise Refused(f"{arm} {night}: the morning's probes aren't the ones {DAILY.name} asks now")
     return Job(arm, account, night, checkpoint, morning, probes, stored)
@@ -167,8 +170,8 @@ def plan(accounts: Mapping[str, str], persona: str, ports: Ports,
 def spend(jobs: Sequence[Job]) -> Spend:
     pairs = sum(len(job.probes) for job in jobs)
     replies, calls = len(ASKED) * pairs, 2 * pairs
-    # Each judge may ask its unreadable answers once more, per morning: the worst case ``_judge_job`` allows.
-    retries = JUDGES * sum(math.ceil(2 * len(job.probes) * JUDGE_RETRY_SHARE) for job in jobs)
+    # Each judge may ask its unreadable answers once more, per morning: its own worst case, as ``_judge_job`` sets it.
+    retries = sum(math.ceil(2 * len(job.probes) * JUDGE_RETRY_SHARE) for job in jobs)
     held_calls = calls + retries
     prices, units = jobs[0].morning.prices, Units()
     spark_call = (SPARK_IN_TOKENS * prices.spark_in_per_m + SPARK_OUT_TOKENS * prices.spark_out_per_m) / 1e6
@@ -269,7 +272,8 @@ def run(jobs: Sequence[Job], ports: Ports, folder: Path, cost: Spend, *,
         timer: Callable[[], float] = time.monotonic) -> list[dict[str, Any]]:
     """Every planned morning judged again under the night lock, each paid step held first; the pairs."""
     ledger, meter, spark_spent = ports.backfill.ledger, _Metered(ports.gemini), [0.0]
-    key = f"second_judge:{jobs[0].account}:{int(time.time())}"
+    # A ``morning:`` key, so the night sweep closes a hard-killed run's holds (``night.sweep``), as a backfill's are.
+    key = f"morning:{jobs[0].night.isoformat()}:{jobs[0].account}:second_judge:{int(time.time())}"
     pairs: list[dict[str, Any]] = []
     try:
         with night_lock(ledger), phase(), ExitStack() as holds:

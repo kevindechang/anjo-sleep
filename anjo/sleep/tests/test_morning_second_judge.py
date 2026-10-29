@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import fcntl
 import json
-import math
 import re
 from datetime import date
 from pathlib import Path
@@ -16,13 +15,13 @@ from typing import Any
 
 import pytest
 
-from anjo.sleep.budget import Ledger, Pool
+from anjo.sleep.budget import Ledger, Pool, Reservation
 from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.night.sweep import LOCK_NAME
+from anjo.sleep.night.sweep import LOCK_NAME, swept_night
 from anjo.sleep.probes.arms import ArmDeps
-from anjo.sleep.probes.morning import DAILY, JUDGE_RETRY_SHARE, JUDGE_USD_PER_CALL, Morning, subset_probes
+from anjo.sleep.probes.morning import DAILY, JUDGE_USD_PER_CALL, Morning, subset_probes
 from anjo.sleep.probes.score import MuseJudge
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, StoreSpy, probe, taste
@@ -85,6 +84,36 @@ class FailingSpark(Spark):
         if self.prompts:
             raise PermissionError("the judge's key is gone")
         return super().__call__(model, messages, tools, timeout_s)
+
+
+class RetryingSpark(Spark):
+    """Muse Spark whose calls 1, 3 and 5 can't be read: each sends the morning's one retry, then all are read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def __call__(self, model: Any, messages: Any, tools: Any, timeout_s: float, **_: Any) -> ChatResult:
+        self.prompts.append(messages[0]["content"])
+        self.calls += 1
+        if self.calls in (1, 3, 5):
+            return ChatResult("not a verdict", (), "muse-spark", 1000, 200, "stop")
+        return ChatResult(_verdict(messages[0]["content"], True), (), "muse-spark", 1000, 200, "stop")
+
+
+class RetryingGemini(Gemini):
+    """Gemini's Vertex call, unreadable on its calls 1, 3 and 5, readable after: every retry is counted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def __call__(self, prompt: str) -> tuple[str, int, int]:
+        self.prompts.append(prompt)
+        self.calls += 1
+        if self.calls in (1, 3, 5):
+            return "not a verdict", 2000, 300
+        return _verdict(prompt, "Kind: vocab" not in prompt), 2000, 300
 
 
 class World:
@@ -227,16 +256,19 @@ def test_out_inside_the_sleep_folders_is_refused_before_anything_is_held_or_sent
     assert world.woke == 0 and world.ledger.open_holds() == () and not inside.exists()
 
 
-def test_the_hold_covers_each_judges_retries_on_each_morning(tmp_path: Path) -> None:
+def test_the_hold_equals_the_calls_each_judge_makes_with_its_retries(tmp_path: Path) -> None:
     world = World(tmp_path)
+    (world.root / USER / "scores" / "night-02.json").unlink()  # one morning: its retries are the whole worst case
+    world.spark, world.gemini = RetryingSpark(), RetryingGemini()  # each unreadable call sends its retry
     jobs, _ = second.plan({"seed": USER}, "film_founder", world.ports, world.root)
     cost = second.spend(jobs)
-    retries = math.ceil(2 * 11 * JUDGE_RETRY_SHARE)  # each judge's allowance on one morning, as _judge_job sets it
-    held = cost.calls + 2 * len(jobs) * retries  # two judges, two mornings
-    assert (len(jobs), {len(job.probes) for job in jobs}, retries) == (2, {11}, 3)
-    assert cost.calls == 44 and held == 56
-    assert cost.spark_hold == pytest.approx(held * JUDGE_USD_PER_CALL)
-    assert cost.gemini_hold == pytest.approx(held * second.GEMINI_WORST_USD)
+    assert (len(jobs), {len(job.probes) for job in jobs}) == (1, {11})
+    assert world.run("--out", str(world.out), "--go")[0] == 0
+    spark_calls, gemini_calls = len(world.spark.prompts), len(world.gemini.prompts)
+    assert cost.calls == 22  # each judge's: every probe in both orders
+    assert (spark_calls, gemini_calls) == (25, 25)  # 22 calls + the morning's 3 retries, what _judge_job allows
+    assert cost.spark_hold == pytest.approx(spark_calls * JUDGE_USD_PER_CALL)
+    assert cost.gemini_hold == pytest.approx(gemini_calls * second.GEMINI_WORST_USD)
 
 
 def test_a_morning_that_fails_mid_judging_still_settles_the_spark_spend(tmp_path: Path) -> None:
@@ -257,3 +289,36 @@ def test_a_glimmer_that_did_not_wake_is_refused_with_its_holds_settled(tmp_path:
     assert world.model.adapters == [] and world.spark.prompts == [] and world.gemini.prompts == []
     assert world.ledger.open_holds() == ()
     assert (world.out / "pairs.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_a_malformed_stored_row_is_refused_before_any_model_call(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    path = world.root / USER / "scores" / "night-01.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["outcomes"][0].pop("outcome")  # a judged row that names no outcome: _job indexes it directly
+    path.write_text(json.dumps(record), encoding="utf-8")
+    code, said = world.run("--out", str(world.out), "--go")
+    assert code == 1 and "malformed" in said[-1]
+    assert world.model.adapters == [] and world.spark.prompts == [] and world.gemini.prompts == []
+    assert world.woke == 0 and world.ledger.open_holds() == () and not world.out.exists()
+
+
+def _no_settle(self: Reservation, actual: float) -> None:
+    """A run killed hard runs no ``finally``: its holds are taken and never settled."""
+
+
+def _no_release(self: Reservation) -> None:
+    """Nor released."""
+
+
+def test_a_killed_runs_holds_are_swept_at_their_bounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path)
+    monkeypatch.setattr(Reservation, "settle", _no_settle)  # the kill: holds taken, never closed
+    monkeypatch.setattr(Reservation, "release", _no_release)
+    assert world.run("--out", str(world.out), "--go")[0] == 0
+    killed = world.ledger.open_holds()
+    assert sorted(hold.job.split(":")[-2] for hold in killed) == ["arms", "gemini", "spark"]
+    monkeypatch.undo()  # the process is gone; the sweep runs in a new one
+    with swept_night(world.ledger, lambda: (0, 0)) as swept:
+        assert swept.holds_settled == 3
+    assert world.ledger.open_holds() == ()
