@@ -78,7 +78,7 @@ DAY_RETRIES: Final = 2
 # hotter, with this line after ``repair_v1.md``; still unchanged, it is kept as it was, and a round
 # none of whose days changed fails before the gates read it again (rule ``UNCHANGED_RULE``,
 # ``repair.rewritten``). On 2026-10-29 a day's line survived two repair rounds word for word, each
-# round paying for a full read to flag it again. The prompts are unchanged.
+# round paying for a full read to flag it again.
 UNCHANGED: Final = "Your last answer gave `before` back unchanged, so `reason` still holds. Write the day again, " \
                    "changing what `reason` is about; keep the `plant` and `ask` beats."
 UNCHANGED_RULE: Final = "unchanged"
@@ -283,6 +283,7 @@ def writer_messages(
         system, payload = f"{system.rstrip()}\n{KEEP_OFF}\n", {**payload, "keep_off": list(keep_off)}
     if repair is not None:
         system, payload = f"{system.rstrip()}\n\n{REPAIR_PROMPT.read_text(encoding='utf-8')}", {**payload, **repair}
+        payload["rewrite_ask"] = 2 if again else 1
         system = f"{system.rstrip()}\n{UNCHANGED}" if again else system
     return [
         {"role": "system", "content": system},
