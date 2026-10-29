@@ -128,12 +128,12 @@ def what_changed(user_id: str, since: date) -> list[Change]:
 
 def delete_all(user_id: str) -> DeleteReport:
     require_sleep_host()
-    return _delete_all(_plain(user_id), delete_ports())
+    return _finish_delete(user_id, _delete_all(_plain(user_id), delete_ports()))
 
 
 def purge(user_id: str) -> None:
     """What a night that was cancelled mid-step runs: the delete's removals again, without its cancel."""
-    erase_stored(_plain(user_id), delete_ports())
+    _finish_delete(user_id, erase_stored(_plain(user_id), delete_ports()))
 
 
 def has_footprint(user_id: str) -> bool:
@@ -150,7 +150,7 @@ def remote_cleanup(user_id: str) -> None:
     if not has_footprint(user_id):
         return
     inventory().write(user_id, adapter_names(user_id))
-    _delete_all(_plain(user_id), delete_ports(under_erasure=True))
+    _finish_delete(user_id, _delete_all(_plain(user_id), delete_ports(under_erasure=True)))
 
 
 def retry_pending() -> list[str]:
@@ -231,6 +231,12 @@ class _ForcedId:
         tombstones().add(user_id)
         apply_tombstones()
         return 1 if listed else 0
+
+
+def _finish_delete(user_id: str, report: DeleteReport) -> DeleteReport:
+    """Drop eligibility only after cleanup and lock release succeeded, so failures remain retryable."""
+    forced = _ForcedId()
+    return replace(report, erased=(*report.erased, (forced.name, forced.erase(user_id, frozenset()))))
 
 
 class _SleepFiles:
@@ -323,7 +329,7 @@ def local_erasers(*, under_erasure: bool = False) -> Sequence[Any]:
     files = [
         PathEraser("training copies", _training), PathEraser("night logs and scores", _results),
         PathEraser("sealed probes", _sealed), PathEraser("mind latents", _latents),
-        PathEraser("mind state", _mind_state), _PendingNote(), _ForcedId(),
+        PathEraser("mind state", _mind_state), _PendingNote(),
     ]
     registry = PathEraser("checkpoint registry", _registry)
     return [*files, *([] if under_erasure else [_SleepFiles(), _MindWorkspace()]), registry]

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -198,7 +199,7 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
     page = page_html()
     scripts = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")]
     styles = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".css")]
-    assert len(scripts) == 5 and len(styles) == 3  # app, nights, mind, night and dailies; demo, mind and dailies css
+    assert len(scripts) == 6 and len(styles) == 3  # app, model, nights, mind, night and dailies; demo, mind and dailies css
     for text in (page, *scripts, *styles):
         assert "http://" not in text and "https://" not in text and "//cdn" not in text
         assert "@import" not in text and "url(" not in text
@@ -206,6 +207,75 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
         assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "outerHTML" not in script
         assert "eval(" not in script and "localStorage" not in script and "document.write" not in script
     assert "prefers-reduced-motion" in styles[0] and all("prefers-color-scheme: dark" in style for style in styles)
+
+
+def test_the_task9_controls_reference_their_routes_and_ask_inline() -> None:
+    """The person's own controls (Task 9) call the three routes, never a browser dialog, and put
+    every result in the page's own live line."""
+    from anjo.sleep.demo.page import ASSETS, WEB_DIR, page_html
+
+    page = page_html()
+    scripts = {name: (WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")}
+    assert "model.js" in scripts
+    model = scripts["model.js"]
+    for endpoint in ("/api/sleep/nights", "/api/sleep/what-changed", "/api/sleep/undo", "/api/sleep/delete"):
+        assert endpoint in model, endpoint
+    for banned in ("window.confirm", "alert(", "prompt("):
+        assert all(banned not in script for script in scripts.values()), banned
+    assert 'id="yours-result"' in page and 'aria-live="polite"' in page
+    assert 'id="yours-undo-step"' in page and 'id="yours-delete-step"' in page
+    assert "textContent" in model and "innerHTML" not in model
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 500])
+def test_model_controls_visibility_and_retry_after_initial_failure(status: int) -> None:
+    """Execute the real script: server failures expose the error and controls; auth failures hide them."""
+    from anjo.sleep.demo.page import WEB_DIR
+
+    script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const status = Number(process.argv[1]);
+const nodes = new Map();
+function byId(id) {
+  if (!nodes.has(id)) nodes.set(id, {
+    hidden: id === 'yours', textContent: '', value: '', listeners: {},
+    addEventListener(event, listener) { this.listeners[event] = listener; },
+    replaceChildren() {}, append() {},
+  });
+  return nodes.get(id);
+}
+let nights = 0;
+const copy = { yours_loading: 'Loading', yours_nights_empty: 'Empty',
+  yours_changes_empty: 'No changes', yours_unavailable: 'Sign in' };
+vm.runInNewContext(fs.readFileSync(process.argv[2], 'utf8'), {
+  window: { anjoDemo: { copy, byId, element() {} } },
+  fetch: async (path) => {
+    const code = path.endsWith('/nights') && ++nights === 1 ? status : 200;
+    return { ok: code === 200, status: code,
+      json: async () => code === 200 ? [] : { detail: 'Inline failure' } };
+  },
+});
+(async () => {
+  await new Promise(setImmediate);
+  const unavailable = status === 401 || status === 403;
+  assert.equal(byId('yours').hidden, unavailable);
+  assert.equal(byId('yours-retry').hidden, status !== 500);
+  if (status === 500) {
+    assert.equal(byId('yours-nights-state').textContent, 'Inline failure');
+    assert.equal(byId('yours-delete').hidden, false);
+    assert.equal(typeof byId('yours-delete').listeners.click, 'function');
+    await byId('yours-retry').listeners.click();
+    assert.equal(nights, 2);
+    assert.equal(byId('yours-nights-state').textContent, 'Empty');
+    assert.equal(byId('yours-retry').hidden, true);
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(["node", "-e", script, str(status), str(WEB_DIR / "model.js")],
+                            capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 def test_brief_served_with_chat(account: str) -> None:

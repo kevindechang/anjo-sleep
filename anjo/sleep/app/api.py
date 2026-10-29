@@ -17,7 +17,10 @@ takes another user's id) and on the same flagged-user check:
 - ``GET /api/sleep/nights`` and ``GET /api/sleep/nights/<date>``: each finished night's status, gates
   by name, steps and the chooser's action code, never a conversation word;
 - ``GET /api/sleep/what-changed?since=<date>``: plain lines for what changed since then;
-- ``POST /api/sleep/undo``: the previous version serves again (409 when there is none).
+- ``POST /api/sleep/undo``: the previous version serves again (409 when there is none);
+- ``POST /api/sleep/delete`` with ``{"confirm": "delete"}``: everything Anjo Sleep keeps of the
+  caller, removed (400 without the body, 409 while a night still holds the lock, 500 when a step
+  failed and left work to retry).
 """
 from __future__ import annotations
 
@@ -32,18 +35,24 @@ from anjo.dashboard.auth import get_current_user_id
 from anjo.sleep.app.cleared_sessions import NotSynthetic, cleared_sessions, is_synthetic, mark_cleared
 from anjo.sleep.app.delivery import no_delivery
 from anjo.sleep.app.flags import sleep_enabled_for, sleep_host
+from anjo.sleep.app.ownership import delete_all
 from anjo.sleep.app.ownership import person_results
 from anjo.sleep.app.ownership import undo as undo_night
 from anjo.sleep.app.ownership import what_changed as changes_since
 from anjo.sleep.ownership.changes import ChangesError, NightView, night_views
+from anjo.sleep.ownership.delete import DeleteIncomplete, DeleteReport
 from anjo.sleep.ownership.undo import NothingToUndo
 
 PREFIX: Final = "/sleep"
 DEFAULT_SINCE_DAYS: Final = 7
+CONFIRM_DELETE: Final = "delete"
 UNREADABLE: Final = "A night record can't be read."
 NOTHING_TO_UNDO: Final = "There is no earlier version to go back to."
 NOT_FLAGGED: Final = "Anjo Sleep isn't on for this account."
 NOT_SYNTHETIC: Final = "Only a synthetic person's session can be cleared."
+DELETE_CONFIRM: Final = f'Send {{"confirm": "{CONFIRM_DELETE}"}} to delete your sleep data.'
+DELETE_RUNNING: Final = "A night is still running. Try again once it has stopped."
+DELETE_INCOMPLETE: Final = "Some of your sleep data couldn't be deleted. Try again."
 
 router = APIRouter(prefix=PREFIX)
 
@@ -136,6 +145,42 @@ class UndoOut(BaseModel):
     night: date
 
 
+class DeleteRequest(BaseModel):
+    """The stray-POST guard: a delete names its own confirmation, in a JSON body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: str = ""
+
+
+class RemovedOut(BaseModel):
+    store: str
+    count: int
+
+
+class ErasedOut(BaseModel):
+    part: str
+    count: int
+
+
+class DeleteOut(BaseModel):
+    """What ``delete_all`` removed: names and counts only, never a path or another person's id."""
+
+    cancelled: bool
+    jobs_stopped: int
+    adapters: int
+    remote_removed: list[RemovedOut]
+    erased: list[ErasedOut]
+
+
+def _delete_out(report: DeleteReport) -> DeleteOut:
+    return DeleteOut(
+        cancelled=report.cancelled, jobs_stopped=report.jobs_stopped, adapters=report.adapters,
+        remote_removed=[RemovedOut(store=name, count=count) for name, count in report.remote_removed],
+        erased=[ErasedOut(part=name, count=count) for name, count in report.erased],
+    )
+
+
 def _night_out(view: NightView) -> NightOut:
     return NightOut(
         night=view.night, status=view.status, failed_at=view.failed_at, checkpoint=view.checkpoint,
@@ -184,3 +229,19 @@ def undo(user_id: str = Depends(flagged_user)) -> UndoOut:
     except NothingToUndo:
         raise HTTPException(status_code=409, detail=NOTHING_TO_UNDO) from None
     return UndoOut(checkpoint=restored.id, night=restored.night)
+
+
+@router.post("/delete")
+def delete(body: DeleteRequest | None = None, user_id: str = Depends(flagged_user)) -> DeleteOut:
+    """The caller's own data only. The body's confirmation keeps a stray POST from erasing it."""
+    if body is None or body.confirm != CONFIRM_DELETE:
+        raise HTTPException(status_code=400, detail=DELETE_CONFIRM)
+    try:
+        report = delete_all(user_id)
+    except DeleteIncomplete as error:
+        if "night lock: still held" in error.report.failures:
+            raise HTTPException(status_code=409, detail=DELETE_RUNNING) from None
+        raise HTTPException(status_code=500, detail=DELETE_INCOMPLETE) from None
+    except Exception:  # Client setup and lock failures use the same private, retryable response.
+        raise HTTPException(status_code=500, detail=DELETE_INCOMPLETE) from None
+    return _delete_out(report)
