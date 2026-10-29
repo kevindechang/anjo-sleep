@@ -11,7 +11,8 @@ and Claude's blind audit where the two differ.
   answer by hand in ``audit/answers.jsonl`` as ``{"id", "same_problem", "holds"}``. The audited
   view is never reported while one is unanswered (``Judged.pending``).
 - **Spend:** each call is held before it runs, Muse Spark's on ``meta_usd`` and Gemini's on
-  ``vertex_usd``, at the most one call reads and writes, and settled at what it used.
+  ``vertex_usd``, at the most one call reads and writes, every billed try it may make, and
+  settled at what it used.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import Ledger, Pool
+from anjo.sleep.mind.apd import retry
 from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.score import (
     ApdJudge,
@@ -37,6 +39,7 @@ from anjo.sleep.mind.apd.score import (
 )
 from anjo.sleep.mind.apd.store import DataDir, write_text
 from anjo.sleep.mind.apd.types import ArmRun, FindingReport, Life, LifeScore, PlantedItem
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.holds import SPARK_MAX_IN_TOKENS, SPARK_MAX_OUT_TOKENS, held, usd
 from anjo.sleep.types import Evidence
 
@@ -50,6 +53,24 @@ MAX_OUT_TOKENS: Final = SPARK_MAX_OUT_TOKENS
 
 def prompt_id(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+class Reply(tuple[str, int, int]):
+    """A judge's reply and its tokens; ``failed`` counts the tries before it that failed on
+    something other than a 429, each possibly billed at a call's worst case (``_held``)."""
+
+    failed: int
+
+    def __new__(cls, text: str, tokens_in: int, tokens_out: int, failed: int = 0) -> Reply:
+        reply = super().__new__(cls, (text, tokens_in, tokens_out))
+        reply.failed = failed
+        return reply
+
+
+def _failed_tries(error: ModelApiError) -> int:
+    """The tries before a judge's failure that weren't 429s, each possibly billed
+    (``backend._gemini`` sets ``failed``)."""
+    return int(getattr(error, "failed", 0))
 
 
 def _rows(path: Path) -> list[dict[str, object]]:
@@ -117,9 +138,16 @@ class CachedJudge:
 
     def _held(self, prompt: str, key: str, ledger: Ledger, rate: Rate) -> str:
         spent = [0.0]
-        with held(ledger, f"apd:judge:{self.name}:{key[:16]}", (POOLS[self.name],), usd(rate.worst), lambda: spent[0]):
-            reply, tokens_in, tokens_out = self.model(prompt)
-            spent[0] = rate.usd(tokens_in, tokens_out)
+        bound = usd(rate.worst * retry.ATTEMPTS)  # every billed try the call's policy allows
+        with held(ledger, f"apd:judge:{self.name}:{key[:16]}", (POOLS[self.name],), bound, lambda: spent[0]):
+            try:
+                answer = self.model(prompt)
+            except ModelApiError as failure:
+                spent[0] = rate.worst * _failed_tries(failure)
+                raise
+            reply, tokens_in, tokens_out = answer
+            failed = answer.failed if isinstance(answer, Reply) else 0
+            spent[0] = rate.worst * failed + rate.usd(tokens_in, tokens_out)
         return reply
 
     @property

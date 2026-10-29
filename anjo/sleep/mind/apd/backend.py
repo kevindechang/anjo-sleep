@@ -61,7 +61,7 @@ from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.ceiling import Ceiling
 from anjo.sleep.mind.apd.colab_vllm import ColabSession, TunnelOpener
 from anjo.sleep.mind.apd.generators import BY_MODEL, SPARK, Generator
-from anjo.sleep.mind.apd.judging import MAX_IN_TOKENS, MUSE, Rate, TextModel
+from anjo.sleep.mind.apd.judging import MAX_IN_TOKENS, MUSE, Rate, Reply, TextModel
 from anjo.sleep.mind.apd.readers import SPARK_READER, Reader
 from anjo.sleep.mind.apd.types import LIFE_DAYS, MAX_PREVALENCE
 
@@ -205,24 +205,31 @@ def _vertex() -> Any:
     return genai.Client(vertexai=True, location=GEMINI_LOCATION)
 
 
-def _gemini(prompt: str) -> tuple[str, int, int]:
+def _gemini(prompt: str) -> Reply:
     model, types = second_judge.MODEL_ID, importlib.import_module("google.genai.types")
     config = types.GenerateContentConfig(
         temperature=0.0, max_output_tokens=JUDGE_MAX_TOKENS + GEMINI_THINKING_RESERVE,
         thinking_config=types.ThinkingConfig(thinking_level=GEMINI_THINKING),
         http_options=types.HttpOptions(timeout=int(GEMINI_JUDGE_TIMEOUT_S * 1000)))
-    for attempt in range(1, retry.RATE_LIMIT_ATTEMPTS + 1):
+    retries = Retries(sleep=time.sleep)  # the judge call's own: no attempt shares its tries
+    attempt, failed = 1, 0  # the call's tries, and those that failed on other than a 429
+    while True:
         try:
             reply = _vertex().models.generate_content(model=model, contents=prompt, config=config)
             break
         except Exception as error:  # noqa: BLE001 - the SDK's errors share no base; each is a failed call
             failure = _vertex_error(error, GEMINI_JUDGE_TIMEOUT_S)
-            if attempt == retry.RATE_LIMIT_ATTEMPTS or not retry.transient(failure):
+            if not retry.rate_limited(failure):
+                failed += 1
+            wait = retries.wait(failure, attempt, failed)
+            if wait is None:
+                setattr(failure, "failed", failed)  # what ``judging._held`` prices at a call's worst
                 raise failure from None
-            time.sleep(retry.rate_limit_wait(attempt, getattr(failure, "retry_after_s", None)))
+            time.sleep(wait)
+            attempt += 1
     usage = reply.usage_metadata
     out = int(usage.candidates_token_count or 0) + int(usage.thoughts_token_count or 0)  # both billed as output
-    return reply.text or "", int(usage.prompt_token_count or 0), out
+    return Reply(reply.text or "", int(usage.prompt_token_count or 0), out, failed)
 
 
 def gemini_chat(model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
