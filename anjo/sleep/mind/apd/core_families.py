@@ -15,7 +15,12 @@ never that the problem is gone (``dry since``, ``loved it``), which gave the who
 line's own day (``leak_v1.md``), nor names the apparent problem beside it. Joining it to the
 earlier fact is the reader's work. Lines that broke this were rewritten (core-v2): under a new
 ``-v2`` id (``-v3`` when rewritten again), or under the same id in ``core-test``, whose ids the
-pinned pair specs name (``pairs.pair_specs``).
+pinned pair specs name (``pairs.pair_specs``). **Every family's plant line** keeps to the same rule
+(core-v4): it states its raw fact, never what it means or how it came out ("small flaws are fine",
+"the other 60 ... will be on the final list"); a decoy's never names the apparent problem's own
+measure ("she could come at 7:40 pm"), and an opportunity's never books the person's own side
+("a full house for a Wednesday matinee"). ``test_apd_core_reversals`` keeps a phrase list of every
+case so far.
 
 **The days a fact names** hold on whichever day its schedule puts it (core-v3,
 ``test_apd_core_dates``): a day named relative to the writing ("Monday's rehearsal", "next week")
@@ -165,12 +170,13 @@ _TRAIN: Final = (
     ), "The website pays 60 an episode for licensed audio with a transcript.",
         "Is there anything else I can do with the transcripts I make?",
         "License the episodes with their transcripts to the language-learning website at 60 each."),
-    _t("podcast-download-dip-v3", "reversal", _PODCAST, "the downloads chart", (
+    _t("podcast-download-dip-v4", "reversal", _PODCAST, "the downloads chart", (
         "Downloads of episode 9 are down 40 percent on the dashboard against episode 8.",
-    ), "The hosting service says its dashboard stopped counting one big podcast app for a week, and its "
-       "corrected numbers, posted on Friday, put episode 9 at 5,200 downloads and episode 8 at 5,100.",
+    ), "The hosting service says its dashboard stopped counting one big podcast app for a week, the week "
+       "episode 9 came out.",
         "Should I change the show's format because downloads fell?",
-        "Not a fall: the dashboard missed one app for a week, and the corrected downloads are level."),
+        "Not a fall: the dashboard stopped counting one big app the week episode 9 came out, so its 40 percent "
+        "drop is a counting gap."),
     _t("podcast-sponsor-quiet", "decoy", _PODCAST, "the sponsor's renewal", (
         "The sponsor hasn't answered my renewal email for two weeks.",
         "Their marketing contact usually replies within a day.",
@@ -241,17 +247,17 @@ _VAL: Final = (
         "The open studio day is on the 18th. Is anything missing?",
         "A public event needs liability insurance under the lease and the studio has none; buy cover before "
         "the 18th."),
-    _t("pottery-seconds-plates", "opportunity", _POTTERY, "the seconds shelf", (
+    _t("pottery-seconds-plates-v2", "opportunity", _POTTERY, "the seconds shelf", (
         "A new restaurant across the street wants handmade plates with a rustic look.",
         "Forty plates with small glaze flaws sit unsold on the seconds shelf.",
-    ), "The restaurant's chef said small flaws are fine and wants 30 plates by next month.",
+    ), "The restaurant's chef wants 30 plates by next month and says no two of her plates should look the same.",
         "The seconds shelf is full. What should I do with those plates?",
-        "Sell the seconds plates to the restaurant across the street, which wants 30 and takes small flaws."),
-    _t("pottery-celadon-lines-v2", "reversal", _POTTERY, "the celadon bowls", (
+        "Sell the seconds plates to the restaurant across the street, which wants 30 rustic plates, no two alike."),
+    _t("pottery-celadon-lines-v3", "reversal", _POTTERY, "the celadon bowls", (
         "Fine cracks appeared in the glaze of the celadon bowls the day after firing.",
-    ), "The celadon is a crackle glaze, sold for its web of fine lines.",
+    ), "The celadon's label says it is a crackle glaze, which crazes as it cools.",
         "Should I throw away the celadon bowls?",
-        "Not a defect: the celadon is a crackle glaze meant to show fine lines."),
+        "Not a defect: the celadon is a crackle glaze, and its label says it crazes as it cools."),
     _t("pottery-clay-bill", "decoy", _POTTERY, "the clay delivery", (
         "The clay supplier charged 600 this month, against 300 last month.",
         "The number of students hasn't changed.",
@@ -279,24 +285,24 @@ _VAL: Final = (
         "The e-bike range launches on the 1st. Is everything in place?",
         "The batteries need a four-week fire safety test and none was sent, so the 1st can't hold; send them "
         "now and move the launch."),
-    _t("bikes-courier-fleet", "opportunity", _BIKES, "the old rental bikes", (
+    _t("bikes-courier-fleet-v2", "opportunity", _BIKES, "the old rental bikes", (
         "A courier company is starting a cargo service and needs sturdy bikes for its riders.",
         "Twelve old rental bikes have been stored in the back room since we stopped rentals.",
-    ), "The courier company's manager said they'd buy the bikes and pay us to service them every month.",
+    ), "The courier company's manager said they'd pay 150 for each used bike in working order, and a monthly "
+       "fee for servicing.",
         "What should I do with the old rental bikes in the back room?",
-        "Sell the old rental bikes to the courier company and service them monthly."),
+        "Sell the old rental bikes to the courier company at 150 each and service them for its monthly fee."),
     _t("bikes-brake-squeal-v2", "reversal", _BIKES, "the new disc brakes", (
         "Customers say the new disc brakes squeal loudly on their first rides.",
     ), "The brake maker's guide says new pads squeal until they bed in over about 20 stops.",
         "Should I stop selling the new disc brakes?",
         "Not faulty: new pads squeal until they bed in, and it stops after about 20 stops."),
-    _t("bikes-august-sales", "decoy", _BIKES, "August's sales", (
+    _t("bikes-august-sales-v2", "decoy", _BIKES, "August's sales", (
         "August's bike sales were 18, against 35 in July.",
         "Nothing changed in the shop's prices or stock.",
-    ), "Every year since the shop opened, August sales have been about half of July's while the town is "
-       "away on its summer holidays.",
+    ), "Last year's books show 17 bikes sold in August against 33 in July.",
         "Sales dropped in August. Do I need a promotion?",
-        "Not a slump: August sales are always about half of July's while the town is away on holiday."),
+        "Not a slump: last year's August was 17 against 33 in July, the same summer dip."),
 )
 
 _TEST: Final = (
@@ -335,9 +341,10 @@ _TEST: Final = (
     _t("wedding-rsvp-count", "decoy", _WEDDING, "the guest numbers", (
         "Only 90 of the 150 invited guests have replied to the invitation.",
         "The final numbers are due to me in a week.",
-    ), "The couple told me the other 60 are family who confirmed by phone and will be on the final list.",
+    ), "The couple's guest list includes 60 older relatives, who always confirm with the couple by phone "
+       "rather than by post.",
         "Only 90 people have replied. Should I cut the food order?",
-        "Not a shortfall: the other 60 confirmed by phone and will be on the final list."),
+        "Not a shortfall: the 60 older relatives confirm with the couple by phone, not by post."),
     _t("theatre-wall-height", "contradiction", _THEATRE, "the touring set", (
         "The castle wall in our set stands 4.5 metres tall.",
         "The second tour venue's stage has 4 metres of clearance below its lighting grid.",
@@ -361,10 +368,10 @@ _TEST: Final = (
     _t("theatre-school-matinee", "opportunity", _THEATRE, "the empty Wednesday afternoons", (
         "The local secondary school is studying this play for its exams.",
         "The theatre is dark on Wednesday afternoons during our run.",
-    ), "The school's head of English said they'd book a full house of 200 students for a Wednesday matinee "
-       "at 8 each.",
+    ), "The school's head of English said the 200 students in the exam year could each pay 8 for a "
+       "school-time performance.",
         "Wednesday afternoons are dead. Any way to use them?",
-        "Run a Wednesday matinee for the school studying the play: a full house of 200 at 8 each."),
+        "Run a Wednesday matinee for the school studying the play: 200 students at 8 each."),
     _t("theatre-hoarse-lead", "reversal", _THEATRE, "the lead's voice", (
         "The lead actor's voice was hoarse at the rehearsal on Sunday the 6th.",
     ), "The lead had shouted through a football match on Saturday the 5th, and he is resting his voice ahead of "

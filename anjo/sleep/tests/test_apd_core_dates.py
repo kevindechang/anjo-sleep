@@ -38,7 +38,7 @@ WEEKDAY = re.compile(rf"\b(?:{'|'.join(DAYS)})\b")  # singular: "Tuesdays" is no
 RELATIVE = re.compile(r"\b(?:(?:this|last|next) week|the week before|yesterday|tomorrow)\b", re.IGNORECASE)
 # Days that recur, true whichever day says them; each is found in a drawn template (no stale entry).
 RECURRING = ("on a Saturday", "Tuesday and Wednesday evenings", "Monday to Thursday", "Wednesday to Friday",
-             "a Wednesday matinee", "the Saturday class", "the Saturday farmers' market")
+             "the Saturday class", "the Saturday farmers' market")
 _PARTS = re.compile(rf"\b(?:{'|'.join(DAYS)}) (?:mornings|afternoons|evenings|nights)\b")  # "Friday mornings"
 MONTHS = ((2026, 8), (2026, 9), (2026, 10))  # a life's days are in September 2026; a pinned date is near them
 LAST_DAY = LIFE_START + timedelta(days=LIFE_DAYS - 1)
@@ -167,7 +167,7 @@ def test_no_fact_names_a_month_after_the_lifes() -> None:
     later = {t.id: month for t in _drawn().values() for fact in (*_facts(t), t.resolution)
              for month in MONTH.findall(fact) if MONTH_NAMES.index(month) + 1 > LIFE_START.month}
     assert later == {}
-    assert core_families.template("bikes-october-sales") is None and core_families.template("bikes-august-sales")
+    assert core_families.template("bikes-october-sales") is None and core_families.template("bikes-august-sales-v2")
 
 
 def test_the_second_weeks_tickets_went_on_sale_before_the_life_in_every_fact() -> None:
