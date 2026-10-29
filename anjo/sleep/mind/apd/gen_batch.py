@@ -23,7 +23,10 @@
   goes on, and at its end ``live.RunsFailed`` names every skipped life; a rerun generates only
   those (a life on disk is never generated again).
 - **What stops new work:** the run's ceiling (``CeilingReached``), a hold with no room while no
-  other attempt is in flight (``BudgetStop``; with one in flight it waits for it to end), a reply
+  other attempt is in flight (``BudgetStop``; with one in flight it waits for it to end), the
+  network looking down (``NetworkDown``: ``NET_DOWN_ATTEMPTS`` attempts in a row across the run
+  ended on a call that never connected, ``Breaker``; it stays tripped, the lives it stops are not
+  recorded as failed, and the ones skipped before it are named again, ``network_stop``), a reply
   from the wrong model (``ModelMismatch``) or anything unexpected. No further life starts, the ones
   running finish and are saved and printed, and the error is raised.
 - **A kill** (Ctrl-C, a signal's ``SystemExit``, any error out of the loop, ``Parallel``): no
@@ -60,6 +63,7 @@ from anjo.sleep.model_api import ChatResult, ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
 SKIPPED: Final = (GenerationError, ModelApiError, gates.GateError)  # a life failing with these is skipped
+NET_DOWN_ATTEMPTS: Final = 3  # attempts in a row across a run that never connected, before it stops (``Breaker``)
 WORKER: Final = "apd-gen"  # the workers' thread names
 T = TypeVar("T")
 
@@ -151,26 +155,38 @@ def side_by_side(backend: Backend, work: Sequence[Callable[[Backend], T]], paral
 Keep = Callable[[repair.Tried, int, int], None]  # a failed check's life kept, by attempt and round (``--keep-failed``)
 
 
-def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None, keep: Keep | None = None) -> Generated:
+def generate_life(spec: LifeSpec, backend: Backend, log: CallLog | None = None, keep: Keep | None = None,
+                  breaker: Breaker | None = None) -> Generated:
     """``generate.generate``'s attempts, each attempt's worst case held before it starts: written by
     the backend's generator (``generators``), its gates read by its reader (``readers``), every
     try logged to ``log`` when given. With ``backend.repair``, an attempt failing only a leak, a
     missed origin day or the script audit first takes up to ``repair.ROUNDS`` repair rounds, each
-    held as an attempt is; ``keep`` is handed each check that failed."""
+    held as an attempt is; ``keep`` is handed each check that failed. With a ``breaker``, how each
+    attempt ended is counted, and no attempt starts, nor is the life skipped, once it has tripped;
+    without one, nothing trips, and a life alone is skipped as before."""
+    breaker = Breaker(limit=None) if breaker is None else breaker
     on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(generate.MAX_ATTEMPTS):
+        breaker.check()
         if on_call is not None:
             cool_down(backend)
+            breaker.check()
             on_call = None
         if log is not None:
             log.attempt = attempt
         try:
             made = _attempt(spec, backend, log, attempt, keep)
         except CallFailed as failed:
+            breaker.ended(failed)
             on_call = failed
             continue
+        except SKIPPED as error:
+            breaker.ended(error)
+            raise
+        breaker.ended(None)
         if made is not None:
             return made
+    breaker.check()
     raise GenerationError(f"no {spec.split} life passed the gates in {generate.MAX_ATTEMPTS} attempts{last_call(on_call)}")
 
 
@@ -236,6 +252,55 @@ def _checked(spec: LifeSpec, backend: Backend, log: CallLog | None, attempt: int
 class CallFailed(RuntimeError):
     """An attempt's call still failed on a transient failure after its tries: the attempt ends, and
     the next one starts after a cool-down."""
+
+
+class NetworkDown(RuntimeError):
+    """``NET_DOWN_ATTEMPTS`` attempts in a row ended on a call that never connected: the network
+    looks down, so no new attempt starts. It is no ``SKIPPED`` error: the lives it stops are not
+    recorded as failed, and a rerun generates them."""
+
+
+class Breaker:
+    """How the run's attempts ended, in the order they ended, across its lives' threads: one ended
+    on a call that never connected (``retry.connect_failed``) adds one, any other ending (passed,
+    failed a rule or a gate, a status, a reply too slow, a connection dropped) starts the count
+    again; at ``limit`` it trips (``None``: never), and stays tripped whatever ends after."""
+
+    def __init__(self, limit: int | None = NET_DOWN_ATTEMPTS) -> None:
+        self._lock = threading.Lock()
+        self._limit = limit
+        self._in_a_row = 0
+        self._down: str | None = None  # why it tripped, once it has
+
+    def ended(self, error: Exception | None) -> None:
+        with self._lock:
+            if self._down is not None:
+                return
+            if not (isinstance(error, (CallFailed, ModelApiError)) and retry.connect_failed(error)):
+                self._in_a_row = 0
+                return
+            self._in_a_row += 1
+            if self._limit is not None and self._in_a_row >= self._limit:
+                self._down = f"{self._in_a_row} attempts in a row failed to connect (last: {error})"
+
+    def check(self) -> None:
+        """``NetworkDown`` once it has tripped."""
+        with self._lock:
+            if self._down is not None:
+                raise NetworkDown(self._down)
+
+
+@contextmanager
+def network_stop(out: Out, skipped: Sequence[str]) -> Iterator[None]:
+    """A run the network stops (``NetworkDown``): what it skipped before the stop (``skipped``, as
+    it stands then) named again before the stop is raised on, as ``batch.check_failed`` would."""
+    try:
+        yield
+    except NetworkDown:
+        if skipped:
+            out(f"Before the stop, {len(skipped)} failed and weren't saved ({', '.join(skipped)}); "
+                "a rerun generates them again.")
+        raise
 
 
 def last_call(failed: CallFailed | None) -> str:
@@ -381,11 +446,11 @@ class Outcome:
     failed: tuple[failures.AttemptFailure, ...]
 
 
-def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
+def _one(data: DataDir, spec: LifeSpec, backend: Backend, *, breaker: Breaker | None = None) -> Outcome:
     log, made = CallLog(on_failure=recorder(data, "generate-attempt", spec_name(spec))), None
     keep = partial(quarantine, data) if backend.keep_failed else None
     try:
-        made = generate_life(spec, backend, log, keep)
+        made = generate_life(spec, backend, log, keep, breaker)
     except SKIPPED as error:
         return Outcome(spec, Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
     finally:
@@ -421,7 +486,8 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
                    parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
     """Every life of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved,
     its problems sealed; lines in the specs' order, and with a ceiling what the run has settled per
-    life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end."""
+    life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end,
+    or ``network_stop`` before the network looking down stops the run (``Breaker``)."""
     for split in dict.fromkeys(spec.split for spec in specs):
         check(split, backend.generator, backend.provider)
         readers.check(split, backend.read_by)
@@ -432,7 +498,9 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
         backend.ceiling.begin("life(s) generated", len(todo))
     made: list[str] = []
     skipped: list[str] = []
-    with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
+    breaker = Breaker()  # one for the run: the network looking down stops it (``NetworkDown``)
+    work = [partial(_one, data, spec, breaker=breaker) for spec in todo]
+    with network_stop(out, skipped), side_by_side(backend, work, parallel) as results:
         for outcome in results:
             found = outcome.found
             report_failures(out, spec_name(outcome.spec), outcome.failed)

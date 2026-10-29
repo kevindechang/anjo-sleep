@@ -249,6 +249,8 @@ def _vertex_error(error: Exception, timeout_s: float) -> ModelApiError:
         return RateLimited(f"{where} returned HTTP 429", retry_after_s=_retry_delay(getattr(error, "details", None)))
     if isinstance(code, int):
         return ModelApiError(f"{where} returned HTTP {code}")
+    if isinstance(error, httpx.ConnectTimeout):  # no connection made in time, as ``model_api`` names it
+        return ModelApiError(f"{where} failed in transport (ConnectTimeout)")
     if isinstance(error, httpx.TimeoutException):
         return ModelApiError(f"{where} timed out after {timeout_s:g}s")
     if isinstance(error, httpx.HTTPError):

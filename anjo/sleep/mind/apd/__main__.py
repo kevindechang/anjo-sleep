@@ -18,7 +18,8 @@ it spent (``ceiling``). Glimmer's pinned revision comes from the serving setting
 
 A run whose model call still fails after its retries fails alone, recorded; the others go on, and
 the command then stops with exit code 3. A life whose generation still fails is skipped the same
-way (``gen_batch``). So does a session that can't carry the next run, or a
+way (``gen_batch``), but once attempts in a row across the run fail to connect, the network looks
+down: nothing new starts, and the command stops with exit code 6 (``gen_batch.Breaker``). So does a session that can't carry the next run, or a
 hold with no room coming (``BudgetStop``): what finished is kept, and a rerun goes on from there. Every command runs under
 MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
 runs' journals settled, stale MIND holds settled at their bound; a second command at once stops
@@ -84,7 +85,7 @@ from anjo.sleep.mind.apd import (
     timing,
 )
 from anjo.sleep.mind.apd.batch import PARALLEL, settle_orphans
-from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL
+from anjo.sleep.mind.apd.gen_batch import GEN_PARALLEL, NetworkDown
 from anjo.sleep.mind.apd.ceiling import COMMANDS as CEILING_COMMANDS
 from anjo.sleep.mind.apd.ceiling import DEFAULT_MAX_USD, UNITS, Ceiling, CeilingReached, RunLedger, max_usd
 from anjo.sleep.mind.apd.journal import SpendJournal
@@ -130,6 +131,7 @@ REFUSED_CODE: Final = 2
 STOPPED: Final = 3
 BUSY: Final = 4
 CEILING: Final = 5  # the run's settled spend reached --max-usd
+NETWORK_DOWN: Final = 6  # attempts in a row failed to connect: the network looks down (``gen_batch.Breaker``)
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
 SPARK_COMMANDS: Final = ("generate", "generate-pairs", *SERVING_COMMANDS)  # the commands that call Spark Open
@@ -414,6 +416,9 @@ def _guarded(args: argparse.Namespace, data: DataDir, backend: backends.Backend,
             intervene.DrawRefused) as error:
         out(f"Refused: {error}.")
         return REFUSED_CODE
+    except NetworkDown as error:
+        out(f"Stopped: {error}; the network looks down. What finished is kept; rerun to go on.")
+        return NETWORK_DOWN
     except (RunFailed, colab_vllm.SessionEnding, BudgetStop) as error:
         out(f"Stopped: {error}. What finished is kept, and a rerun goes on from there.")
         return STOPPED

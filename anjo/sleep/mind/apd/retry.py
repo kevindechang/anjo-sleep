@@ -69,8 +69,9 @@ FIRST_TOKEN_S: Final = 60.0  # queueing and reading a long prompt, before the fi
 SLOW_TOKENS_PER_S: Final = 20.0  # a slow but healthy decode speed for Spark Open
 _TRANSIENT: Final = re.compile(
     r" (?:returned HTTP (?:429|5\d\d)$|timed out after "
-    r"|failed in transport \((?:ConnectError|ReadError|WriteError|CloseError|RemoteProtocolError)\))"
+    r"|failed in transport \((?:ConnectError|ConnectTimeout|ReadError|WriteError|CloseError|RemoteProtocolError)\))"
 )
+_CONNECT_FAILED: Final = re.compile(r" failed in transport \((?:ConnectError|ConnectTimeout)\)")
 
 
 def retryable(status: int) -> bool:
@@ -81,6 +82,14 @@ def retryable(status: int) -> bool:
 def transient(error: Exception) -> bool:
     """``model_api``'s message for a 429, a 5xx, a timeout or a dropped connection."""
     return _TRANSIENT.search(str(error)) is not None
+
+
+def connect_failed(error: Exception) -> bool:
+    """``model_api``'s message for a connection never made: refused, its host's name not found, its
+    network unreachable (httpx's ``ConnectError``) or its connect timing out (``ConnectTimeout``).
+    What a network that is down gives (``gen_batch.Breaker``); never a reply too slow (a read
+    timeout, a call's own deadline), a connection dropped once made, or an HTTP status."""
+    return _CONNECT_FAILED.search(str(error)) is not None
 
 
 def rate_limited(error: Exception) -> bool:
