@@ -80,6 +80,7 @@ REASONING_STRENGTH_ENV: Final = "ANJO_SLEEP_REASONING_STRENGTH"
 SNAPSHOT_ENV: Final = "ANJO_SLEEP_GPU_SNAPSHOT"
 VLLM_VERSION_ENV: Final = "ANJO_SLEEP_VLLM_VERSION"
 PROMPT_EMBEDS_ENV: Final = "ANJO_SLEEP_PROMPT_EMBEDS"
+DETERMINISTIC_ENV: Final = "ANJO_SLEEP_SERVE_DETERMINISTIC"
 # The vLLM release both backends serve with (Modal's image installs it, SageMaker's image is built
 # FROM vllm/vllm-openai at this tag) unless the deploy names another. 0.28.0 is the first release
 # whose model registry has Glimmer's architecture, MuseGlimmerForConditionalGeneration (vLLM #51655,
@@ -184,9 +185,16 @@ def serve_precision(environ: Mapping[str, str] | None = None) -> Precision:
     return SERVING if SERVE_GPUS[gpu].gpu == SERVING.gpu else SERVE_GPUS[gpu]
 
 
-def serve_app_name(precision: Precision) -> str:
-    """Today's app for ``SERVING``; a second app, named for its GPU, for any other."""
-    return APP_NAME if precision is SERVING else f"{APP_NAME}-{precision.gpu.lower()}"
+def serve_deterministic(environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get(DETERMINISTIC_ENV, "").strip() == "1"
+
+
+def serve_app_name(precision: Precision, *, deterministic: bool | None = None) -> str:
+    """A separate app for another GPU or deterministic kernels, including client staging."""
+    name = APP_NAME if precision is SERVING else f"{APP_NAME}-{precision.gpu.lower()}"
+    enabled = serve_deterministic() if deterministic is None else deterministic
+    return f"{name}-det" if enabled else name
 
 
 def max_inputs(environ: Mapping[str, str] | None = None) -> int:
@@ -210,7 +218,8 @@ class ServeConfig:
     ``tool_parser`` vLLM's tool-call parser for Glimmer (``muse_glimmer``; None serves without tools),
     ``gpu_snapshot`` whether Modal snapshots the GPU memory to cut the cold start, and
     ``hf_secret`` the Modal secret holding HF_TOKEN for the download (None downloads without), and
-    ``prompt_embeds`` whether a request may send input embeddings (soft tokens; off by default)."""
+    ``prompt_embeds`` whether a request may send input embeddings (soft tokens; off by default), and
+    ``deterministic`` whether a separate app uses batch-invariant kernels (off by default)."""
 
     precision: Precision
     revision: str | None
@@ -220,6 +229,7 @@ class ServeConfig:
     hf_secret: str | None = None
     prompt_embeds: bool = False
     max_inputs: int = DEFAULT_MAX_INPUTS
+    deterministic: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServeConfig:
@@ -241,6 +251,7 @@ class ServeConfig:
             gpu_snapshot=env.get(SNAPSHOT_ENV, "").strip() == "1", vllm_version=version,
             hf_secret=hf_secret, prompt_embeds=env.get(PROMPT_EMBEDS_ENV, "").strip() == "1",
             max_inputs=max_inputs(env),
+            deterministic=serve_deterministic(env),
         )
 
     def pinned_revision(self) -> str:
@@ -299,11 +310,14 @@ def vllm_command(
 NATIVE_SAMPLER_ENV: Final = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 
-def vllm_env() -> dict[str, str]:
+def vllm_env(settings: ServeConfig | None = None) -> dict[str, str]:
     """The server's environment beside the secret: adapters load at runtime, by the client's
     ``/v1/load_lora_adapter``, and Hugging Face's cache stays on the weights volume."""
+    deterministic = serve_deterministic() if settings is None else settings.deterministic
     return {
         **NATIVE_SAMPLER_ENV,
+        # vLLM 0.28's LoRA shrink otherwise uses split-K atomic adds during prefill.
+        **({"VLLM_BATCH_INVARIANT": "1"} if deterministic else {}),
         "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True",
         "HF_HOME": f"{WEIGHTS_DIR}/hf",
         "HF_HUB_ENABLE_HF_TRANSFER": "1",

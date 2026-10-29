@@ -464,3 +464,44 @@ def test_serve_gpu_setting_default_is_today(monkeypatch: pytest.MonkeyPatch) -> 
     assert recorder.by("cls")[0]["gpu"] == "H100" and recorder.by("concurrent")[0]["max_inputs"] == 32
     (env,) = recorder.by("env")
     assert (env["values"][config.SERVE_GPU_ENV], env["values"][config.MAX_INPUTS_ENV]) == ("H100", "32")
+
+
+def test_deterministic_serving_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(config.DETERMINISTIC_ENV, raising=False)
+    off = ServeConfig.from_env({})
+    assert off.deterministic is False
+    assert "VLLM_BATCH_INVARIANT" not in config.vllm_env(off)
+    assert "VLLM_BATCH_INVARIANT" not in config.vllm_env()
+    assert config.serve_app_name(off.precision) == config.APP_NAME
+    for value in ("", "0", "true"):
+        assert ServeConfig.from_env({config.DETERMINISTIC_ENV: value}).deterministic is False
+    monkeypatch.setenv(config.REVISION_ENV, REVISION)
+    recorder = _Recorder()
+    _import_app(monkeypatch, recorder)
+    assert recorder.by("app") == [{"name": config.APP_NAME}]
+    assert config.DETERMINISTIC_ENV not in recorder.by("env")[0]["values"]
+    assert "VLLM_BATCH_INVARIANT" not in recorder.by("env")[0]["values"]
+
+
+@pytest.mark.parametrize(("gpu", "app"), [("L40S", "anjo-sleep-serve-det"),
+                                         ("H100", "anjo-sleep-serve-h100-det")])
+def test_deterministic_serving_uses_a_separate_app_and_bakes_settings_into_image(
+    monkeypatch: pytest.MonkeyPatch, gpu: str, app: str,
+) -> None:
+    monkeypatch.setenv(config.REVISION_ENV, REVISION)
+    monkeypatch.setenv(config.SERVE_GPU_ENV, gpu)
+    monkeypatch.setenv(config.DETERMINISTIC_ENV, " 1 ")
+    recorder = _Recorder()
+    module = _import_app(monkeypatch, recorder)
+    settings = module.SETTINGS
+    assert settings.deterministic is True
+    assert config.vllm_env(settings)["VLLM_BATCH_INVARIANT"] == "1"
+    assert config.vllm_env()["VLLM_BATCH_INVARIANT"] == "1"
+    assert config.serve_app_name(settings.precision) == app  # staging on the diagnostic host
+    assert config.serve_app_name(settings.precision, deterministic=False) != app
+    assert recorder.by("app") == [{"name": app}]
+    image_env = recorder.by("env")[0]["values"]
+    assert image_env["VLLM_BATCH_INVARIANT"] == image_env[config.DETERMINISTIC_ENV] == "1"
+    assert ServeConfig.from_env(image_env) == settings
+    off = ServeConfig.from_env({config.REVISION_ENV: REVISION, config.SERVE_GPU_ENV: gpu})
+    assert "VLLM_BATCH_INVARIANT" not in config.vllm_env(off)  # explicit config wins over host env
