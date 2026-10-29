@@ -150,6 +150,8 @@ def post_chat(
                 retries.counted()
                 retries.sleep(pause)
                 response, attempt = client.post(url, json=body, headers=headers), attempt + 1
+    except httpx.ConnectTimeout:  # no connection made in time: a failed connection, not a slow reply
+        raise ModelApiError(f"{where} failed in transport (ConnectTimeout)") from None
     except httpx.TimeoutException:
         raise ModelApiError(f"{where} timed out after {timeout_s:g}s") from None
     except httpx.HTTPError as exc:

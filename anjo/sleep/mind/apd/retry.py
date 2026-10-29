@@ -67,11 +67,11 @@ ATTEMPT_COOL_DOWN_S: Final = 60.0  # before the attempt after one a call ended (
 REPLY_MAX_TOKENS: Final = SPARK_MAX_OUT_TOKENS  # every generation reply's cap: the most one call is held for
 FIRST_TOKEN_S: Final = 60.0  # queueing and reading a long prompt, before the first token
 SLOW_TOKENS_PER_S: Final = 20.0  # a slow but healthy decode speed for Spark Open
-_IN_TRANSPORT: Final = (  # a timeout, or a connection refused or dropped: the network, never a status
-    r"timed out after |failed in transport \((?:ConnectError|ReadError|WriteError|CloseError|RemoteProtocolError)\)"
+_TRANSIENT: Final = re.compile(
+    r" (?:returned HTTP (?:429|5\d\d)$|timed out after "
+    r"|failed in transport \((?:ConnectError|ConnectTimeout|ReadError|WriteError|CloseError|RemoteProtocolError)\))"
 )
-_TRANSIENT: Final = re.compile(rf" (?:returned HTTP (?:429|5\d\d)$|{_IN_TRANSPORT})")
-_TRANSPORT: Final = re.compile(rf" (?:{_IN_TRANSPORT})")
+_CONNECT_FAILED: Final = re.compile(r" failed in transport \((?:ConnectError|ConnectTimeout)\)")
 
 
 def retryable(status: int) -> bool:
@@ -84,10 +84,12 @@ def transient(error: Exception) -> bool:
     return _TRANSIENT.search(str(error)) is not None
 
 
-def in_transport(error: Exception) -> bool:
-    """``model_api``'s message for a timeout or a refused or dropped connection, never an HTTP
-    status: the transient failures a network that is down gives (``gen_batch.Breaker``)."""
-    return _TRANSPORT.search(str(error)) is not None
+def connect_failed(error: Exception) -> bool:
+    """``model_api``'s message for a connection never made: refused, its host's name not found, its
+    network unreachable (httpx's ``ConnectError``) or its connect timing out (``ConnectTimeout``).
+    What a network that is down gives (``gen_batch.Breaker``); never a reply too slow (a read
+    timeout, a call's own deadline), a connection dropped once made, or an HTTP status."""
+    return _CONNECT_FAILED.search(str(error)) is not None
 
 
 def rate_limited(error: Exception) -> bool:

@@ -18,7 +18,7 @@ it spent (``ceiling``). Glimmer's pinned revision comes from the serving setting
 
 A run whose model call still fails after its retries fails alone, recorded; the others go on, and
 the command then stops with exit code 3. A life whose generation still fails is skipped the same
-way (``gen_batch``), but once attempts in a row across the run fail in transport, the network looks
+way (``gen_batch``), but once attempts in a row across the run fail to connect, the network looks
 down: nothing new starts, and the command stops with exit code 6 (``gen_batch.Breaker``). So does a session that can't carry the next run, or a
 hold with no room coming (``BudgetStop``): what finished is kept, and a rerun goes on from there. Every command runs under
 MIND's lock, after MIND's sweep (``mind.sweep``): leftover ``anjo-mind-`` sessions stopped, killed
@@ -131,7 +131,7 @@ REFUSED_CODE: Final = 2
 STOPPED: Final = 3
 BUSY: Final = 4
 CEILING: Final = 5  # the run's settled spend reached --max-usd
-NETWORK_DOWN: Final = 6  # attempts in a row failed in transport: the network looks down (``gen_batch.Breaker``)
+NETWORK_DOWN: Final = 6  # attempts in a row failed to connect: the network looks down (``gen_batch.Breaker``)
 EXIT_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 SERVING_COMMANDS: Final = ("run", "timing", "intervene", "kill-resume")
 SPARK_COMMANDS: Final = ("generate", "generate-pairs", *SERVING_COMMANDS)  # the commands that call Spark Open

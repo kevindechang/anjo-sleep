@@ -25,7 +25,8 @@ not (the unrelated item, the last day).
 backend's generator (``generators``) and read by its reader (``readers``), never mixed with
 another's, each saved with its record and its calls, each attempt held before it
 starts (``PAIR_CALLS``), a pair that still fails skipped and recorded, the ceiling checked before
-each attempt. Pairs are test material: the core never trains on them.
+each attempt, the run stopped once the network looks down (``gen_batch.Breaker``). Pairs are test
+material: the core never trains on them.
 """
 from __future__ import annotations
 
@@ -48,12 +49,14 @@ from anjo.sleep.mind.apd.families import Template
 from anjo.sleep.mind.apd.gen_batch import (
     GEN_PARALLEL,
     SKIPPED,
+    Breaker,
     CallFailed,
     failed_at,
     failing,
     kept_off,
     last_call,
     made_record,
+    network_stop,
     recorder,
     refuse_changed,
     refuse_mixed,
@@ -220,14 +223,20 @@ class GeneratedPair:
     verdicts: tuple[GateVerdict, ...]
 
 
-def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) -> GeneratedPair:
+def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None,
+                  breaker: Breaker | None = None) -> GeneratedPair:
     """``write_pair``'s attempts, each held before it starts, written by the backend's generator,
-    both histories gated by its reader, every try logged to ``log`` when given."""
+    both histories gated by its reader, every try logged to ``log`` when given. With a ``breaker``,
+    as ``gen_batch.generate_life``: how each attempt ended is counted, and no attempt starts, nor is
+    the pair skipped, once it has tripped."""
     model, writes = backend.read_by.reads_with(backend.provider), backend.generator.writes_with(backend.provider)
+    breaker = Breaker(limit=None) if breaker is None else breaker
     on_call: CallFailed | None = None  # the last attempt ended by a call
     for attempt in range(MAX_ATTEMPTS):
+        breaker.check()
         if on_call is not None:
             cool_down(backend)
+            breaker.check()
             on_call = None
         if backend.ceiling is not None:
             backend.ceiling.check()
@@ -241,16 +250,23 @@ def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) 
                                       keep_off=backend.keep_off)
                 except GenerationFailed as failed:
                     failed_at(log, failures.of_rule(attempt, failed))
+                    breaker.ended(None)
                     continue
                 verdicts = (*gates.check(made.failed, made.failed_problems, reader=reader, auditor=auditor,
                                          model=model),
                             *gates.check(made.kept, made.kept_problems, reader=reader, auditor=auditor, model=model))
         except CallFailed as failed:
+            breaker.ended(failed)
             on_call = failed
             continue
+        except SKIPPED as error:
+            breaker.ended(error)
+            raise
+        breaker.ended(None)
         if gates.passed(verdicts):
             return GeneratedPair(made, attempt + 1, verdicts)
         failed_at(log, *failures.of_verdicts(attempt, made.failed, verdicts))
+    breaker.check()
     raise GenerationError(f"no pair passed the gates in {MAX_ATTEMPTS} attempts{last_call(on_call)}")
 
 
@@ -271,10 +287,10 @@ def _name(spec: PairSpec) -> str:
     return f"pair {spec.seed} ({spec.template})"
 
 
-def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
+def _one(data: DataDir, spec: PairSpec, backend: Backend, *, breaker: Breaker | None = None) -> _Outcome:
     log, made = CallLog(on_failure=recorder(data, "generate-pairs-attempt", _name(spec))), None
     try:
-        made = generate_pair(spec, backend, log)
+        made = generate_pair(spec, backend, log, breaker)
     except SKIPPED as error:
         return _Outcome(spec, _Skip(spec, str(error) or type(error).__name__), tuple(log.failures))
     finally:
@@ -328,7 +344,8 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
     """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
     a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end. A pair's
     writer is given its topics (``keep_off``) as ``pairs_keep_off`` says, its made record saying so;
-    pairs on disk that disagree on it refuse a run with pairs to write."""
+    pairs on disk that disagree on it refuse a run with pairs to write. The network looking down
+    stops the run (``gen_batch.Breaker``, ``network_stop``)."""
     check("core-test", backend.generator, backend.provider)
     keep_off = pairs_keep_off(data)
     backend = dataclasses.replace(backend, keep_off=keep_off.on)
@@ -345,7 +362,9 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
         backend.ceiling.begin("pair(s) generated", len(todo))
     made: list[str] = []
     skipped: list[str] = []
-    with side_by_side(backend, [partial(_one, data, spec) for spec in todo], parallel) as results:
+    breaker = Breaker()  # one for the run, as generate_lives has
+    work = [partial(_one, data, spec, breaker=breaker) for spec in todo]
+    with network_stop(out, skipped), side_by_side(backend, work, parallel) as results:
         for outcome in results:
             found = outcome.found
             report_failures(out, _name(outcome.spec), outcome.failed)

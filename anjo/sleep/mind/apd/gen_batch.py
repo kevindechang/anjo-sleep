@@ -25,9 +25,10 @@
 - **What stops new work:** the run's ceiling (``CeilingReached``), a hold with no room while no
   other attempt is in flight (``BudgetStop``; with one in flight it waits for it to end), the
   network looking down (``NetworkDown``: ``NET_DOWN_ATTEMPTS`` attempts in a row across the run
-  ended on a call that failed in transport, ``Breaker``; the lives it stops are not recorded as
-  failed), a reply from the wrong model (``ModelMismatch``) or anything unexpected. No further life
-  starts, the ones running finish and are saved and printed, and the error is raised.
+  ended on a call that never connected, ``Breaker``; it stays tripped, the lives it stops are not
+  recorded as failed, and the ones skipped before it are named again, ``network_stop``), a reply
+  from the wrong model (``ModelMismatch``) or anything unexpected. No further life starts, the ones
+  running finish and are saved and printed, and the error is raised.
 - **A kill** (Ctrl-C, a signal's ``SystemExit``, any error out of the loop, ``Parallel``): no
   further life starts, the running ones make no further call or attempt, each settling its hold,
   and the command waits for every worker to end before MIND's lock is let go.
@@ -62,7 +63,7 @@ from anjo.sleep.model_api import ChatResult, ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
 SKIPPED: Final = (GenerationError, ModelApiError, gates.GateError)  # a life failing with these is skipped
-NET_DOWN_ATTEMPTS: Final = 3  # attempts in a row across a run ended in transport before it stops (``Breaker``)
+NET_DOWN_ATTEMPTS: Final = 3  # attempts in a row across a run that never connected, before it stops (``Breaker``)
 WORKER: Final = "apd-gen"  # the workers' thread names
 T = TypeVar("T")
 
@@ -254,35 +255,52 @@ class CallFailed(RuntimeError):
 
 
 class NetworkDown(RuntimeError):
-    """``NET_DOWN_ATTEMPTS`` attempts in a row ended on a call that failed in transport: the network
+    """``NET_DOWN_ATTEMPTS`` attempts in a row ended on a call that never connected: the network
     looks down, so no new attempt starts. It is no ``SKIPPED`` error: the lives it stops are not
     recorded as failed, and a rerun generates them."""
 
 
 class Breaker:
     """How the run's attempts ended, in the order they ended, across its lives' threads: one ended
-    on a call that failed in transport (``retry.in_transport``) adds one, any other ending (passed,
-    failed a rule or a gate, a status) starts the count again; at ``limit`` it trips (``None``:
-    never)."""
+    on a call that never connected (``retry.connect_failed``) adds one, any other ending (passed,
+    failed a rule or a gate, a status, a reply too slow, a connection dropped) starts the count
+    again; at ``limit`` it trips (``None``: never), and stays tripped whatever ends after."""
 
     def __init__(self, limit: int | None = NET_DOWN_ATTEMPTS) -> None:
         self._lock = threading.Lock()
         self._limit = limit
         self._in_a_row = 0
-        self._last = ""
+        self._down: str | None = None  # why it tripped, once it has
 
     def ended(self, error: Exception | None) -> None:
         with self._lock:
-            if isinstance(error, (CallFailed, ModelApiError)) and retry.in_transport(error):
-                self._in_a_row, self._last = self._in_a_row + 1, str(error)
-            else:
+            if self._down is not None:
+                return
+            if not (isinstance(error, (CallFailed, ModelApiError)) and retry.connect_failed(error)):
                 self._in_a_row = 0
+                return
+            self._in_a_row += 1
+            if self._limit is not None and self._in_a_row >= self._limit:
+                self._down = f"{self._in_a_row} attempts in a row failed to connect (last: {error})"
 
     def check(self) -> None:
         """``NetworkDown`` once it has tripped."""
         with self._lock:
-            if self._limit is not None and self._in_a_row >= self._limit:
-                raise NetworkDown(f"{self._in_a_row} attempts in a row failed in transport (last: {self._last})")
+            if self._down is not None:
+                raise NetworkDown(self._down)
+
+
+@contextmanager
+def network_stop(out: Out, skipped: Sequence[str]) -> Iterator[None]:
+    """A run the network stops (``NetworkDown``): what it skipped before the stop (``skipped``, as
+    it stands then) named again before the stop is raised on, as ``batch.check_failed`` would."""
+    try:
+        yield
+    except NetworkDown:
+        if skipped:
+            out(f"Before the stop, {len(skipped)} failed and weren't saved ({', '.join(skipped)}); "
+                "a rerun generates them again.")
+        raise
 
 
 def last_call(failed: CallFailed | None) -> str:
@@ -468,7 +486,8 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
                    parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
     """Every life of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved,
     its problems sealed; lines in the specs' order, and with a ceiling what the run has settled per
-    life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end."""
+    life after each. A life that fails is skipped and recorded; ``RunsFailed`` names them at the end,
+    or ``network_stop`` before the network looking down stops the run (``Breaker``)."""
     for split in dict.fromkeys(spec.split for spec in specs):
         check(split, backend.generator, backend.provider)
         readers.check(split, backend.read_by)
@@ -480,7 +499,8 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
     made: list[str] = []
     skipped: list[str] = []
     breaker = Breaker()  # one for the run: the network looking down stops it (``NetworkDown``)
-    with side_by_side(backend, [partial(_one, data, spec, breaker=breaker) for spec in todo], parallel) as results:
+    work = [partial(_one, data, spec, breaker=breaker) for spec in todo]
+    with network_stop(out, skipped), side_by_side(backend, work, parallel) as results:
         for outcome in results:
             found = outcome.found
             report_failures(out, spec_name(outcome.spec), outcome.failed)
