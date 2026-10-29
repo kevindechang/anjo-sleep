@@ -33,6 +33,11 @@ B12_SEEDS: Final = (
     24669217588998, 77366009082834, 85947257106673, 88458211401902, 160925515386209, 168367185272422,
     176842782688129, 216932522140416, 235428662265663, 246609441459095, 262351798521200, 280154879010824,
 )  # drawn 2026-10-28, before any core-test life was generated
+# Amended 2026-10-29, before any core-test life or pair existed: the three core-test reversal plant
+# lines (wedding-salty-lamb, theatre-hoarse-lead, photo-green-cast) changed text under the same ids.
+# Each said its problem was gone, which gave the whole item away on its own day, so the leak gate
+# failed every life that drew one (``core_families``). The split, its draw, b12 and the pair specs
+# are unchanged; a life's made record keeps its field's template texts (``texts_digest``).
 
 
 def core_specs(split: CoreSplit) -> tuple[LifeSpec, ...]:

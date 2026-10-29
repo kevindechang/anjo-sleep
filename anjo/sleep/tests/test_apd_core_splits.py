@@ -56,8 +56,10 @@ def test_splits_hold_out_templates() -> None:
         for name in core_families.fields(split):  # every field can fill a life, with every family
             found = core_families.templates_for(split, name)
             assert len(found) == MAX_PREVALENCE and {t.family for t in found} == set(FAMILIES)
-    # core-train keeps APD's development templates unchanged, and they are its only borrowed ones
-    assert set(families.TEMPLATES["development"]) <= set(by_split["core-train"])
+    # core-train keeps APD's development templates unchanged, and they are its only borrowed ones,
+    # but for the reversals it keeps out (their plant line states its outcome)
+    kept = {t for t in families.TEMPLATES["development"] if t.id not in core_families.CORE_KEPT_OUT}
+    assert kept <= set(by_split["core-train"]) and len(kept) == len(families.TEMPLATES["development"]) - 1
 
 
 def test_core_split_sizes_and_problem_free_lives() -> None:
