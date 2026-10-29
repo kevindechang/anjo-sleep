@@ -301,11 +301,26 @@ def _all_ties(against: dict[str, dict[str, object]]) -> dict[str, dict[str, obje
     return {name: _stat(0, int(str(stat["n"])), 0, 0.5, None, (0.5, 0.5)) for name, stat in against.items()}
 
 
+def _rounded(value: float | None) -> float | None:
+    """A diagnostic margin at four decimals; ``None`` stays ``None``."""
+    return None if value is None else round(value, 4)
+
+
 def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome | None]) -> list[dict[str, object]]:
-    """Ids and codes only: enough to recount any result, with no text. A probe with no verdict says so."""
-    return [{"probe": p.id, "pair": pair, "kind": p.kind, "outcome": NO_VERDICT, "flip": False} if f is None else
-            {"probe": f.probe_id, "pair": pair, "kind": f.kind, "outcome": f.outcome, "flip": f.flipped}
-            for p, f in zip(probes, found, strict=True)]
+    """Ids and codes only: enough to recount any result, with no text. A probe with no verdict says so.
+    A ``taste_ab`` row also carries each arm's log-probability margin toward the expected option."""
+    rows: list[dict[str, object]] = []
+    for p, f in zip(probes, found, strict=True):
+        if f is None:
+            rows.append({"probe": p.id, "pair": pair, "kind": p.kind, "outcome": NO_VERDICT, "flip": False})
+            continue
+        row: dict[str, object] = {"probe": f.probe_id, "pair": pair, "kind": f.kind, "outcome": f.outcome,
+                                  "flip": f.flipped}
+        if f.kind == "taste_ab":
+            row["margin_a"] = _rounded(f.margin_a)
+            row["margin_b"] = _rounded(f.margin_b)
+        rows.append(row)
+    return rows
 
 
 def _answer(

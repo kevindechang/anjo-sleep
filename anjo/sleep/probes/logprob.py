@@ -38,6 +38,22 @@ class TasteChoice:
         return None if self.picked is None else self.picked == expected
 
 
+def expected_margin(choice: TasteChoice, probe: Probe) -> float | None:
+    """How far ``choice``'s log-probabilities lean toward ``probe.expected``, averaged over both
+    orders: per order, the log-probability of the label that showed the expected option minus the
+    other label's. Positive means the arm leans toward the expected option. ``None`` when the probe
+    has no expected option among its options."""
+    options = probe.options
+    if options is None or probe.expected is None or probe.expected not in options:
+        return None
+    expected = options.index(probe.expected)
+    differences = [
+        logprobs[order.index(expected)] - logprobs[1 - order.index(expected)]
+        for order, logprobs in zip(ORDERS, (choice.order_1, choice.order_2), strict=True)
+    ]
+    return sum(differences) / len(differences)
+
+
 def present(
     probe: Probe, order: tuple[int, int], context: str | None,
 ) -> list[dict[str, str]]:

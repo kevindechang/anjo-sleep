@@ -2,7 +2,11 @@
 """taste_ab by log-probability forced choice (Task 2): both orders, no judge, no sampling."""
 from __future__ import annotations
 
-from anjo.sleep.probes.logprob import LABELS, forced_choice, present
+from dataclasses import replace
+
+import pytest
+
+from anjo.sleep.probes.logprob import LABELS, TasteChoice, expected_margin, forced_choice, present
 from anjo.sleep.tests.sleep_fakes import FakeLogprobs, ckpt, options, taste
 
 
@@ -67,3 +71,29 @@ def test_system_context_goes_first_and_options_are_in_the_user_turn():
     assert msgs[0] == {"role": "system", "content": "CTX"} and msgs[1]["role"] == "user"
     assert options(p)[0] in msgs[1]["content"] and p.prompt in msgs[1]["content"]
     assert present(p, (0, 1), None)[0]["role"] == "user"
+
+
+def test_expected_margin_leans_toward_the_first_option_in_both_orders():
+    p = taste()  # expected is options[0]: label A in (0, 1), label B in (1, 0)
+    choice = TasteChoice((-0.1, -2.0), (-2.0, -0.1), options(p)[0])
+    assert expected_margin(choice, p) == pytest.approx(1.9)
+
+
+def test_expected_margin_leans_toward_the_second_option_in_both_orders():
+    base = taste()
+    p = replace(base, expected=options(base)[1])  # label B in (0, 1), label A in (1, 0)
+    choice = TasteChoice((-2.0, -0.1), (-0.1, -2.0), options(p)[1])
+    assert expected_margin(choice, p) == pytest.approx(1.9)
+
+
+def test_expected_margin_averages_the_two_orders():
+    p = taste()  # +1.0 in (0, 1), -2.0 in (1, 0)
+    choice = TasteChoice((0.0, -1.0), (-1.0, -3.0), options(p)[0])
+    assert expected_margin(choice, p) == pytest.approx(-0.5)
+
+
+def test_expected_margin_is_none_without_an_expected_option():
+    p = taste()
+    choice = TasteChoice((-0.1, -2.0), (-2.0, -0.1), options(p)[0])
+    assert expected_margin(choice, replace(p, expected=None)) is None
+    assert expected_margin(choice, replace(p, expected="not one of the options")) is None
