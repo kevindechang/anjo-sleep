@@ -9,6 +9,8 @@ import ast
 import hashlib
 import json
 import re
+import threading
+import time
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -354,3 +356,79 @@ def test_a_ceiling_is_scored_beside_the_base_and_labelled_never_a_result(tmp_pat
                  ["--ceiling", f"x={ceiling}", "--ceiling", f"x={_adapter('other', 1)}"]):
         with pytest.raises(SystemExit):  # an account or a ceiling, each named once, an adapter by its volume name
             knowledge_score.main(argv, environ={}, client=never, wake=never, ledger=never, root=tmp_path, day_text=never)
+
+
+class _Counting(FakeClient):
+    """Records the most calls it had in flight at once."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.inflight, self.most, self.lock = 0, 0, threading.Lock()
+
+    def continuation_logprobs(self, adapter: Any, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        with self.lock:
+            self.inflight += 1
+            self.most = max(self.most, self.inflight)
+        time.sleep(0.0002)  # long enough for a second worker to come in, were there one
+        try:
+            return super().continuation_logprobs(adapter, messages, continuation)
+        finally:
+            with self.lock:
+                self.inflight -= 1
+
+
+class _Drifting(FakeClient):
+    """After ``after`` calls the base finds every true line likely: what a server whose numbers depend on
+    the batch can do between two passes."""
+
+    def __init__(self, after: int, truths: frozenset[str]) -> None:
+        super().__init__(denied=truths)
+        self.after, self.truths = after, truths
+
+    def continuation_logprobs(self, adapter: Any, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        drifted = len(self.sent) >= self.after and adapter is None and continuation in self.truths
+        found = super().continuation_logprobs(adapter, messages, continuation)
+        return (-1.0, 2.0) if drifted else found
+
+
+def test_scoring_sends_one_request_at_a_time(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _life(tmp_path, "acct-seed", "seed", 1)
+    client = _Counting()
+    _run(tmp_path, client, {"seed": "acct-seed"}, lambda account, window: [], capsys)
+    assert len(client.sent) == 2 * sum(len(item.choices) for item in _items()) and client.most == 1
+
+
+def test_repeat_scores_the_base_and_one_adapter_again_and_prints_the_receipt(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    items, never = _items(), _Never()
+    _life(tmp_path, "acct-seed", "seed", 2)
+    assert knowledge_score.main(["--account", "seed=acct-seed", "--repeat"], environ={}, client=never, wake=never,
+                                ledger=never, root=tmp_path, day_text=never) == 0
+    out = capsys.readouterr().out
+    assert "5 adapters" in out and "repeat" in out  # the base, two nights, and the base and night 1 again
+    client = FakeClient({_adapter("seed", 1): {item.statement for item in items}})
+    lines = _run(tmp_path, client, {"seed": "acct-seed"}, lambda account, window: [], capsys, "--repeat")
+    choices = sum(len(item.choices) for item in items)
+    assert len(client.sent) == 5 * choices
+    assert [name for name, _, _ in client.sent[-2 * choices:]] == [None] * choices + [_adapter("seed", 1)] * choices
+    repeats = {line["scored"]: line for line in lines if line.get("line") == "repeat"}
+    assert set(repeats) == {"base", _adapter("seed", 1)}
+    for line in repeats.values():  # the same server, the same numbers: the receipt says so
+        assert line["max_logprob_diff"] == 0.0 and line["accuracy_diff"] == 0.0 and line["flipped"] == []
+        assert line["items"] == len(items) and line["reproducible"] is True
+    truths = frozenset(item.statement for item in items)
+    drifting = _Drifting(3 * choices, truths)  # the base, then two nights, then the base again finds them all
+    lines = _run(tmp_path, drifting, {"seed": "acct-seed"}, lambda account, window: [], capsys, "--repeat")
+    base = next(line for line in lines if line.get("line") == "repeat" and line["scored"] == "base")
+    assert base["max_logprob_diff"] == pytest.approx(7.0) and base["reproducible"] is False
+    assert base["accuracy_diff"] == pytest.approx(1.0) and base["flipped"] == sorted(item.id for item in items)
+    assert not any(item.statement in json.dumps(lines) for item in items)
+
+
+def test_a_pick_that_changes_on_a_near_tie_is_not_reproduced() -> None:
+    item = _items()[0]
+    first = {item.id: tuple(0.0002 if n == item.answer else 0.0 for n in range(len(item.choices)))}
+    again = {item.id: tuple(0.0003 if n != item.answer else 0.0002 for n in range(len(item.choices)))}
+    line = knowledge_score.repeat_line([item], first, again)
+    assert line["max_logprob_diff"] <= knowledge_score.REPRODUCIBLE_NATS and line["flipped"] == [item.id]
+    assert line["reproducible"] is False and line["accuracy_diff"] == pytest.approx(-1.0)

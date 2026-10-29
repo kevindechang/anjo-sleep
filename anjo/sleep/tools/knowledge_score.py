@@ -41,6 +41,17 @@ arms): scored as a night is, on every item (it was trained on every statement), 
 ``ceiling`` line marked CEILING with its paired difference from the base. Contamination by design: it
 says what the pipeline can store when handed the answers, never a result.
 
+**Reproducible** (2026-10-29): the app serves Glimmer at FP8 with activations quantized on the fly, one
+scale for each layer's whole batch (``config.SERVING``, ``--quantization fp8``), and vLLM batches every
+request in flight together, other adapters' and other clients' included. So a line's log-probability
+depends on what shared its batch: two runs 16 at a time moved one adapter's accuracy by 14.5 points. The
+scorer sends one request at a time (``SCORING_WORKERS``), so each line is computed alone, the same way
+every time; its prefill is never a prefix-cache hit (vLLM computes a prompt-log-probability request
+whole). That holds only with nothing else on the app (no night, gate or morning serving: its one
+container batches every client together), which no client can see; ``--repeat`` is the receipt: the
+base and the first adapter scored again at the end, with the largest change in any choice's
+log-probability, the accuracy change and the items that flipped. Nights keep their own concurrency.
+
 **Spend:** it wakes the app (meant for a warm one) and scores for at most ``SCORE_MAX_S``; no adapter
 starts after it. That, the wake and Modal's idle window after the last request are held on
 ``modal_usd`` before the first request, and settled at what ran plus the idle window. The URL and token
@@ -74,9 +85,11 @@ from anjo.sleep.sets.loader import SetError
 from anjo.sleep.types import CheckpointRef
 
 POOL: Final = "modal_usd"
-SCORE_MAX_S: Final = 30 * 60.0
+SCORE_MAX_S: Final = 60 * 60.0
+SCORING_WORKERS: Final = 1  # one request in flight, so nothing of the scorer's shares its batch (Reproducible)
+REPRODUCIBLE_NATS: Final = 1e-3  # a repeat this close, choice by choice, with no pick changed, is the same number
 WAKE_S: Final = 600.0  # client.WAKE_TOTAL_TIMEOUT_S: a cold start's worst
-CALL_S: Final = 0.5  # an estimate, not measured: a choice's three round trips (two tokenizations, one prefill)
+CALL_S: Final = 0.5  # an estimate, not measured: a choice's three round trips (two tokenizations, one prefill), one at a time
 LOAD_S: Final = 10.0  # an estimate: loading one adapter from the volume
 RESAMPLES: Final = 2000
 CI_SEED: Final = 20261029
@@ -199,7 +212,7 @@ def seen(items: Sequence[KnowledgeItem], lines: Sequence[str]) -> frozenset[str]
 
 
 def score(client: LogprobClient, adapter: CheckpointRef | None, items: Sequence[KnowledgeItem],
-          workers: int = config.CONCURRENT_REQUESTS) -> dict[str, tuple[float, ...]]:
+          workers: int = SCORING_WORKERS) -> dict[str, tuple[float, ...]]:
     """Every choice's summed log-probability, the prompt alone as the person's one turn."""
     calls = [(item.prompt, choice) for item in items for choice in item.choices]
     sums = in_order(lambda call: math.fsum(client.continuation_logprobs(
@@ -263,6 +276,16 @@ def arm_line(items: Sequence[KnowledgeItem], base: Scores, arm: Scores, seen_ids
             "newly_right": sorted(k for k in right if right[k] and not base_right[k]),
             "newly_wrong": sorted(k for k in right if base_right[k] and not right[k]),
             "unseen": sorted(i.id for i in items if i.id not in seen_ids)}
+
+
+def repeat_line(items: Sequence[KnowledgeItem], first: Scores, again: Scores) -> dict[str, Any]:
+    """One scored side against its repeat: the largest change in a choice's summed log-probability, the
+    accuracy change, the items whose pick changed, and whether it reproduced."""
+    worst = max((abs(a - b) for i in items for a, b in zip(first[i.id], again[i.id], strict=True)), default=0.0)
+    flipped = sorted(i.id for i in items if _right(i, first[i.id]) != _right(i, again[i.id]))
+    accuracy = [_mean([float(_right(i, side[i.id])) for i in items]) or 0.0 for side in (first, again)]
+    return {"items": len(items), "max_logprob_diff": round(worst, 6), "accuracy_diff": round(accuracy[1] - accuracy[0], 4),
+            "flipped": flipped, "reproducible": worst <= REPRODUCIBLE_NATS and not flipped}
 
 
 def pair_line(items: Sequence[KnowledgeItem], a: Scores, b: Scores, seen_both: frozenset[str]) -> dict[str, Any]:
@@ -363,11 +386,13 @@ def _setting(env: Mapping[str, str], name: str) -> str:
 
 
 def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float,
-         ceilings: Mapping[str, str] | None = None) -> str:
+         ceilings: Mapping[str, str] | None = None, repeat: bool = False) -> str:
     ceilings = ceilings or {}
     adapters = 1 + sum(n.adapter is not None for life in lives.values() for n in life) + len(ceilings)
+    repeats = (1 + (adapters > 1)) if repeat else 0
+    adapters += repeats
     choices = sum(len(item.choices) for item in the_set.items)
-    seconds = adapters * choices * CALL_S / config.CONCURRENT_REQUESTS + adapters * LOAD_S
+    seconds = adapters * choices * CALL_S + adapters * LOAD_S
     expected = rate * (seconds + config.SCALEDOWN_S) / 3600.0
     held = rate * (SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600.0
     arms = "; ".join(f"{arm}: {len(life)} nights, {sum(n.adapter is not None for n in life)} trained, "
@@ -381,8 +406,11 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
         f"  arms      {arms or 'none'}",
         *([f"  ceilings  {', '.join(f'{label}={name}' for label, name in ceilings.items())}: CEILING, {CEILING}"]
           if ceilings else []),
-        f"  calls     {adapters} adapters (the base, every trained night and each ceiling) x {choices} choices = "
-        f"{adapters * choices} log-probability calls, prefill only, {config.CONCURRENT_REQUESTS} at once",
+        f"  calls     {adapters} adapters (the base, every trained night and each ceiling"
+        f"{', and the repeats' if repeats else ''}) x {choices} choices = {adapters * choices} log-probability calls, "
+        "prefill only, one at a time: run it with nothing else on the app (no night, gate or morning)",
+        *([f"  repeat    the base{' and the first adapter' if repeats > 1 else ''} scored again at the end: the "
+           "receipt (largest log-probability change, accuracy change, items flipped)"] if repeats else []),
         f"  expected  ~{seconds / 60:.1f} GPU min scoring, an estimate ({CALL_S} s a call, {LOAD_S:.0f} s an adapter "
         f"load), plus the {config.SCALEDOWN_S / 60:.0f}-min idle window: ~${expected:.2f} at ${rate:.2f}/h on "
         f"{gpu.name} with the app warm; a cold start adds its wake",
@@ -409,6 +437,8 @@ def main(
     parser.add_argument("--gpu", choices=tuple(gpus.GPUS), default=config.serve_precision(env).gpu)
     parser.add_argument("--usd-per-hour", type=float, help="the GPU's price an hour, if not the listed one")
     parser.add_argument("--url", help=f"the app's URL (default {backend.MODAL_URL_ENV})")
+    parser.add_argument("--repeat", action="store_true",
+                        help="score the base and the first adapter again at the end: the reproducibility receipt")
     parser.add_argument("--go", action="store_true", help="send the requests; without it, print the plan only")
     args = parser.parse_args(argv)
     accounts, ceilings = _accounts(parser, args.account), _ceilings(parser, args.ceiling)
@@ -424,7 +454,7 @@ def main(
         parser.error(f"no finished night under the results root for {', '.join(empty)}")
     gpu = gpus.GPUS[args.gpu]
     rate = args.usd_per_hour or gpu.usd_per_hour
-    out(plan(the_set, lives, gpu, rate, ceilings))
+    out(plan(the_set, lives, gpu, rate, ceilings, args.repeat))
     if not args.go:
         return 0
     reader = day_text or _app_day_text()
@@ -439,6 +469,7 @@ def main(
                                                  (POOL,), Bound(rate, SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S))
     started = clock()
     scored: dict[str | None, Scores] = {}
+    repeated: dict[str | None, Scores] = {}
     try:
         woke = wake()
         out(json.dumps({"line": "wake", "ok": woke.ok, "seconds": round(woke.seconds, 1)}))
@@ -447,13 +478,14 @@ def main(
         dated, deadline = client.on(EVAL_DAY), clock() + SCORE_MAX_S
         wanted = list(dict.fromkeys([None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None),
                                      *ceilings.values()]))
-        for name in wanted:
+        again = [None, *wanted[1:2]] if args.repeat else []  # the base and the first adapter, at the end
+        for n, name in enumerate([*wanted, *again]):
             if clock() >= deadline:
-                out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) - len(scored)}))
+                out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) + len(again) - n}))
                 break
             ref = None if name is None else CheckpointRef(name, "knowledge", EVAL_DAY, f"{config.ADAPTERS_DIR}/{name}",
                                                           None, rendering=client.rendering)
-            scored[name] = score(dated, ref, the_set.items)
+            (scored if n < len(wanted) else repeated)[name] = score(dated, ref, the_set.items)
     finally:
         if reservation is not None:  # what ran, and the idle window Modal bills after the last request
             reservation.settle(rate * (max(0.0, clock() - started) + config.SCALEDOWN_S) / 3600.0)
@@ -461,6 +493,9 @@ def main(
                     "items": len(the_set.items)}))
     if None in scored:
         _report(the_set, lives, scored, seen_by, out, ceilings)
+    for name, scores in repeated.items():
+        out(json.dumps({"line": "repeat", "scored": "base" if name is None else name,
+                        **repeat_line(the_set.items, scored[name], scores)}))
     return 0
 
 
