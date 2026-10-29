@@ -64,6 +64,7 @@ def test_plan_lists_development_accounts_and_writes_nothing(tmp_path: Path) -> N
     assert f"{results / 'researcher'} - 1 night folders" in text
     assert f"{results / 'film_founder'} - 0 night folders" in text
     assert f"{results / 'film_student'} - missing" in text
+    assert "derived=unknown, recorded=unknown (plan reads no nights; counts after fit)" in text
     assert "plan only: nothing written" in text
     assert not path.exists()
 
@@ -240,3 +241,22 @@ def test_go_refuses_an_existing_fit_without_replace_and_replaces_with_a_reason(
     assert code == 0, text
     assert "four lives resolved more rows" in text
     assert load_estimator(path) == replacement
+
+
+def test_default_fit_reports_row_sources_in_registration_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = _tree(tmp_path / "results", {})
+    lines: list[str] = []
+
+    def fit(roots, *, is_synthetic, lives, report_counts):
+        report_counts(8, 4)
+        return COEFFICIENTS
+
+    monkeypatch.setattr(fit_estimator, "fit_from_logs", fit)
+    code = fit_estimator.main(
+        ["--results", str(results), "--go"], out=lines.append,
+        is_synthetic=lambda uid: True, estimator=tmp_path / "estimator.json",
+    )
+    assert code == 0
+    assert "fit rows: derived=8, recorded=4 (resolved rows only)" in lines
