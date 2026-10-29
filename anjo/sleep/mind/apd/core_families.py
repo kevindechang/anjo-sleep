@@ -198,13 +198,13 @@ _TRAIN: Final = (
         "Can you help me line up the kitchen work for the week of the 21st?",
         "The floors (25th) come after the cabinets (22nd), the wrong order; move the cabinet delivery past the 25th "
         "and pay the reschedule fee."),
-    _t("film-rehearsal-late-core", "decoy", _FILM, "the lead actor's rehearsal time", (
+    _t("film-rehearsal-late-core-v2", "decoy", _FILM, "the lead actor's rehearsal time", (
         "The lead actor arrived at 7:40 pm to tonight's rehearsal.",
         "The call sheet said 7:00 pm for everyone.",
-    ), "I texted the lead actor that she could come to rehearsals at 7:40 pm this month because of her evening "
-       "class.",
+    ), "This month the lead actor has an evening class across town that ends at 7:15 pm, and I agreed she "
+       "would come to rehearsals straight from it.",
         "Is the lead actor's 7:40 pm arrival at rehearsal something I should worry about?",
-        "Not a problem: she was told she could come at 7:40 pm because of her evening class."),
+        "Not a problem: her evening class ends at 7:15 pm across town, and I agreed she'd come straight from it."),
     _t("bake-night-oven-core", "contradiction", _BAKERY, "the wholesale order on the 18th", (
         "By agreement with the neighbours, my oven can't run before 4 am.",
         "The wholesale order for Friday the 18th is 960 loaves due at the cafe by 7 am, and my oven makes 80 "

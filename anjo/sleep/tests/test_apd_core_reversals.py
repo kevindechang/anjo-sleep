@@ -5,7 +5,9 @@ A line that also said the problem was gone (``dry since``, ``loved it``) gave th
 its own day, so the leak gate (``leak_v1.md``) failed every life that drew it. APD's own templates
 stay frozen: the one the core drew that states its outcome is kept out of the core's draws instead.
 A plant line also never names the apparent problem beside what dissolves it ("the line on the desk
-top sits in the wax coat" was both halves on one day). Pure: no model is called."""
+top sits in the wax coat" was both halves on one day), and neither does a decoy's: "she could come
+at 7:40 pm" named the arrival it explained, and the leak gate flagged it, alone or with the next
+day, in all three of one life's attempts (batch 6). Pure: no model is called."""
 from __future__ import annotations
 
 import re
@@ -130,3 +132,16 @@ def test_reno_tile_shade_holds_on_every_day_its_draws_put_it() -> None:
         assert plan.origin_days[0] < plan.disambiguating_day < plan.surface_day
         for fact in (*tiles.origins, tiles.disambiguating, tiles.resolution):
             assert not WEEKDAY.search(fact) and "still damp" not in fact, fact
+
+
+def test_the_rehearsal_line_states_the_class_and_never_the_arrival_it_explains() -> None:
+    late = core_families.template("film-rehearsal-late-core-v2")
+    assert late is not None and late.family == "decoy" and core_families.template("film-rehearsal-late-core") is None
+    origins = set().union(*(_key_terms(origin) for origin in late.origins))
+    line = late.disambiguating.lower()
+    # the raw fact the reader joins to the 7:40 arrival: a class this month that ends at 7:15 pm, agreed
+    assert "7:15" in _key_terms(late.disambiguating) and "class" in line and "agreed" in line
+    # never the arrival it explains (``leak_v1.md``: both halves on one day)
+    assert not _key_terms(late.disambiguating) & origins
+    assert not any(word in line for word in ("7:40", "late", "arriv", "call sheet", "7:00"))
+    assert "7:40" in late.surface and "7:15" in late.resolution
