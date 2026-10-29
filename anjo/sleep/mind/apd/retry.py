@@ -67,10 +67,11 @@ ATTEMPT_COOL_DOWN_S: Final = 60.0  # before the attempt after one a call ended (
 REPLY_MAX_TOKENS: Final = SPARK_MAX_OUT_TOKENS  # every generation reply's cap: the most one call is held for
 FIRST_TOKEN_S: Final = 60.0  # queueing and reading a long prompt, before the first token
 SLOW_TOKENS_PER_S: Final = 20.0  # a slow but healthy decode speed for Spark Open
-_TRANSIENT: Final = re.compile(
-    r" (?:returned HTTP (?:429|5\d\d)$|timed out after "
-    r"|failed in transport \((?:ConnectError|ReadError|WriteError|CloseError|RemoteProtocolError)\))"
+_IN_TRANSPORT: Final = (  # a timeout, or a connection refused or dropped: the network, never a status
+    r"timed out after |failed in transport \((?:ConnectError|ReadError|WriteError|CloseError|RemoteProtocolError)\)"
 )
+_TRANSIENT: Final = re.compile(rf" (?:returned HTTP (?:429|5\d\d)$|{_IN_TRANSPORT})")
+_TRANSPORT: Final = re.compile(rf" (?:{_IN_TRANSPORT})")
 
 
 def retryable(status: int) -> bool:
@@ -81,6 +82,12 @@ def retryable(status: int) -> bool:
 def transient(error: Exception) -> bool:
     """``model_api``'s message for a 429, a 5xx, a timeout or a dropped connection."""
     return _TRANSIENT.search(str(error)) is not None
+
+
+def in_transport(error: Exception) -> bool:
+    """``model_api``'s message for a timeout or a refused or dropped connection, never an HTTP
+    status: the transient failures a network that is down gives (``gen_batch.Breaker``)."""
+    return _TRANSPORT.search(str(error)) is not None
 
 
 def rate_limited(error: Exception) -> bool:
