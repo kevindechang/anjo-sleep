@@ -5,9 +5,10 @@ night run on that window and the virtual date, in the past; records are labeled;
 offline and deterministic."""
 from __future__ import annotations
 
+import argparse
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -55,6 +56,144 @@ def test_accelerated_results_are_labeled(tmp_path: Path, person: Persona) -> Non
     assert _summary(final[0].log_path)["label"] == "final"
     with pytest.raises(ValueError, match="label"):
         run_accelerated("u3", FOUNDER, 1, START, rig=fake.rig(), label="draft")
+
+
+# ── a final run must be on the frozen code (Task 12b) ─────────────────────────
+
+
+def test_final_label_without_require_sha_is_refused_on_real_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake = FakeAccelerated(tmp_path)
+    touched: list[object] = []
+
+    def simulate(uid: str, person: object, i: int, seed: int) -> DayRun:
+        touched.append(uid)
+        raise AssertionError("a refused run simulates no day")
+
+    def deps_for(night: date) -> NightDeps:
+        touched.append(night)
+        raise AssertionError("a refused run runs no night")
+
+    rig = replace(fake.rig(sha=None), simulate=simulate, deps_for=deps_for)  # sha=None: this commit's code
+    with pytest.raises(AcceleratedError, match="frozen"):
+        run_accelerated("u1", FOUNDER, 1, START, rig=rig, label="final")
+    assert touched == [] and fake.world.events == []
+    real = ["--wiring", "x:y", "--simulate", "x:z", "--morning", "x:w", "--days", "2", "--start", "2026-10-20",
+            "--user", "u1", "--persona", "film_founder", "--label", "final"]
+    with pytest.raises(SystemExit):  # the command refuses it before any sweep, VM or call
+        accelerated.main(real)
+    assert "require-sha" in capsys.readouterr().err
+
+
+def test_accelerated_refuses_when_head_differs_from_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    wrong = "0" * 40 if accelerated.git_sha() != "0" * 40 else "f" * 40
+    with pytest.raises(AcceleratedError, match="frozen"):
+        run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(sha=None), label="final", require_sha=wrong)
+    assert fake.world.events == []  # refused before any day simulated or night run
+
+
+def test_accelerated_accepts_matching_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    head = accelerated.git_sha()
+    results = run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(sha=None), label="final", require_sha=head)
+    assert [r.status for r in results] == ["promoted"]
+    summary = _summary(results[0].log_path)
+    assert summary["git_sha"] == head and summary["label"] == "final"
+
+
+def test_fake_final_runs_ignore_require_sha(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    results = run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(), label="final", require_sha="0" * 40)
+    assert [r.status for r in results] == ["promoted"]
+    assert _summary(results[0].log_path)["git_sha"] == FAKE_SHA  # a fake run's own sha, not the given one
+    assert accelerated.main(["--fake", "--days", "1", "--label", "final"]) == 0
+    assert accelerated.main(["--fake", "--days", "1", "--label", "final", "--require-sha", "0" * 40]) == 0
+    # not on git, a fake run ignores --require-sha whatever it looks like, not only a well-formed sha
+    assert accelerated.main(["--fake", "--days", "1", "--label", "final", "--require-sha", "abcd"]) == 0
+
+
+def test_a_real_final_run_refuses_a_wrong_sha_before_the_sweep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from anjo.sleep.night import __main__ as night_command
+
+    swept: list[bool] = []
+
+    @contextmanager
+    def sweep(ledger: object, stop: object) -> Iterator[object]:
+        swept.append(True)  # the sweep stops leftover Colab/Modal sessions and settles open holds
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("anjo.sleep.night.sweep.swept_night", sweep)
+    monkeypatch.setattr(night_command, "night_cfg", lambda: object())
+    monkeypatch.setattr(night_command, "chosen_runner",
+                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal"))
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    wrong = "0" * 40 if accelerated.git_sha() != "0" * 40 else "f" * 40
+    args = argparse.Namespace(wiring="builtins:print", simulate="builtins:print", morning="builtins:print",
+                              users=["u1"], personas=["film_founder"], label="final", require_sha=wrong,
+                              days=1, start=START, seed=1, mind=False, match_file=None)
+    with pytest.raises(SystemExit, match="frozen"):
+        accelerated._real(args, argparse.ArgumentParser())
+    assert swept == []  # wrong code touches nothing: no VM stopped, no hold settled, no day, no night
+
+
+def test_a_final_run_names_the_frozen_sha_before_it_reads_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    fake = FakeAccelerated(tmp_path)
+
+    def down(*args: object, **kw: object) -> str:
+        raise AcceleratedError("the git sha of this run can't be read")
+
+    monkeypatch.setattr(accelerated, "git_sha", down)
+    with pytest.raises(AcceleratedError, match="frozen"):  # the missing flag, not a git that can't be read
+        run_accelerated("u1", FOUNDER, 1, START, rig=fake.rig(sha=None), label="final")
+
+
+def test_the_frozen_sha_is_refused_before_a_future_start(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    wrong = "0" * 40 if accelerated.git_sha() != "0" * 40 else "f" * 40
+    with pytest.raises(AcceleratedError, match="frozen"):  # the wrong code, not the future date
+        run_accelerated("u1", FOUNDER, 1, date(2099, 1, 1), rig=fake.rig(sha=None), label="final", require_sha=wrong)
+
+
+def test_a_real_run_does_not_turn_a_late_accelerated_error_into_a_system_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from contextlib import contextmanager, nullcontext
+    from types import SimpleNamespace
+
+    from anjo.sleep.night import __main__ as night_command
+
+    @contextmanager
+    def sweep(ledger: object, stop: object) -> Iterator[object]:
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("anjo.sleep.night.sweep.swept_night", sweep)
+    monkeypatch.setattr("anjo.sleep.serving.backend.phase", nullcontext)
+    monkeypatch.setattr("anjo.sleep.train.trainer.LoraTrainer", lambda *a, **k: object())
+    monkeypatch.setattr(night_command, "night_cfg", lambda: object())
+    monkeypatch.setattr(night_command, "_publisher", lambda name: (lambda *a, **k: None))
+    monkeypatch.setattr(night_command, "chosen_runner",
+                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal"))
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    head = accelerated.git_sha()
+
+    def late(*a: object, **k: object) -> object:
+        raise AcceleratedError("u1: the simulated day's window is empty")  # after night 1, not the sha
+
+    monkeypatch.setattr(accelerated, "run_accelerated_batch", late)
+    args = argparse.Namespace(wiring="builtins:print", simulate="builtins:print", morning="builtins:print",
+                              users=["u1"], personas=["film_founder"], label="final", require_sha=head,
+                              days=2, start=START, seed=1, mind=False, match_file=None)
+    with pytest.raises(AcceleratedError, match="window"):  # a mid-run failure still raises, not a clean exit
+        accelerated._real(args, argparse.ArgumentParser())
 
 
 def test_two_accelerated_days_extract_separate_evidence(tmp_path: Path) -> None:

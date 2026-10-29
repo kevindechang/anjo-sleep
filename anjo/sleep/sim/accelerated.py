@@ -6,7 +6,9 @@ it recorded, and then its night runs on that window and the virtual date ``start
 go through one ``run_night_batch_with`` call, so Task 5's night lock, sweep, holds and newest-reply
 path are reused, never re-implemented. Every night's ``summary.json`` is stamped with
 ``accelerated=True``, the git sha the run used, its label (``development`` or ``final``) and its day
-index, so no accelerated result can be read as a real person's.
+index, so no accelerated result can be read as a real person's. A final-label run on real code must
+also name the frozen sha (``--require-sha``): the run refuses any other commit before a day is
+simulated or a night runs. An offline fake run is not on git, so it ignores ``--require-sha``.
 
 A window that is empty, or starts before the life's previous window ended, stops the run: a
 second night reading the first day's lines again would train on them twice.
@@ -91,11 +93,16 @@ class AcceleratedError(RuntimeError):
 @dataclass(frozen=True)
 class Rig:
     """What a run needs from outside: the night's ports for a virtual date, the simulated day, and
-    (optionally) the git sha to stamp. ``simulate`` is ``(user_id, person, day_index, seed)``."""
+    (optionally) the git sha to stamp. ``simulate`` is ``(user_id, person, day_index, seed)``.
+
+    ``sha`` given marks a fake or offline run: its code is not read from git, so ``require_sha`` is
+    ignored. Left ``None``, the run reads this commit's sha, and a final one must be on
+    ``require_sha`` before any day is simulated or any night runs."""
 
     deps_for: Callable[[date], NightDeps]
     simulate: Callable[[str, Persona, int, int], DayRun]
     sha: str | None = None
+    require_sha: str | None = None
     # How long a life's simulated day took (seconds), told before its night: the Colab runner stops a
     # VM that would idle through a long day. ``vm_record(user_id, night)`` is that night's content-free
     # VM record (kept or stopped, idle seconds), stamped into the summary.
@@ -134,6 +141,35 @@ def git_sha(repo: Path = REPO) -> str:
     sha = done.stdout.strip()
     if done.returncode != 0 or len(sha) != 40:
         raise AcceleratedError("the git sha of this run can't be read")
+    return sha
+
+
+def is_sha(text: str) -> bool:
+    """Whether ``text`` is a full 40-character hex git sha (either case)."""
+    try:
+        return len(text) == 40 and int(text, 16) >= 0
+    except ValueError:
+        return False
+
+
+def _resolve_sha(supplied: str | None, require_sha: str | None, label: Label) -> str:
+    """The sha the run stamps. A fake or offline run (``supplied`` given) is not on git, so any
+    ``require_sha`` is ignored. Otherwise a final run must name the frozen sha (``require_sha``)
+    before this commit's sha is even read, and be on it: refused before any day is simulated or any
+    night runs."""
+    if supplied is not None:
+        return supplied
+    if require_sha is None:
+        if label == "final":
+            raise AcceleratedError(
+                "a final run must name the frozen code's sha with --require-sha (require_sha)")
+        return git_sha()
+    sha = git_sha()
+    wanted = require_sha.lower()
+    if sha != wanted:
+        raise AcceleratedError(
+            f"this run is on {sha}, not the frozen {wanted}: a final run must be on the frozen code, "
+            f"a separate checkout of the sleep-freeze tag")
     return sha
 
 
@@ -190,17 +226,18 @@ def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult)
 
 def run_accelerated_batch(
     lives: Sequence[tuple[str, Persona]], days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
-    label: str = "development", sweep: Sweep | None = None,
+    label: str = "development", sweep: Sweep | None = None, require_sha: str | None = None,
 ) -> dict[str, list[NightResult]]:
     """Run ``days`` days for every life in lockstep; each night is the life's own virtual date, in
-    the past (``check_dates``, before anything runs)."""
+    the past (``check_dates``, before anything runs). A final run on real code must be on the frozen
+    ``require_sha`` (or the rig's), refused first of all, before ``check_dates``, any day or any night."""
     if days < 1:
         raise ValueError("days is at least 1")
-    check_dates(start, days, rig.now())
     kind = _check_label(label)
     if len({uid for uid, _ in lives}) != len(lives):
         raise ValueError("each life has its own user id")
-    sha = rig.sha if rig.sha is not None else git_sha()
+    sha = _resolve_sha(rig.sha, require_sha if require_sha is not None else rig.require_sha, kind)
+    check_dates(start, days, rig.now())
     out: dict[str, list[NightResult]] = {uid: [] for uid, _ in lives}
     last_end: dict[str, datetime] = {}
     for i in range(days):
@@ -230,11 +267,11 @@ def run_accelerated_batch(
 
 def run_accelerated(
     user_id: str, person: Persona, days: int, start: date, *, rig: Rig, seed: int = DEFAULT_SEED,
-    label: str = "development", sweep: Sweep | None = None,
+    label: str = "development", sweep: Sweep | None = None, require_sha: str | None = None,
 ) -> list[NightResult]:
     """One life: a batch of one."""
     return run_accelerated_batch([(user_id, person)], days, start, rig=rig, seed=seed, label=label,
-                                 sweep=sweep)[user_id]
+                                 sweep=sweep, require_sha=require_sha)[user_id]
 
 
 # ── the command line ─────────────────────────────────────────────────────────
@@ -304,16 +341,18 @@ def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: 
     return dated
 
 
-def _fake(days: int, start: date | None, seed: int, mind: bool, parser: argparse.ArgumentParser) -> int:
+def _fake(days: int, start: date | None, seed: int, mind: bool, label: str,
+          parser: argparse.ArgumentParser) -> int:
     """The whole loop on fakes: no model, no GPU, no network, no data dir, on the rig's fake clock.
-    ``mind`` turns on MIND's inquiry on a fake thinker."""
+    ``mind`` turns on MIND's inquiry on a fake thinker. A fake run is not on git, so a final one
+    (``label``) needs no ``--require-sha`` and any given one is ignored."""
     rig_module = importlib.import_module("anjo.sleep.tests.accelerated_rig")  # test support, loaded only here
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
     clock = rig_module.FakeClock()
     start = _dated(parser, start, days, clock.now)
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
         fake = rig_module.FakeAccelerated(Path(root), clock=clock, mind_from=start if mind else None)
-        results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed)
+        results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed, label=label)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
         print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
         return _exit(results)  # while the run's folder still holds its logs
@@ -377,6 +416,12 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error(str(error))
     if subset is not None and args.label == "final":
         parser.error("a final run scores the full morning: unset ANJO_SLEEP_MORNING_SUBSET")
+    if args.label == "final" and args.require_sha is None:  # a fake run never reaches here
+        parser.error("a final run must name the frozen code's sha: --require-sha <40 hex chars>")
+    try:  # the sha first of all: wrong code is refused before the sweep, any VM or any call
+        _resolve_sha(None, args.require_sha, _check_label(args.label))
+    except AcceleratedError as refused:
+        raise SystemExit(str(refused)) from None
     start = _dated(parser, args.start, args.days, datetime.now(timezone.utc))  # before any sweep, VM or call
     cfg = night_command.night_cfg()  # likewise: an unknown ANJO_SLEEP_OBJECTIVE stops here
     if args.match_file is not None:
@@ -402,7 +447,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
                 night=night, personas=personas, mind_inquiry=args.mind)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
-                      score=score, subset=subset, **hooks)
+                      score=score, subset=subset, require_sha=args.require_sha, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept)
@@ -430,11 +475,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--mind", action="store_true", help="MIND's inquiry in each night (Task 17)")
     parser.add_argument("--match-file", type=Path, default=None,
                         help="the live comparison's matched control only: JSON of each night's date and budget minutes")
+    parser.add_argument("--require-sha", default=None,
+                        help="the frozen code's 40-character git sha a real final run must be on")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days is at least 1")
-    if args.fake:
-        return _fake(args.days, args.start, args.seed, args.mind, parser)
+    if args.fake:  # a fake run is not on git: it ignores --require-sha, well-formed or not
+        return _fake(args.days, args.start, args.seed, args.mind, args.label, parser)
+    if args.require_sha is not None and not is_sha(args.require_sha):
+        parser.error("--require-sha is a full 40-character hex git sha")
     return _real(args, parser)
 
 
