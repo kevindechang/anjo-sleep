@@ -6,11 +6,13 @@ Live 2026-10-29, one request at a time: a side of the knowledge set (202 choices
 which 405 posts were ``/tokenize`` (two a choice and the reply's header), each a round trip of about
 0.45 s to Modal, asking every adapter for ids the base had already given.
 
-**Why the model can be left out of the key.** An adapter is saved without a tokenizer (the trainers'
-``model.save_pretrained`` on the PEFT model writes the adapter's weights and config alone), so vLLM
-tokenizes a request naming it with the base model's tokenizer and chat template; and training renders
-every row with that same tokenizer at the pinned revision (``train.colab_train.served_ids``). So the
-base's ids are the ids each adapter was trained on, whatever model a body names. The key is the rest of
+**Why the model can be left out of the key.** An adapter folder the server loads holds exactly
+``config.ADAPTER_FILES``, the adapter's weights and its config: the training job copies those two files
+alone onto the adapters volume (``train.modal_job``), and ``config.check_adapter`` refuses a folder with
+any other file before an upload or a stage. So no tokenizer or chat template travels with an adapter, and
+vLLM tokenizes a request naming one with the base model's; and training renders every row with that same
+tokenizer at the pinned revision (``train.colab_train.served_ids``). So the base's ids are the ids each
+adapter was trained on, whatever model a body names. The key is the rest of
 the body, the date and reasoning strength of a chat included. Only token ids are kept; nothing else is.
 """
 from __future__ import annotations
