@@ -43,7 +43,7 @@ from anjo.sleep.mind.apd import failures, gates, readers
 from anjo.sleep.mind.apd.backend import GEN_READS_PER_ITEM, Backend, GenCalls, cool_down, held_attempt, item_reads
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
-from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for
+from anjo.sleep.mind.apd.core_families import PAIR_TEMPLATES, PairTemplate, template, templates_for, texts_digest
 from anjo.sleep.mind.apd.families import Template
 from anjo.sleep.mind.apd.gen_batch import (
     GEN_PARALLEL,
@@ -55,6 +55,7 @@ from anjo.sleep.mind.apd.gen_batch import (
     last_call,
     made_record,
     recorder,
+    refuse_changed,
     refuse_mixed,
     report_failures,
     side_by_side,
@@ -280,7 +281,7 @@ def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
         if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
             first = pair_id(pair_template(spec.template).field, spec.seed)
             data.save_calls(failed_log_id(first, data.call_log_ids()), [call.to_json() for call in log.calls])
-    data.save_made(made.pair.id, made_record(backend))
+    data.save_made(made.pair.id, {**made_record(backend), "templates": texts_digest("core-test", made.pair.failed.field)})
     data.save_calls(made.pair.id, [call.to_json() for call in log.calls])
     data.save_pair(made.pair)
     return _Outcome(spec, made, tuple(log.failures))
@@ -335,6 +336,7 @@ def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, o
     on_disk = data.pairs()
     refuse_mixed((life for pair in on_disk for life in (pair.failed, pair.kept)), backend, "the pairs", data,
                  [pair.id for pair in on_disk])
+    refuse_changed(((pair.id, pair.failed) for pair in on_disk), data, "the pairs")
     todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
     if todo and keep_off.mixed:
         raise StoreError(f"the pairs on disk are mixed on keep_off ({keep_off.detail}), and a new pair would mix "

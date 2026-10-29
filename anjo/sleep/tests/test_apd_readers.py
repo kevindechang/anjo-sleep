@@ -21,7 +21,8 @@ from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import calls, core_splits, fakes, gen_batch, generate, generators, labels, readers, retry
+from anjo.sleep.mind.apd import (calls, core_families, core_splits, fakes, gen_batch, generate, generators, labels,
+                                 readers, retry)
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.mind.apd.judging import GEMINI, MUSE, Rate
 from anjo.sleep.mind.apd.store import DataDir, StoreError
@@ -97,10 +98,11 @@ def test_the_command_line_defaults_a_core_split_to_deepseek_and_gemini_and_refus
     assert cli.main([*base, "--only", "1", "generate", "--split", "core-val"], out=lines.append) == 0
     assert cli.main([*base, "generate-pairs", "--n", "1"], out=lines.append) == 0
     (life,), (pair,) = DataDir(data).lives("core-val"), DataDir(data).pairs()
-    for made_id in (life.id, pair.id):
+    for made_id, texts in ((life.id, core_families.texts_digest("core-val", life.field)),
+                           (pair.id, core_families.texts_digest("core-test", pair.failed.field))):
         assert DataDir(data).made(made_id) == {
             "writer": "deepseek-v4p1-flash", "writer_model": fireworks_api.DEEPSEEK_V4P1_FLASH,
-            "trains": generators.DEEPSEEK.trains, "reader": "gemini", "reader_model": GEMINI_ID}
+            "trains": generators.DEEPSEEK.trains, "reader": "gemini", "reader_model": GEMINI_ID, "templates": texts}
     lines.clear()
     assert cli.main([*base, "--only", "2", "generate", "--split", "core-val", "--reader", "spark"],
                     out=lines.append) == cli.REFUSED_CODE
@@ -129,7 +131,7 @@ def test_apd_splits_refuse_a_non_spark_reader(tmp_path: Path, capsys: pytest.Cap
     (life,) = DataDir(data).lives("development")
     assert DataDir(data).made(life.id) == {
         "writer": "spark", "writer_model": FIREWORKS.model, "trains": generators.SPARK.trains, "reader": "spark",
-        "reader_model": FIREWORKS.model}
+        "reader_model": FIREWORKS.model, "templates": core_families.texts_digest("development", life.field)}
 
 
 def test_reader_holds_on_its_own_pool(tmp_path: Path) -> None:

@@ -50,6 +50,7 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.mind.apd import failures, gates, generate, readers, repair, retry
 from anjo.sleep.mind.apd.backend import Backend, Flight, GenCalls, Halted, cool_down, held_attempt, life_calls
 from anjo.sleep.mind.apd.calls import CallLog, failed_log_id
+from anjo.sleep.mind.apd.core_families import texts_digest
 from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import Draft, GenerationError, GenerationFailed, Generated, ItemPlan, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
@@ -314,6 +315,19 @@ def refuse_mixed(lives: Iterable[Life], backend: Backend, where: str, data: Data
                          f"({_named(read)}); one never mixes readers: go on with theirs, or start a new data dir")
 
 
+def refuse_changed(made: Iterable[tuple[str, Life]], data: DataDir, where: str) -> None:
+    """``StoreError`` when any record on disk (``made``: the id it is kept under and a life it holds)
+    was written from other template texts than its field's now (``core_families.texts_digest``): a
+    mismatch, never a reuse. A record from before the digest was kept is not checked."""
+    changed = [made_id for made_id, life in made
+               if (kept := (data.made(made_id) or {}).get("templates")) is not None
+               and kept != texts_digest(life.split, life.field)]
+    if changed:
+        raise StoreError(f"{where} holds {len(changed)} written from other template texts than their fields' now "
+                         f"({', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''}); one never mixes "
+                         "template texts: go on with theirs, or start a new data dir")
+
+
 def made_record(backend: Backend) -> dict[str, object]:
     """Who wrote and read a life or pair, and why its lives may train the MIND core (``None``: no
     clearance recorded for its writer); ``keep_off`` when its writer was given its topics
@@ -378,7 +392,8 @@ def _one(data: DataDir, spec: LifeSpec, backend: Backend) -> Outcome:
         if made is None and log.calls:  # skipped, killed or stopped (the ceiling, a hold): what it made still cost
             first = generate.life_id_for(spec.split, spec.field, spec.seed)
             data.save_calls(failed_log_id(first, data.call_log_ids()), [call.to_json() for call in log.calls])
-    data.save_made(made.life.id, {**made_record(backend), **({"repair_rounds": made.repaired} if made.repaired else {})})
+    data.save_made(made.life.id, {**made_record(backend), "templates": texts_digest(spec.split, spec.field),
+                                  **({"repair_rounds": made.repaired} if made.repaired else {})})
     data.save_calls(made.life.id, [call.to_json() for call in log.calls])
     data.save_life(made.life, made.problems)
     return Outcome(spec, made, tuple(log.failures))
@@ -411,6 +426,7 @@ def generate_lives(data: DataDir, specs: Sequence[LifeSpec], backend: Backend, o
         check(split, backend.generator, backend.provider)
         readers.check(split, backend.read_by)
         refuse_mixed(data.lives(split), backend, split, data)
+        refuse_changed(((life.id, life) for life in data.lives(split)), data, split)
     todo = [spec for spec in specs if not any(data.has_life(life_id) for life_id in spec_ids(spec))]
     if backend.ceiling is not None:
         backend.ceiling.begin("life(s) generated", len(todo))

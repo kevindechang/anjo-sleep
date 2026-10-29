@@ -23,7 +23,9 @@ Pure.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import astuple, dataclass
 from typing import Final
 
 from anjo.sleep.mind.apd.families import TEMPLATES, Template
@@ -114,9 +116,9 @@ _TRAIN: Final = (
         "Make the walnut offcuts into serving boards for the kitchen shop, 40 a month at 25 each."),
     _t("furniture-desk-line-v2", "reversal", _FURNITURE, "the cherry desk top", (
         "A hairline crack showed up along the cherry desk top this morning.",
-    ), "Wiping the line with mineral spirits took it away, along with the wax.",
+    ), "Under a raking light, the line on the cherry desk top sits in the wax coat over the wood.",
         "Do I have to make a new top for the cherry desk?",
-        "Not a cracked top: the line was in the wax layer, and the wood beneath is whole."),
+        "Not a cracked top: the line is in the wax coat, not the wood."),
     _t("furniture-timber-invoice", "decoy", _FURNITURE, "the timber invoice", (
         "This month's timber invoice is 1,900, against 950 last month.",
         "I'm building at the same pace as last month.",
@@ -163,11 +165,11 @@ _TRAIN: Final = (
         "The sponsor has gone quiet. Are they dropping the show?",
         "Not dropping the show: the marketing contact is on leave until the 20th."),
     _t("reno-tile-shade", "reversal", _RENO, "the bathroom tiles", (
-        "The bathroom wall tiles fixed on Monday look two shades darker than the showroom sample.",
+        "The bathroom wall tiles went up this morning and look two shades darker than the showroom sample.",
     ), "The tiler says new tiles and grout stay damp for about 72 hours after fixing, and damp ceramic looks darker.",
         "Should I ask the supplier to replace the bathroom tiles?",
-        "Not the wrong tiles: they went up on Monday and are still damp, and damp tiles look darker for about "
-        "72 hours."),
+        "Not the wrong tiles: they were held against the sample the morning they went up, and damp tiles look "
+        "darker for about 72 hours."),
 )
 
 _VAL: Final = (
@@ -478,6 +480,21 @@ def templates_for(split: LifeSplit, field: str) -> tuple[Template, ...]:
         return ()
     pool = TEMPLATES[split] if split == "development" or split == "held_out" else _CORE_POOL
     return tuple(template for template in pool if template.field == field)
+
+
+TEXTS_DIGEST_CHARS: Final = 16
+
+
+def texts_digest(split: LifeSplit, field: str) -> str:
+    """A short digest of every template text a life or pair of ``split`` in ``field`` can draw: the
+    field's draw pool and its pair templates. A life's and a pair's made record keep it, so lives
+    written from other texts are never mixed (``gen_batch.refuse_changed``). The field's texts, not
+    the life's own draw: a digest of what a sealed life drew would name its planted templates to
+    anyone who tried the field's few combinations."""
+    drawn = sorted(templates_for(split, field), key=lambda t: t.id)
+    paired = sorted((pair for pair in PAIR_TEMPLATES if pair.field == field), key=lambda pair: pair.id)
+    texts = json.dumps([*(astuple(t) for t in drawn), *(astuple(pair) for pair in paired)], ensure_ascii=False)
+    return hashlib.sha256(texts.encode()).hexdigest()[:TEXTS_DIGEST_CHARS]
 
 
 def template(template_id: str) -> Template | None:

@@ -7,8 +7,11 @@ stay frozen: the one the core drew that states its outcome is kept out of the co
 Pure: no model is called."""
 from __future__ import annotations
 
-from anjo.sleep.mind.apd import core_families, families
-from anjo.sleep.mind.apd.generate import _key_terms
+import re
+from datetime import timedelta
+
+from anjo.sleep.mind.apd import core_families, core_splits, families, generate
+from anjo.sleep.mind.apd.generate import LIFE_START, _key_terms
 from anjo.sleep.mind.apd.types import CORE_SPLITS, FAMILIES, MAX_PREVALENCE, CoreSplit
 
 # The lines as they were (core-v1), by the id they had, and the id each one has now: a new id where
@@ -40,7 +43,9 @@ NOW = {
 KEPT_OUT = ("reno-damp-patch",)  # APD's, frozen: it states its outcome ("the patch has been dry since")
 # Words that tell a reader the apparent problem is gone; a reversal's plant line never needs them.
 OUTCOME_WORDS = ("since", "whole", "nothing of the kind", "has gone", "loved", "clearly", "neutral", "level",
-                 "without leaking", "is fine", "are fine", "no longer", "as it should")
+                 "without leaking", "is fine", "are fine", "no longer", "as it should", "took it away", "still damp")
+WEEKDAY = re.compile(r"\b(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b")
+DAMP_HOURS = 72  # ``reno-tile-shade``: how long new tiles stay damp, by its plant line
 
 
 def _drawn(split: CoreSplit) -> tuple[families.Template, ...]:
@@ -80,3 +85,28 @@ def test_the_core_draws_keep_out_apds_reversals_that_state_their_outcome() -> No
         field = families.TEMPLATES["development"][[t.id for t in families.TEMPLATES["development"]].index(kept_out)].field
         assert kept_out in {t.id for t in families.templates_for("development", field)}  # APD's draws unchanged
     assert apd - set(KEPT_OUT) <= drawn  # every other APD development template still drawn by core-train
+
+
+def test_reno_tile_shade_holds_on_every_day_its_draws_put_it() -> None:
+    # Arrange: every core-train life's every attempt that draws it, as scheduled
+    tiles = core_families.template("reno-tile-shade")
+    assert tiles is not None
+    drawn = [(attempt, plan) for spec in core_splits.core_specs("core-train") if spec.field == tiles.field
+             for attempt in range(generate.MAX_ATTEMPTS)
+             for plan in generate.plan(spec.split, spec.field, spec.families, spec.prevalence,
+                                       generate.attempt_seed(spec.seed, attempt))
+             if plan.template.id == tiles.id]
+
+    # Assert: 13 lives draw it on their first attempt; on each draw the tiles are compared the morning
+    # they went up (no weekday a schedule could put more than 72 hours back), and the question, days
+    # later, is never told they are still damp
+    assert sum(1 for attempt, _ in drawn if attempt == 0) == 13
+    (origin,) = tiles.origins
+    assert "this morning" in origin and str(DAMP_HOURS) in tiles.disambiguating
+    for _, plan in drawn:
+        compared = LIFE_START + timedelta(days=plan.origin_days[0])
+        went_up = compared  # "this morning": the day of the comparison
+        assert (compared - went_up) <= timedelta(hours=DAMP_HOURS)
+        assert plan.origin_days[0] < plan.disambiguating_day < plan.surface_day
+        for fact in (*tiles.origins, tiles.disambiguating, tiles.resolution):
+            assert not WEEKDAY.search(fact) and "still damp" not in fact, fact
