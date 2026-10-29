@@ -3,11 +3,18 @@
 MIND's core trains on ``core-train``, locks its thresholds on ``core-val`` and is tested on
 ``core-test``. The three are held out from each other by **field and template**: each split has
 its own fields, and each template belongs to one field. ``core-train`` takes the APD development
-fields (their templates unchanged, in ``families``) and three fields of its own; ``core-val`` and
-``core-test`` have only their own. No core split uses an APD held-out field or template: those stay
-APD's frozen test. Every field has two contradictions and one template of each other family, as in
-``families``, under the same rules (facts state no conclusion; a resolution's numbers come from its
-own facts).
+fields (their templates unchanged, in ``families``, but for ``CORE_KEPT_OUT``) and three fields of
+its own; ``core-val`` and ``core-test`` have only their own. No core split uses an APD held-out field
+or template: those stay APD's frozen test. Every field has two contradictions and one template of
+each other family, as in ``families``, under the same rules (facts state no conclusion; a
+resolution's numbers come from its own facts).
+
+**A reversal's plant line** (``disambiguating``) states the raw fact that dissolves the apparent
+problem, with the numbers, names and dates its planted-fact check needs, and never what it means:
+never that the problem is gone (``dry since``, ``loved it``), which gave the whole item away on the
+line's own day (``leak_v1.md``). Joining it to the earlier fact is the reader's work. Lines that
+broke this were rewritten (core-v2): under a new ``-v2`` id, or under the same id in ``core-test``,
+whose ids the pinned pair specs name (``pairs.pair_specs``).
 
 **Pair templates** (``PairTemplate``, for ``pairs``): one commitment the person relies on, in a
 ``core-test`` field, and its two outcomes: twice failing, or twice kept. The failed history plants
@@ -37,6 +44,7 @@ _BIKES: Final = "bicycle shop"
 _WEDDING: Final = "wedding catering"
 _THEATRE: Final = "theatre production"
 _PHOTO: Final = "photo exhibition"
+_RENO: Final = "home renovation"  # an APD development field core-train draws its own reversal in
 
 _TRAIN: Final = (
     _t("truck-generator-load", "contradiction", _TRUCK, "the festival weekend's power", (
@@ -66,10 +74,9 @@ _TRAIN: Final = (
     ), "The brewery owner said the truck could have a free pitch in the brewery yard on quiz nights.",
         "Tuesday and Wednesday evenings are dead for me. Any ideas?",
         "Trade from the brewery yard on its quiz nights, a free pitch on the idle weeknights."),
-    _t("truck-cold-reviews", "reversal", _TRUCK, "the online rating", (
+    _t("truck-cold-reviews-v2", "reversal", _TRUCK, "the online rating", (
         "Three reviews this week say the burgers arrived cold.",
-    ), "All three reviews were delivery app orders from Monday, when the app's couriers ran an hour late, "
-       "and walk-up customers have said nothing of the kind.",
+    ), "All three reviews were delivery app orders from Monday, when the app's couriers ran an hour late.",
         "Do I need a new grill because of the cold burger reviews?",
         "Not the grill: the cold burgers were Monday's delivery orders held up by late couriers."),
     _t("truck-sunday-takings", "decoy", _TRUCK, "Sunday's takings", (
@@ -105,9 +112,9 @@ _TRAIN: Final = (
     ), "The kitchen shop said it would take 40 boards a month at 25 each.",
         "The walnut offcuts are piling up. What would you do with them?",
         "Make the walnut offcuts into serving boards for the kitchen shop, 40 a month at 25 each."),
-    _t("furniture-desk-line", "reversal", _FURNITURE, "the cherry desk top", (
+    _t("furniture-desk-line-v2", "reversal", _FURNITURE, "the cherry desk top", (
         "A hairline crack showed up along the cherry desk top this morning.",
-    ), "Wiping the line with mineral spirits took it away: it was in the wax layer, and the wood beneath is whole.",
+    ), "Wiping the line with mineral spirits took it away, along with the wax.",
         "Do I have to make a new top for the cherry desk?",
         "Not a cracked top: the line was in the wax layer, and the wood beneath is whole."),
     _t("furniture-timber-invoice", "decoy", _FURNITURE, "the timber invoice", (
@@ -143,10 +150,10 @@ _TRAIN: Final = (
     ), "The website pays 60 an episode for licensed audio with a transcript.",
         "Is there anything else I can do with the transcripts I make?",
         "License the episodes with their transcripts to the language-learning website at 60 each."),
-    _t("podcast-download-dip", "reversal", _PODCAST, "the downloads chart", (
+    _t("podcast-download-dip-v2", "reversal", _PODCAST, "the downloads chart", (
         "Downloads of last week's episode are down 40 percent on the dashboard.",
     ), "The hosting service says its dashboard stopped counting one big podcast app for a week, and its "
-       "corrected numbers, posted on Friday, show downloads level.",
+       "corrected numbers, posted on Friday, put last week's episode at 5,200 downloads and the week before at 5,100.",
         "Should I change the show's format because downloads fell?",
         "Not a fall: the dashboard missed one app for a week, and the corrected downloads are level."),
     _t("podcast-sponsor-quiet", "decoy", _PODCAST, "the sponsor's renewal", (
@@ -155,6 +162,12 @@ _TRAIN: Final = (
     ), "The sponsor's automatic reply says the marketing contact is on leave until the 20th.",
         "The sponsor has gone quiet. Are they dropping the show?",
         "Not dropping the show: the marketing contact is on leave until the 20th."),
+    _t("reno-tile-shade", "reversal", _RENO, "the bathroom tiles", (
+        "The bathroom wall tiles fixed on Monday look two shades darker than the showroom sample.",
+    ), "The tiler says new tiles and grout stay damp for about 72 hours after fixing, and damp ceramic looks darker.",
+        "Should I ask the supplier to replace the bathroom tiles?",
+        "Not the wrong tiles: they went up on Monday and are still damp, and damp tiles look darker for about "
+        "72 hours."),
 )
 
 _VAL: Final = (
@@ -183,11 +196,11 @@ _VAL: Final = (
     ), "The restaurant's chef said small flaws are fine and wants 30 plates by next month.",
         "The seconds shelf is full. What should I do with those plates?",
         "Sell the seconds plates to the restaurant across the street, which wants 30 and takes small flaws."),
-    _t("pottery-celadon-lines", "reversal", _POTTERY, "the celadon bowls", (
+    _t("pottery-celadon-lines-v2", "reversal", _POTTERY, "the celadon bowls", (
         "Fine cracks appeared in the glaze of the celadon bowls the day after firing.",
-    ), "The celadon is a crackle glaze sold for its web of fine lines, and the bowls hold water without leaking.",
+    ), "The celadon is a crackle glaze, sold for its web of fine lines.",
         "Should I throw away the celadon bowls?",
-        "Not a defect: the celadon is a crackle glaze meant to show fine lines, and the bowls hold water."),
+        "Not a defect: the celadon is a crackle glaze meant to show fine lines."),
     _t("pottery-clay-bill", "decoy", _POTTERY, "the clay delivery", (
         "The clay supplier charged 600 this month, against 300 last month.",
         "The number of students hasn't changed.",
@@ -221,10 +234,9 @@ _VAL: Final = (
     ), "The courier company's manager said they'd buy the bikes and pay us to service them every month.",
         "What should I do with the old rental bikes in the back room?",
         "Sell the old rental bikes to the courier company and service them monthly."),
-    _t("bikes-brake-squeal", "reversal", _BIKES, "the new disc brakes", (
+    _t("bikes-brake-squeal-v2", "reversal", _BIKES, "the new disc brakes", (
         "Customers say the new disc brakes squeal loudly on their first rides.",
-    ), "The brake maker's guide says new pads squeal until they bed in over about 20 stops, and riders who "
-       "came back after a week say the squeal has gone.",
+    ), "The brake maker's guide says new pads squeal until they bed in over about 20 stops.",
         "Should I stop selling the new disc brakes?",
         "Not faulty: new pads squeal until they bed in, and it stops after about 20 stops."),
     _t("bikes-october-sales", "decoy", _BIKES, "October's sales", (
@@ -266,10 +278,9 @@ _TEST: Final = (
         "Cater the planner's office lunches on the idle weekdays, 15 people four days a week at 12 a head."),
     _t("wedding-salty-lamb", "reversal", _WEDDING, "the tasting feedback", (
         "The couple at Saturday's tasting said the lamb was too salty.",
-    ), "The tasting lamb was the only dish a trainee cooked, and the couple retasted the lamb on Tuesday and "
-       "loved it.",
+    ), "The tasting lamb was the only dish a trainee cooked, while the head chef was away until Tuesday.",
         "Should I take the lamb off the wedding menu?",
-        "Not the recipe: a trainee cooked the salty tasting batch, and the couple loved the lamb on Tuesday."),
+        "Not the recipe: a trainee cooked the salty tasting batch while the head chef was away."),
     _t("wedding-rsvp-count", "decoy", _WEDDING, "the guest numbers", (
         "Only 90 of the 150 invited guests have replied to the invitation.",
         "The final numbers are due to me in a week.",
@@ -305,10 +316,11 @@ _TEST: Final = (
         "Run a Wednesday matinee for the school studying the play: a full house of 200 at 8 each."),
     _t("theatre-hoarse-lead", "reversal", _THEATRE, "the lead's voice", (
         "The lead actor's voice was hoarse at Monday's rehearsal.",
-    ), "The lead had shouted at a football match on Sunday, rested his voice on Tuesday, and sang all of "
-       "Thursday's run clearly.",
+    ), "The lead had shouted through a football match on Sunday, and he rested his voice on Tuesday ahead of "
+       "Thursday's run.",
         "Do I need to bring in the understudy for the lead?",
-        "Not needed: the lead was hoarse from Sunday's match and sang Thursday's run clearly after resting."),
+        "Not needed: the lead was hoarse from shouting at Sunday's match, and he rested his voice before "
+        "Thursday's run."),
     _t("theatre-advance-sales", "decoy", _THEATRE, "the advance ticket sales", (
         "Advance sales for the second week are 120 tickets, against 400 for the first week.",
         "The marketing hasn't changed between the two weeks.",
@@ -344,10 +356,9 @@ _TEST: Final = (
         "Sell 30 of the stored prints to the boutique hotel at 150 each."),
     _t("photo-green-cast", "reversal", _PHOTO, "the test prints", (
         "The test prints came back with a strong green cast.",
-    ), "I'd viewed the test prints under the studio's new fluorescent tubes, and under the gallery's daylight "
-       "lamps the same prints look neutral.",
+    ), "I'd viewed the test prints under the studio's new fluorescent tubes, which give off a green tint.",
         "Do I need to reprint everything because of the green cast?",
-        "Not the prints: the green came from the studio's fluorescent tubes, and they look neutral under daylight."),
+        "Not the prints: the green came from the studio's new fluorescent tubes they were viewed under."),
     _t("photo-framing-quote", "decoy", _PHOTO, "the framing quote", (
         "The framer quoted 3,600 for this show, against 1,800 for the last one.",
         "Both shows have the same number of prints.",
@@ -447,6 +458,10 @@ CORE_FIELDS: Final[dict[CoreSplit, tuple[str, ...]]] = {
     "core-test": (_WEDDING, _THEATRE, _PHOTO),
 }
 _ALL: Final[tuple[Template, ...]] = (*TEMPLATES["development"], *TEMPLATES["held_out"], *CORE_TEMPLATES)
+# APD's development reversal whose plant line states its outcome; APD's templates stay frozen, so
+# core-train draws its own reversal in that field instead (``reno-tile-shade``).
+CORE_KEPT_OUT: Final = frozenset({"reno-damp-patch"})
+_CORE_POOL: Final[tuple[Template, ...]] = tuple(t for t in _ALL if t.id not in CORE_KEPT_OUT)
 _PAIR_GAPS: Final = tuple(pair.gap for pair in PAIR_TEMPLATES)
 
 
@@ -461,7 +476,7 @@ def templates_for(split: LifeSplit, field: str) -> tuple[Template, ...]:
     """The split's templates in ``field``; empty for a field the split doesn't hold."""
     if field not in fields(split):
         return ()
-    pool = TEMPLATES[split] if split == "development" or split == "held_out" else _ALL
+    pool = TEMPLATES[split] if split == "development" or split == "held_out" else _CORE_POOL
     return tuple(template for template in pool if template.field == field)
 
 
