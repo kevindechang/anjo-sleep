@@ -51,6 +51,40 @@ class GivesItBack(LeakyDay):
         return dataclasses.replace(result, text=json.dumps({**day, "messages": [*day["messages"], MARK]}))
 
 
+@dataclasses.dataclass
+class CopiesWhenTold(GivesItBack):
+    """Model the literal reading of the old repair prompt's instruction to return the same object."""
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        result = super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+        if calls.kind_of(messages) != "write":
+            return result
+        body = json.loads(messages[-1]["content"])
+        if "reason" not in body:
+            return result
+        day = json.loads(result.text)
+        if "Return the same JSON object as before." in messages[0]["content"]:
+            texts = body["before"]
+        else:
+            texts = [text for text in day["messages"] if text != MARK]
+        return dataclasses.replace(result, text=json.dumps({**day, "messages": texts}))
+
+
+def test_a_writer_following_the_repair_output_instruction_changes_the_rejected_day(tmp_path: Path) -> None:
+    writer, log = CopiesWhenTold(), CallLog()
+    backend = _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True)
+
+    made = gen_batch.generate_life(SPEC, backend, log)
+
+    assert made.attempts == 1 and made.repaired == 1
+    assert all(MARK not in session.text for session in made.life.sessions)
+    (asked,) = writer.repairs
+    assert MARK in asked["before"] and "notes taken from" in asked["reason"]
+    assert asked["rewrite_ask"] == 1
+    assert not log.failures and all(verdict.passed for verdict in made.verdicts)
+
+
 def test_a_rewrite_given_back_unchanged_is_asked_once_more_hotter_and_the_life_passes(tmp_path: Path) -> None:
     # Arrange
     writer, log = GivesItBack(), CallLog()
@@ -66,6 +100,7 @@ def test_a_rewrite_given_back_unchanged_is_asked_once_more_hotter_and_the_life_p
     assert generate.UNCHANGED not in first and again.endswith(generate.UNCHANGED)
     assert first_heat == generate.WRITE_TEMPERATURE < generate.REWRITE_TEMPERATURE == heat
     assert writer.repairs[0]["reason"] == writer.repairs[1]["reason"]  # the round's own reason, no gate text
+    assert [body["rewrite_ask"] for body in writer.repairs] == [1, 2]
     # the log keeps which write came back unchanged, never its text
     rewrites = [c for c in log.calls if c.kind == "write" and c.repair == 1]
     assert [c.unchanged for c in rewrites] == [True, False]
