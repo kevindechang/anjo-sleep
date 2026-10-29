@@ -94,6 +94,7 @@ def test_an_anonymous_visitor_reaches_the_page_and_its_api(sleep_app: Any, clien
 def test_every_other_sleep_route_still_refuses_anonymous_visitors(sleep_app: Any, client: Any) -> None:
     for method, path in (("GET", "/api/sleep/nights"), ("GET", "/api/sleep/nights/2026-10-30"),
                          ("GET", "/api/sleep/what-changed"), ("POST", "/api/sleep/undo"),
+                         ("POST", "/api/sleep/delete"),
                          ("POST", "/api/sleep/dev/sessions"), ("GET", "/api/sleep/dev/sessions/s1"),
                          ("GET", "/api/sleep/demonstration"), ("GET", "/api/sleep/demo-admin")):
         response = client.request(method, path, follow_redirects=False)

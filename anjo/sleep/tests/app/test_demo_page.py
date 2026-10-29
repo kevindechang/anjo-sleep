@@ -198,7 +198,7 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
     page = page_html()
     scripts = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")]
     styles = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".css")]
-    assert len(scripts) == 5 and len(styles) == 3  # app, nights, mind, night and dailies; demo, mind and dailies css
+    assert len(scripts) == 6 and len(styles) == 3  # app, model, nights, mind, night and dailies; demo, mind and dailies css
     for text in (page, *scripts, *styles):
         assert "http://" not in text and "https://" not in text and "//cdn" not in text
         assert "@import" not in text and "url(" not in text
@@ -206,6 +206,24 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
         assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "outerHTML" not in script
         assert "eval(" not in script and "localStorage" not in script and "document.write" not in script
     assert "prefers-reduced-motion" in styles[0] and all("prefers-color-scheme: dark" in style for style in styles)
+
+
+def test_the_task9_controls_reference_their_routes_and_ask_inline() -> None:
+    """The person's own controls (Task 9) call the three routes, never a browser dialog, and put
+    every result in the page's own live line."""
+    from anjo.sleep.demo.page import ASSETS, WEB_DIR, page_html
+
+    page = page_html()
+    scripts = {name: (WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")}
+    assert "model.js" in scripts
+    model = scripts["model.js"]
+    for endpoint in ("/api/sleep/nights", "/api/sleep/what-changed", "/api/sleep/undo", "/api/sleep/delete"):
+        assert endpoint in model, endpoint
+    for banned in ("window.confirm", "alert(", "prompt("):
+        assert all(banned not in script for script in scripts.values()), banned
+    assert 'id="yours-result"' in page and 'aria-live="polite"' in page
+    assert 'id="yours-undo-step"' in page and 'id="yours-delete-step"' in page
+    assert "textContent" in model and "innerHTML" not in model
 
 
 def test_brief_served_with_chat(account: str) -> None:

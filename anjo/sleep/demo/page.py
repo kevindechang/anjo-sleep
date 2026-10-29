@@ -21,6 +21,7 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "app.js": "text/javascript; charset=utf-8",
     "demo.css": "text/css; charset=utf-8",
     "nights.js": "text/javascript; charset=utf-8",  # the full step: the night slider and the toggles
+    "model.js": "text/javascript; charset=utf-8",  # Task 9: what changed, undo and delete, for the person's own session
     "mind.js": "text/javascript; charset=utf-8",  # her mind panel and its chart
     "night.js": "text/javascript; charset=utf-8",  # last night as one loop, in the mind band
     "mind.css": "text/css; charset=utf-8",

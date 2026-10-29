@@ -373,6 +373,64 @@ p { margin: 0; }
 .card-fixed .fixed { padding: var(--space-5); font: 400 var(--text-reply)/1.62 var(--serif); }
 .card-fixed .fixed p + p { margin-top: var(--space-3); }
 
+/* ── your model: what changed, undo and delete (Task 9) ────────────────── */
+
+.yours { padding-top: var(--space-5); border-top: 1px solid var(--rule-strong); }
+.yours-grid { display: grid; gap: var(--space-4); margin-top: var(--space-5); }
+@container (min-width: 44rem) {
+  .yours-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+}
+.yours-panel { padding: var(--space-4); background: var(--paper-raised); border: 1px solid var(--rule); }
+.yours-panel h3 {
+  margin: 0 0 var(--space-3);
+  font: 600 0.6875rem/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.yours-changes-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--space-3); }
+.yours-changes-head h3 { margin: 0; }
+.yours-changes-head .field { font-size: var(--text-small); }
+.yours-changes-head input[type="date"] {
+  min-height: 2.5rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font: 500 0.8125rem/1.2 var(--mono);
+}
+.yours-list { display: grid; gap: 0; margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+.yours-night, .yours-change { display: grid; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--rule); }
+.yours-night { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+.yours-change { grid-template-columns: max-content max-content minmax(0, 1fr); align-items: baseline; }
+.yours-night-date, .yours-change-night { font: 500 0.75rem/1.4 var(--mono); color: var(--ink-faint); }
+.yours-night-status, .yours-change-kind {
+  justify-self: start;
+  font: 500 0.6875rem/1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.yours-change-line { font: 400 0.9375rem/1.45 var(--serif); color: var(--ink); }
+.yours-actions { display: grid; gap: var(--space-4); margin-top: var(--space-5); }
+@container (min-width: 40rem) {
+  .yours-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.yours-action { padding: var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
+.yours-action .note { margin-top: var(--space-2); }
+.yours-danger { border-color: var(--alert); }
+.yours-danger > .button { border-color: var(--alert); color: var(--alert); }
+.yours-danger > .button:hover { background: var(--alert); border-color: var(--alert); color: var(--paper); }
+.yours-step { margin-top: var(--space-3); padding: var(--space-3); background: var(--alert-paper); border-left: 3px solid var(--alert); }
+.yours-step p { font: 500 0.9375rem/1.45 var(--sans); }
+.yours-step-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.yours-result { margin-top: var(--space-4); }
+@media (max-width: 30rem) {
+  .yours-change { grid-template-columns: max-content minmax(0, 1fr); }
+  .yours-change-line { grid-column: 1 / -1; }
+}
+
 /* ── colophon ──────────────────────────────────────────────────────────── */
 
 .colophon {
