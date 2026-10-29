@@ -72,6 +72,28 @@ def pooled_personas() -> tuple[str, ...]:
     return tuple(_thresholds()["development"]["pooled_lives"])
 
 
+def _donor_personas() -> frozenset[str]:
+    return frozenset(p for p in pooled_personas() if p.endswith("_donor"))
+
+
+def _unpromoted_donor(root: Path, persona: str, account: str) -> bool:
+    if persona not in _donor_personas():
+        return False
+    basis = str(latest_full_score(root, account).get("checkpoint_basis") or "promoted")
+    return basis == "not_promoted"
+
+
+def _pool_accounts(pair: str, root: Path, accounts: Mapping[str, str]) -> dict[str, str]:
+    """Accounts whose outcomes count toward the pooled score and pool-ready gate."""
+    if pair != "3_vs_3x":
+        return dict(accounts)
+    return {
+        persona: account
+        for persona, account in accounts.items()
+        if not _unpromoted_donor(root, persona, account)
+    }
+
+
 def min_probes_per_dimension() -> int:
     return int(_thresholds()["development"]["min_probes_per_dimension"])
 
@@ -337,6 +359,74 @@ def _result_line(
     return line
 
 
+def _life_result_line(
+    persona: str,
+    pair: str,
+    dimension: str,
+    wins: int,
+    ties: int,
+    losses: int,
+    score: float,
+    decisive: float | None,
+) -> dict[str, Any]:
+    n = wins + ties + losses
+    line: dict[str, Any] = {
+        "line": "life",
+        "persona": persona,
+        "pair": pair,
+        "dimension": dimension,
+        "n": n,
+        "wins": wins,
+        "ties": ties,
+        "losses": losses,
+    }
+    if n:
+        line["score"] = round(score, 4)
+        if decisive is not None:
+            line["decisive_share"] = round(decisive, 4)
+    else:
+        line["score"] = None
+    return line
+
+
+def life_scores(
+    root: Path,
+    accounts: Mapping[str, str],
+    *,
+    probes_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Each development life's tie-inclusive score per registered comparison and dimension (§5.1b)."""
+    lines: list[dict[str, Any]] = []
+    for pair in HEADLINE:
+        for dimension in DIMENSIONS:
+            for persona, account in sorted(accounts.items()):
+                rows = pooled_rows(
+                    root,
+                    {persona: account},
+                    pair,
+                    kinds=_kinds_for_dimension(dimension),
+                    probes_root=probes_root,
+                )
+                wins, ties, losses, score, _ci, decisive = score_pooled(rows, dimension)
+                lines.append(
+                    _life_result_line(persona, pair, dimension, wins, ties, losses, score, decisive)
+                )
+    for pair in FAIRNESS:
+        for persona, account in sorted(accounts.items()):
+            rows = pooled_rows(
+                root,
+                {persona: account},
+                pair,
+                kinds=frozenset({"new_work"}),
+                probes_root=probes_root,
+            )
+            wins, ties, losses, score, _ci, decisive = score_pooled(rows, "knowledge")
+            lines.append(
+                _life_result_line(persona, pair, "knowledge", wins, ties, losses, score, decisive)
+            )
+    return lines
+
+
 def comparisons(
     root: Path,
     accounts: Mapping[str, str],
@@ -350,10 +440,11 @@ def comparisons(
     margin = fairness_margin()
     lines: list[dict[str, Any]] = []
     for pair in HEADLINE:
+        pool = _pool_accounts(pair, root, accounts)
         for dimension in DIMENSIONS:
             rows = pooled_rows(
                 root,
-                accounts,
+                pool,
                 pair,
                 kinds=_kinds_for_dimension(dimension),
                 probes_root=probes_root,
@@ -364,7 +455,7 @@ def comparisons(
             label = _label_comparison(
                 pair,
                 rows=rows,
-                accounts=accounts,
+                accounts=pool,
                 wins=wins,
                 ties=ties,
                 losses=losses,
@@ -421,7 +512,11 @@ def read(
         "personas": dict(sorted(accounts.items())),
         "probe_set": FULL_SET,
     }
-    return [header, *comparisons(root, accounts, bootstrap=bootstrap, probes_root=probes_root)]
+    return [
+        header,
+        *life_scores(root, accounts, probes_root=probes_root),
+        *comparisons(root, accounts, bootstrap=bootstrap, probes_root=probes_root),
+    ]
 
 
 def main(

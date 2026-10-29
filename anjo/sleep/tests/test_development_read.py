@@ -34,13 +34,14 @@ def _write_score(
     subset: str | None = None,
     persona: str | None = None,
     sealed_dir: Path | None = None,
+    checkpoint_basis: str = "promoted",
 ) -> None:
     folder = root / account / "scores"
     folder.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "night": night,
         "checkpoint": f"ckpt-{account}-{number}",
-        "checkpoint_basis": "promoted",
+        "checkpoint_basis": checkpoint_basis,
         "probes": len({row["probe"] for row in outcomes}),
         "arms": {},
         "pairs": {},
@@ -289,3 +290,59 @@ def test_development_refuses_daily_subset_scores(tmp_path: Path) -> None:
         )
     with pytest.raises(dev.DevelopmentError, match="no full morning"):
         dev.read(tmp_path, POOLED, bootstrap=CFG)
+
+
+def test_development_3_vs_3x_pool_ready_ignores_unpromoted_donor(tmp_path: Path) -> None:
+    sealed = tmp_path / SEALED
+    per_life = 15
+
+    def wins_3x(persona: str, account: str, pair: str) -> list[dict[str, Any]]:
+        return _knowledge_wins(account, pair, per_life, persona)
+
+    for persona, account in POOLED.items():
+        rows = wins_3x(persona, account, "3_vs_3x")
+        basis = "not_promoted" if persona == "founder_donor" else "promoted"
+        if persona == "founder_donor":
+            rows = [_row(f"{persona}-pad", "4_vs_2C", "new_work", "tie", source=f"{persona}-pad")]
+        _write_score(
+            tmp_path,
+            account,
+            1,
+            "2026-10-31",
+            rows,
+            persona=persona,
+            sealed_dir=sealed,
+            checkpoint_basis=basis,
+        )
+
+    line = next(
+        line
+        for line in _comparison_lines(tmp_path, sealed_dir=sealed)
+        if line["pair"] == "3_vs_3x" and line["dimension"] == "knowledge"
+    )
+    assert line["n"] == 3 * per_life * 2 and line["label"] == "win"
+
+
+def test_development_reports_each_life_score(tmp_path: Path) -> None:
+    sealed = tmp_path / SEALED
+    _fill_accounts(
+        tmp_path,
+        "3_vs_1",
+        lambda persona, account, pair: [
+            _row(f"{persona}-nw", pair, "new_work", "win", source=f"{persona}-src"),
+            _row(f"{persona}-vo", pair, "vocab", "loss"),
+        ],
+        sealed_dir=sealed,
+    )
+    lines = dev.read(tmp_path, POOLED, bootstrap=CFG, probes_root=sealed)
+    founder_know = next(
+        line
+        for line in lines
+        if line.get("line") == "life"
+        and line["persona"] == "founder"
+        and line["pair"] == "3_vs_1"
+        and line["dimension"] == "knowledge"
+    )
+    assert founder_know["n"] == 2 and founder_know["wins"] == 1 and founder_know["losses"] == 1
+    assert founder_know["score"] == 0.5
+    assert any(line["line"] == "comparison" for line in lines)
