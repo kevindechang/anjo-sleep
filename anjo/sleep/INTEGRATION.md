@@ -570,10 +570,10 @@ Pass `--account` once for each of the four personas in `development.pooled_lives
 defaults to `$ANJO_DATA_DIR/sleep/results`. `--sealed-dir` defaults to `$ANJO_SLEEP_SEALED_DIR`.
 
 It reads each account's newest `night-*.json` under `<root>/<account>/scores/` whose `subset` is
-`full` (any other subset is ignored) and the sealed `<persona>.jsonl` probes. It writes no files.
+`full` (a missing, empty or null subset counts as `full`; any other subset is ignored) and the sealed `<persona>.jsonl` probes. It writes no files.
 
-`DevelopmentError`, or argparse, refuses a sealed dir that is unset, a missing or empty sealed
-file, accounts other than those four personas, a probe or kind the sealed set does not have, an
+`DevelopmentError`, or argparse, refuses a sealed dir that is unset and, for the rows it keeps (rows of other pairs or kinds and
+`no_verdict` rows are skipped first), a missing or empty sealed file, accounts other than those four personas, a probe or kind the sealed set does not have, an
 outcome other than `win`, `tie`, `loss` or `no_verdict`, a score file that is not `night-NN` or
 has no night, and an account with no full morning score. `no_verdict` rows are dropped. The
 pooled label stays `inconclusive` when judged probes are under
@@ -590,7 +590,8 @@ only when that comparison is not a win or a loss and the CI lower bound is above
 `python -m anjo.sleep.reports.final` loads the module and does not read arguments. Call `run`
 with the freeze tag, the results root, the lives, `donors`, `pair_lives`, `single_life` and
 `sealed`. The module names the tag `sleep-freeze`. Notes in `anjo/sleep/prereg/thresholds.json`
-call that freeze Nov 1, and the checkpoint rule refuses any other checkout.
+call that freeze Nov 1, and `run` refuses a checkout whose HEAD is not that tag (a caller may pass `git=` in place of
+reading HEAD; tests do).
 
 It reads that thresholds file, resolves the tag with local `git rev-parse`, reads `HEAD`, and
 reads each life's highest-numbered `<results_root>/<life>/scores/night-*.json` whose `label` is
@@ -633,7 +634,8 @@ Glimmer revision raises before anything is built.
 
 vLLM 0.28's LoRA `lora_shrink` kernel splits its sums (split-K) and adds the parts with atomic
 adds, so identical serial requests to the default app could score differently. On the
-deterministic app, repeats were bit-identical. Its speed cost is not yet measured.
+deterministic app, repeats were bit-identical (measured on Modal 2026-10-29 with `adapter_repro`;
+not something the tests can show). Its speed cost against the default app is not yet measured.
 
 ## Adapter repeat check
 
@@ -650,13 +652,13 @@ python -m anjo.sleep.tools.adapter_repro --x p-<hash>-n<N> --y p-<hash>-n<N>
 names). `--usd-per-hour`, when set, must be finite and positive. `--url` overrides
 `ANJO_SLEEP_MODAL_URL`.
 
-With `--go` it reads up to 30 choices (`MAX_CHOICES`) from that persona's frozen knowledge set,
-scores them one at a time on `EVAL_DAY` (2026-10-28) with the token memo, and reads `/metrics`
+It reads up to 30 choices (`MAX_CHOICES`) from that persona's frozen knowledge set
+(even for the plan). With `--go` it scores them one at a time on `EVAL_DAY` (2026-10-28) with the token memo, and reads `/metrics`
 at each pass boundary. Passes: a base reference; A, X three times on the same payloads; B, X
 three times with a new `cache_salt` each pass; C, base then X, Y, X; D, unload and reload X,
-then score X. Stdout is JSON: the plan, then per-pass hashes, log-prob differences, flips and
-seconds, then a verdict. Prompts and continuations are not printed. It takes the local night
-lock and, when a ledger is present, a `modal_usd` hold for the active cap (`CAP_HEADROOM` is 3
+then score X. Stdout is the plan as plain text; with `--go`, JSON lines follow: per-pass hashes,
+log-prob differences, flips and seconds, then a verdict. Prompts and continuations are not
+printed. When a ledger is present, it takes the local night lock and a `modal_usd` hold for the active cap (`CAP_HEADROOM` is 3
 times the estimate) plus wake and the idle window.
 
 It exits 2 before any request when the night lock is held. A missing `ANJO_SLEEP_MODAL_URL`
