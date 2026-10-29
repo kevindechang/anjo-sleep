@@ -307,10 +307,39 @@ def test_an_undated_issue_names_the_one_day_holding_the_longest_phrase_it_quotes
     assert repair.fixes(felt, problems, (audit,), (issue,)) == {3: (reason,)}
     # a shorter run of its words on another day loses to the longest
     assert repair.fixes(_saying(felt, "I need to be at the yard by six.", 5), problems, (audit,), (issue,)) == {3: (reason,)}
-    # no run of QUOTE_WORDS words in any day's messages, or the longest on two days: a fresh attempt, as today
+    # unquoted, a run shorter than UNQUOTED_WORDS, or the longest on two days: a fresh attempt, as today
     assert repair.fixes(life, problems, (audit,), (issue,)) is None
-    assert repair.fixes(_saying(life, "Feels strange.", 3), problems, (audit,), (issue,)) is None
+    assert repair.fixes(_saying(life, "Feels strange to be there.", 3), problems, (audit,), (issue,)) is None
     assert repair.fixes(_saying(life, "Feels strange to be at the end of it.", 3, 5), problems, (audit,), (issue,)) is None
+
+
+def test_a_paraphrased_issue_does_not_name_a_day_by_a_common_phrase() -> None:
+    # Arrange: the issue is about day 8, in its own words; day 3 happens to say "going to have to"
+    life, problems = _life()
+    audit = GateVerdict("script_audit", None, False, "1 issue(s) found")
+    issue = "The person says they are going to have to reshoot, which settles the night shoot early."
+    said = _saying(life, "We are going to have to move the van.", 2)
+
+    # Act / Assert: the run they share is shorter than UNQUOTED_WORDS: left to a fresh attempt, as today
+    assert repair.quoted_day(said, issue) is None and repair.fixes(said, problems, (audit,), (issue,)) is None
+
+
+def test_an_issue_that_quotes_is_matched_by_its_quotation_alone() -> None:
+    life, problems = _life()
+    audit = GateVerdict("script_audit", None, False, "1 issue(s) found")
+    said = _saying(_saying(life, "Honestly it feels great.", 4), "We are going to have to reshoot it, sadly.", 2)
+    # the quoted words name their day, short as they are; the unquoted words around them are not matched
+    for issue in ('Day five says "it feels great" although we are going to have to reshoot it.',
+                  "Day five says \u201cit feels great\u201d although we are going to have to reshoot it.",
+                  "Day five says 'it feels great' and the person's tone is off."):
+        assert repair.quoted_day(said, issue) == life.days[4], issue
+    # a scare-quoted pair of words is no quotation: the six-word rule finds no run, so a fresh attempt
+    scared = _saying(life, "The chase scene went long today.", 2)
+    assert repair.quoted_day(scared, 'The "chase scene" is called settled before the surface day.') is None
+    # a quotation found nowhere, or on two days, names none, whatever the words around it match
+    assert repair.quoted_day(said, 'It says "the wrap party was huge" and we are going to have to reshoot it.') is None
+    twice = _saying(said, "It feels great.", 6)
+    assert repair.fixes(twice, problems, (audit,), ('Day five says "it feels great".',)) is None
 
 
 def test_a_day_written_again_keeps_the_topics_it_was_first_given(tmp_path: Path) -> None:
@@ -401,6 +430,8 @@ def test_a_missed_origin_day_is_named_with_why_and_no_other_discoverability_fail
     days = {item.id: (life.days[5],)}
     reason = repair.DISCOVER_REASON.format(family=item.family, topic=item.topic)
     assert repair.fixes(life, problems, (missed,), (), missed=days) == {5: (reason,)}
+    # the day's other planted beats on the topic stay, as repair_v1 says
+    assert "Apart from this day's `plant` and `ask` beats, write nothing about" in reason
     # with a leak of the same item: each day, with its reasons
     leak = GateVerdict("leak", item.id, False, "sessions flagged from 2026-09-14")
     assert sorted(repair.fixes(life, problems, (leak, missed), (), missed=days) or {}) == [5, 7]

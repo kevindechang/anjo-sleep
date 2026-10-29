@@ -18,7 +18,7 @@ or the script audit up to ``repair.ROUNDS`` repair rounds (``repair``); APD's ow
 regenerated whole, as registered. ``--keep-failed`` keeps each failed check's life under the data
 dir's ``quarantine``, on ``core-train`` only: every other split's items are sealed. ``--keep-off``
 gives a core split's writer its life's planted topics, to keep to their beats (``generate.KEEP_OFF``);
-APD's own splits are written as registered.
+APD's own splits are written as registered, and the pairs follow most core lives on disk.
 """
 from __future__ import annotations
 
@@ -26,11 +26,12 @@ import argparse
 import dataclasses
 
 from anjo.sleep.mind.apd import backend as backends
-from anjo.sleep.mind.apd import generators, readers, repair, retry
+from anjo.sleep.mind.apd import gen_batch, generators, pairs, readers, repair, retry
 from anjo.sleep.mind.apd.generators import GENERATORS, Generator
 from anjo.sleep.mind.apd.judging import Rate
 from anjo.sleep.mind.apd.limiter import DEFAULT_CONCURRENCY, DEFAULT_PER_MINUTE, Limiter
 from anjo.sleep.mind.apd.readers import READERS, Reader
+from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.apd.types import CORE_SPLITS
 from anjo.sleep.mind.spark_provider import SparkProvider
 
@@ -176,6 +177,31 @@ def repair_note(args: argparse.Namespace) -> tuple[str, ...]:
             f"changed or unread windows are paid for), so the worst case can reach {1 + repair.ROUNDS} times the one "
             f"shown. A round costs a share of the first check that grows the earlier its first day falls: on the "
             f"fakes, about 63% for day 6 of a six-item life",)
+
+
+def keep_off_warning(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
+    """A warning when a core split's ``generate`` differs on ``--keep-off`` from most core lives on
+    disk (a tie warns neither way): it goes on every core split or none, so the splits compare.
+    For ``generate-pairs``, what ``pairs.pairs_keep_off`` warns of."""
+    if args.command == "generate-pairs":
+        return pairs.pairs_keep_off(data).warnings
+    split = split_of(args)
+    if args.command != "generate" or split not in CORE_SPLITS:
+        return ()
+    found, on = gen_batch.kept_off(data), bool(getattr(args, "keep_off", False))
+    if found.majority is None or found.majority == on:
+        return ()
+    return (f"--keep-off is {'on' if on else 'off'} for this {split} run, unlike most {found}; it goes on every "
+            "core split or none, so core-train, core-val and core-test stay comparable",)
+
+
+def pairs_keep_off_note(args: argparse.Namespace, data: DataDir) -> tuple[str, ...]:
+    """The plan's note on the pairs' ``keep_off`` (``pairs.pairs_keep_off``): which, and from what."""
+    if args.command != "generate-pairs":
+        return ()
+    found = pairs.pairs_keep_off(data)
+    return (f"the pairs are written {'with' if found.on else 'without'} keep_off, following {found.source} "
+            f"({found.detail})",)
 
 
 def pace_note(args: argparse.Namespace) -> str:

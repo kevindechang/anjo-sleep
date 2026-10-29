@@ -29,6 +29,7 @@ each attempt. Pairs are test material: the core never trains on them.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import re
 from collections.abc import Sequence
@@ -50,6 +51,7 @@ from anjo.sleep.mind.apd.gen_batch import (
     CallFailed,
     failed_at,
     failing,
+    kept_off,
     last_call,
     made_record,
     recorder,
@@ -74,7 +76,7 @@ from anjo.sleep.mind.apd.generate import (
     ranked,
 )
 from anjo.sleep.mind.apd.generators import check
-from anjo.sleep.mind.apd.store import DataDir
+from anjo.sleep.mind.apd.store import DataDir, StoreError
 from anjo.sleep.mind.apd.types import HALF_GAP_DAYS, LIFE_DAYS, CounterfactualPair, GateVerdict, Life
 
 PAIR_LABEL: Final = "pairs:core-v1"
@@ -155,15 +157,18 @@ def _ids(life: Life, spots: dict[str, str], beat: str, fact: str) -> tuple[str, 
     return expressed(fact, found, {item.id: item.text for item in life.evidence})
 
 
-def write_pair(spec: PairSpec, seed: int, *, chat: ChatFn, model: str = SPARK_OPEN) -> CounterfactualPair:
-    """One pair under ``seed`` (the spec's seed, or an attempt's), not yet gated."""
+def write_pair(spec: PairSpec, seed: int, *, chat: ChatFn, model: str = SPARK_OPEN,
+               keep_off: bool = False) -> CounterfactualPair:
+    """One pair under ``seed`` (the spec's seed, or an attempt's), not yet gated; with ``keep_off``,
+    each write is given its two items' topics (``generate.KEEP_OFF``)."""
     pair, unrelated = pair_template(spec.template), template(spec.unrelated)
     if unrelated is None or unrelated not in templates_for("core-test", pair.field):
         raise ValueError(f"{spec.unrelated!r} isn't a core-test template of {pair.field!r}")
     plans = (prefix_plan(unrelated, Dice(f"{PAIR_LABEL}:{seed}")),
              ItemPlan(pair.gap, (COMMIT_DAY, OUTCOME_DAYS[0]), OUTCOME_DAYS[1], LAST_DAY))
     beats = beats_of(plans)  # i1: the unrelated item; i2: the commitment's gap, its outcomes the failed ones
-    shared = failed = kept = Draft(pair_id(pair.field, seed), pair.field, seed, model)
+    topics = tuple(item.template.topic for item in plans) if keep_off else ()
+    shared = failed = kept = Draft(pair_id(pair.field, seed), pair.field, seed, model, keep_off=topics)
     for index, day in enumerate(life_days()):
         done = shared.write(chat, index, day, [] if index in OUTCOME_DAYS else beats.get(index, []))
         shared, failed, kept = shared.add(done), failed.add(done), kept.add(done)
@@ -223,7 +228,8 @@ def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) 
             with failing(log, attempt), held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS,
                                                      log) as (writer, reader, auditor):
                 try:
-                    made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes)
+                    made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes,
+                                      keep_off=backend.keep_off)
                 except GenerationFailed as failed:
                     failed_at(log, failures.of_rule(attempt, failed))
                     continue
@@ -272,16 +278,59 @@ def _one(data: DataDir, spec: PairSpec, backend: Backend) -> _Outcome:
     return _Outcome(spec, made, tuple(log.failures))
 
 
+@dataclass(frozen=True)
+class PairsKeepOff:
+    """Whether new pairs' writer is given their topics (``on``), following what (``source``: the
+    pairs on disk, the core-test majority or the default) and its counts (``detail``); ``mixed``
+    when the pairs on disk disagree, and what the plan warns of."""
+
+    on: bool
+    source: str
+    detail: str
+    mixed: bool = False
+    warnings: tuple[str, ...] = ()
+
+
+def pairs_keep_off(data: DataDir) -> PairsKeepOff:
+    """New pairs follow the pairs on disk (a record with no ``keep_off`` reads as off), so pairs
+    never mix; with none on disk, most ``core-test`` lives on disk (the pairs are core-test's; the
+    other splits' lives don't count); with neither, or a tie, they are written without it."""
+    flags = [bool((data.made(pair.id) or {}).get("keep_off")) for pair in data.pairs()]
+    lives = kept_off(data, "core-test")
+    if not flags:
+        if lives.majority is not None:
+            return PairsKeepOff(lives.majority, "the core-test majority", str(lives))
+        return PairsKeepOff(False, "the default", "no pairs or core-test lives on disk" if lives.without == 0
+                            else f"no pairs on disk, and a tie: {lives}")
+    with_ = sum(flags)
+    detail = f"pairs on disk: {len(flags) - with_} without keep_off, {with_} with"
+    if 0 < with_ < len(flags):
+        return PairsKeepOff(False, "the pairs on disk", detail, mixed=True, warnings=(
+            f"the pairs on disk are mixed on keep_off ({detail}): a run with pairs to write refuses",))
+    on = with_ > 0
+    lean = () if lives.majority in (None, on) else (
+        f"new pairs follow the pairs on disk, {'with' if on else 'without'} keep_off, though most core-test lives "
+        f"were written {'without' if on else 'with'} it ({lives})",)
+    return PairsKeepOff(on, "the pairs on disk", detail, warnings=lean)
+
+
 def generate_pairs(data: DataDir, specs: Sequence[PairSpec], backend: Backend, out: Out, *,
                    parallel: int = GEN_PARALLEL) -> tuple[str, ...]:
     """Every pair of ``specs`` not yet on disk, ``parallel`` at a time, generated, gated and saved;
-    a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end."""
+    a pair that fails is skipped and recorded, and ``RunsFailed`` names them at the end. A pair's
+    writer is given its topics (``keep_off``) as ``pairs_keep_off`` says, its made record saying so;
+    pairs on disk that disagree on it refuse a run with pairs to write."""
     check("core-test", backend.generator, backend.provider)
+    keep_off = pairs_keep_off(data)
+    backend = dataclasses.replace(backend, keep_off=keep_off.on)
     readers.check("core-test", backend.read_by)
     on_disk = data.pairs()
     refuse_mixed((life for pair in on_disk for life in (pair.failed, pair.kept)), backend, "the pairs", data,
                  [pair.id for pair in on_disk])
     todo = [spec for spec in specs if not any(data.has_pair(found) for found in spec_pair_ids(spec))]
+    if todo and keep_off.mixed:
+        raise StoreError(f"the pairs on disk are mixed on keep_off ({keep_off.detail}), and a new pair would mix "
+                         "them further; move the pairs written otherwise out of the data dir, or start a new one")
     if backend.ceiling is not None:
         backend.ceiling.begin("pair(s) generated", len(todo))
     made: list[str] = []

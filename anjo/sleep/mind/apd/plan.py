@@ -60,6 +60,7 @@ class Plan:
     ceiling_usd: float | None = None  # --max-usd, for the commands that take it
     ceiling_unit: str = ""  # what the ceiling is checked before
     parallel: int = 1  # the units that may be in flight at once
+    warnings: tuple[str, ...] = ()  # printed last, before nothing runs
     totals: tuple[str, ...] = ()  # the worst case in all and the expected cost, when the plan prints them
 
 
@@ -333,5 +334,6 @@ def describe(plan: Plan) -> str:
     lines.extend(_ceiling(plan))  # beside the holds
     lines.extend(plan.totals)
     lines.extend(f"Note: {note}." for note in plan.notes)
+    lines.extend(f"Warning: {warning}." for warning in plan.warnings)
     lines.append("Nothing has run. Add --yes to start it.")
     return "\n".join(lines)

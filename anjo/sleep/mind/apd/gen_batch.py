@@ -54,7 +54,7 @@ from anjo.sleep.mind.apd.batch import Out, check_failed
 from anjo.sleep.mind.apd.generate import Draft, GenerationError, GenerationFailed, Generated, ItemPlan, LifeSpec
 from anjo.sleep.mind.apd.generators import check, mixed
 from anjo.sleep.mind.apd.store import DataDir, StoreError
-from anjo.sleep.mind.apd.types import Life
+from anjo.sleep.mind.apd.types import CORE_SPLITS, CoreSplit, Life
 from anjo.sleep.model_api import ChatResult, ModelApiError
 
 GEN_PARALLEL: Final = 4  # lives generated at once
@@ -320,6 +320,32 @@ def made_record(backend: Backend) -> dict[str, object]:
             "trains": backend.generator.trains, "reader": backend.read_by.name,
             "reader_model": backend.read_by.reads_with(backend.provider),
             **({"keep_off": True} if backend.keep_off else {})}
+
+
+@dataclass(frozen=True)
+class KeptOff:
+    """How many core lives on disk (``of`` them) were written without ``--keep-off`` and with it
+    (``made_record``)."""
+
+    without: int
+    with_: int
+    of: str = "core lives"
+
+    @property
+    def majority(self) -> bool | None:
+        """Whether most were written with it; ``None`` on a tie, none on disk included."""
+        return None if self.without == self.with_ else self.with_ > self.without
+
+    def __str__(self) -> str:
+        return f"{self.of} on disk: {self.without} without keep_off, {self.with_} with"
+
+
+def kept_off(data: DataDir, split: CoreSplit | None = None) -> KeptOff:
+    """``data``'s core lives (``split``'s alone, when given), counted by whether their writer was
+    given their topics."""
+    splits = CORE_SPLITS if split is None else (split,)
+    found = [bool((data.made(life.id) or {}).get("keep_off")) for core in splits for life in data.lives(core)]
+    return KeptOff(found.count(False), found.count(True), "core lives" if split is None else f"{split} lives")
 
 
 @dataclass(frozen=True)
