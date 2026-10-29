@@ -15,7 +15,9 @@ trained adapter. Each choice is one log-probability call through Glimmer's clien
 (``VllmClient.continuation_logprobs``: ``/v1/completions`` with prompt log-probabilities, prefill only),
 summed over its tokens; the first choice wins a tie (the general gate's rule). The prompt is the set's
 one line, alone: no system turn, brief, memory or thought channel, so what an adapter picks is in its
-weights. Every prompt carries the gates' fixed date, so every side is asked the same thing.
+weights. Every prompt carries the gates' fixed date, so every side is asked the same thing. Each text is
+tokenized once for the run, the first side asking (``VllmClient.reusing_tokens``: an adapter tokenizes as
+the base does), so every side sends one request a choice: its prefill.
 
 **Seen or unseen:** an item no simulated day mentioned can't have been learned from the days. A line of a
 day mentions an item when it holds the item's key (a number as a word or in digits; a phrase's content
@@ -25,7 +27,9 @@ through the app's own reader, ``anjo.sleep.app.history_source:synthetic_day_text
 name so the engine never imports the app; no other reader can be named), which refuses a real person;
 they are read before anything is held or woken.
 
-**The report** (one JSON line each: item ids and numbers, never a statement's or a day's words): ``set``;
+**The report** (one JSON line each: item ids and numbers, never a statement's or a day's words): ``side`` as
+each side (the base, an adapter or a repeat) finishes, with its seconds, the first's including the run's
+tokenizations: the live measure of ``ROUND_TRIP_S``; then ``set``;
 ``base`` (accuracy, the floor every arm starts from, beside chance; mean margin: the true choice's
 log-probability less the best counterfeit's);
 ``arm_night`` per arm and night (1, 2, ... in date order): trained and promoted, accuracy on all items
@@ -51,15 +55,20 @@ whole). That holds only with nothing else on the app (its one container batches 
 so a run holds the night lock (``night.sweep.night_lock``) from before its hold to its last request: it is
 refused while a night, its gates, a simulated day or a morning runs on this host, and none starts while
 it scores. Traffic from another host (the live app's chat) isn't covered; ``--repeat`` is the receipt: the
-base and the first adapter scored again at the end, with the largest change in any choice's
-log-probability, the accuracy change and the items that flipped. Nights keep their own concurrency, so
-the other log-probability scorers, the general gate (``gates/general.py``) and the log-probability
-probes of the mornings (``probes/logprob.py``), still send 16 at a time and carry the same batch noise.
+base and the first adapter scored again right after them, before any other adapter (so a run the cap
+stops still has it), and, when time remains after every side, the base once more at the end, which sees
+traffic that came later (its own ``repeat`` line, ``check`` ``end``); each line has the largest change in
+any choice's log-probability, the accuracy change and the items that flipped. Nights keep their own concurrency, so the other log-probability scorers, the general
+gate (``gates/general.py``) and the log-probability probes of the mornings (``probes/logprob.py``), still
+send 16 at a time and carry the same batch noise.
 
 **Spend:** it wakes the app (meant for a warm one) and scores for at most ``SCORE_MAX_S``; no adapter
-starts after it. That, the wake and Modal's idle window after the last request are held on
-``modal_usd`` before the first request, and settled at what ran plus the idle window. The URL and token
-come from ``ANJO_SLEEP_MODAL_URL`` (or ``--url``) and ``ANJO_SLEEP_MODAL_TOKEN``, read only with ``--go``.
+starts after it. The plan prices the scoring from the measured round trip (``ROUND_TRIP_S``) and refuses
+a run whose estimate passes ``CAP_SHARE`` of that cap, since an estimate can be short. Only the arms ``--account`` names are scored, so a run that won't fit
+names fewer (the base and one arm, for a determinism check). The cap, the wake and Modal's idle window
+after the last request are held on ``modal_usd`` before the first request, and settled at what ran plus
+the idle window. The URL and token come from ``ANJO_SLEEP_MODAL_URL`` (or ``--url``) and
+``ANJO_SLEEP_MODAL_TOKEN``, read only with ``--go``.
 """
 from __future__ import annotations
 
@@ -92,12 +101,17 @@ from anjo.sleep.types import CheckpointRef
 
 POOL: Final = "modal_usd"
 SCORE_MAX_S: Final = 60 * 60.0
+CAP_SHARE: Final = 0.9  # the most of SCORE_MAX_S a plan may fill: the estimate is an estimate
 SCORING_WORKERS: Final = 1  # one request in flight, so nothing of the scorer's shares its batch (Reproducible)
 LOCKED: Final = "the night lock is held: a night, its gates or a morning is serving on this host; nothing was held or sent"
 REPRODUCIBLE_NATS: Final = 1e-3  # a repeat this close, choice by choice, with no pick changed, is the same number
 WAKE_S: Final = 600.0  # client.WAKE_TOTAL_TIMEOUT_S: a cold start's worst
-CALL_S: Final = 0.5  # an estimate, not measured: a choice's three round trips (two tokenizations, one prefill), one at a time
-LOAD_S: Final = 10.0  # an estimate: loading one adapter from the volume
+# One post's round trip from the scoring host to the app and back, its GPU work aside. Measured 2026-10-29: a side
+# took 277-300 s one request at a time (13 sides filled the 60-min cap) for 608 posts, 405 /tokenize, 202
+# completions and a load: (277..300 - 202 x PREFILL_S - 0..LOAD_S) / 608 = 0.40-0.46 s. The top, so it errs long.
+ROUND_TRIP_S: Final = 0.46
+PREFILL_S: Final = 0.11  # one choice's prefill on the GPU: 95-110 ms a /v1/completions in the server's log
+LOAD_S: Final = 10.0  # an estimate, not measured: loading one adapter from the volume
 RESAMPLES: Final = 2000
 CI_SEED: Final = 20261029
 DAYS: Final = "anjo.sleep.app.history_source:synthetic_day_text"
@@ -127,6 +141,8 @@ class LogprobClient(Protocol):
     def rendering(self) -> str: ...
 
     def on(self, day: date) -> LogprobClient: ...
+
+    def reusing_tokens(self) -> LogprobClient: ...
 
     def continuation_logprobs(self, adapter: CheckpointRef | None, messages: list[dict[str, str]],
                               continuation: str) -> Sequence[float]: ...
@@ -392,14 +408,32 @@ def _setting(env: Mapping[str, str], name: str) -> str:
     return value
 
 
+def _repeats(adapters: int, repeat: bool) -> int:
+    """The sides ``--repeat`` adds to the base and ``adapters``: the base and the first adapter again right
+    after them, and the base at the end when another adapter comes between."""
+    return (1 + (adapters > 0) + (adapters > 1)) if repeat else 0
+
+
+def estimate_s(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], ceilings: Mapping[str, str],
+               repeat: bool) -> float:
+    """The scoring's seconds, one request at a time: every side's prefills (one a choice), each adapter's
+    load, and each text's tokenization once for the run (the reply's header, the prompts, the choices)."""
+    adapters = sum(n.adapter is not None for life in lives.values() for n in life) + len(ceilings)
+    sides = 1 + adapters + _repeats(adapters, repeat)
+    items = the_set.items
+    texts = 1 + len({item.prompt for item in items}) + len({choice for item in items for choice in item.choices})
+    choices = sum(len(item.choices) for item in items)
+    return texts * ROUND_TRIP_S + sides * choices * (ROUND_TRIP_S + PREFILL_S) + adapters * LOAD_S
+
+
 def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float,
          ceilings: Mapping[str, str] | None = None, repeat: bool = False) -> str:
     ceilings = ceilings or {}
-    adapters = 1 + sum(n.adapter is not None for life in lives.values() for n in life) + len(ceilings)
-    repeats = (1 + (adapters > 1)) if repeat else 0
-    adapters += repeats
+    trained = sum(n.adapter is not None for life in lives.values() for n in life) + len(ceilings)
+    repeats = _repeats(trained, repeat)
+    adapters = 1 + trained + repeats
     choices = sum(len(item.choices) for item in the_set.items)
-    seconds = adapters * choices * CALL_S + adapters * LOAD_S
+    seconds = estimate_s(the_set, lives, ceilings, repeat)
     expected = rate * (seconds + config.SCALEDOWN_S) / 3600.0
     held = rate * (SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S) / 3600.0
     arms = "; ".join(f"{arm}: {len(life)} nights, {sum(n.adapter is not None for n in life)} trained, "
@@ -415,12 +449,16 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
           if ceilings else []),
         f"  calls     {adapters} adapters (the base, every trained night and each ceiling"
         f"{', and the repeats' if repeats else ''}) x {choices} choices = {adapters * choices} log-probability calls, "
-        "prefill only, one at a time, under the night lock (refused while a night, its gates or a morning runs)",
-        *([f"  repeat    the base{' and the first adapter' if repeats > 1 else ''} scored again at the end: the "
-           "receipt (largest log-probability change, accuracy change, items flipped)"] if repeats else []),
-        f"  expected  ~{seconds / 60:.1f} GPU min scoring, an estimate ({CALL_S} s a call, {LOAD_S:.0f} s an adapter "
-        f"load), plus the {config.SCALEDOWN_S / 60:.0f}-min idle window: ~${expected:.2f} at ${rate:.2f}/h on "
-        f"{gpu.name} with the app warm; a cold start adds its wake",
+        "prefill only, one at a time, under the night lock (refused while a night, its gates or a morning runs); "
+        "each text tokenized once for the run",
+        *([f"  repeat    the base{' and the first adapter' if trained else ''} scored again right after, before any "
+           f"other{', and the base at the end if time remains (later traffic)' if trained > 1 else ''}: the receipt "
+           "(largest log-probability change, accuracy change, items flipped)"] if repeats else []),
+        f"  expected  ~{seconds / 60:.1f} GPU min scoring, an estimate ({ROUND_TRIP_S} s a round trip and {PREFILL_S} s "
+        f"a prefill, measured 2026-10-29; {LOAD_S:.0f} s an adapter load), plus the {config.SCALEDOWN_S / 60:.0f}-min "
+        f"idle window: ~${expected:.2f} at ${rate:.2f}/h on {gpu.name} with the app warm; a cold start adds its wake",
+        *([f"  refused   ~{seconds / 60:.0f} min is past {CAP_SHARE:.0%} of the scorer's {SCORE_MAX_S / 60:.0f}-min cap: "
+           "only the arms --account names are scored, so name fewer"] if seconds > CAP_SHARE * SCORE_MAX_S else []),
         f"  hold      ${held:.2f} on {POOL} ({SCORE_MAX_S / 60:.0f} min cap, the wake and the idle window), "
         "settled at what ran plus the idle window",
         f"  days      read first with --go through {DAYS}, for the seen flags (a synthetic person's only)",
@@ -437,7 +475,8 @@ def main(
 ) -> int:
     env = os.environ if environ is None else environ
     parser = argparse.ArgumentParser(description="Score each arm's nightly adapters on a frozen knowledge set.")
-    parser.add_argument("--account", action="append", default=[], help="<arm>=<account id>, once per arm")
+    parser.add_argument("--account", action="append", default=[],
+                        help="<arm>=<account id>, once per arm; only the arms named are scored")
     parser.add_argument("--ceiling", action="append", default=[],
                         help="<label>=<adapter>: an oracle ceiling (tools.knowledge_ceiling), never a result")
     parser.add_argument("--persona", default="film_founder", help="the persona the arms lived (its frozen set)")
@@ -445,7 +484,7 @@ def main(
     parser.add_argument("--usd-per-hour", type=float, help="the GPU's price an hour, if not the listed one")
     parser.add_argument("--url", help=f"the app's URL (default {backend.MODAL_URL_ENV})")
     parser.add_argument("--repeat", action="store_true",
-                        help="score the base and the first adapter again at the end: the reproducibility receipt")
+                        help="score the base and the first adapter again right after them: the reproducibility receipt")
     parser.add_argument("--go", action="store_true", help="send the requests; without it, print the plan only")
     args = parser.parse_args(argv)
     accounts, ceilings = _accounts(parser, args.account), _ceilings(parser, args.ceiling)
@@ -462,6 +501,8 @@ def main(
     gpu = gpus.GPUS[args.gpu]
     rate = args.usd_per_hour or gpu.usd_per_hour
     out(plan(the_set, lives, gpu, rate, ceilings, args.repeat))
+    if estimate_s(the_set, lives, ceilings, args.repeat) > CAP_SHARE * SCORE_MAX_S:
+        return 2  # the plan says why; nothing was read, held or sent
     if not args.go:
         return 0
     reader = day_text or _app_day_text()
@@ -482,23 +523,33 @@ def main(
                                                      (POOL,), Bound(rate, SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S))
         started = clock()
         scored: dict[str | None, Scores] = {}
-        repeated: dict[str | None, Scores] = {}
+        repeated: list[tuple[str, str | None, Scores]] = []  # each check ("early" or "end"), its side, its scores
         try:
             woke = wake()
             out(json.dumps({"line": "wake", "ok": woke.ok, "seconds": round(woke.seconds, 1)}))
             if not woke.ok:
                 return 1
-            dated, deadline = client.on(EVAL_DAY), clock() + SCORE_MAX_S
+            dated, deadline = client.on(EVAL_DAY).reusing_tokens(), clock() + SCORE_MAX_S
             wanted = list(dict.fromkeys([None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None),
                                          *ceilings.values()]))
-            again = [None, *wanted[1:2]] if args.repeat else []  # the base and the first adapter, at the end
-            for n, name in enumerate([*wanted, *again]):
+            head, again = wanted[:2], wanted[:2] if args.repeat else []  # the base and the first adapter, again at once
+            end = [None] if args.repeat and wanted[2:] else []  # and the base after every side, while time remains
+            order = [*head, *again, *wanted[2:], *end]
+            for n, name in enumerate(order):
                 if clock() >= deadline:
-                    out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) + len(again) - n}))
+                    out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(order) - n}))
                     break
                 ref = None if name is None else CheckpointRef(name, "knowledge", EVAL_DAY, f"{config.ADAPTERS_DIR}/{name}",
                                                               None, rendering=client.rendering)
-                (scored if n < len(wanted) else repeated)[name] = score(dated, ref, the_set.items)
+                began = clock()
+                check = "early" if len(head) <= n < len(head) + len(again) else "end" if n >= len(order) - len(end) else None
+                got = score(dated, ref, the_set.items)
+                if check is None:
+                    scored[name] = got
+                else:
+                    repeated.append((check, name, got))
+                out(json.dumps({"line": "side", "scored": "base" if name is None else name, "again": check is not None,
+                                "seconds": round(clock() - began, 1)}))
         finally:
             if reservation is not None:  # what ran, and the idle window Modal bills after the last request
                 reservation.settle(rate * (max(0.0, clock() - started) + config.SCALEDOWN_S) / 3600.0)
@@ -506,8 +557,8 @@ def main(
                     "items": len(the_set.items)}))
     if None in scored:
         _report(the_set, lives, scored, seen_by, out, ceilings)
-    for name, scores in repeated.items():
-        out(json.dumps({"line": "repeat", "scored": "base" if name is None else name,
+    for check, name, scores in repeated:
+        out(json.dumps({"line": "repeat", "check": check, "scored": "base" if name is None else name,
                         **repeat_line(the_set.items, scored[name], scores)}))
     return 0
 
