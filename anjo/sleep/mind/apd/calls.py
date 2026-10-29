@@ -14,6 +14,7 @@ Pure.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -46,6 +47,10 @@ class Call:
     wait_s: float | None = None  # the wait before the call was tried again, after this try failed
     leaked: bool = False  # given up on, and still in flight when its limiter place was freed for it
     repair: int = 0  # the attempt's repair round it was made in (``repair``); 0: the attempt as first written
+    retry: int = 0  # a write: the same day asked again after a reply that couldn't be read (``generate.DAY_RETRIES``)
+    refused_field: str | None = None  # a write whose reply couldn't be read as its day: the field why, never its text
+    missing: int | None = None  # and, for ``placed``, the day's beats it left out
+    extra: int | None = None  # and the keys it added that are no beat
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -57,7 +62,17 @@ class Call:
                    None if raw["days"] is None else int(raw["days"]), int(raw["tokens_in"]), int(raw["tokens_out"]),
                    float(raw["usd"]), bool(raw.get("failed", False)), None if chars is None else int(chars),
                    None if finish is None else str(finish), bool(raw.get("rate_limited", False)),
-                   None if wait is None else float(wait), bool(raw.get("leaked", False)), int(raw.get("repair") or 0))
+                   None if wait is None else float(wait), bool(raw.get("leaked", False)), int(raw.get("repair") or 0),
+                   int(raw.get("retry") or 0), _str(raw.get("refused_field")), _int(raw.get("missing")),
+                   _int(raw.get("extra")))
+
+
+def _str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _int(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def kind_of(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -84,13 +99,29 @@ class CallLog:
     failures: list[Any] = field(default_factory=list)  # ``failures.AttemptFailure``, one per failed attempt
     on_failure: Callable[[Any], None] | None = None  # each failure as it is kept (``gen_batch.recorder``)
     _items: dict[tuple[int, str], int] = field(default_factory=dict)
+    _asked: dict[tuple[int, int, str], int] = field(default_factory=dict)  # each write request's answered tries
 
     def add(self, messages: Sequence[Mapping[str, Any]], tokens_in: int, tokens_out: int, usd: float, *,
             failed: bool = False, reply_chars: int | None = None, finish: str | None = None,
-            rate_limited: bool = False, wait_s: float | None = None) -> None:
+            rate_limited: bool = False, wait_s: float | None = None) -> int:
+        """Logs one try; returns its index in ``calls``."""
         kind, payload = kind_of(messages), _payload(messages)
+        retry = 0
+        if kind == "write":  # the same request answered before in this attempt and round: the day asked again
+            request = json.dumps(list(messages), sort_keys=True, ensure_ascii=False).encode()
+            key = (self.attempt, self.repair, hashlib.sha256(request).hexdigest())
+            retry = self._asked.get(key, 0)
+            if not failed:
+                self._asked[key] = retry + 1
         self.calls.append(Call(kind, self.attempt, self._item(kind, payload), _days(kind, payload), tokens_in,
-                               tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s, repair=self.repair))
+                               tokens_out, usd, failed, reply_chars, finish, rate_limited, wait_s, repair=self.repair,
+                               retry=retry))
+        return len(self.calls) - 1
+
+    def mark_refused(self, index: int, field: str | None, missing: int | None, extra: int | None) -> None:
+        """Call ``index``'s reply couldn't be read as its day (``generate.Refusals``): why, as the
+        field and counts, never the text."""
+        self.calls[index] = replace(self.calls[index], refused_field=field, missing=missing, extra=extra)
 
     def mark_leaked(self, index: int) -> None:
         """Call ``index`` was still in flight when its limiter place was freed for it. A life saved

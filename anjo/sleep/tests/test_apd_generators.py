@@ -71,7 +71,7 @@ def test_core_split_records_its_generator(tmp_path: Path) -> None:
     # its attempt held the generator's worst case for its writes, Spark Open's for its reads
     held = next(float(e["amount"]) for e in read_records(tmp_path / "budget.jsonl", PLAIN)
                 if e["op"] == "reserve" and str(e["job"]).endswith(":spark:a1"))
-    calls = backends.life_calls(spec.prevalence)
+    calls = backends.life_calls(spec.prevalence, day_retries=generate.day_retries(str(GPT.model)))
     assert held == pytest.approx(backends.gen_holds(PRICES, RATES, FIREWORKS.pool, calls, GPT_PRICES)[FIREWORKS.pool])
     assert held < backends.gen_holds(PRICES, RATES, FIREWORKS.pool, calls)[FIREWORKS.pool]
 
@@ -135,8 +135,9 @@ def test_plan_prices_the_chosen_generator(tmp_path: Path, capsys: pytest.Capture
     gpt, spark = plan.pricing(PRICES, RATES, FIREWORKS, GPT, GPT_PRICES), plan.pricing(PRICES, RATES, FIREWORKS)
     expected = sum(sum(plan.life_expected(plan.surface_days(spec), gpt).values()) for spec in specs)
     on_spark = sum(sum(plan.life_expected(plan.surface_days(spec), spark).values()) for spec in specs)
-    held = [backends.gen_holds(PRICES, RATES, FIREWORKS.pool, backends.life_calls(spec.prevalence), GPT_PRICES)
-            for spec in specs]
+    retries = generate.day_retries(str(GPT.model))
+    held = [backends.gen_holds(PRICES, RATES, FIREWORKS.pool, backends.life_calls(spec.prevalence, day_retries=retries),
+                               GPT_PRICES) for spec in specs]
     lines: list[str] = []
 
     # Act

@@ -211,12 +211,13 @@ def _dates(text: str) -> list[date]:
     return found
 
 
-def round_calls(prevalence: int, days: Collection[int]) -> GenCalls:
+def round_calls(prevalence: int, days: Collection[int], *, day_retries: int = 0) -> GenCalls:
     """The most one repair round writing ``days`` (indexes) again calls: a writer and an extractor
-    call for each of them, an extractor call for each other day after the first of them, and the
-    gates read again in full, as an attempt's are (at worst every window changed)."""
+    call for each of them and ``day_retries`` more writer calls each (``generate.day_retries``), an
+    extractor call for each other day after the first of them, and the gates read again in full, as
+    an attempt's are (at worst every window changed)."""
     full = life_calls(prevalence)
-    return GenCalls(len(days) + LIFE_DAYS - min(days), full.reads, full.muse)
+    return GenCalls(len(days) * (1 + day_retries) + LIFE_DAYS - min(days), full.reads, full.muse)
 
 
 def rewritten(tried: Tried, found: Mapping[int, Sequence[str]], round_: int,

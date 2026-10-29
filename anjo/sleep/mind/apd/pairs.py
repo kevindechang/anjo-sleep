@@ -70,6 +70,7 @@ from anjo.sleep.mind.apd.generate import (
     ItemPlan,
     attempt_seed,
     beats_of,
+    day_retries,
     expressed,
     life_days,
     problem_file,
@@ -88,6 +89,13 @@ LAST_DAY: Final = LIFE_DAYS - 1
 PAIR_SPARK_WRITES: Final = 2 * LIFE_DAYS + 2 * len(OUTCOME_DAYS)  # each day written and extracted, each outcome extracted
 PAIR_ITEMS: Final = 3  # the unrelated item in both histories, the commitment's gap in the failed one
 PAIR_CALLS: Final = GenCalls(PAIR_SPARK_WRITES, PAIR_ITEMS * GEN_READS_PER_ITEM, PAIR_ITEMS + 2)  # + both audits
+
+
+def pair_calls(day_retries: int = 0) -> GenCalls:
+    """``PAIR_CALLS`` and ``day_retries`` more writer calls a day (``generate.day_retries``)."""
+    return dataclasses.replace(PAIR_CALLS, writes=PAIR_CALLS.writes + day_retries * LIFE_DAYS)
+
+
 PAIR_EXPECTED: Final = GenCalls(PAIR_CALLS.writes, PAIR_ITEMS * item_reads(LAST_DAY), PAIR_CALLS.muse, retries=0)
 FAILED_BEATS: Final = ("i2.o2", "i2.d")  # the gap's second origin and its disambiguating fact
 KEPT_BEATS: Final = ("k.o", "k.d")
@@ -225,8 +233,8 @@ def generate_pair(spec: PairSpec, backend: Backend, log: CallLog | None = None) 
         if log is not None:
             log.attempt = attempt
         try:
-            with failing(log, attempt), held_attempt(backend, f"pairs:{spec.seed}:{attempt}", PAIR_CALLS,
-                                                     log) as (writer, reader, auditor):
+            with failing(log, attempt), held_attempt(backend, f"pairs:{spec.seed}:{attempt}",
+                                                     pair_calls(day_retries(writes)), log) as (writer, reader, auditor):
                 try:
                     made = write_pair(spec, attempt_seed(spec.seed, attempt), chat=writer, model=writes,
                                       keep_off=backend.keep_off)
