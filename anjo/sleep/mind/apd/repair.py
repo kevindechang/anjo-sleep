@@ -16,12 +16,14 @@ thrown away whole: the days the failure names are written again, the rest kept.
   and ``repair_v1.md``, with the days before it as they now stand, the day as it was, why, and the
   days after it, which it keeps to. The day is extracted again on the targets held before it, its
   messages' sources tagged by the round so no evidence id is reused. A rewrite that comes back as
-  the day was is asked once more, hotter, told so (``generate.UNCHANGED``); still as it was, the
-  round fails at once, before the gates read it again. Every later day is extracted
-  again too, its messages unchanged, on the targets then held: a target's label is fixed when it
-  is made and comes back with each mention, so a label the rewrite took away must not return on
-  a later day. The life and its sealed file are built again from the whole draft, so a planted
-  fact that left no evidence still fails the attempt.
+  the day was is asked once more, hotter, told so (``generate.UNCHANGED``); still as it was, it is
+  kept as it was and the round goes on, since another of its days may mend the window (batch 6: a
+  two-day window ended on its first day, and its second was never tried). A round none of whose days
+  changed fails at once, before the gates read it again. Every later day is extracted again too,
+  its messages unchanged, on the targets then held: a target's label is fixed when it is made and
+  comes back with each mention, so a label the rewrite took away must not return on a later day.
+  The life and its sealed file are built again from the whole draft, so a planted fact that left
+  no evidence still fails the attempt.
 - **What is read again** (``Memo``): the life is gated again in full, but a request sent before in
   the same attempt is answered from its reply without a call. Only the windows whose text changed,
   the ones never read (past a leak's first flag), and the discoverability, identify and audit
@@ -228,17 +230,23 @@ def round_calls(prevalence: int, days: Collection[int], *, day_retries: int = 0)
 def rewritten(tried: Tried, found: Mapping[int, Sequence[str]], round_: int,
               chat: ChatFn) -> tuple[Draft, tuple[ItemPlan, ...]]:
     """``tried``'s draft from the first day ``found`` names on: each day it names written again,
-    told why, and every other later day extracted again, on the targets held before it."""
-    beats, first = generate.beats_of(tried.plans), min(found)
-    draft = refolded(tried.draft, tried.draft.written[:first])
+    told why, and every other later day extracted again, on the targets held before it. When every
+    day it names came back as it was (``generate.unchanged``), it fails at the last of them, before
+    the days after it are extracted or anything is read (``generate.UNCHANGED_RULE``)."""
+    beats, first, last = generate.beats_of(tried.plans), min(found), max(found)
+    draft, changed = refolded(tried.draft, tried.draft.written[:first]), False
     for done in tried.draft.written[first:]:
         if done.index not in found:
             draft = draft.add(draft.extracted_again(chat, done))
             continue
         asked = {"reason": " ".join(found[done.index]), "before": list(done.texts),
                  "later": [{"day": d.index + 1, "messages": list(d.texts)} for d in tried.draft.written[done.index + 1:]]}
-        draft = draft.add(draft.write(chat, done.index, done.day, beats.get(done.index, []), branch=f"r{round_}",
-                                      repair=asked))
+        again = draft.write(chat, done.index, done.day, beats.get(done.index, []), branch=f"r{round_}", repair=asked)
+        changed = changed or not generate.unchanged(again.texts, done.texts)
+        if done.index == last and not changed:
+            raise generate.GenerationFailed("every day written again came back as it was, each asked twice",
+                                            step="writer", day=first + 1, rule=generate.UNCHANGED_RULE)
+        draft = draft.add(again)
     return draft, tried.plans
 
 

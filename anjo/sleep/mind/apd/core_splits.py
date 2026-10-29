@@ -46,6 +46,12 @@ B12_SEEDS: Final = (
 # on another named two dates for one event, and a date inside the life was in the past on some days
 # that named it as to come (``test_apd_core_dates``). The split, its draw, b12 and the pair specs are
 # unchanged.
+# Amended a third time 2026-10-29, still before any core-test life or pair existed: three core-test
+# plant lines stated their own meaning beside the fact (wedding-rsvp-count: "the other 60 ... will be on
+# the final list"; theatre-school-matinee: a full house booked for the dark Wednesday itself;
+# photo-framing-quote: "which the last show's didn't") and now state the raw fact only, under the same
+# ids (``test_apd_core_reversals``, ``leak_v1.md``). The split, its draw, b12 and the pair specs are
+# unchanged.
 
 
 def core_specs(split: CoreSplit) -> tuple[LifeSpec, ...]:

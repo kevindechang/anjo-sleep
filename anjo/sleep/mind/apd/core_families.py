@@ -15,7 +15,12 @@ never that the problem is gone (``dry since``, ``loved it``), which gave the who
 line's own day (``leak_v1.md``), nor names the apparent problem beside it. Joining it to the
 earlier fact is the reader's work. Lines that broke this were rewritten (core-v2): under a new
 ``-v2`` id (``-v3`` when rewritten again), or under the same id in ``core-test``, whose ids the
-pinned pair specs name (``pairs.pair_specs``).
+pinned pair specs name (``pairs.pair_specs``). **Every family's plant line** keeps to the same rule
+(core-v4): it states its raw fact, never what it means or how it came out ("small flaws are fine",
+"the other 60 ... will be on the final list"); a decoy's never names the apparent problem's own
+measure ("she could come at 7:40 pm"), and an opportunity's never books the person's own side
+("a full house for a Wednesday matinee"). ``test_apd_core_reversals`` keeps a phrase list of every
+case so far.
 
 **The days a fact names** hold on whichever day its schedule puts it (core-v3,
 ``test_apd_core_dates``): a day named relative to the writing ("Monday's rehearsal", "next week")
@@ -165,12 +170,13 @@ _TRAIN: Final = (
     ), "The website pays 60 an episode for licensed audio with a transcript.",
         "Is there anything else I can do with the transcripts I make?",
         "License the episodes with their transcripts to the language-learning website at 60 each."),
-    _t("podcast-download-dip-v3", "reversal", _PODCAST, "the downloads chart", (
+    _t("podcast-download-dip-v4", "reversal", _PODCAST, "the downloads chart", (
         "Downloads of episode 9 are down 40 percent on the dashboard against episode 8.",
-    ), "The hosting service says its dashboard stopped counting one big podcast app for a week, and its "
-       "corrected numbers, posted on Friday, put episode 9 at 5,200 downloads and episode 8 at 5,100.",
+    ), "The hosting service says its dashboard stopped counting one big podcast app for a week, the week "
+       "episode 9 came out.",
         "Should I change the show's format because downloads fell?",
-        "Not a fall: the dashboard missed one app for a week, and the corrected downloads are level."),
+        "Not a fall: the dashboard stopped counting one big app the week episode 9 came out, so its 40 percent "
+        "drop is a counting gap."),
     _t("podcast-sponsor-quiet", "decoy", _PODCAST, "the sponsor's renewal", (
         "The sponsor hasn't answered my renewal email for two weeks.",
         "Their marketing contact usually replies within a day.",
@@ -198,13 +204,13 @@ _TRAIN: Final = (
         "Can you help me line up the kitchen work for the week of the 21st?",
         "The floors (25th) come after the cabinets (22nd), the wrong order; move the cabinet delivery past the 25th "
         "and pay the reschedule fee."),
-    _t("film-rehearsal-late-core", "decoy", _FILM, "the lead actor's rehearsal time", (
+    _t("film-rehearsal-late-core-v2", "decoy", _FILM, "the lead actor's rehearsal time", (
         "The lead actor arrived at 7:40 pm to tonight's rehearsal.",
         "The call sheet said 7:00 pm for everyone.",
-    ), "I texted the lead actor that she could come to rehearsals at 7:40 pm this month because of her evening "
-       "class.",
+    ), "This month the lead actor has an evening class across town that ends at 7:15 pm, and I agreed she "
+       "would come to rehearsals straight from it.",
         "Is the lead actor's 7:40 pm arrival at rehearsal something I should worry about?",
-        "Not a problem: she was told she could come at 7:40 pm because of her evening class."),
+        "Not a problem: her evening class ends at 7:15 pm across town, and I agreed she'd come straight from it."),
     _t("bake-night-oven-core", "contradiction", _BAKERY, "the wholesale order on the 18th", (
         "By agreement with the neighbours, my oven can't run before 4 am.",
         "The wholesale order for Friday the 18th is 960 loaves due at the cafe by 7 am, and my oven makes 80 "
@@ -219,6 +225,35 @@ _TRAIN: Final = (
     ), "The ordering app emailed me that it had a maintenance outage all day on the 5th.",
         "Online orders were low on the 5th. Should I change something?",
         "Not a demand drop: the ordering app was down all day on the 5th."),
+    # APD's templates of these fields whose plant line says what its fact means (``CORE_KEPT_OUT``),
+    # each drawn by core-train in a version of its own that states the raw fact, origins kept.
+    _t("film-score-room-core", "opportunity", _FILM, "the score recording", (
+        "A violinist friend is looking for a quiet room to record a short piece for free.",
+        "The church hall I booked for scene 12 stands empty every evening after the shoot wraps at six.",
+    ), "The church hall's caretaker locks up at ten each evening.",
+        "I'm trying to sort out the music for the film. Any ideas?",
+        "The violinist can record the piece in the booked church hall after the shoot wraps at six, any evening "
+        "before ten, for free."),
+    _t("reno-skip-share-core", "opportunity", _RENO, "the demolition rubble", (
+        "The neighbour is renting a skip bin for the week of the 8th.",
+        "My demolition will produce about a tonne of rubble that I planned to haul to the tip on weekends.",
+    ), "The neighbour's skip bin is a large six-metre one, and their own clear-out fills half of it.",
+        "How should I deal with the rubble from the demolition?",
+        "Ask to share the neighbour's six-metre skip bin, half of it unused, for the rubble instead of hauling it "
+        "to the tip."),
+    _t("bake-rye-sales-core", "reversal", _BAKERY, "the rye loaf's sales", (
+        "Sales of the rye loaf fell by half over the last two weeks.",
+    ), "The mill's rye deliveries stopped for two weeks because of road works, and the rye loaf was off the shelf "
+       "for those two weeks.",
+        "Should I drop the rye loaf because it stopped selling?",
+        "Not falling demand: the rye loaf was off the shelf for those two weeks while the mill's deliveries "
+        "stopped."),
+    _t("reno-wiring-quote-core", "decoy", _RENO, "the electrician's quote", (
+        "The electrician quoted 2,400 to rewire the ground floor.",
+        "A friend's rewiring of a similar house last year cost 1,500.",
+    ), "The electrician's quote includes replacing the old fuse box and adding a garden socket circuit.",
+        "Is the electrician's quote too high?",
+        "Not overpriced: the quote also covers a new fuse box and a garden socket circuit, beyond the rewiring."),
 )
 
 _VAL: Final = (
@@ -241,17 +276,17 @@ _VAL: Final = (
         "The open studio day is on the 18th. Is anything missing?",
         "A public event needs liability insurance under the lease and the studio has none; buy cover before "
         "the 18th."),
-    _t("pottery-seconds-plates", "opportunity", _POTTERY, "the seconds shelf", (
+    _t("pottery-seconds-plates-v2", "opportunity", _POTTERY, "the seconds shelf", (
         "A new restaurant across the street wants handmade plates with a rustic look.",
         "Forty plates with small glaze flaws sit unsold on the seconds shelf.",
-    ), "The restaurant's chef said small flaws are fine and wants 30 plates by next month.",
+    ), "The restaurant's chef wants 30 plates by next month and says no two of her plates should look the same.",
         "The seconds shelf is full. What should I do with those plates?",
-        "Sell the seconds plates to the restaurant across the street, which wants 30 and takes small flaws."),
-    _t("pottery-celadon-lines-v2", "reversal", _POTTERY, "the celadon bowls", (
+        "Sell the seconds plates to the restaurant across the street, which wants 30 rustic plates, no two alike."),
+    _t("pottery-celadon-lines-v3", "reversal", _POTTERY, "the celadon bowls", (
         "Fine cracks appeared in the glaze of the celadon bowls the day after firing.",
-    ), "The celadon is a crackle glaze, sold for its web of fine lines.",
+    ), "The celadon's label says it is a crackle glaze, which crazes as it cools.",
         "Should I throw away the celadon bowls?",
-        "Not a defect: the celadon is a crackle glaze meant to show fine lines."),
+        "Not a defect: the celadon is a crackle glaze, and its label says it crazes as it cools."),
     _t("pottery-clay-bill", "decoy", _POTTERY, "the clay delivery", (
         "The clay supplier charged 600 this month, against 300 last month.",
         "The number of students hasn't changed.",
@@ -279,24 +314,24 @@ _VAL: Final = (
         "The e-bike range launches on the 1st. Is everything in place?",
         "The batteries need a four-week fire safety test and none was sent, so the 1st can't hold; send them "
         "now and move the launch."),
-    _t("bikes-courier-fleet", "opportunity", _BIKES, "the old rental bikes", (
+    _t("bikes-courier-fleet-v2", "opportunity", _BIKES, "the old rental bikes", (
         "A courier company is starting a cargo service and needs sturdy bikes for its riders.",
         "Twelve old rental bikes have been stored in the back room since we stopped rentals.",
-    ), "The courier company's manager said they'd buy the bikes and pay us to service them every month.",
+    ), "The courier company's manager said they'd pay 150 for each used bike in working order, and a monthly "
+       "fee for servicing.",
         "What should I do with the old rental bikes in the back room?",
-        "Sell the old rental bikes to the courier company and service them monthly."),
+        "Sell the old rental bikes to the courier company at 150 each and service them for its monthly fee."),
     _t("bikes-brake-squeal-v2", "reversal", _BIKES, "the new disc brakes", (
         "Customers say the new disc brakes squeal loudly on their first rides.",
     ), "The brake maker's guide says new pads squeal until they bed in over about 20 stops.",
         "Should I stop selling the new disc brakes?",
         "Not faulty: new pads squeal until they bed in, and it stops after about 20 stops."),
-    _t("bikes-august-sales", "decoy", _BIKES, "August's sales", (
+    _t("bikes-august-sales-v2", "decoy", _BIKES, "August's sales", (
         "August's bike sales were 18, against 35 in July.",
         "Nothing changed in the shop's prices or stock.",
-    ), "Every year since the shop opened, August sales have been about half of July's while the town is "
-       "away on its summer holidays.",
+    ), "Last year's books show 17 bikes sold in August against 33 in July.",
         "Sales dropped in August. Do I need a promotion?",
-        "Not a slump: August sales are always about half of July's while the town is away on holiday."),
+        "Not a slump: last year's August was 17 against 33 in July, the same summer dip."),
 )
 
 _TEST: Final = (
@@ -335,9 +370,10 @@ _TEST: Final = (
     _t("wedding-rsvp-count", "decoy", _WEDDING, "the guest numbers", (
         "Only 90 of the 150 invited guests have replied to the invitation.",
         "The final numbers are due to me in a week.",
-    ), "The couple told me the other 60 are family who confirmed by phone and will be on the final list.",
+    ), "The couple's guest list includes 60 older relatives, who always confirm with the couple by phone "
+       "rather than by post.",
         "Only 90 people have replied. Should I cut the food order?",
-        "Not a shortfall: the other 60 confirmed by phone and will be on the final list."),
+        "Not a shortfall: the 60 older relatives confirm with the couple by phone, not by post."),
     _t("theatre-wall-height", "contradiction", _THEATRE, "the touring set", (
         "The castle wall in our set stands 4.5 metres tall.",
         "The second tour venue's stage has 4 metres of clearance below its lighting grid.",
@@ -361,10 +397,10 @@ _TEST: Final = (
     _t("theatre-school-matinee", "opportunity", _THEATRE, "the empty Wednesday afternoons", (
         "The local secondary school is studying this play for its exams.",
         "The theatre is dark on Wednesday afternoons during our run.",
-    ), "The school's head of English said they'd book a full house of 200 students for a Wednesday matinee "
-       "at 8 each.",
+    ), "The school's head of English said the 200 students in the exam year could each pay 8 for a "
+       "school-time performance.",
         "Wednesday afternoons are dead. Any way to use them?",
-        "Run a Wednesday matinee for the school studying the play: a full house of 200 at 8 each."),
+        "Run a Wednesday matinee for the school studying the play: 200 students at 8 each."),
     _t("theatre-hoarse-lead", "reversal", _THEATRE, "the lead's voice", (
         "The lead actor's voice was hoarse at the rehearsal on Sunday the 6th.",
     ), "The lead had shouted through a football match on Saturday the 5th, and he is resting his voice ahead of "
@@ -413,7 +449,7 @@ _TEST: Final = (
     _t("photo-framing-quote", "decoy", _PHOTO, "the framing quote", (
         "The framer quoted 3,600 for this show, against 1,800 for the last one.",
         "Both shows have the same number of prints.",
-    ), "This show's prints are twice the size and use museum glass, which the last show's didn't.",
+    ), "This show's prints are twice the size of the last show's, and each is framed behind museum glass.",
         "Is the framer overcharging me this time?",
         "Not overcharging: this show's frames are twice the size, with museum glass."),
 )
@@ -511,11 +547,12 @@ CORE_FIELDS: Final[dict[CoreSplit, tuple[str, ...]]] = {
 _ALL: Final[tuple[Template, ...]] = (*TEMPLATES["development"], *TEMPLATES["held_out"], *CORE_TEMPLATES)
 # APD's development templates core-train doesn't draw; APD's templates stay frozen, so core-train
 # draws its own in their place (``_TRAIN``): a reversal whose plant line states its outcome
-# (``reno-tile-shade`` in its place), and those whose facts name a day only the day they're said can
-# place, or a date the life's days fall on both sides of (each ``-core`` in its place).
+# (``reno-tile-shade`` in its place), those whose facts name a day only the day they're said can
+# place, or a date the life's days fall on both sides of, and those whose plant line says what its
+# fact means (each ``-core`` in its place).
 CORE_KEPT_OUT: Final = frozenset({
     "reno-damp-patch", "reno-tile-membrane", "reno-floor-cabinets", "film-rehearsal-late", "bake-night-oven",
-    "bake-online-orders",
+    "bake-online-orders", "film-score-room", "reno-skip-share", "bake-rye-sales", "reno-wiring-quote",
 })
 _CORE_POOL: Final[tuple[Template, ...]] = tuple(t for t in _ALL if t.id not in CORE_KEPT_OUT)
 _PAIR_GAPS: Final = tuple(pair.gap for pair in PAIR_TEMPLATES)

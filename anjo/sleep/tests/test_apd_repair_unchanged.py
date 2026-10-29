@@ -4,7 +4,9 @@
 day's line survived two repair rounds word for word, and each round paid for the gates' reads
 again only to flag it again. A rewrite that comes back unchanged is asked once more inside its
 round, hotter, with a code-side line that it gave the day back as it was and the round's reason
-stands; still unchanged, the round fails at once, before anything reads it. Each write that came
+stands; still unchanged, the day is kept as it was and the round goes on to its other days (in
+batch 6, a two-day window ended on its first day and its second, the plant's, was never tried). A
+round none of whose days changed fails before the gates read anything again. Each write that came
 back unchanged is marked in the call log, never its text. Every model is a fake: no network."""
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from anjo.sleep.mind.apd import calls, gen_batch, generate, repair
 from anjo.sleep.mind.apd.calls import CallLog
 from anjo.sleep.mind.apd.ceiling import RunLedger
 from anjo.sleep.model_api import ChatResult
-from anjo.sleep.tests.test_apd_repair import LEAKY_DAY, MARK, SPEC, FlagsTheMark, LeakyDay, _backend
+from anjo.sleep.tests.test_apd_repair import HALVES, LEAKY_DAY, MARK, SPEC, FlagsTheMark, LeakyDay, TwoHalves, _backend
 
 
 @dataclasses.dataclass
@@ -71,9 +73,9 @@ def test_a_rewrite_given_back_unchanged_is_asked_once_more_hotter_and_the_life_p
     assert "round 1: 1 day(s) written again, 1 came back unchanged and was asked again, 0 still unchanged" in shown
 
 
-def test_a_rewrite_still_unchanged_fails_the_round_before_anything_reads_it(
+def test_a_round_none_of_whose_days_changed_fails_before_anything_reads_it(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Arrange: one attempt; the leaky day comes back as it was however it is asked
+    # Arrange: one attempt; the leaky day, the round's only one, comes back as it was however it is asked
     monkeypatch.setattr(generate, "MAX_ATTEMPTS", 1)
     writer, log = GivesItBack(mends=False), CallLog()
     backend = _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True)
@@ -86,8 +88,8 @@ def test_a_rewrite_still_unchanged_fails_the_round_before_anything_reads_it(
     assert writer.days == [*range(1, 11), LEAKY_DAY, LEAKY_DAY]
     (failed,) = log.failures
     assert (failed.step, failed.day, failed.rule) == ("writer", LEAKY_DAY, generate.UNCHANGED_RULE)
-    assert {c.kind for c in log.calls if c.repair == 1} == {"write"}
-    assert [c.unchanged for c in log.calls if c.repair == 1] == [True, True]
+    assert {c.kind for c in log.calls if c.repair == 1} <= {"write", "extract"}
+    assert [c.unchanged for c in log.calls if c.kind == "write" and c.repair == 1] == [True, True]
     assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
 
 
@@ -110,6 +112,39 @@ DAY = [
     "drawer fronts, and call the yard about the next delivery of oak boards.",
 ]
 MENDED = [*DAY[:3], DAY[3].replace(", so the damp is clearly not a problem any more", ""), *DAY[4:]]
+
+
+@dataclasses.dataclass
+class KeepsHalfOne(TwoHalves):
+    """``TwoHalves`` whose rewrite of day 5 gives it back as it was, its half and all, however it is
+    asked; day 6's rewrite drops its half, as ``TwoHalves`` does."""
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
+                 temperature: float | None = None) -> ChatResult:
+        result: ChatResult = super().__call__(model, messages, tools, timeout_s, temperature=temperature)
+        body = json.loads(messages[-1]["content"]) if calls.kind_of(messages) == "write" else {}
+        if "reason" not in body or body["day"] != 5:
+            return result
+        day = json.loads(result.text)
+        return dataclasses.replace(result, text=json.dumps({**day, "messages": [*day["messages"], HALVES[0]]}))
+
+
+def test_a_day_given_back_twice_is_kept_and_the_rounds_other_day_still_mends_the_window(tmp_path: Path) -> None:
+    # Arrange: the window flagged is days 5 and 6 together; day 5 is given back as it was
+    writer, log = KeepsHalfOne(), CallLog()
+    backend = _backend(tmp_path, life_chat=writer, reader=FlagsTheMark(), repair=True)
+
+    # Act
+    made = gen_batch.generate_life(SPEC, backend, log)
+
+    # Assert: day 5 asked twice and kept as it was, day 6 written again; read again, the life passes
+    assert made.attempts == 1 and made.repaired == 1
+    assert [body["day"] for body in writer.repairs] == [5, 5, 6]
+    assert [c.unchanged for c in log.calls if c.kind == "write" and c.repair == 1] == [True, True, False]
+    said = " ".join(s.text for s in made.life.sessions)
+    assert HALVES[0] in said and HALVES[1] not in said and not log.failures
+    shown = "\n".join(calls.breakdown({made.life.id: log.calls}))
+    assert "round 1: 2 day(s) written again, 1 came back unchanged and was asked again, 1 still unchanged" in shown
 
 
 @pytest.mark.parametrize(("after", "same"), [

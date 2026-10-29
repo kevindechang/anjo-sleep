@@ -5,7 +5,9 @@ A line that also said the problem was gone (``dry since``, ``loved it``) gave th
 its own day, so the leak gate (``leak_v1.md``) failed every life that drew it. APD's own templates
 stay frozen: the one the core drew that states its outcome is kept out of the core's draws instead.
 A plant line also never names the apparent problem beside what dissolves it ("the line on the desk
-top sits in the wax coat" was both halves on one day). Pure: no model is called."""
+top sits in the wax coat" was both halves on one day), and neither does a decoy's: "she could come
+at 7:40 pm" named the arrival it explained, and the leak gate flagged it, alone or with the next
+day, in all three of one life's attempts (batch 6). Pure: no model is called."""
 from __future__ import annotations
 
 import re
@@ -38,15 +40,18 @@ BEFORE = {
 }
 NOW = {
     "truck-cold-reviews": "truck-cold-reviews-v3", "furniture-desk-line": "furniture-desk-line-v3",
-    "podcast-download-dip": "podcast-download-dip-v3", "pottery-celadon-lines": "pottery-celadon-lines-v2",
+    "podcast-download-dip": "podcast-download-dip-v4", "pottery-celadon-lines": "pottery-celadon-lines-v3",
     "bikes-brake-squeal": "bikes-brake-squeal-v2", "wedding-salty-lamb": "wedding-salty-lamb",
     "theatre-hoarse-lead": "theatre-hoarse-lead", "photo-green-cast": "photo-green-cast",
 }
-GONE = ("truck-cold-reviews-v2", "furniture-desk-line-v2", "podcast-download-dip-v2")  # ids a later rewrite took over
+GONE = ("truck-cold-reviews-v2", "furniture-desk-line-v2", "podcast-download-dip-v2",  # ids a later rewrite took over
+        "podcast-download-dip-v3", "pottery-celadon-lines-v2")
 KEPT_OUT = (
     "reno-damp-patch",  # APD's, frozen: it states its outcome ("the patch has been dry since")
     # a day only the day it's said can place ("next Monday", "Friday's order"), or a date inside the life
     "reno-tile-membrane", "reno-floor-cabinets", "film-rehearsal-late", "bake-night-oven", "bake-online-orders",
+    # a plant line that says what its fact means (``APD_SWEPT``)
+    "film-score-room", "reno-skip-share", "bake-rye-sales", "reno-wiring-quote",
 )
 # Words that tell a reader the apparent problem is gone; a reversal's plant line never needs them.
 OUTCOME_WORDS = ("since", "whole", "nothing of the kind", "has gone", "loved", "clearly", "neutral", "level",
@@ -130,3 +135,97 @@ def test_reno_tile_shade_holds_on_every_day_its_draws_put_it() -> None:
         assert plan.origin_days[0] < plan.disambiguating_day < plan.surface_day
         for fact in (*tiles.origins, tiles.disambiguating, tiles.resolution):
             assert not WEEKDAY.search(fact) and "still damp" not in fact, fact
+
+
+def test_the_rehearsal_line_states_the_class_and_never_the_arrival_it_explains() -> None:
+    late = core_families.template("film-rehearsal-late-core-v2")
+    assert late is not None and late.family == "decoy" and core_families.template("film-rehearsal-late-core") is None
+    origins = set().union(*(_key_terms(origin) for origin in late.origins))
+    line = late.disambiguating.lower()
+    # the raw fact the reader joins to the 7:40 arrival: a class this month that ends at 7:15 pm, agreed
+    assert "7:15" in _key_terms(late.disambiguating) and "class" in line and "agreed" in line
+    # never the arrival it explains (``leak_v1.md``: both halves on one day)
+    assert not _key_terms(late.disambiguating) & origins
+    assert not any(word in line for word in ("7:40", "late", "arriv", "call sheet", "7:00"))
+    assert "7:40" in late.surface and "7:15" in late.resolution
+
+
+# Every plant line that stated its own meaning or outcome beside its fact (leak_v1.md:19-20, 25-27),
+# as it was, by the id it had, and the id it has now: a new id in core-train and core-val, the same
+# id in core-test, whose ids the pinned pair specs name. Swept 2026-10-29, after batch 6.
+SWEPT = {
+    "film-rehearsal-late-core": ("film-rehearsal-late-core-v2", "I texted the lead actor that she could come to "
+                                 "rehearsals at 7:40 pm this month because of her evening class."),
+    "podcast-download-dip-v3": ("podcast-download-dip-v4", "The hosting service says its dashboard stopped counting "
+                                "one big podcast app for a week, and its corrected numbers, posted on Friday, put "
+                                "episode 9 at 5,200 downloads and episode 8 at 5,100."),
+    "pottery-celadon-lines-v2": ("pottery-celadon-lines-v3", "The celadon is a crackle glaze, sold for its web of "
+                                 "fine lines."),
+    "pottery-seconds-plates": ("pottery-seconds-plates-v2", "The restaurant's chef said small flaws are fine and "
+                               "wants 30 plates by next month."),
+    "bikes-august-sales": ("bikes-august-sales-v2", "Every year since the shop opened, August sales have been about "
+                           "half of July's while the town is away on its summer holidays."),
+    "bikes-courier-fleet": ("bikes-courier-fleet-v2", "The courier company's manager said they'd buy the bikes and "
+                            "pay us to service them every month."),
+    "wedding-rsvp-count": ("wedding-rsvp-count", "The couple told me the other 60 are family who confirmed by phone "
+                           "and will be on the final list."),
+    "theatre-school-matinee": ("theatre-school-matinee", "The school's head of English said they'd book a full house "
+                               "of 200 students for a Wednesday matinee at 8 each."),
+    "photo-framing-quote": ("photo-framing-quote", "This show's prints are twice the size and use museum glass, which "
+                            "the last show's didn't."),
+}
+# APD's own plant lines that say what their fact means, drawn by core-train until 2026-10-29: APD's stay
+# frozen, so each is kept out of the core's draws (``CORE_KEPT_OUT``) and drawn in a ``-core`` version.
+APD_SWEPT = {
+    "film-score-room": ("film-score-room-core", "The church hall caretaker said any recording is fine as long as it "
+                        "ends by ten."),
+    "reno-skip-share": ("reno-skip-share-core", "The neighbour said they'd happily share the bin; it's a large "
+                        "six-metre one, half empty."),
+    "bake-rye-sales": ("bake-rye-sales-core", "The mill's rye deliveries stopped for two weeks because of road works, "
+                       "and the rye loaf was off the shelf for those two weeks; it was back on the shelf last Monday."),
+    "reno-wiring-quote": ("reno-wiring-quote-core", "The quote includes replacing the old fuse box and adding a garden "
+                          "socket circuit, which my friend's job did not."),
+}
+# Phrases that state what a fact means or how it came out, built from every case so far: crude, but a
+# plant line that brings one back fails here before a live run pays for it.
+STATED = ("is fine", "are fine", "was fine", "fine after all", "not a problem", "no problem", "nothing of the kind",
+          "has gone", "no longer", "dry since", "loved it", "clearly", "neutral", "level", "without leaking",
+          "took it away", "is whole", "still damp", "as it should", "sold for", "corrected", "about half",
+          "the other", "will be on the", "full house", "could come", "pay us", "happily", "back on the", "did not",
+          "didn't")
+
+
+def _stated(line: str) -> list[str]:
+    return [phrase for phrase in STATED if re.search(rf"\b{re.escape(phrase)}\b", line.lower())]
+
+
+def test_the_stated_outcome_phrases_catch_every_case_so_far() -> None:
+    cases = [*BEFORE.values(), *(line for _, line in (*SWEPT.values(), *APD_SWEPT.values())),
+             "The patch has been dry since the gutter was cleared."]  # reno-damp-patch's kind, APD's own
+    assert [line for line in cases if not _stated(line)] == []
+
+
+def test_no_plant_line_drawn_into_a_core_split_states_its_meaning_or_outcome() -> None:
+    # every plant line any core split draws, of every family, APD's own included (kept out when one fails)
+    stated = {t.id: _stated(t.disambiguating) for split in CORE_SPLITS for t in _drawn(split)}
+    assert {tid: found for tid, found in stated.items() if found} == {}
+
+
+def test_each_apd_line_that_says_its_meaning_is_drawn_in_a_core_version_and_kept_for_apd() -> None:
+    drawn = {t.id: t for t in _drawn("core-train")}
+    apd = {t.id: t for t in families.TEMPLATES["development"]}
+    for old, (new, line) in APD_SWEPT.items():
+        assert old in core_families.CORE_KEPT_OUT and old not in drawn and apd[old].disambiguating == line, old
+        mine = drawn[new]
+        assert (mine.family, mine.field, mine.origins, mine.surface) == (apd[old].family, apd[old].field,
+                                                                         apd[old].origins, apd[old].surface), old
+        assert mine.disambiguating != line and not _stated(mine.disambiguating), old
+
+
+def test_each_swept_line_is_rewritten_under_its_splits_id_rule() -> None:
+    test_ids = {t.id for name in core_families.fields("core-test") for t in core_families.templates_for("core-test", name)}
+    for old, (new, line) in SWEPT.items():
+        now = core_families.template(new)
+        assert now is not None and now.disambiguating != line, old
+        assert (new == old) == (old in test_ids), old  # core-test keeps its ids; the others take new ones
+        assert new == old or core_families.template(old) is None, old

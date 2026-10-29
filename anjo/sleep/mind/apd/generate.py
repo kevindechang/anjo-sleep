@@ -75,9 +75,10 @@ KEEP_OFF: Final = "`keep_off` names subjects that belong to the beats: write abo
 # many more times, inside the attempt and its hold (``day_retries``); APD's own writer is asked once.
 DAY_RETRIES: Final = 2
 # A day written again (``repair``) that comes back as it was (``unchanged``) is asked once more,
-# hotter, with this line after ``repair_v1.md``; still unchanged, its round fails at once, before the
-# gates read it again (rule ``UNCHANGED_RULE``). On 2026-10-29 a day's line survived two repair
-# rounds word for word, each round paying for a full read to flag it again. The prompts are unchanged.
+# hotter, with this line after ``repair_v1.md``; still unchanged, it is kept as it was, and a round
+# none of whose days changed fails before the gates read it again (rule ``UNCHANGED_RULE``,
+# ``repair.rewritten``). On 2026-10-29 a day's line survived two repair rounds word for word, each
+# round paying for a full read to flag it again. The prompts are unchanged.
 UNCHANGED: Final = "Your last answer gave `before` back unchanged, so `reason` still holds. Write the day again, " \
                    "changing what `reason` is about; keep the `plant` and `ask` beats."
 UNCHANGED_RULE: Final = "unchanged"
@@ -294,8 +295,9 @@ def _write_day(
     beats: Sequence[Beat], repair: Mapping[str, Any] | None = None, keep_off: Sequence[str] = (),
 ) -> tuple[list[str], dict[str, int]]:
     """The day's messages and where its beats are. A day written again (``repair``) that comes back
-    as it was is asked once more (``UNCHANGED``, at ``REWRITE_TEMPERATURE``), and fails if it comes
-    back as it was again (``UNCHANGED_RULE``); each such reply is marked (``GivenBack``)."""
+    as it was is asked once more (``UNCHANGED``, at ``REWRITE_TEMPERATURE``), and kept as it comes
+    back then; each reply that came back as it was is marked (``GivenBack``). Whether its round goes
+    on is the round's (``repair.rewritten``): another of its days may mend what this one keeps."""
     asked = functools.partial(writer_messages, field, index, day, seed, earlier, beats, model=model, repair=repair,
                               keep_off=keep_off)
     found = _asked(chat, model, asked(), index, beats, WRITE_TEMPERATURE)
@@ -306,8 +308,6 @@ def _write_day(
     found = _asked(chat, model, asked(again=True), index, beats, REWRITE_TEMPERATURE)
     if unchanged(found[0], before):
         _given_back(chat)
-        raise GenerationFailed("a day written again came back as it was, asked twice", step="writer", day=index + 1,
-                               rule=UNCHANGED_RULE)
     return found
 
 
