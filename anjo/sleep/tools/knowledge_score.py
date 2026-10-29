@@ -47,10 +47,14 @@ request in flight together, other adapters' and other clients' included. So a li
 depends on what shared its batch: two runs 16 at a time moved one adapter's accuracy by 14.5 points. The
 scorer sends one request at a time (``SCORING_WORKERS``), so each line is computed alone, the same way
 every time; its prefill is never a prefix-cache hit (vLLM computes a prompt-log-probability request
-whole). That holds only with nothing else on the app (no night, gate or morning serving: its one
-container batches every client together), which no client can see; ``--repeat`` is the receipt: the
+whole). That holds only with nothing else on the app (its one container batches every client together),
+so a run holds the night lock (``night.sweep.night_lock``) from before its hold to its last request: it is
+refused while a night, its gates, a simulated day or a morning runs on this host, and none starts while
+it scores. Traffic from another host (the live app's chat) isn't covered; ``--repeat`` is the receipt: the
 base and the first adapter scored again at the end, with the largest change in any choice's
-log-probability, the accuracy change and the items that flipped. Nights keep their own concurrency.
+log-probability, the accuracy change and the items that flipped. Nights keep their own concurrency, so
+the other log-probability scorers, the general gate (``gates/general.py``) and the log-probability
+probes of the mornings (``probes/logprob.py``), still send 16 at a time and carry the same batch noise.
 
 **Spend:** it wakes the app (meant for a warm one) and scores for at most ``SCORE_MAX_S``; no adapter
 starts after it. That, the wake and Modal's idle window after the last request are held on
@@ -68,6 +72,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -76,6 +81,7 @@ from typing import Any, Final, Protocol
 from anjo.sleep.budget import Bound, default_ledger
 from anjo.sleep.gates import EVAL_DAY, in_order
 from anjo.sleep.night.holds import hold
+from anjo.sleep.night.sweep import NightBusy, night_lock
 from anjo.sleep.reports.results import results_root
 from anjo.sleep.serving import backend, config, gpus
 from anjo.sleep.serving.client import WakeResult
@@ -87,6 +93,7 @@ from anjo.sleep.types import CheckpointRef
 POOL: Final = "modal_usd"
 SCORE_MAX_S: Final = 60 * 60.0
 SCORING_WORKERS: Final = 1  # one request in flight, so nothing of the scorer's shares its batch (Reproducible)
+LOCKED: Final = "the night lock is held: a night, its gates or a morning is serving on this host; nothing was held or sent"
 REPRODUCIBLE_NATS: Final = 1e-3  # a repeat this close, choice by choice, with no pick changed, is the same number
 WAKE_S: Final = 600.0  # client.WAKE_TOTAL_TIMEOUT_S: a cold start's worst
 CALL_S: Final = 0.5  # an estimate, not measured: a choice's three round trips (two tokenizations, one prefill), one at a time
@@ -408,7 +415,7 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
           if ceilings else []),
         f"  calls     {adapters} adapters (the base, every trained night and each ceiling"
         f"{', and the repeats' if repeats else ''}) x {choices} choices = {adapters * choices} log-probability calls, "
-        "prefill only, one at a time: run it with nothing else on the app (no night, gate or morning)",
+        "prefill only, one at a time, under the night lock (refused while a night, its gates or a morning runs)",
         *([f"  repeat    the base{' and the first adapter' if repeats > 1 else ''} scored again at the end: the "
            "receipt (largest log-probability change, accuracy change, items flipped)"] if repeats else []),
         f"  expected  ~{seconds / 60:.1f} GPU min scoring, an estimate ({CALL_S} s a call, {LOAD_S:.0f} s an adapter "
@@ -465,30 +472,36 @@ def main(
         client, wake = serving.client(), wake or serving.wake
     assert wake is not None
     book = default_ledger(env) if ledger is ... else ledger
-    reservation = None if book is None else hold(book, f"knowledge_score:{the_set.sha[:12]}:{int(time.time())}",
-                                                 (POOL,), Bound(rate, SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S))
-    started = clock()
-    scored: dict[str | None, Scores] = {}
-    repeated: dict[str | None, Scores] = {}
-    try:
-        woke = wake()
-        out(json.dumps({"line": "wake", "ok": woke.ok, "seconds": round(woke.seconds, 1)}))
-        if not woke.ok:
-            return 1
-        dated, deadline = client.on(EVAL_DAY), clock() + SCORE_MAX_S
-        wanted = list(dict.fromkeys([None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None),
-                                     *ceilings.values()]))
-        again = [None, *wanted[1:2]] if args.repeat else []  # the base and the first adapter, at the end
-        for n, name in enumerate([*wanted, *again]):
-            if clock() >= deadline:
-                out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) + len(again) - n}))
-                break
-            ref = None if name is None else CheckpointRef(name, "knowledge", EVAL_DAY, f"{config.ADAPTERS_DIR}/{name}",
-                                                          None, rendering=client.rendering)
-            (scored if n < len(wanted) else repeated)[name] = score(dated, ref, the_set.items)
-    finally:
-        if reservation is not None:  # what ran, and the idle window Modal bills after the last request
-            reservation.settle(rate * (max(0.0, clock() - started) + config.SCALEDOWN_S) / 3600.0)
+    with ExitStack() as locked:  # the night lock for the run: no night, gate or morning on this host shares the batch
+        try:
+            locked.enter_context(nullcontext() if book is None else night_lock(book))
+        except NightBusy:
+            out(json.dumps({"line": "refused", "why": LOCKED}))
+            return 2
+        reservation = None if book is None else hold(book, f"knowledge_score:{the_set.sha[:12]}:{int(time.time())}",
+                                                     (POOL,), Bound(rate, SCORE_MAX_S + WAKE_S + config.SCALEDOWN_S))
+        started = clock()
+        scored: dict[str | None, Scores] = {}
+        repeated: dict[str | None, Scores] = {}
+        try:
+            woke = wake()
+            out(json.dumps({"line": "wake", "ok": woke.ok, "seconds": round(woke.seconds, 1)}))
+            if not woke.ok:
+                return 1
+            dated, deadline = client.on(EVAL_DAY), clock() + SCORE_MAX_S
+            wanted = list(dict.fromkeys([None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None),
+                                         *ceilings.values()]))
+            again = [None, *wanted[1:2]] if args.repeat else []  # the base and the first adapter, at the end
+            for n, name in enumerate([*wanted, *again]):
+                if clock() >= deadline:
+                    out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) + len(again) - n}))
+                    break
+                ref = None if name is None else CheckpointRef(name, "knowledge", EVAL_DAY, f"{config.ADAPTERS_DIR}/{name}",
+                                                              None, rendering=client.rendering)
+                (scored if n < len(wanted) else repeated)[name] = score(dated, ref, the_set.items)
+        finally:
+            if reservation is not None:  # what ran, and the idle window Modal bills after the last request
+                reservation.settle(rate * (max(0.0, clock() - started) + config.SCALEDOWN_S) / 3600.0)
     out(json.dumps({"line": "set", "persona": the_set.persona, "version": the_set.version, "sha": the_set.sha,
                     "items": len(the_set.items)}))
     if None in scored:
