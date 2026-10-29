@@ -351,3 +351,29 @@ def test_a_night_without_its_log_is_refused_cleanly(tmp_path: Path, monkeypatch:
             live.main(argv, run=_Runs(root, ledger), out=lambda line: None, now=lambda: NOW)
         assert f"night {DAY} has a summary but no log.jsonl" in capsys.readouterr().err
     assert not ledger.open_holds()
+
+
+def test_the_capacity_arm_runs_beside_a_reused_seed_arm_and_no_shell_sets_it(tmp_path: Path,
+                                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.tools import knowledge_score
+
+    root, ledger = _setup(tmp_path, monkeypatch)
+    _night(root, "syn-a", DAY, minutes={"sft": 1.0, "seed": 2.0, "dpo": 0.5})  # the seed arm, already lived
+    monkeypatch.setenv(objective.CAPACITY_ENV, "1")  # this shell's setting never reaches an arm
+    accounts = ["--account", "seed=syn-a", "--account", "seed_cap=syn-k"]
+    runs, lines = _Runs(root, ledger), list[str]()
+    argv = [*accounts, *_tokens(tmp_path, accounts)[2:], "--days", "1", "--start", DAY, "--reuse", "seed",
+            "--night-usd", "2.0", "--yes"]
+    assert live.main(argv, run=runs, out=lines.append, now=lambda: NOW) == 0
+    [cap] = runs.calls
+    assert cap["account"] == "syn-k" and cap["env"][objective.CAPACITY_ENV] == "1"
+    assert cap["env"][objective.OBJECTIVE_ENV] == "sft_dpo_seed" and objective.FOLD_ENV not in cap["env"]
+    assert objective.CAPACITY_ENV not in live.arm_env("seed", {objective.CAPACITY_ENV: "1"}, "tok")
+    assert live.arm_usd("seed_cap", 3, 2.0) > live.arm_usd("seed", 3, 2.0)  # its added minutes are priced
+    assert any(line.startswith("seed_cap: ") for line in lines) and not ledger.open_holds()
+    assert ("seed_cap", "seed") in knowledge_score.PAIRS  # scored against the seed arm night by night
+    reported = list[str]()
+    assert live.main([*accounts, "--reuse", "seed", "--report"], out=reported.append) == 0
+    assert [line.split(":")[0] for line in reported] == ["seed", "seed_cap"]
+    with pytest.raises(SystemExit):  # a seed arm that runs still makes its claim, so it runs with its control
+        live.main(accounts, out=lines.append)

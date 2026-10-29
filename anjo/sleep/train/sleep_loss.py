@@ -45,6 +45,9 @@ time budget instead of a step plan, epochs of the rows in fresh seeded orders, e
 ``stretch`` gives the share of the budget used (one warmup, one cosine to zero); then the DPO block, as
 any night. It never dreams: it is the control a dreaming arm is held to.
 
+**Capacity** (``Plan.passes``, ``ANJO_SLEEP_CAPACITY``): the main block takes ``passes`` passes over its
+rows, one row a step, in place of the step plan; the DPO block keeps its own. Never with a time budget.
+
 **The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
 hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
 are tonight's fresh slot (B at zero: the reset, ``load_leading``); after training the job folds it.
@@ -150,6 +153,7 @@ class Plan:
     dreams: bool = False
     stretch_s: float = 0.0  # the matched control: the main block trains this long by the clock (0: the step plan)
     deadline: float = math.inf  # the timer's reading past which no update starts (the channel's ``max_minutes``)
+    passes: int = 0  # capacity: the main block's passes over its rows, one row a step (0: the step plan)
 
 
 Spliced = tuple[Any, Any]  # the thought channel (``channel_train.Channel``) and K soft tokens ``(K, H)``
@@ -712,8 +716,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
     dreaming = plan.dreams and bool(batch.dreams)
     if dreaming and not batch.anchors:
         raise ValueError("dreams need the anchor items their check scores")
-    if plan.stretch_s and (plan.stretch_s < 0 or dreaming):
-        raise ValueError("a matched control trains a positive time budget, and no dreams")
+    if plan.stretch_s and (plan.stretch_s < 0 or dreaming or plan.passes):
+        raise ValueError("a matched control trains a positive time budget, and no dreams or passes")
     if batch.dream_groups and len(batch.dream_groups) != len(batch.dreams):
         raise ValueError("each dream has one seed kind")
     rng = random.Random(plan.seed)
@@ -721,6 +725,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
     items, imitating = _stream(batch, rng)
     fresh = set(rng.sample(range(len(batch.seeds)), math.ceil(ON_POLICY_SHARE * len(batch.seeds))))
     accumulation, epochs, per_epoch = step_plan(len(items), plan.min_steps) if items else (1, 0, 0)
+    if items and plan.passes:  # capacity: every row its own step, each pass; the DPO block keeps its own plan
+        accumulation, epochs, per_epoch = 1, plan.passes, len(items)
     main = epochs * per_epoch
     dream_steps = math.ceil(min(len(batch.dreams), DREAM_TOP_K + DREAM_RANDOM) / accumulation) if dreaming else 0
     if main + len(batch.pairs) + dream_steps == 0:

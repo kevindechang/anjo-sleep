@@ -22,6 +22,9 @@ accelerated life per arm on fresh synthetic accounts, then ``--report`` over wha
   its twin ``protect_random``: the same job with a random orthonormal basis of the same rank and width in
   place of the anchors' (the decisive ablation). A twin needs no match file: the same rows, step plan and
   sampling make its minutes the same by construction, and the report checks they stayed within 5%.
+- ``seed_cap``: the seed arm with ``ANJO_SLEEP_CAPACITY=1`` (rank 32, three passes over the night's rows at
+  one row a step, ``train/objective.py``): what more training does, against the seed arm (``--reuse seed``
+  reads a seed arm that already lived). No control: the budget is the claim, and the report gives the minutes.
 
 A control runs after the arm it is matched to, with a match file of that arm's minutes per night
 (``--match-file``, per run: no host setting can pad a real night). Every arm runs with
@@ -65,7 +68,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
@@ -80,7 +83,7 @@ from anjo.sleep.train.terms import DREAMS_NOT_WIRED
 
 POOL: Final = "modal_usd"
 A100_USD_PER_HOUR: Final = 2.50  # Modal's A100-80GB list price, checked 2026-10-27
-ORDER: Final = ("seed", "today", "fold", "dreams", "seed_matched", "protect", "protect_random")
+ORDER: Final = ("seed", "today", "fold", "dreams", "seed_matched", "protect", "protect_random", "seed_cap")
 CONTROL_OF: Final = {"today": "seed", "seed_matched": "dreams"}  # a control, and the arm its minutes match
 TWIN_OF: Final = {"protect_random": "protect"}  # the same job with one thing swapped: equal minutes by construction
 NEEDS: Final = {"seed": ("today",), "dreams": ("seed_matched",), "protect": ("protect_random", "fold")}  # a claim's comparisons
@@ -91,16 +94,18 @@ ENVS: Final[Mapping[str, Mapping[str, str]]] = {
     "today": {objective.OBJECTIVE_ENV: "sft_dpo"}, "seed_matched": SEED,
     "protect": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "anchors"},
     "protect_random": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "random"},
+    "seed_cap": {**SEED, objective.CAPACITY_ENV: "1"},
 }
 # Estimates per night (2026-10-29), not measurements: seeding's teacher passes 0.9, fresh samples 1.3,
 # imitation 0.8, the fold 0.1, dreams' ranking and block 1.3 plus 1.5 minutes of serving for their text.
 # The protected slot adds 1.5 to the fold's: the anchors' passes 0.3, the bases 0.5, the projection in the
 # loop and the protected cut 0.7; each night's receipt measures the first two (terms.protect.minutes).
-ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8, "protect": 4.6, "protect_random": 4.6}
+# Capacity runs the seed arm's main block (about 5.3 of its 5.8 training minutes) three times over: +10.7.
+ADDED_A100_MIN: Final = {"seed": 3.0, "fold": 3.1, "dreams": 5.8, "protect": 4.6, "protect_random": 4.6, "seed_cap": 13.7}
 TODAY_TRAIN_MIN: Final = 2.83  # today's training minutes, measured 2026-10-28: a control's budget holds them too
 MISMATCH: Final = 0.05
 SWITCHES: Final = (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, objective.PROTECT_ENV,
-                   PRESSURE_ENV)
+                   objective.CAPACITY_ENV, PRESSURE_ENV)
 SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # app.sim_transport's: the account a day's lines post as
 HOLD_KEY: Final = "sleep-objective-live"
 REUSABLE: Final = ("seed", "protect")  # reference arms: what a control or a twin is matched to
@@ -109,14 +114,15 @@ WIRING: Final = ("--wiring", "anjo.sleep.app.night:build", "--simulate", "anjo.s
                  "--morning", "anjo.sleep.app.morning:build")
 
 
-def arms(accounts: Mapping[str, str]) -> list[str]:
-    """The arms asked for, in run order: each control and twin after the arm it is matched to."""
+def arms(accounts: Mapping[str, str], reused: Collection[str] = ()) -> list[str]:
+    """The arms asked for, in run order: each control and twin after the arm it is matched to. A reused
+    arm makes no claim in this run, so its comparisons need not be named."""
     unknown = sorted(set(accounts) - set(ORDER))
     if unknown or "seed" not in accounts:
         raise ValueError(f"arms are {', '.join(ORDER)}, and the seed arm is always run")
     if len(set(accounts.values())) != len(accounts):
         raise ValueError("each arm lives on its own account")
-    missing = [f"{arm} needs {other}" for arm, others in NEEDS.items() if arm in accounts
+    missing = [f"{arm} needs {other}" for arm, others in NEEDS.items() if arm in accounts and arm not in reused
                for other in others if other not in accounts]
     missing += [f"{control} needs {arm}" for control, arm in {**CONTROL_OF, **TWIN_OF}.items()
                 if control in accounts and arm not in accounts]
@@ -255,10 +261,11 @@ def matches(done: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None]) -> dict[str, Any]:
+def report(root: Path, accounts: Mapping[str, str], out: Callable[[str], None],
+           reused: Collection[str] = ()) -> dict[str, Any]:
     """Per arm: the night series and the means; per control, its match night by night. Numbers only."""
     table: dict[str, Any] = {}
-    for arm in arms(accounts):
+    for arm in arms(accounts, reused):
         done, scored = nights(root, accounts[arm]), scores(root, accounts[arm])
         terms = [n["train"].get("terms") or {} for n in done]
         dreams: list[dict[str, Any]] = [t["dreams"] for t in terms if t.get("dreams")]
@@ -397,7 +404,7 @@ def _run_arms(args: argparse.Namespace, accounts: Mapping[str, str], tokens: Map
         if held is not None:
             held.release()
     try:
-        report(root, accounts, out)
+        report(root, accounts, out, args.reuse)
     except ValueError as error:  # every arm ran; only the reading stopped
         out(f"report stopped: {error}")
         return 1
@@ -422,14 +429,14 @@ def main(argv: Sequence[str] | None = None, *, run: Callable[..., Any] = subproc
     args = parser.parse_args(argv)
     try:
         accounts = _accounts(args.account)
-        chosen = arms(accounts)
+        chosen = arms(accounts, args.reuse)
         morning_subset(os.environ)  # an unknown ANJO_SLEEP_MORNING_SUBSET stops the plan, as it stops each run
         files = _token_files(args.token_file, chosen)
     except ValueError as error:
         parser.error(str(error))
     if args.report:
         try:
-            report(results_root(), accounts, out)
+            report(results_root(), accounts, out, args.reuse)
         except ValueError as error:
             parser.error(f"--report: {error}")
         return 0
