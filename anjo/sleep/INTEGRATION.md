@@ -543,7 +543,7 @@ and hash are null (only `undated_days` is set), and it loads as no estimator (`N
 `anjo/sleep/app/night.py` attaches `registered_estimator()` to `NightDeps.estimator`. `_expect` in
 `anjo/sleep/night/run.py` records an expectation only when the estimator is registered, the
 choice has a want and the account is synthetic; it also skips a question or target the snapshot
-does not hold, so a real person's night records none. `anjo/sleep/tests/test_expect_register.py`
+does not hold, so a real person's night records none. `anjo/sleep/tests/app/test_expect_register.py`
 covers the fit's refusals, the round trip, a tampered file, the placeholder and both night paths.
 
 **Second-judge spend holds.** `anjo/sleep/tools/morning_second_judge.py` labels its holds
