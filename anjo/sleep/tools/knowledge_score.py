@@ -3,6 +3,7 @@ never delays or changes a run (``python -m anjo.sleep.tools.knowledge_score``).
 
     python -m anjo.sleep.tools.knowledge_score --account seed=<id> --account today=<id> ...   # the plan
     python -m anjo.sleep.tools.knowledge_score --account seed=<id> --account today=<id> ... --go
+    python -m anjo.sleep.tools.knowledge_score --ceiling recipe=<adapter> --go   # an oracle ceiling (below)
 
 **What it reads:** each account's night folders under the results root (``reports.results``): the adapter
 a night trained (``summary.json``'s ``trained_adapter``, scored whether or not it was promoted, and
@@ -34,6 +35,11 @@ both of whose arms trained that night: the paired differences in accuracy and ma
 arms saw (the main number) and on all items, each with its item and statement counts and a 95% paired
 cluster bootstrap interval (each resample draws statements, since a statement's items move together, and
 serves both sides; ``RESAMPLES`` of them from a fixed seed).
+
+**A ceiling** (``--ceiling <label>=<adapter>``, ``tools.knowledge_ceiling``'s adapter, with or without
+arms): scored as a night is, on every item (it was trained on every statement), and printed as a
+``ceiling`` line marked CEILING with its paired difference from the base. Contamination by design: it
+says what the pipeline can store when handed the answers, never a result.
 
 **Spend:** it wakes the app (meant for a warm one) and scores for at most ``SCORE_MAX_S``; no adapter
 starts after it. That, the wake and Modal's idle window after the last request are held on
@@ -76,6 +82,7 @@ RESAMPLES: Final = 2000
 CI_SEED: Final = 20261029
 DAYS: Final = "anjo.sleep.app.history_source:synthetic_day_text"
 # Each claim and what it is compared with: the live comparison's arms (tools.sleep_objective_live).
+CEILING: Final = "contamination by design: trained on the set's own statements, never a result"
 PAIRS: Final = (("seed", "today"), ("fold", "seed"), ("protect", "fold"), ("protect", "protect_random"),
                 ("dreams", "seed_matched"))
 _ARM: Final = re.compile(r"[a-z][a-z_]{0,31}")
@@ -289,10 +296,17 @@ def _seen_by_night(items: Sequence[KnowledgeItem], account: str, life: Sequence[
 
 
 def _report(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], scored: Mapping[str | None, Scores],
-            seen_by: Mapping[str, Mapping[int, frozenset[str]]], out: Callable[[str], None]) -> None:
+            seen_by: Mapping[str, Mapping[int, frozenset[str]]], out: Callable[[str], None],
+            ceilings: Mapping[str, str]) -> None:
     items, base = the_set.items, scored[None]
     out(json.dumps({"line": "base", "items": len(items), "accuracy": _mean([float(_right(i, base[i.id])) for i in items]),
                     "chance": chance(items), "mean_margin": _mean([_margin(i, base[i.id]) for i in items])}))
+    every = frozenset(i.id for i in items)
+    for label, name in ceilings.items():
+        if name in scored:
+            out(json.dumps({"line": "ceiling", "CEILING": CEILING, "label": label, "adapter": name,
+                            **arm_line(items, base, scored[name], every),
+                            "vs_base": pair_line(items, scored[name], base, every)}))
     for arm, life in lives.items():
         for night in life:
             head = {"line": "arm_night", "arm": arm, "night": night.number, "date": night.date,
@@ -325,6 +339,16 @@ def _accounts(parser: argparse.ArgumentParser, pairs: Sequence[str]) -> dict[str
     return found
 
 
+def _ceilings(parser: argparse.ArgumentParser, pairs: Sequence[str]) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for pair in pairs:
+        label, _, adapter = pair.partition("=")
+        if not _ARM.fullmatch(label) or not config.ADAPTER_NAME.fullmatch(adapter) or label in found:
+            parser.error("--ceiling is <label>=<adapter> (p-<hash>-n<night>, as knowledge_ceiling prints it), once per label")
+        found[label] = adapter
+    return found
+
+
 def _app_day_text() -> DayText:
     module, _, name = DAYS.partition(":")
     reader: DayText = getattr(importlib.import_module(module), name)  # by name: the engine never imports the app
@@ -338,8 +362,10 @@ def _setting(env: Mapping[str, str], name: str) -> str:
     return value
 
 
-def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float) -> str:
-    adapters = 1 + sum(n.adapter is not None for life in lives.values() for n in life)
+def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.Gpu, rate: float,
+         ceilings: Mapping[str, str] | None = None) -> str:
+    ceilings = ceilings or {}
+    adapters = 1 + sum(n.adapter is not None for life in lives.values() for n in life) + len(ceilings)
     choices = sum(len(item.choices) for item in the_set.items)
     seconds = adapters * choices * CALL_S / config.CONCURRENT_REQUESTS + adapters * LOAD_S
     expected = rate * (seconds + config.SCALEDOWN_S) / 3600.0
@@ -352,8 +378,10 @@ def plan(the_set: KnowledgeSet, lives: Mapping[str, Sequence[Night]], gpu: gpus.
         f"{len({item.source for item in the_set.items})} statements, {choices} choices, sha {the_set.sha[:12]}",
         f"  base      scored first: its accuracy is the floor every arm starts from (chance {100 * (chance(the_set.items) or 0):.0f}%); "
         "the report's base line prints both",
-        f"  arms      {arms}",
-        f"  calls     {adapters} adapters (the base and every trained night) x {choices} choices = "
+        f"  arms      {arms or 'none'}",
+        *([f"  ceilings  {', '.join(f'{label}={name}' for label, name in ceilings.items())}: CEILING, {CEILING}"]
+          if ceilings else []),
+        f"  calls     {adapters} adapters (the base, every trained night and each ceiling) x {choices} choices = "
         f"{adapters * choices} log-probability calls, prefill only, {config.CONCURRENT_REQUESTS} at once",
         f"  expected  ~{seconds / 60:.1f} GPU min scoring, an estimate ({CALL_S} s a call, {LOAD_S:.0f} s an adapter "
         f"load), plus the {config.SCALEDOWN_S / 60:.0f}-min idle window: ~${expected:.2f} at ${rate:.2f}/h on "
@@ -374,14 +402,18 @@ def main(
 ) -> int:
     env = os.environ if environ is None else environ
     parser = argparse.ArgumentParser(description="Score each arm's nightly adapters on a frozen knowledge set.")
-    parser.add_argument("--account", action="append", required=True, help="<arm>=<account id>, once per arm")
+    parser.add_argument("--account", action="append", default=[], help="<arm>=<account id>, once per arm")
+    parser.add_argument("--ceiling", action="append", default=[],
+                        help="<label>=<adapter>: an oracle ceiling (tools.knowledge_ceiling), never a result")
     parser.add_argument("--persona", default="film_founder", help="the persona the arms lived (its frozen set)")
     parser.add_argument("--gpu", choices=tuple(gpus.GPUS), default=config.serve_precision(env).gpu)
     parser.add_argument("--usd-per-hour", type=float, help="the GPU's price an hour, if not the listed one")
     parser.add_argument("--url", help=f"the app's URL (default {backend.MODAL_URL_ENV})")
     parser.add_argument("--go", action="store_true", help="send the requests; without it, print the plan only")
     args = parser.parse_args(argv)
-    accounts = _accounts(parser, args.account)
+    accounts, ceilings = _accounts(parser, args.account), _ceilings(parser, args.ceiling)
+    if not accounts and not ceilings:
+        parser.error("name at least one --account or --ceiling")
     try:
         the_set = knowledge.load(args.persona)
     except SetError as exc:
@@ -392,7 +424,7 @@ def main(
         parser.error(f"no finished night under the results root for {', '.join(empty)}")
     gpu = gpus.GPUS[args.gpu]
     rate = args.usd_per_hour or gpu.usd_per_hour
-    out(plan(the_set, lives, gpu, rate))
+    out(plan(the_set, lives, gpu, rate, ceilings))
     if not args.go:
         return 0
     reader = day_text or _app_day_text()
@@ -413,7 +445,8 @@ def main(
         if not woke.ok:
             return 1
         dated, deadline = client.on(EVAL_DAY), clock() + SCORE_MAX_S
-        wanted = [None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None)]
+        wanted = list(dict.fromkeys([None, *(n.adapter for life in lives.values() for n in life if n.adapter is not None),
+                                     *ceilings.values()]))
         for name in wanted:
             if clock() >= deadline:
                 out(json.dumps({"line": "stopped", "why": "the scorer's cap", "unscored": len(wanted) - len(scored)}))
@@ -427,7 +460,7 @@ def main(
     out(json.dumps({"line": "set", "persona": the_set.persona, "version": the_set.version, "sha": the_set.sha,
                     "items": len(the_set.items)}))
     if None in scored:
-        _report(the_set, lives, scored, seen_by, out)
+        _report(the_set, lives, scored, seen_by, out, ceilings)
     return 0
 
 

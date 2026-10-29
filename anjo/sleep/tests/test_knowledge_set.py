@@ -331,3 +331,26 @@ def test_the_plan_sends_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[st
     with pytest.raises(SystemExit):
         knowledge_score.main(["--account", "seed=../x"], environ={}, client=never, wake=never, ledger=never,
                              root=tmp_path, day_text=never)
+
+
+def test_a_ceiling_is_scored_beside_the_base_and_labelled_never_a_result(tmp_path: Path,
+                                                                         capsys: pytest.CaptureFixture[str]) -> None:
+    items, ceiling, never = _items(), _adapter("ceiling", 1), _Never()
+    assert knowledge_score.main(["--ceiling", f"recipe={ceiling}"], environ={}, client=never, wake=never,
+                                ledger=never, root=tmp_path, day_text=never) == 0
+    out = capsys.readouterr().out
+    assert "2 adapters" in out and "CEILING" in out and "never a result" in out and ceiling in out
+    client = FakeClient({ceiling: {item.statement for item in items}}, frozenset(item.statement for item in items))
+    lines = _run(tmp_path, client, {}, never, capsys, "--ceiling", f"recipe={ceiling}")  # no arm: the days are never read
+    assert {name for name, _, _ in client.sent} == {None, ceiling} and set(client.days) == {EVAL_DAY}
+    [line] = [line for line in lines if line.get("line") == "ceiling"]
+    assert line["label"] == "recipe" and line["adapter"] == ceiling and "never a result" in line["CEILING"]
+    assert line["accuracy"] == pytest.approx(1.0) and line["seen_items"] == len(items) and line["unseen"] == []
+    assert line["vs_base"]["accuracy_diff"] == pytest.approx(1.0) and line["vs_base"]["items"] == len(items)
+    assert line["vs_base"]["clusters"] == len({item.source for item in items})
+    assert not [line for line in lines if line.get("line") in ("arm_night", "pair")]
+    assert not any(item.statement in json.dumps(lines) for item in items)
+    for argv in ([], ["--ceiling", "recipe=not-an-adapter"], ["--ceiling", f"a b={ceiling}"],
+                 ["--ceiling", f"x={ceiling}", "--ceiling", f"x={_adapter('other', 1)}"]):
+        with pytest.raises(SystemExit):  # an account or a ceiling, each named once, an adapter by its volume name
+            knowledge_score.main(argv, environ={}, client=never, wake=never, ledger=never, root=tmp_path, day_text=never)
