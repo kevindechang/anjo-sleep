@@ -69,6 +69,13 @@ def _life_id(record: Mapping[str, Any]) -> str:
     raise WarmStartCheckError("each score record needs life, life_id, person or account")
 
 
+def _night(record: Mapping[str, Any]) -> str:
+    night = record.get("night")
+    if night is None:
+        raise WarmStartCheckError("each score record needs a night")
+    return str(night)
+
+
 def _donor_excluded(records: Sequence[Mapping[str, Any]]) -> frozenset[str]:
     excluded: set[str] = set()
     for record in records:
@@ -205,18 +212,12 @@ def pick_policy(
         return "clean_slate"
     if co == "loss" and wo != "loss":
         return "warm_start"
-    ws = float(warm["score"]) if warm and warm.get("n", 0) else 0.5
-    cs = float(clean["score"]) if clean and clean.get("n", 0) else 0.5
-    if ws > cs:
-        return "warm_start"
-    if cs > ws:
-        return "clean_slate"
     return "inconclusive"
 
 
 def _match_nights(warm: Sequence[Mapping[str, Any]], clean: Sequence[Mapping[str, Any]]) -> None:
-    warm_nights = {(_life_id(r), str(r["night"])) for r in warm}
-    clean_nights = {(_life_id(r), str(r["night"])) for r in clean}
+    warm_nights = {(_life_id(r), _night(r)) for r in warm}
+    clean_nights = {(_life_id(r), _night(r)) for r in clean}
     if warm_nights != clean_nights:
         raise WarmStartCheckError("warm and clean scores must cover the same development nights")
 
@@ -243,15 +244,15 @@ def compare_policies(
     _match_nights(warm_scores, clean_scores)
     excluded_warm = _donor_excluded(warm_scores)
     excluded_clean = _donor_excluded(clean_scores)
+    excluded_3x = excluded_warm | excluded_clean
     table: dict[str, Any] = {}
     dim_winners: list[Pick] = []
     for dimension in DIMENSIONS:
         row: dict[str, Any] = {"dimension": dimension, "comparisons": {}}
         picks: list[Pick] = []
         for comparison in COMPARISONS:
-            exclude = excluded_warm if comparison == COMP_3V3X else frozenset()
+            exclude = excluded_3x if comparison == COMP_3V3X else frozenset()
             warm_stats = pool_comparison(warm_scores, comparison, dimension, exclude_lives=exclude)
-            exclude = excluded_clean if comparison == COMP_3V3X else frozenset()
             clean_stats = pool_comparison(
                 clean_scores, comparison, dimension, exclude_lives=exclude
             )

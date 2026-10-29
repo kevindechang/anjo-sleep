@@ -152,8 +152,31 @@ def test_warm_start_check_tie_is_inconclusive() -> None:
 
 
 def test_warm_start_check_uses_development_pooled_rule_not_final_lives_rule() -> None:
-    """Passes CI, score and decisive share with only one life ahead: development win, final inconclusive."""
-    stats = _stats(
+    """Pooled bootstrap: one life ahead is a development win but final inconclusive; policy pick uses that."""
+    rows = _outcome_rows(COMP_3V1, "knowledge", 35, 5)
+    warm, clean = _paired_nights(rows, rows)
+    # Only founder wins on warm; other lives tie — enough probes pooled, one life ahead.
+    for i, life in enumerate(T["development"]["pooled_lives"]):
+        if life != "founder":
+            warm[i] = _record(
+                life,
+                "2026-10-28",
+                wsc.WARM_LABEL,
+                _scoped(life, _outcome_rows(COMP_3V1, "knowledge", 10, 10)),
+            )
+    warm_stats = wsc.pool_comparison(warm, COMP_3V1, "knowledge")
+    assert warm_stats is not None
+    assert wsc.development_outcome(warm_stats, T) == "win"
+    assert wsc.final_outcome(warm_stats, T) == "inconclusive"
+
+    weaker = _stats(
+        score=0.52,
+        ci_low=0.48,
+        ci_high=0.54,
+        decisive=0.52,
+        per_life={life: False for life in T["development"]["pooled_lives"]},
+    )
+    winner = _stats(
         score=0.58,
         ci_low=0.56,
         ci_high=0.62,
@@ -165,21 +188,50 @@ def test_warm_start_check_uses_development_pooled_rule_not_final_lives_rule() ->
             "researcher_donor": False,
         },
     )
-    assert wsc.development_outcome(stats, T) == "win"
-    assert wsc.final_outcome(stats, T) == "inconclusive"
-    weaker = _stats(
-        score=0.52,
-        ci_low=0.48,
-        ci_high=0.54,
-        decisive=0.52,
-        per_life={
-            "founder": False,
-            "founder_donor": False,
-            "researcher": False,
-            "researcher_donor": False,
+    assert wsc.development_outcome(winner, T) == "win"
+    assert wsc.final_outcome(winner, T) == "inconclusive"
+    assert wsc.pick_policy(winner, weaker, T) == "warm_start"
+
+    both_miss = _stats(score=0.52, ci_low=0.48, ci_high=0.56, decisive=0.52)
+    assert wsc.development_outcome(both_miss, T) == "inconclusive"
+    assert wsc.pick_policy(
+        both_miss, _stats(score=0.51, ci_low=0.47, ci_high=0.55, decisive=0.51), T
+    ) == ("inconclusive")
+
+
+def test_warm_start_check_missing_night_raises() -> None:
+    warm = [{"life": "founder", "metadata": {"training_policy": wsc.WARM_LABEL}, "outcomes": []}]
+    clean = [_record("founder", "2026-10-28", wsc.CLEAN_LABEL, [])]
+    try:
+        wsc.compare_policies(warm, clean, T)
+    except wsc.WarmStartCheckError as err:
+        assert "night" in str(err).lower()
+    else:
+        raise AssertionError("expected WarmStartCheckError")
+
+
+def test_warm_start_check_3x_pools_same_lives_when_donor_differs() -> None:
+    """3 vs 3x excludes unpromoted donors from both policies using the union of exclusions."""
+    night = "2026-10-28"
+    rows = _outcome_rows(COMP_3V3X, "knowledge", 12, 8)
+    warm = [
+        _record("founder", night, wsc.WARM_LABEL, _scoped("founder", rows)),
+        {
+            **_record("founder_donor", night, wsc.WARM_LABEL, _scoped("founder_donor", rows)),
+            "unavailable": {"3x": wsc.DONOR_UNAVAILABLE},
         },
-    )
-    assert wsc.pick_policy(stats, weaker, T) == "warm_start"
+        _record("researcher", night, wsc.WARM_LABEL, _scoped("researcher", rows)),
+        _record("researcher_donor", night, wsc.WARM_LABEL, _scoped("researcher_donor", rows)),
+    ]
+    clean = [
+        _record(life, night, wsc.CLEAN_LABEL, _scoped(life, rows))
+        for life in T["development"]["pooled_lives"]
+    ]
+    result = wsc.compare_policies(warm, clean, T)
+    comp = result["dimensions"]["knowledge"]["comparisons"][COMP_3V3X]
+    assert comp["warm"] is not None and comp["clean"] is not None
+    assert set(comp["warm"]["per_life"].keys()) == set(comp["clean"]["per_life"].keys())
+    assert "founder_donor" not in comp["warm"]["per_life"]
 
 
 def test_warm_start_cli_prints_json_lines(tmp_path: Path) -> None:
