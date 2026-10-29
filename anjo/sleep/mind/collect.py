@@ -17,8 +17,9 @@ from typing import Final, Literal
 
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
+from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
-from anjo.sleep.mind import points
+from anjo.sleep.mind import expect, points
 from anjo.sleep.mind.deciders import night_picks, replay_point
 from anjo.sleep.night.nightlog import NightLog, SUMMARY
 from anjo.sleep.personas.model import PersonFile, load_person_file, to_visible_dict
@@ -30,6 +31,7 @@ from anjo.sleep.types import Expectation
 Split = Literal["development", "held_out"]
 LABELS_FILE: Final = "relevance.json"
 TARGETS_FILE: Final = "targets.jsonl"
+EVIDENCE_FILE: Final = "evidence.jsonl"
 PERSONAS_DIR: Final = Path(__file__).parents[1] / "personas"
 DEVELOPMENT_PERSONAS: Final = frozenset({"film_founder", "founder", "researcher", "film_student"})
 DEVELOPMENT_LIVES: Final = (
@@ -61,10 +63,12 @@ def collect_life(
         raise CollectRefused(f"development collect uses registered personas, not {life_id!r}")
     labels = load_frozen_labels(life_root / LABELS_FILE)
     target_labels = _target_labels(life_root / TARGETS_FILE, user_id)
-    expectations, returns = _expectations(life_root / TARGETS_FILE, user_id)
-    arrivals = _arrivals(persona, _life_start(nights_dir, split))
-    picks = _night_picks(nights_dir, split, target_labels, chat)
-    last_day = picks[-1].night if picks else _life_start(nights_dir, split)
+    expectations = _expectations(life_root / TARGETS_FILE, user_id)
+    returns = _returns(life_root / EVIDENCE_FILE, user_id)
+    folders = _collectible_folders(nights_dir, split)
+    arrivals = _arrivals(persona, _life_start(folders))
+    picks = _night_picks(folders, target_labels, chat)
+    last_day = picks[-1].night if picks else _life_start(folders)
     return mind.LifeRecord(
         life_id=life_id,
         split=split,
@@ -132,15 +136,35 @@ def _refuse_ids(life_id: str, user_id: str) -> None:
         raise CollectRefused(f"refusing non-synthetic account id {user_id!r}")
 
 
-def _life_start(nights_dir: Path, split: Split) -> date:
-    dated: list[date] = []
+def _summary_label(split: Split) -> str:
+    """Accelerated summaries use ``final`` for held-out nights; ``LifeRecord.split`` stays ``held_out``."""
+    return "final" if split == "held_out" else "development"
+
+
+def _collectible_folders(nights_dir: Path, split: Split) -> tuple[Path, ...]:
+    """One folder per virtual night: the latest attempt that matches the split and has decision points."""
+    want = _summary_label(split)
+    by_day: dict[str, Path] = {}
     for folder in _night_folders(nights_dir):
         summary = json.loads((folder / SUMMARY).read_text(encoding="utf-8"))
-        if summary.get("label") != split:
+        if summary.get("label") != want:
             continue
-        dated.append(date.fromisoformat(str(summary["night"])))
-    if not dated:
-        raise CollectRefused(f"no {split} nights under {nights_dir}")
+        if not NightLog(folder).points():
+            continue
+        day, _, _ = folder.name.partition(".")
+        prev = by_day.get(day)
+        if prev is None or _folder_key(folder) > _folder_key(prev):
+            by_day[day] = folder
+    if not by_day:
+        raise CollectRefused(f"no {split} nights with decision points under {nights_dir}")
+    return tuple(sorted(by_day.values(), key=_folder_key))
+
+
+def _life_start(folders: Sequence[Path]) -> date:
+    dated = [
+        date.fromisoformat(str(json.loads((folder / SUMMARY).read_text(encoding="utf-8"))["night"]))
+        for folder in folders
+    ]
     return min(dated)
 
 
@@ -148,11 +172,14 @@ def _night_folders(nights_dir: Path) -> Sequence[Path]:
     if not nights_dir.is_dir():
         return ()
 
-    def key(folder: Path) -> tuple[str, int]:
-        day, _, attempt = folder.name.partition(".")
-        return day, int(attempt) if attempt.isdigit() else 1
+    return tuple(
+        sorted((f for f in nights_dir.iterdir() if (f / SUMMARY).is_file()), key=_folder_key)
+    )
 
-    return tuple(sorted((f for f in nights_dir.iterdir() if (f / SUMMARY).is_file()), key=key))
+
+def _folder_key(folder: Path) -> tuple[str, int]:
+    day, _, attempt = folder.name.partition(".")
+    return day, int(attempt) if attempt.isdigit() else 1
 
 
 def _target_labels(path: Path, user_id: str) -> dict[str, str]:
@@ -162,13 +189,23 @@ def _target_labels(path: Path, user_id: str) -> dict[str, str]:
     return {target.id: target.label for target in store.targets()}
 
 
-def _expectations(
-    path: Path, user_id: str
-) -> tuple[tuple[Expectation, ...], Mapping[str, tuple[date, ...]]]:
+def _expectations(path: Path, user_id: str) -> tuple[Expectation, ...]:
     if not path.is_file():
-        return (), {}
+        return ()
     store = EventLogTargetStore(path, user_id, codec=PLAIN, guard=NO_GUARD)
-    return tuple(store.expectations()), {}
+    return tuple(store.expectations())
+
+
+def _returns(path: Path, user_id: str) -> dict[str, tuple[date, ...]]:
+    """When the person's own evidence came back to each target (start of that virtual day)."""
+    if not path.is_file():
+        return {}
+    store = JsonlEvidenceStore(path, user_id, codec=PLAIN, guard=NO_GUARD)
+    by_target: dict[str, list[date]] = {}
+    for item in store.stored(date.max):
+        if item.target_id is not None and expect.returning([item], item.target_id):
+            by_target.setdefault(item.target_id, []).append(item.day)
+    return {target: tuple(sorted(days)) for target, days in by_target.items()}
 
 
 def _arrivals(persona: PersonFile, life_start: date) -> tuple[mind.Arrival, ...]:
@@ -182,19 +219,13 @@ def _arrivals(persona: PersonFile, life_start: date) -> tuple[mind.Arrival, ...]
 
 
 def _night_picks(
-    nights_dir: Path,
-    split: Split,
+    folders: Sequence[Path],
     labels: Mapping[str, str],
     chat: ChatFn | None,
 ) -> list[mind.NightPicks]:
     out: list[mind.NightPicks] = []
-    for folder in _night_folders(nights_dir):
-        summary = json.loads((folder / SUMMARY).read_text(encoding="utf-8"))
-        if summary.get("label") != split:
-            continue
+    for folder in folders:
         records = NightLog(folder).points()
-        if not records:
-            continue
         parsed = [points.point_from_record(record) for record in records]
         pre = next((p for p in parsed if p.phase == "pre_study"), None)
         if pre is None:

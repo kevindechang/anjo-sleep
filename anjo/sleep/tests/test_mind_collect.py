@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
+from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.mind import points
 from anjo.sleep.mind.collect import CollectRefused, collect_life
 from anjo.sleep.mind.deciders import DECIDERS
@@ -21,6 +23,8 @@ from anjo.sleep.personas.model import load_person_file, to_visible_dict
 from anjo.sleep.probes import relevance
 from anjo.sleep.reports import mind
 from anjo.sleep.sim.accelerated import PERSONAS
+from anjo.sleep.types import Evidence
+
 from anjo.sleep.tests.test_mind_deciders import FakeChat, _points, _world
 
 PERSONA = PERSONAS / "film_founder.json"
@@ -202,3 +206,168 @@ def test_collect_arrivals_from_persona_held_out_not_visible(tmp_path: Path) -> N
     visible = json.dumps(to_visible_dict(pf.visible))
     for item in pf.held_out.new_work:
         assert item.text not in visible
+
+
+def test_collect_loads_returns_from_person_evidence(tmp_path: Path) -> None:
+    world, homework = _world(tmp_path / "run")
+    life = _life_root(tmp_path)
+    result = run_night_batch_with(
+        world.deps(homework=homework, estimator=COEFFICIENTS, is_synthetic=lambda uid: True),
+        {"p1": NIGHT},
+    )["p1"]
+    folder = life / "nights" / NIGHT.isoformat()
+    folder.mkdir(parents=True)
+    (folder / SUMMARY).write_text(
+        json.dumps({"night": NIGHT.isoformat(), "label": "development", "status": "promoted"})
+    )
+    (folder / POINTS).write_text((result.log_path.parent / POINTS).read_text(encoding="utf-8"))
+    pre, _ = _points(result.log_path)
+    target_id = pre.raw.targets[0].id
+    pf = load_person_file(PERSONA)
+    items = tuple(w.id for w in pf.held_out.new_work)
+    _write_labels(life / "relevance.json", set(), tuple(t.id for t in pre.raw.targets), items)
+    for target in pre.raw.targets:
+        world.targets("p1").upsert(replace(target, person_id="p1"))
+    (life / "targets.jsonl").write_text(
+        (tmp_path / "run" / "p1" / "targets.jsonl").read_text(encoding="utf-8")
+    )
+    return_day = NIGHT + timedelta(days=2)
+    evidence = JsonlEvidenceStore(life / "evidence.jsonl", "p1", codec=PLAIN, guard=NO_GUARD)
+    evidence.add(
+        [
+            Evidence(
+                id="e-return",
+                person_id="p1",
+                day=return_day,
+                kind="correction",
+                text="they replied",
+                source="message:1",
+                held_out=False,
+                created_at=pre.raw.as_of,
+                target_id=target_id,
+            )
+        ]
+    )
+    record = collect_life(
+        life / "nights", PERSONA, chat=FakeChat({"action": "silence", "target_id": None})
+    )
+    assert record.returns[target_id] == (return_day,)
+    assert record.expectations
+    extended = replace(record, last_day=return_day + timedelta(days=14))
+    assert mind.demand([extended], COEFFICIENTS.base_rate).n >= 1
+
+
+def test_collect_held_out_split_reads_final_label_nights(tmp_path: Path) -> None:
+    world, homework = _world(tmp_path / "run")
+    life = _life_root(tmp_path)
+    result = run_night_batch_with(
+        world.deps(homework=homework, estimator=COEFFICIENTS, is_synthetic=lambda uid: True),
+        {"p1": NIGHT},
+    )["p1"]
+    folder = life / "nights" / NIGHT.isoformat()
+    folder.mkdir(parents=True)
+    (folder / SUMMARY).write_text(
+        json.dumps(
+            {
+                "night": NIGHT.isoformat(),
+                "label": "final",
+                "status": "promoted",
+                "accelerated": True,
+            }
+        )
+    )
+    (folder / POINTS).write_text((result.log_path.parent / POINTS).read_text(encoding="utf-8"))
+    pre, _ = _points(result.log_path)
+    pf = load_person_file(PERSONA)
+    _write_labels(
+        life / "relevance.json",
+        set(),
+        tuple(t.id for t in pre.raw.targets),
+        tuple(w.id for w in pf.held_out.new_work),
+    )
+    for target in pre.raw.targets:
+        world.targets("p1").upsert(replace(target, person_id="p1"))
+    (life / "targets.jsonl").write_text(
+        (tmp_path / "run" / "p1" / "targets.jsonl").read_text(encoding="utf-8")
+    )
+    record = collect_life(
+        life / "nights",
+        PERSONA,
+        split="held_out",
+        chat=FakeChat({"action": "silence", "target_id": None}),
+    )
+    assert record.split == "held_out" and len(record.nights) == 1
+
+
+def test_collect_summary_only_folders_do_not_shift_life_start(tmp_path: Path) -> None:
+    world, homework = _world(tmp_path / "run")
+    life = _life_root(tmp_path)
+    result = run_night_batch_with(
+        world.deps(homework=homework, estimator=COEFFICIENTS, is_synthetic=lambda uid: True),
+        {"p1": NIGHT},
+    )["p1"]
+    folder = life / "nights" / NIGHT.isoformat()
+    folder.mkdir(parents=True)
+    (folder / SUMMARY).write_text(
+        json.dumps({"night": NIGHT.isoformat(), "label": "development", "status": "promoted"})
+    )
+    (folder / POINTS).write_text((result.log_path.parent / POINTS).read_text(encoding="utf-8"))
+    _write_summary(life / "nights" / "2099-01-01", date(2099, 1, 1), label="development")
+    pre, _ = _points(result.log_path)
+    pf = load_person_file(PERSONA)
+    _write_labels(
+        life / "relevance.json",
+        set(),
+        tuple(t.id for t in pre.raw.targets),
+        tuple(w.id for w in pf.held_out.new_work),
+    )
+    for target in pre.raw.targets:
+        world.targets("p1").upsert(replace(target, person_id="p1"))
+    (life / "targets.jsonl").write_text(
+        (tmp_path / "run" / "p1" / "targets.jsonl").read_text(encoding="utf-8")
+    )
+    record = collect_life(
+        life / "nights", PERSONA, chat=FakeChat({"action": "silence", "target_id": None})
+    )
+    by_id = {w.id: w for w in pf.held_out.new_work}
+    for arrival in record.arrivals:
+        assert arrival.day == NIGHT + timedelta(days=by_id[arrival.item_id].day)
+
+
+def test_collect_keeps_latest_rerun_per_night(tmp_path: Path) -> None:
+    world, homework = _world(tmp_path / "run")
+    life = _life_root(tmp_path)
+    result = run_night_batch_with(
+        world.deps(homework=homework, estimator=COEFFICIENTS, is_synthetic=lambda uid: True),
+        {"p1": NIGHT},
+    )["p1"]
+    points_text = (result.log_path.parent / POINTS).read_text(encoding="utf-8")
+    first = life / "nights" / NIGHT.isoformat()
+    first.mkdir(parents=True)
+    (first / SUMMARY).write_text(
+        json.dumps({"night": NIGHT.isoformat(), "label": "development", "status": "rejected"})
+    )
+    (first / POINTS).write_text(points_text)
+    second = life / "nights" / f"{NIGHT.isoformat()}.2"
+    second.mkdir(parents=True)
+    (second / SUMMARY).write_text(
+        json.dumps({"night": NIGHT.isoformat(), "label": "development", "status": "promoted"})
+    )
+    (second / POINTS).write_text(points_text)
+    pre, _ = _points(result.log_path)
+    pf = load_person_file(PERSONA)
+    _write_labels(
+        life / "relevance.json",
+        set(),
+        tuple(t.id for t in pre.raw.targets),
+        tuple(w.id for w in pf.held_out.new_work),
+    )
+    for target in pre.raw.targets:
+        world.targets("p1").upsert(replace(target, person_id="p1"))
+    (life / "targets.jsonl").write_text(
+        (tmp_path / "run" / "p1" / "targets.jsonl").read_text(encoding="utf-8")
+    )
+    record = collect_life(
+        life / "nights", PERSONA, chat=FakeChat({"action": "silence", "target_id": None})
+    )
+    assert len(record.nights) == 1
