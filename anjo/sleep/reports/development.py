@@ -19,7 +19,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from anjo.sleep.app.night import SEALED_ENV
 from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.morning import NO_VERDICT
 from anjo.sleep.probes.score import (
@@ -33,6 +32,7 @@ from anjo.sleep.reports.results import FULL_SET, results_root
 from anjo.sleep.types import Probe, ProbeKind
 
 THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
+SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"  # the app's name for the sealed probe files (anjo.sleep.app.ownership); the engine may not import the app
 HEADLINE: Final = ("3_vs_1", "3_vs_3x")
 FAIRNESS: Final = ("4_vs_2C", "4_vs_2F")
 DIMENSIONS: Final = ("knowledge", "interaction")
