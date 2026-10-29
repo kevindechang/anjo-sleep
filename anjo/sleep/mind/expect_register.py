@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
 
+from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.mind import expect, points
 from anjo.sleep.mind.collect import DEVELOPMENT_LIVES, collect_life
 from anjo.sleep.mind.expect import Coefficients, FitRow, Split
@@ -22,6 +23,7 @@ PERSONAS_DIR: Final = Path(__file__).parents[1] / "personas"
 _VERSION: Final = 1
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COEFF_KEYS: Final = ("intercept", "understand", "unacted", "days", "undated_days")
+_DEVELOPMENT_USER_IDS: Final = frozenset(user_id for _, user_id in DEVELOPMENT_LIVES)
 
 
 class EstimatorError(ValueError):
@@ -51,21 +53,24 @@ def load_estimator(path: Path | None = None) -> Coefficients | None:
     data = json.loads(file.read_text(encoding="utf-8"))
     if data.get("version") != _VERSION:
         raise EstimatorError("estimator version is not supported")
-    if any(data.get(key) is None for key in (*_COEFF_KEYS, "base_rate", "n")):
-        return None
-    payload = {key: data[key] for key in ("version", *_COEFF_KEYS, "base_rate", "n")}
     digest = data.get("sha256")
+    if any(data.get(key) is None for key in (*_COEFF_KEYS, "base_rate", "n")):
+        if digest is None:
+            return None
+        raise EstimatorError("estimator is missing required coefficients")
+    payload = {key: data[key] for key in ("version", *_COEFF_KEYS, "base_rate", "n")}
     if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
         raise EstimatorError("estimator sha256 must be 64 lowercase hex characters")
     if digest != _digest(payload):
         raise EstimatorError("estimator sha256 does not match its coefficients")
+    _require_numeric_payload(payload)
     return Coefficients(
         float(payload["intercept"]),
         float(payload["understand"]),
         float(payload["unacted"]),
         float(payload["days"]),
         base_rate=float(payload["base_rate"]),
-        n=int(payload["n"]),
+        n=payload["n"],
         undated_days=float(payload["undated_days"]),
     )
 
@@ -107,6 +112,10 @@ def _persona_for_user(user_id: str, personas_dir: Path) -> Path:
 
 def _fit_rows_from_root(root: Path, *, personas_dir: Path, split: Split) -> list[FitRow]:
     nights_dir, life_root, user_id = _layout(root)
+    if user_id not in _DEVELOPMENT_USER_IDS:
+        raise EstimatorError(f"estimator fit refuses account {user_id!r}")
+    if not is_synthetic(user_id):
+        raise EstimatorError(f"estimator fit refuses non-synthetic account {user_id!r}")
     persona = _persona_for_user(user_id, personas_dir)
     life = collect_life(nights_dir, persona, split=split)
     return _fit_rows(life, nights_dir)
@@ -148,7 +157,7 @@ def _fit_rows(life: mind.LifeRecord, nights_dir: Path) -> list[FitRow]:
         if kind_target is None:
             continue
         kind, target = kind_target
-        row = expect.fit_row(target, kind, made.made_at, outcome, "development")
+        row = expect.fit_row(target, kind, made.made_at, outcome, life.split)
         if row is not None:
             rows.append(row)
     return rows
@@ -162,7 +171,7 @@ def _study(
             continue
         if night_pick.study.get("D0") != made.target_id:
             continue
-        folder = _latest_folder(nights_dir, night_pick.night)
+        folder = _folder_for_night(nights_dir, night_pick.night, split=life.split)
         if folder is None:
             continue
         log = NightLog(folder)
@@ -190,16 +199,37 @@ def _night_end(night: date) -> datetime:
     return datetime.combine(night + timedelta(days=1), time.min, tzinfo=timezone.utc)
 
 
-def _latest_folder(nights_dir: Path, night: date) -> Path | None:
+def _folder_for_night(nights_dir: Path, night: date, *, split: Split) -> Path | None:
+    want = "final" if split == "held_out" else "development"
     prefix = night.isoformat()
-    candidates = [
-        folder
-        for folder in nights_dir.iterdir()
-        if folder.is_dir() and folder.name.startswith(prefix) and (folder / SUMMARY).is_file()
-    ]
+    candidates: list[Path] = []
+    for folder in nights_dir.iterdir():
+        if (
+            not folder.is_dir()
+            or not folder.name.startswith(prefix)
+            or not (folder / SUMMARY).is_file()
+        ):
+            continue
+        summary = json.loads((folder / SUMMARY).read_text(encoding="utf-8"))
+        if summary.get("label") != want or not NightLog(folder).points():
+            continue
+        candidates.append(folder)
     if not candidates:
         return None
     return max(candidates, key=_folder_key)
+
+
+def _require_numeric_payload(payload: Mapping[str, Any]) -> None:
+    for key in _COEFF_KEYS:
+        value = payload[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise EstimatorError(f"estimator {key} must be a number")
+    base_rate = payload["base_rate"]
+    if not isinstance(base_rate, (int, float)) or isinstance(base_rate, bool):
+        raise EstimatorError("estimator base_rate must be a number")
+    n = payload["n"]
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise EstimatorError("estimator n must be an integer")
 
 
 def _folder_key(folder: Path) -> tuple[str, int]:
