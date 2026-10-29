@@ -6,6 +6,8 @@ log-probabilities from prompt_logprobs. A fake vLLM answers; no network."""
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import date
 from typing import Any
 
@@ -66,6 +68,48 @@ def test_complete_prompts_as_trained_names_the_adapter_and_samples_as_registered
     _client(fake).complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
     assert fake.requests[-1][1]["model"] == config.MODEL
     assert fake.requests[-3][1]["chat_template_kwargs"]["current_date"] == utc_today().isoformat()
+
+
+def _headers(fake: FakeVllm) -> list[dict[str, Any]]:
+    return [body for path, body, _ in fake.requests if path == "/tokenize" and body.get("prompt") == config.USER_CHANNEL]
+
+
+def test_the_replys_header_is_asked_of_tokenize_once_per_model() -> None:
+    """Live 2026-10-29 (knowledge_score, 16 at once): /tokenize slowed to 11 s and Modal's proxy cut one
+    at 10 s. The reply's header is the same ids on every call, so a client asks /tokenize for it once per
+    model for its life, its copies included; the chat, which differs, is tokenized on every call."""
+    fake = FakeVllm()
+    client = _client(fake)
+    for copy in (client, client.on(NIGHT), client.once(), client.with_load_wait(0), client):
+        copy.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+        copy.continuation_logprobs(None, [{"role": "user", "content": "q"}], " A")
+    assert _headers(fake) == [{"model": config.MODEL, "prompt": config.USER_CHANNEL, "add_special_tokens": False}]
+    completions = [body for path, body, _ in fake.requests if path == "/v1/completions"]
+    assert len(completions) == 10 and all(body["prompt"][:5] == [1, 2, 3, 5, 6] for body in completions)
+    assert sum(1 for path, body, _ in fake.requests if path == "/tokenize" and "messages" in body) == 10
+
+    client.complete(ADAPTER, [{"role": "user", "content": "hi"}], temperature=1.0)
+    client.complete(ADAPTER, [{"role": "user", "content": "hi"}], temperature=1.0)
+    assert [body["model"] for body in _headers(fake)] == [config.MODEL, ADAPTER.id]  # once per model
+    _client(fake).complete(None, [{"role": "user", "content": "hi"}], temperature=1.0)
+    assert len(_headers(fake)) == 3  # a new client asks again: the cache is the client's
+
+
+def test_a_burst_asks_for_the_header_once() -> None:
+    class Slow(FakeVllm):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            time.sleep(0.01)  # long enough that the burst's first calls overlap
+            return super().__call__(request)
+
+    fake = Slow()
+    client = _client(fake)
+    burst = [threading.Thread(target=lambda: client.complete(None, [{"role": "user", "content": "hi"}], temperature=1.0))
+             for _ in range(16)]
+    for thread in burst:
+        thread.start()
+    for thread in burst:
+        thread.join()
+    assert len(_headers(fake)) == 1 and sum(path == "/v1/completions" for path, _, _ in fake.requests) == 16
 
 
 def test_an_adapter_is_never_served_under_another_rendering() -> None:

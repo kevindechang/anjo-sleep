@@ -135,7 +135,7 @@ class Proxied(LiveVllm):
         raise met("lost on the way", request=request)
 
 
-@pytest.mark.parametrize("status", [502, 503, 504])
+@pytest.mark.parametrize("status", [408, 502, 503, 504])
 def test_a_proxy_status_goes_again_once(status: int) -> None:
     """Night 1's morning (the seed arm, 2026-10-29) failed on one 502 from Modal's proxy while vLLM
     was healthy. A 502, 503 or 504 is the proxy's answer, not vLLM's: the request goes again once."""
@@ -157,20 +157,24 @@ def test_an_unseeded_sampled_completion_goes_again_too() -> None:
     assert first == again and "seed" not in first and first["temperature"] == 1.0  # the same post, unseeded
 
 
-def test_a_proxy_status_on_tokenize_goes_again_once() -> None:
+@pytest.mark.parametrize("status", [408, 502])
+def test_a_proxy_status_on_tokenize_goes_again_once(status: int) -> None:
+    """Live 2026-10-29 10:00 (knowledge_score, 16 at once): Modal's proxy gave up on one /tokenize after
+    10 s, ``408 Request Timeout``, with no vLLM line for it; neighbours took 11 s and answered 200."""
     plain = Proxied(path="/tokenize")
     _client(plain, Waits()).complete(None, MESSAGES, temperature=1.0, seed=3)  # how many a reply tokenizes
-    fake, waits = Proxied(502, path="/tokenize"), Waits()
+    fake, waits = Proxied(status, path="/tokenize"), Waits()
     client = _client(fake, waits)
     assert client.complete(None, MESSAGES, temperature=1.0, seed=3).text == "hello"
     assert fake.sent == plain.sent + 1 and fake.bodies[0] == fake.bodies[1]
     assert waits.slept == [vllm.BACKOFF_S[0]] and client.retries() == 1 and fake.probes == []
 
 
-def test_a_proxy_status_on_an_adapter_load_is_not_sent_again() -> None:
-    fake, waits = Proxied(502, path=vllm.LOAD_PATH), Waits()
+@pytest.mark.parametrize("status", [408, 502])
+def test_a_proxy_status_on_an_adapter_load_is_not_sent_again(status: int) -> None:
+    fake, waits = Proxied(status, path=vllm.LOAD_PATH), Waits()
     client = _client(fake, waits)
-    with pytest.raises(ServingError, match=f"^{vllm.LOAD_PATH} returned HTTP 502$") as raised:
+    with pytest.raises(ServingError, match=f"^{vllm.LOAD_PATH} returned HTTP {status}$") as raised:
         client.complete(ADAPTER, MESSAGES, temperature=1.0, seed=3)
     assert not isinstance(raised.value, vllm.ProxyFailed | vllm.TransportFailed)
     assert fake.sent == 1 and waits.slept == [] and client.retries() == 0 and fake.probes == []
@@ -257,7 +261,7 @@ def test_a_warm_client_meets_a_restarted_container() -> None:
     budget = vllm.REQUEST_TIMEOUT_S - vllm.WARM_TIMEOUT_S - vllm.BACKOFF_S[0]
     assert fake.timeouts == [("/tokenize", vllm.WARM_TIMEOUT_S), ("/tokenize", budget),  # then a 404: forgotten
                              (vllm.LOAD_PATH, vllm.WARM_TIMEOUT_S), ("/tokenize", vllm.WARM_TIMEOUT_S),
-                             ("/tokenize", vllm.WARM_TIMEOUT_S), (COMPLETIONS, vllm.WARM_TIMEOUT_S)]
+                             (COMPLETIONS, vllm.WARM_TIMEOUT_S)]  # the reply's header: the client's already
     assert len(fake.loads) == 2 and client.retries() == 1  # loaded again once, sent again once
 
 

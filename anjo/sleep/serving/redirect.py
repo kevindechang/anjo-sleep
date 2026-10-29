@@ -24,8 +24,10 @@ import httpx
 
 # Statuses Modal's proxy sends by itself: a POST that met one goes again once (``client._Requests``),
 # inside the same attempts and bound; the same idempotent post, so at worst vLLM computes it twice. A
-# result GET that meets one asks again (``follow``). The proxy answered: no liveness question.
-PROXY_STATUSES: Final = frozenset({502, 503, 504})
+# result GET that meets one asks again (``follow``). The proxy answered: no liveness question. 408 is
+# its own give-up on a request vLLM was slow to answer (2026-10-29: one /tokenize cut at 10 s, no vLLM
+# line for it, under a 16-wide burst): the same case. An adapter load meets none of this, never sent again.
+PROXY_STATUSES: Final = frozenset({408, 502, 503, 504})
 RESULT_HOPS: Final = 4  # Modal's 303s one post follows: 300 s holds two 150 s waits; never forever
 HOP_PAUSE_S: Final = 2.0  # before a result GET that failed asks again; doubled each time
 HOP_PAUSE_MAX_S: Final = 16.0
