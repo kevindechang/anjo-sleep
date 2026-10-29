@@ -597,6 +597,12 @@ class CountedChat:
                          reply=result)
             return result
 
+    def gave_back(self) -> None:
+        """The reply last answered gave a day written again back as it was (``generate.GivenBack``):
+        its logged call keeps that."""
+        if self.log is not None and self._answered is not None:
+            self.log.mark_unchanged(self._answered)
+
     def refused(self, field: str | None, missing: int | None, extra: int | None) -> None:
         """The reply last answered couldn't be read (``generate.Refusals``): its logged call keeps why."""
         if self.log is not None and self._answered is not None:
