@@ -23,7 +23,7 @@ GATE_ENV: Final = "ANJO_SLEEP_SAFETY_GATE"
 def gate_on(environ: Mapping[str, str] | None = None) -> bool:
     """Whether the safety gate runs in full: ``on``; ``off`` or unset is off. Any other value stops
     the night before it starts."""
-    value = (os.environ if environ is None else environ).get(GATE_ENV, "").strip()
+    value = (os.environ if environ is None else environ).get(GATE_ENV, "off").strip()
     if value not in ("", "off", "on"):
         raise ValueError(f"{GATE_ENV} is on or off")
     return value == "on"
