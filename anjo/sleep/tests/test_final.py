@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from anjo.sleep.lives import draw as lives_draw
+from anjo.sleep.probes.morning import MORNING_PROBES
 from anjo.sleep.reports import final
 from anjo.sleep.tests.sleep_fakes import probe, taste
 from anjo.sleep.types import Probe
@@ -28,6 +29,11 @@ DONORS = lives_draw.donor_map(
     ),
     lives_draw.Life("life-c", "p2", "music", "line", "t", ()),
 )
+
+
+KNOWLEDGE_ROWS = 20  # new_work + vocab each → 40 knowledge outcomes per comparison per life
+INTERACTION_ROWS = 15  # tone_hold + taste_ab each → 30 interaction outcomes
+NEW_WORK_ROWS = 25
 
 
 def _sealed_catalog() -> dict[str, list[Probe]]:
@@ -94,7 +100,7 @@ def _write_morning(
 
 
 def _wins(
-    life: str, pair: str, *, n: int = 12, kinds: tuple[str, ...] = ("new_work", "vocab")
+    life: str, pair: str, *, n: int = KNOWLEDGE_ROWS, kinds: tuple[str, ...] = ("new_work", "vocab")
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i in range(n):
@@ -111,7 +117,7 @@ def _wins(
     return rows
 
 
-def _interaction_wins(life: str, pair: str, *, n: int = 8) -> list[dict[str, Any]]:
+def _interaction_wins(life: str, pair: str, *, n: int = INTERACTION_ROWS) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i in range(n):
         rows.append(
@@ -139,8 +145,8 @@ def _rig_all_wins(root: Path, *, pair_3x_weak: str | None = None) -> None:
     for life in LIVES:
         rows = _wins(life, final.COMP_3V1) + _wins(life, final.COMP_3V3X)
         rows += _interaction_wins(life, final.COMP_3V1) + _interaction_wins(life, final.COMP_3V3X)
-        rows += _wins(life, final.COMP_4V2C, kinds=("new_work",)) + _wins(
-            life, final.COMP_4V2F, kinds=("new_work",)
+        rows += _wins(life, final.COMP_4V2C, kinds=("new_work",), n=NEW_WORK_ROWS) + _wins(
+            life, final.COMP_4V2F, kinds=("new_work",), n=NEW_WORK_ROWS
         )
         if pair_3x_weak == life:
             rows = [r if r["pair"] != final.COMP_3V3X else {**r, "outcome": "loss"} for r in rows]
@@ -383,7 +389,10 @@ def test_unpromoted_donor_marks_specificity_inconclusive(root: Path) -> None:
         root,
         SINGLE,
         night=2,
-        outcomes=_wins(SINGLE, final.COMP_3V1) + _wins(SINGLE, final.COMP_3V3X),
+        outcomes=_wins(SINGLE, final.COMP_3V1)
+        + _wins(SINGLE, final.COMP_3V3X)
+        + _interaction_wins(SINGLE, final.COMP_3V1)
+        + _interaction_wins(SINGLE, final.COMP_3V3X),
         unavailable={"3x": final.DONOR_UNAVAILABLE},
     )
     report = _run(root)
@@ -401,7 +410,11 @@ def test_matches_needs_registered_margin() -> None:
         "losses": 10,
         "score": 0.5,
         "decisive_share": 0.5,
-        "per_life": {"l1": {"ahead": False}, "l2": {"ahead": False}, "l3": {"ahead": False}},
+        "per_life": {
+            "l1": {"n": NEW_WORK_ROWS, "ahead": False},
+            "l2": {"n": NEW_WORK_ROWS, "ahead": False},
+            "l3": {"n": NEW_WORK_ROWS, "ahead": False},
+        },
     }
     assert final._fairness_outcome({**base, "ci": [0.46, 0.80]}) == "matches"
     assert final._fairness_outcome({**base, "ci": [0.45, 0.80]}) == "inconclusive"
@@ -416,3 +429,79 @@ def test_learned_her_row_needs_both_pair_lives_ahead(root: Path) -> None:
     assert know["pair_lives_ahead_on_3x"] is False
     assert know["claim_row"] != "headline"
     assert know["claim_row"] == "none"
+
+
+def test_headline_win_needs_registered_probe_counts_per_life() -> None:
+    stats = {
+        "n": 3,
+        "wins": 3,
+        "ties": 0,
+        "losses": 0,
+        "score": 1.0,
+        "decisive_share": 1.0,
+        "ci": [0.99, 1.0],
+        "per_life": {
+            "life-a": {"n": 1, "ahead": True, "behind": False, "score": 1.0},
+            "life-b": {"n": 1, "ahead": True, "behind": False, "score": 1.0},
+            "life-c": {"n": 1, "ahead": True, "behind": False, "score": 1.0},
+        },
+    }
+    assert final._headline_outcome(stats, min_per_life=40) == "inconclusive"
+
+
+def test_fairness_matches_needs_registered_new_work_per_life() -> None:
+    stats = {
+        "n": 1,
+        "wins": 1,
+        "ties": 0,
+        "losses": 0,
+        "score": 1.0,
+        "decisive_share": 1.0,
+        "ci": [0.46, 0.99],
+        "per_life": {"life-a": {"n": 1, "ahead": True, "behind": False, "score": 1.0}},
+    }
+    assert final._fairness_outcome(stats) == "inconclusive"
+
+
+def test_loss_at_complement_score_is_inclusive() -> None:
+    stats = {
+        "n": 75,
+        "wins": 25,
+        "ties": 25,
+        "losses": 25,
+        "score": 0.45,
+        "decisive_share": 0.42,
+        "ci": [0.05, 0.40],
+        "per_life": {
+            "a": {"n": 25, "ahead": False, "behind": True, "score": 0.45},
+            "b": {"n": 25, "ahead": False, "behind": True, "score": 0.45},
+            "c": {"n": 25, "ahead": False, "behind": True, "score": 0.45},
+        },
+    }
+    assert final._headline_outcome(stats, reverse=True, min_per_life=25) == "win"
+
+
+def test_final_morning_without_subset_uses_full_set_not_night_summary(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    life = "life-a"
+    night = "2026-10-24"
+    (root / life / "nights" / night).mkdir(parents=True)
+    (root / life / "nights" / night / "summary.json").write_text(
+        json.dumps({"night": night, MORNING_PROBES: "daily-v1"}),
+        encoding="utf-8",
+    )
+    record = {
+        "night": night,
+        "label": "final",
+        "outcomes": [
+            {
+                "probe": f"{life}-new_work-01",
+                "kind": "new_work",
+                "pair": final.COMP_3V1,
+                "outcome": "win",
+            }
+        ],
+    }
+    reg = final.registered_probes(life, record, _sealed, results_root=root)
+    assert f"{life}-new_work-01" in reg
+    assert f"{life}-new_work-02" in reg

@@ -151,6 +151,8 @@ def _probe_set_name(record: Mapping[str, Any], results_root: Path, life_id: str)
     subset = record.get("subset")
     if subset is not None:
         return str(subset)
+    if record.get("label") == "final":
+        return str(FULL_SET)
     night = record.get("night")
     if isinstance(night, str):
         from_summary = _night_summary_probe_set(results_root, life_id, night)
@@ -342,10 +344,42 @@ def _life_behind(cell: Mapping[str, Any]) -> bool:
     return False
 
 
-def _headline_outcome(stats: Mapping[str, Any] | None, *, reverse: bool = False) -> Outcome3:
+def _min_probes_for_dimension(dimension: Dimension) -> int:
+    counts = _thresholds()["counts_per_life"]
+    kinds = _thresholds()["dimensions"][dimension]["kinds"]
+    return sum(int(counts[kind]) for kind in kinds)
+
+
+def _registered_per_life_counts_met(
+    stats: Mapping[str, Any],
+    *,
+    min_per_life: int,
+    lives_total: int,
+) -> bool:
+    per_life = stats.get("per_life", {})
+    if len(per_life) < lives_total:
+        return False
+    return all(int(cell.get("n", 0)) >= min_per_life for cell in per_life.values())
+
+
+def _mirror_threshold(above: float) -> float:
+    """Complement of a registered lower bound (``1 - x``), rounded for inclusive loss at the margin."""
+    return round(1.0 - above, 10)
+
+
+def _headline_outcome(
+    stats: Mapping[str, Any] | None,
+    *,
+    reverse: bool = False,
+    min_per_life: int | None = None,
+) -> Outcome3:
     if stats is None or stats.get("n", 0) == 0:
         return "inconclusive"
     raw = _thresholds()["win"]
+    lives_total = int(raw["lives_total"])
+    need_min = min_per_life if min_per_life is not None else 1
+    if not _registered_per_life_counts_met(stats, min_per_life=need_min, lives_total=lives_total):
+        return "inconclusive"
     ci = stats.get("ci")
     lower = float(ci[0]) if isinstance(ci, list) and len(ci) == 2 else None
     upper = float(ci[1]) if isinstance(ci, list) and len(ci) == 2 else None
@@ -356,20 +390,23 @@ def _headline_outcome(stats: Mapping[str, Any] | None, *, reverse: bool = False)
     lives_ahead = sum(1 for life in per_life.values() if life.get("ahead"))
     lives_behind = sum(1 for life in per_life.values() if _life_behind(life))
     need_lives = int(raw["lives_ahead_at_least"])
+    ci_floor = float(raw["ci_lower_bound_above"])
+    score_floor = float(raw["overall_score_at_least"])
+    share_floor = float(raw["decisive_share_at_least"])
     checks_win = (
         lower is not None
-        and lower > float(raw["ci_lower_bound_above"])
-        and score >= float(raw["overall_score_at_least"])
+        and lower > ci_floor
+        and score >= score_floor
         and decisive is not None
-        and decisive >= float(raw["decisive_share_at_least"])
+        and decisive >= share_floor
         and lives_ahead >= need_lives
     )
     checks_loss = (
         upper is not None
-        and upper < (1.0 - float(raw["ci_lower_bound_above"]))
-        and score <= (1.0 - float(raw["overall_score_at_least"]))
+        and upper < _mirror_threshold(ci_floor)
+        and round(score, 10) <= _mirror_threshold(score_floor)
         and decisive is not None
-        and decisive <= (1.0 - float(raw["decisive_share_at_least"]))
+        and round(decisive, 10) <= _mirror_threshold(share_floor)
         and lives_behind >= need_lives
     )
     if reverse:
@@ -384,10 +421,16 @@ def _headline_outcome(stats: Mapping[str, Any] | None, *, reverse: bool = False)
 def _fairness_outcome(stats: Mapping[str, Any] | None) -> FairnessOutcome:
     if stats is None or stats.get("n", 0) == 0:
         return "inconclusive"
-    if _headline_outcome(stats) == "win":
+    new_work_min = int(_thresholds()["counts_per_life"][NEW_WORK])
+    if _headline_outcome(stats, min_per_life=new_work_min) == "win":
         return "win"
-    if _headline_outcome(stats, reverse=True) == "win":
+    if _headline_outcome(stats, reverse=True, min_per_life=new_work_min) == "win":
         return "loss"
+    lives_total = int(_thresholds()["win"]["lives_total"])
+    if not _registered_per_life_counts_met(
+        stats, min_per_life=new_work_min, lives_total=lives_total
+    ):
+        return "inconclusive"
     ci = stats.get("ci")
     margin = float(_thresholds()["fairness"]["non_inferiority_margin"])
     if isinstance(ci, list) and len(ci) == 2 and float(ci[0]) > margin:
@@ -533,8 +576,9 @@ def run(
             dimension,
             exclude_lives=excluded,
         )
-        vs1 = _headline_outcome(vs1_stats)
-        vs3x = _headline_outcome(vs3x_stats)
+        min_n = _min_probes_for_dimension(dimension)
+        vs1 = _headline_outcome(vs1_stats, min_per_life=min_n)
+        vs3x = _headline_outcome(vs3x_stats, min_per_life=min_n)
         if excluded:
             vs3x = "inconclusive"
         pair_ok = all(_pair_ahead_on_3x(life_records, pair_lives, dimension))
