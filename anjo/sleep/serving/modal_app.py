@@ -72,8 +72,7 @@ def _settings_env(settings: config.ServeConfig) -> dict[str, str]:
         env[config.HF_SECRET_ENV] = settings.hf_secret
     if settings.prompt_embeds:
         env[config.PROMPT_EMBEDS_ENV] = "1"
-    if settings.deterministic:
-        env[config.DETERMINISTIC_ENV] = "1"
+    env[config.DETERMINISTIC_ENV] = "1" if settings.deterministic else "0"
     if settings.precision is not config.SERVING:  # a second app's GPU; today's image env is unchanged
         env[config.SERVE_GPU_ENV] = settings.precision.gpu
     if settings.max_inputs != config.DEFAULT_MAX_INPUTS:
