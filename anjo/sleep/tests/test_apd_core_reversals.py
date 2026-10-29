@@ -50,6 +50,8 @@ KEPT_OUT = (
     "reno-damp-patch",  # APD's, frozen: it states its outcome ("the patch has been dry since")
     # a day only the day it's said can place ("next Monday", "Friday's order"), or a date inside the life
     "reno-tile-membrane", "reno-floor-cabinets", "film-rehearsal-late", "bake-night-oven", "bake-online-orders",
+    # a plant line that says what its fact means (``APD_SWEPT``)
+    "film-score-room", "reno-skip-share", "bake-rye-sales", "reno-wiring-quote",
 )
 # Words that tell a reader the apparent problem is gone; a reversal's plant line never needs them.
 OUTCOME_WORDS = ("since", "whole", "nothing of the kind", "has gone", "loved", "clearly", "neutral", "level",
@@ -169,13 +171,28 @@ SWEPT = {
                            "and will be on the final list."),
     "theatre-school-matinee": ("theatre-school-matinee", "The school's head of English said they'd book a full house "
                                "of 200 students for a Wednesday matinee at 8 each."),
+    "photo-framing-quote": ("photo-framing-quote", "This show's prints are twice the size and use museum glass, which "
+                            "the last show's didn't."),
+}
+# APD's own plant lines that say what their fact means, drawn by core-train until 2026-10-29: APD's stay
+# frozen, so each is kept out of the core's draws (``CORE_KEPT_OUT``) and drawn in a ``-core`` version.
+APD_SWEPT = {
+    "film-score-room": ("film-score-room-core", "The church hall caretaker said any recording is fine as long as it "
+                        "ends by ten."),
+    "reno-skip-share": ("reno-skip-share-core", "The neighbour said they'd happily share the bin; it's a large "
+                        "six-metre one, half empty."),
+    "bake-rye-sales": ("bake-rye-sales-core", "The mill's rye deliveries stopped for two weeks because of road works, "
+                       "and the rye loaf was off the shelf for those two weeks; it was back on the shelf last Monday."),
+    "reno-wiring-quote": ("reno-wiring-quote-core", "The quote includes replacing the old fuse box and adding a garden "
+                          "socket circuit, which my friend's job did not."),
 }
 # Phrases that state what a fact means or how it came out, built from every case so far: crude, but a
 # plant line that brings one back fails here before a live run pays for it.
 STATED = ("is fine", "are fine", "was fine", "fine after all", "not a problem", "no problem", "nothing of the kind",
           "has gone", "no longer", "dry since", "loved it", "clearly", "neutral", "level", "without leaking",
           "took it away", "is whole", "still damp", "as it should", "sold for", "corrected", "about half",
-          "the other", "will be on the", "full house", "could come", "pay us")
+          "the other", "will be on the", "full house", "could come", "pay us", "happily", "back on the", "did not",
+          "didn't")
 
 
 def _stated(line: str) -> list[str]:
@@ -183,15 +200,26 @@ def _stated(line: str) -> list[str]:
 
 
 def test_the_stated_outcome_phrases_catch_every_case_so_far() -> None:
-    cases = [*BEFORE.values(), *(line for _, line in SWEPT.values()),
+    cases = [*BEFORE.values(), *(line for _, line in (*SWEPT.values(), *APD_SWEPT.values())),
              "The patch has been dry since the gutter was cleared."]  # reno-damp-patch's kind, APD's own
     assert [line for line in cases if not _stated(line)] == []
 
 
-def test_no_core_plant_line_of_any_family_states_its_meaning_or_outcome() -> None:
-    # every plant line of the core's own templates; APD's stay frozen (``families``), kept out when they fail
-    stated = {t.id: _stated(t.disambiguating) for t in core_families.CORE_TEMPLATES}
+def test_no_plant_line_drawn_into_a_core_split_states_its_meaning_or_outcome() -> None:
+    # every plant line any core split draws, of every family, APD's own included (kept out when one fails)
+    stated = {t.id: _stated(t.disambiguating) for split in CORE_SPLITS for t in _drawn(split)}
     assert {tid: found for tid, found in stated.items() if found} == {}
+
+
+def test_each_apd_line_that_says_its_meaning_is_drawn_in_a_core_version_and_kept_for_apd() -> None:
+    drawn = {t.id: t for t in _drawn("core-train")}
+    apd = {t.id: t for t in families.TEMPLATES["development"]}
+    for old, (new, line) in APD_SWEPT.items():
+        assert old in core_families.CORE_KEPT_OUT and old not in drawn and apd[old].disambiguating == line, old
+        mine = drawn[new]
+        assert (mine.family, mine.field, mine.origins, mine.surface) == (apd[old].family, apd[old].field,
+                                                                         apd[old].origins, apd[old].surface), old
+        assert mine.disambiguating != line and not _stated(mine.disambiguating), old
 
 
 def test_each_swept_line_is_rewritten_under_its_splits_id_rule() -> None:

@@ -225,6 +225,35 @@ _TRAIN: Final = (
     ), "The ordering app emailed me that it had a maintenance outage all day on the 5th.",
         "Online orders were low on the 5th. Should I change something?",
         "Not a demand drop: the ordering app was down all day on the 5th."),
+    # APD's templates of these fields whose plant line says what its fact means (``CORE_KEPT_OUT``),
+    # each drawn by core-train in a version of its own that states the raw fact, origins kept.
+    _t("film-score-room-core", "opportunity", _FILM, "the score recording", (
+        "A violinist friend is looking for a quiet room to record a short piece for free.",
+        "The church hall I booked for scene 12 stands empty every evening after the shoot wraps at six.",
+    ), "The church hall's caretaker locks up at ten each evening.",
+        "I'm trying to sort out the music for the film. Any ideas?",
+        "The violinist can record the piece in the booked church hall after the shoot wraps at six, any evening "
+        "before ten, for free."),
+    _t("reno-skip-share-core", "opportunity", _RENO, "the demolition rubble", (
+        "The neighbour is renting a skip bin for the week of the 8th.",
+        "My demolition will produce about a tonne of rubble that I planned to haul to the tip on weekends.",
+    ), "The neighbour's skip bin is a large six-metre one, and their own clear-out fills half of it.",
+        "How should I deal with the rubble from the demolition?",
+        "Ask to share the neighbour's six-metre skip bin, half of it unused, for the rubble instead of hauling it "
+        "to the tip."),
+    _t("bake-rye-sales-core", "reversal", _BAKERY, "the rye loaf's sales", (
+        "Sales of the rye loaf fell by half over the last two weeks.",
+    ), "The mill's rye deliveries stopped for two weeks because of road works, and the rye loaf was off the shelf "
+       "for those two weeks.",
+        "Should I drop the rye loaf because it stopped selling?",
+        "Not falling demand: the rye loaf was off the shelf for those two weeks while the mill's deliveries "
+        "stopped."),
+    _t("reno-wiring-quote-core", "decoy", _RENO, "the electrician's quote", (
+        "The electrician quoted 2,400 to rewire the ground floor.",
+        "A friend's rewiring of a similar house last year cost 1,500.",
+    ), "The electrician's quote includes replacing the old fuse box and adding a garden socket circuit.",
+        "Is the electrician's quote too high?",
+        "Not overpriced: the quote also covers a new fuse box and a garden socket circuit, beyond the rewiring."),
 )
 
 _VAL: Final = (
@@ -420,7 +449,7 @@ _TEST: Final = (
     _t("photo-framing-quote", "decoy", _PHOTO, "the framing quote", (
         "The framer quoted 3,600 for this show, against 1,800 for the last one.",
         "Both shows have the same number of prints.",
-    ), "This show's prints are twice the size and use museum glass, which the last show's didn't.",
+    ), "This show's prints are twice the size of the last show's, and each is framed behind museum glass.",
         "Is the framer overcharging me this time?",
         "Not overcharging: this show's frames are twice the size, with museum glass."),
 )
@@ -518,11 +547,12 @@ CORE_FIELDS: Final[dict[CoreSplit, tuple[str, ...]]] = {
 _ALL: Final[tuple[Template, ...]] = (*TEMPLATES["development"], *TEMPLATES["held_out"], *CORE_TEMPLATES)
 # APD's development templates core-train doesn't draw; APD's templates stay frozen, so core-train
 # draws its own in their place (``_TRAIN``): a reversal whose plant line states its outcome
-# (``reno-tile-shade`` in its place), and those whose facts name a day only the day they're said can
-# place, or a date the life's days fall on both sides of (each ``-core`` in its place).
+# (``reno-tile-shade`` in its place), those whose facts name a day only the day they're said can
+# place, or a date the life's days fall on both sides of, and those whose plant line says what its
+# fact means (each ``-core`` in its place).
 CORE_KEPT_OUT: Final = frozenset({
     "reno-damp-patch", "reno-tile-membrane", "reno-floor-cabinets", "film-rehearsal-late", "bake-night-oven",
-    "bake-online-orders",
+    "bake-online-orders", "film-score-room", "reno-skip-share", "bake-rye-sales", "reno-wiring-quote",
 })
 _CORE_POOL: Final[tuple[Template, ...]] = tuple(t for t in _ALL if t.id not in CORE_KEPT_OUT)
 _PAIR_GAPS: Final = tuple(pair.gap for pair in PAIR_TEMPLATES)
