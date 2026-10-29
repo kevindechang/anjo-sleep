@@ -12,7 +12,7 @@ from anjo.sleep.model_api import ChatResult
 from anjo.sleep.probes.arms import ArmReply
 from anjo.sleep.probes.logprob import TasteChoice
 from anjo.sleep.probes.neutral import rewrite
-from anjo.sleep.probes.score import BootstrapConfig, JudgeError, MuseJudge, PairScore, score
+from anjo.sleep.probes.score import BootstrapConfig, JudgeError, MuseJudge, PairScore, probe_outcome, score
 from anjo.sleep.tests.sleep_fakes import options, probe, taste
 
 CFG = BootstrapConfig(resamples=400, seed=7, ci=0.95)
@@ -299,3 +299,14 @@ def test_a_flip_by_either_arm_makes_the_taste_pair_a_tie():
     for ra, rb, want in ((right, flip, (0, 1, 0)), (flip, wrong, (0, 1, 0)), (right, wrong, (1, 0, 0)), (wrong, right, (0, 0, 1))):
         out = score([p], [_reply("", choice=ra)], [_reply("", choice=rb)], judge, bootstrap=CFG)
         assert (out.wins, out.ties, out.losses) == want
+
+
+def test_a_taste_outcome_carries_both_arms_margins_and_the_registered_outcome():
+    p = taste()
+    right = TasteChoice((-0.1, -2.0), (-2.0, -0.1), options(p)[0])
+    wrong = TasteChoice((-2.0, -0.1), (-0.1, -2.0), options(p)[1])
+    judge, _ = _judge(lambda a, b: "A")
+    found = probe_outcome(p, _reply("", choice=right), _reply("", choice=wrong), judge)
+    assert found.outcome == "win" and found.margin_a == pytest.approx(1.9) and found.margin_b == pytest.approx(-1.9)
+    other = probe_outcome(probe("q1"), _reply("good"), _reply("bad"), judge)
+    assert other.margin_a is None and other.margin_b is None

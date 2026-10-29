@@ -18,8 +18,8 @@ from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ARMS, ArmDeps
-from anjo.sleep.probes.morning import Morning, MorningError, run_morning
-from anjo.sleep.probes.score import Verdict
+from anjo.sleep.probes.morning import Morning, MorningError, _rows, run_morning
+from anjo.sleep.probes.score import ProbeOutcome, Verdict
 from anjo.sleep.reports import results
 from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tests.sleep_fakes import (
@@ -183,14 +183,29 @@ def test_per_probe_outcomes_recompute_the_counts(tmp_path: Path) -> None:
     record = json.loads(rig.run().path.read_text(encoding="utf-8"))
     ids = {p.id for p in rig.probes}
     for row in record["outcomes"]:
-        assert set(row) == {"probe", "pair", "kind", "outcome", "flip"}
+        margins = {"margin_a", "margin_b"} if row["kind"] == "taste_ab" else set()
+        assert set(row) == {"probe", "pair", "kind", "outcome", "flip"} | margins
         assert row["probe"] in ids and row["outcome"] in {"win", "tie", "loss"} and isinstance(row["flip"], bool)
+    taste_rows = [row for row in record["outcomes"] if row["kind"] == "taste_ab"]
+    assert taste_rows and all(isinstance(row["margin_a"], float) and isinstance(row["margin_b"], float)
+                              for row in taste_rows)
     assert {row["pair"] for row in record["outcomes"]} == {f"{a}_vs_1" for a in ARMS - {"1"}} | set(record["pairs"])
     mine = [r for r in record["outcomes"] if r["pair"] == "4_vs_2C" and r["kind"] != "pushback"]
     stat = record["pairs"]["4_vs_2C"]["overall"]
     assert [sum(r["outcome"] == o for r in mine) for o in ("win", "tie", "loss")] == [stat["wins"], stat["ties"], stat["losses"]]
     text = json.dumps(record)
     assert not any(p.prompt in text for p in rig.probes) and "reply from" not in text
+
+
+def test_taste_rows_carry_both_margins_and_other_rows_do_not() -> None:
+    p, q = taste("t1"), probe("q1")
+    rows = _rows("3_vs_1", [p, q], [
+        ProbeOutcome("t1", "taste_ab", "tie", True, 1.23456789, None),
+        ProbeOutcome("q1", "new_work", "win", False),
+    ])
+    assert rows[0] == {"probe": "t1", "pair": "3_vs_1", "kind": "taste_ab", "outcome": "tie", "flip": True,
+                       "margin_a": 1.2346, "margin_b": None}
+    assert rows[1] == {"probe": "q1", "pair": "3_vs_1", "kind": "new_work", "outcome": "win", "flip": False}
 
 
 def test_the_results_table_reproduces_the_ci_from_the_file_alone(tmp_path: Path) -> None:

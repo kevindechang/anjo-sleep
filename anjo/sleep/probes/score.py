@@ -31,6 +31,7 @@ from typing import Any, Final, Literal, Protocol, runtime_checkable
 from anjo.sleep.context.template import render
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.probes.arms import ArmReply
+from anjo.sleep.probes.logprob import expected_margin
 from anjo.sleep.probes.neutral import rewrite as neutral_rewrite
 from anjo.sleep.types import Probe
 
@@ -391,12 +392,16 @@ def _grouped2(
 
 @dataclass(frozen=True)
 class ProbeOutcome:
-    """One probe's outcome for arm A against arm B, with whether an order flip made it a tie."""
+    """One probe's outcome for arm A against arm B, with whether an order flip made it a tie.
+    ``margin_a`` and ``margin_b`` are the two arms' log-probability margins toward the expected
+    option (``logprob.expected_margin``): a ``taste_ab`` diagnostic, ``None`` for every other kind."""
 
     probe_id: str
     kind: str
     outcome: Outcome
     flipped: bool
+    margin_a: float | None = None
+    margin_b: float | None = None
 
 
 def pair_outcomes(
@@ -424,9 +429,14 @@ def probe_outcome(
     """One probe's outcome for arm A against arm B: forced choice for ``taste_ab``, else the judge
     in both orders."""
     if probe.kind == "taste_ab":
-        flip = reply_a.choice is not None and reply_b.choice is not None and (
-            reply_a.choice.flipped or reply_b.choice.flipped)
-        return ProbeOutcome(probe.id, probe.kind, taste_outcome(probe, reply_a, reply_b), flip)
+        choice_a, choice_b = reply_a.choice, reply_b.choice
+        flip = choice_a is not None and choice_b is not None and (choice_a.flipped or choice_b.flipped)
+        outcome = taste_outcome(probe, reply_a, reply_b)
+        return ProbeOutcome(
+            probe.id, probe.kind, outcome, flip,
+            None if choice_a is None else expected_margin(choice_a, probe),
+            None if choice_b is None else expected_margin(choice_b, probe),
+        )
     text_a, text_b = reply_a.text, reply_b.text
     if neutral:
         text_a, text_b = rewrite(text_a), rewrite(text_b)
