@@ -20,9 +20,9 @@ pinned pair specs name (``pairs.pair_specs``).
 **The days a fact names** hold on whichever day its schedule puts it (core-v3,
 ``test_apd_core_dates``): a day named relative to the writing ("Monday's rehearsal", "next week")
 appears in one fact of a template at most, and every other names its date ("Sunday the 6th"),
-outside the life's days, so no fact's tense turns between draws. Templates rewritten for this
-took new ids, but in ``core-test``; APD's own are kept out (``CORE_KEPT_OUT``), each drawn in a
-``-core`` version of its own instead.
+outside the life's days, so no fact's tense turns between draws; a month named is the life's
+(September 2026) or earlier. Templates rewritten for this took new ids, but in ``core-test``; APD's
+own are kept out (``CORE_KEPT_OUT``), each drawn in a ``-core`` version of its own instead.
 
 **Pair templates** (``PairTemplate``, for ``pairs``): one commitment the person relies on, in a
 ``core-test`` field, and its two outcomes: twice failing, or twice kept. The failed history plants
@@ -290,13 +290,13 @@ _VAL: Final = (
     ), "The brake maker's guide says new pads squeal until they bed in over about 20 stops.",
         "Should I stop selling the new disc brakes?",
         "Not faulty: new pads squeal until they bed in, and it stops after about 20 stops."),
-    _t("bikes-october-sales", "decoy", _BIKES, "October's sales", (
-        "October's bike sales were 18, against 35 in September.",
+    _t("bikes-august-sales", "decoy", _BIKES, "August's sales", (
+        "August's bike sales were 18, against 35 in July.",
         "Nothing changed in the shop's prices or stock.",
-    ), "Every year since the shop opened, October sales have been about half of September's as the riding "
-       "season ends.",
-        "Sales dropped in October. Do I need a promotion?",
-        "Not a slump: October sales are always about half of September's as the season ends."),
+    ), "Every year since the shop opened, August sales have been about half of July's while the town is "
+       "away on its summer holidays.",
+        "Sales dropped in August. Do I need a promotion?",
+        "Not a slump: August sales are always about half of July's while the town is away on holiday."),
 )
 
 _TEST: Final = (
@@ -375,10 +375,10 @@ _TEST: Final = (
     _t("theatre-advance-sales", "decoy", _THEATRE, "the advance ticket sales", (
         "Advance sales for the second week are 120 tickets, against 400 for the first week.",
         "The marketing hasn't changed between the two weeks.",
-    ), "The second week's tickets went on sale only yesterday, and the first week's had been on sale for "
-       "two months.",
+    ), "The second week's tickets went on sale on Tuesday the 1st, and the first week's had been on sale "
+       "since early July.",
         "Second week sales look weak. Should I cut prices?",
-        "Not weak: the second week's tickets went on sale yesterday, the first week's two months ago."),
+        "Not weak: the second week's tickets went on sale on the 1st, the first week's back in early July."),
     _t("photo-wall-length", "contradiction", _PHOTO, "the gallery hang", (
         "The gallery's walls give 30 metres of hanging space.",
         "The 24 framed prints need 1.5 metres of wall each, spacing included.",

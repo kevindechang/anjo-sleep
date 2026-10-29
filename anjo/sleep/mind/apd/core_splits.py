@@ -38,12 +38,14 @@ B12_SEEDS: Final = (
 # Each said its problem was gone, which gave the whole item away on its own day, so the leak gate
 # failed every life that drew one (``core_families``). The split, its draw, b12 and the pair specs
 # are unchanged; a life's made record keeps its field's template texts (``texts_digest``).
-# Amended again 2026-10-29, still before any core-test life or pair existed: four core-test templates
-# pin the days their facts name (wedding-salty-lamb, theatre-hoarse-lead) or move a date out of the
-# life's days (theatre-tech-cast to the 17th, theatre-candle-approval to the 19th, the pairs' opening),
-# under the same ids. A weekday said on one scheduled day and again on another named two dates for
-# one event, and a date inside the life was in the past on some days that named it as to come
-# (``test_apd_core_dates``). The split, its draw, b12 and the pair specs are unchanged.
+# Amended again 2026-10-29, still before any core-test life or pair existed: five core-test templates
+# pin the days their facts name (wedding-salty-lamb, theatre-hoarse-lead, and theatre-advance-sales,
+# whose second week went on sale "only yesterday" days after its sales were counted, now Tuesday the
+# 1st) or move a date out of the life's days (theatre-tech-cast to the 17th, theatre-candle-approval
+# to the 19th, the pairs' opening), under the same ids. A weekday said on one scheduled day and again
+# on another named two dates for one event, and a date inside the life was in the past on some days
+# that named it as to come (``test_apd_core_dates``). The split, its draw, b12 and the pair specs are
+# unchanged.
 
 
 def core_specs(split: CoreSplit) -> tuple[LifeSpec, ...]:

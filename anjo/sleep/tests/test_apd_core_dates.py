@@ -11,6 +11,8 @@ puts it, and a schedule can put it on any of several days, so what it names must
   never wrong in every draw ("Opening night is on the 14th", always said on the 15th or 16th). A
   week ("the week of the 8th") keeps one side in every draw. A weekday pinned to a date is its own.
 - **A recurring day** ("on Tuesdays", "Friday mornings", "Monday to Thursday") holds any day.
+- **A month** a fact names is the life's (September 2026) or one before it: a later month hasn't
+  come on any day of the life ("October's sales were 18", said in September).
 
 Every scheduled draw is checked: each core split's every spec and attempt (``generate.plan``),
 and the pairs' unrelated items before the fork (``pairs.prefix_plan``). Pure: no model is called.
@@ -40,6 +42,9 @@ RECURRING = ("on a Saturday", "Tuesday and Wednesday evenings", "Monday to Thurs
 _PARTS = re.compile(rf"\b(?:{'|'.join(DAYS)}) (?:mornings|afternoons|evenings|nights)\b")  # "Friday mornings"
 MONTHS = ((2026, 8), (2026, 9), (2026, 10))  # a life's days are in September 2026; a pinned date is near them
 LAST_DAY = LIFE_START + timedelta(days=LIFE_DAYS - 1)
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+               "November", "December")
+MONTH = re.compile(rf"\b({'|'.join(MONTH_NAMES)})\b")
 
 
 def _drawn() -> dict[str, Template]:
@@ -156,3 +161,21 @@ def test_the_sunday_takings_name_the_6th_in_every_fact() -> None:
     assert DAYS[sixth.weekday()] == "Sunday" and sixth < LIFE_START
     for fact in (*_facts(takings), takings.resolution):
         assert "the 6th" in fact and not _relative(fact), fact
+
+
+def test_no_fact_names_a_month_after_the_lifes() -> None:
+    later = {t.id: month for t in _drawn().values() for fact in (*_facts(t), t.resolution)
+             for month in MONTH.findall(fact) if MONTH_NAMES.index(month) + 1 > LIFE_START.month}
+    assert later == {}
+    assert core_families.template("bikes-october-sales") is None and core_families.template("bikes-august-sales")
+
+
+def test_the_second_weeks_tickets_went_on_sale_before_the_life_in_every_fact() -> None:
+    # the first fact counts the second week's sales on any of the life's days, so the day they went on
+    # sale is pinned before them all, never "yesterday" from a later day (2026-10-29)
+    sales = core_families.template("theatre-advance-sales")
+    assert sales is not None
+    for fact in (sales.disambiguating, sales.resolution):
+        assert not _relative(fact), fact
+        ((first, last),) = _pinned(fact)
+        assert first == last < LIFE_START, fact

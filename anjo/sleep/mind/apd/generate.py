@@ -21,7 +21,6 @@ times, while any gate fails or an attempt fails; it never looks at an arm.
 from __future__ import annotations
 
 import dataclasses
-import difflib
 import functools
 import hashlib
 import json
@@ -84,7 +83,6 @@ UNCHANGED: Final = "Your last answer gave `before` back unchanged, so `reason` s
 UNCHANGED_RULE: Final = "unchanged"
 REWRITE_ASKS: Final = 2  # the most times a day written again is asked: once, and once more if it came back as it was
 REWRITE_TEMPERATURE: Final = 1.0  # the ask again's, above ``WRITE_TEMPERATURE``
-SAME_DAY: Final = 0.98  # a rewrite this close to the day it replaces (``difflib`` ratio, case and spacing aside)
 LIFE_START: Final = date(2026, 9, 7)  # day 0 of every life; the clock is the life's, not the world's
 WRITE_TEMPERATURE: Final = 0.8
 EXTRACT_TEMPERATURE: Final = 0.0
@@ -314,11 +312,12 @@ def _write_day(
 
 
 def unchanged(texts: Sequence[str], before: Sequence[str]) -> bool:
-    """Whether a day written again is the day it replaces, or nearly (``SAME_DAY``), case and
-    spacing aside."""
-    def joined(found: Sequence[str]) -> str:
-        return " ".join(" ".join(text.split()) for text in found).lower()
-    return difflib.SequenceMatcher(None, joined(texts), joined(before), autojunk=False).ratio() >= SAME_DAY
+    """Whether a day written again is the day it replaces: as many messages, each its original,
+    case and spacing aside. Compared message by message, never as one text: ``repair_v1.md`` asks to
+    change only what the reason needs, so a correct fix can drop one clause from a long day."""
+    def plain(text: str) -> str:
+        return " ".join(text.split()).lower()
+    return len(texts) == len(before) and all(plain(a) == plain(b) for a, b in zip(texts, before, strict=True))
 
 
 def _given_back(chat: ChatFn) -> None:

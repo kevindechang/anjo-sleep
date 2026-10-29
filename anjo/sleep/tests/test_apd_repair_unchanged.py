@@ -91,18 +91,38 @@ def test_a_rewrite_still_unchanged_fails_the_round_before_anything_reads_it(
     assert RunLedger(tmp_path / "budget.jsonl").open_holds() == ()
 
 
-@pytest.mark.parametrize(("before", "after", "same"), [
-    (["One.", "Two."], ["One.", "Two."], True),
-    (["One.", "Two."], [" one. ", "TWO."], True),  # case and spacing aside
-    (["A long day at the bench, sanding the oak legs."] * 4,
-     ["A long day at the bench, sanding the oak legs."] * 3 + ["A long day at the bench, sanding the oak legs!"], True),
-    (["One.", "Two."], ["One.", "Three."], False),
-    (["A long day at the bench, sanding the oak legs."] * 4,
-     ["A long day at the bench, sanding the oak legs."] * 3 + ["The serving board idea came up again."], False),
+# A day of seven messages, about 1,350 characters, whose fourth carries a leaky clause of about 50.
+DAY = [
+    "Up at six to sand the oak legs for the client's table before the shop got warm; the dust settles faster "
+    "when the air is still cold, and the grain shows every pass of the paper.",
+    "The client rang mid-morning to ask whether the top could be a shade darker than the sample board, which "
+    "means another coat of the walnut oil and a full day's wait before the wax.",
+    "Lunch on the bench outside, watching the delivery van come and go from the timber yard across the road "
+    "while the first coat of oil soaked into the legs.",
+    "Fitted the drawer runners this afternoon, and they ran smooth on the first try, so the damp is clearly not "
+    "a problem any more, and the second drawer went in just as easily.",
+    "The serving board idea came up again when a neighbour asked whether I sell anything small, which I don't "
+    "yet, though the offcuts pile is getting tall enough to fill a shelf.",
+    "Spent an hour at the end of the day sorting the offcuts by species and length, walnut on the top shelf, "
+    "oak below it, the ash and cherry scraps in the crate by the stove, and the long thin strips that might "
+    "make handles tied in a bundle on the wall, because the floor had gone from cluttered to dangerous.",
+    "Swept up, oiled the plane, and wrote tomorrow's list on the board by the door: wax the legs, check the "
+    "drawer fronts, and call the yard about the next delivery of oak boards.",
+]
+MENDED = [*DAY[:3], DAY[3].replace(", so the damp is clearly not a problem any more", ""), *DAY[4:]]
+
+
+@pytest.mark.parametrize(("after", "same"), [
+    (DAY, True),  # given back verbatim, the case seen on 2026-10-29
+    ([f"  {text.upper()} " for text in DAY], True),  # case and spacing aside
+    (MENDED, False),  # repair_v1's minimal fix: the one leaky clause dropped, the rest as it was
+    ([*DAY[:6], DAY[6].replace("oak boards.", "oak boards!")], False),  # any other change in any message
+    (DAY[:6], False),  # a message dropped
+    ([*DAY, "One more line."], False),  # a message added
 ])
-def test_a_rewrite_is_unchanged_when_it_is_the_day_as_it_was_or_nearly(before: list[str], after: list[str],
-                                                                        same: bool) -> None:
-    assert generate.unchanged(after, before) is same
+def test_a_rewrite_is_unchanged_only_when_every_message_is_its_original(after: list[str], same: bool) -> None:
+    assert 1_300 < len(" ".join(DAY)) < 1_400 and 45 < len(DAY[3]) - len(MENDED[3]) < 55
+    assert generate.unchanged(after, DAY) is same
 
 
 def test_a_round_holds_each_written_days_ask_again_with_its_day_retries() -> None:
