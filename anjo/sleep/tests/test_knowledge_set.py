@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import fcntl
 import hashlib
 import json
 import re
@@ -18,7 +19,9 @@ from typing import Any, Final
 
 import pytest
 
+from anjo.sleep.budget import POOLS, Ledger
 from anjo.sleep.gates import EVAL_DAY
+from anjo.sleep.night.sweep import LOCK_NAME
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.probes.decontam import NGRAM
 from anjo.sleep.serving.client import WakeResult
@@ -432,3 +435,47 @@ def test_a_pick_that_changes_on_a_near_tie_is_not_reproduced() -> None:
     line = knowledge_score.repeat_line([item], first, again)
     assert line["max_logprob_diff"] <= knowledge_score.REPRODUCIBLE_NATS and line["flipped"] == [item.id]
     assert line["reproducible"] is False and line["accuracy_diff"] == pytest.approx(-1.0)
+
+
+class _LockProbe(FakeClient):
+    """Notes, at each call, whether another open of the night lock would have to wait."""
+
+    def __init__(self, lock: Path) -> None:
+        super().__init__()
+        self.lock, self.held = lock, list[bool]()
+
+    def continuation_logprobs(self, adapter: Any, messages: list[dict[str, str]], continuation: str) -> Sequence[float]:
+        with open(self.lock, "a+b") as other:
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.held.append(True)
+            else:
+                fcntl.flock(other, fcntl.LOCK_UN)
+                self.held.append(False)
+        return super().continuation_logprobs(adapter, messages, continuation)
+
+
+def test_scoring_holds_the_night_lock_and_is_refused_while_a_night_does(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _life(tmp_path, "acct-seed", "seed", 1)
+    ledger = Ledger(tmp_path / "ledger.jsonl", caps={**dict.fromkeys(POOLS, 0.0), "modal_usd": 50.0})
+    lock, never = tmp_path / LOCK_NAME, _Never()
+    argv = ["--account", "seed=acct-seed", "--go"]
+    with open(lock, "a+b") as night:  # a night, its gates or a morning is serving on this host
+        fcntl.flock(night, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert knowledge_score.main(argv, environ={}, client=never, wake=never, ledger=ledger, root=tmp_path,
+                                    day_text=lambda account, window: []) == 2
+    out = capsys.readouterr().out
+    assert '"line": "refused"' in out and "night lock" in out
+    assert ledger.open_holds() == () and ledger.remaining("modal_usd") == 50.0  # nothing held, nothing sent
+    client = _LockProbe(lock)
+    assert knowledge_score.main(argv, environ={}, client=client, wake=lambda: WakeResult(1.0, True), ledger=ledger,
+                                root=tmp_path, day_text=lambda account, window: []) == 0
+    assert client.held and all(client.held)  # held for every call, so no night or gate shares the batch
+    with open(lock, "a+b") as after:
+        fcntl.flock(after, fcntl.LOCK_EX | fcntl.LOCK_NB)  # and let go when the run ends
+    assert ledger.open_holds() == ()
+    assert knowledge_score.main(["--account", "seed=acct-seed"], environ={}, client=never, wake=never, ledger=never,
+                                root=tmp_path, day_text=never) == 0
+    assert "night lock" in capsys.readouterr().out  # the plan says so
