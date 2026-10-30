@@ -53,9 +53,13 @@ FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark
 # on Baseten.
 CRITIC_HOME = "practice/critics.py"
 # Per-file allowances: the thought channel's tool asks MIND's provider which Spark Open to use, and may
-# name that module alone; Fireworks, the provider's setting and MIND's pool stay forbidden there.
+# name that module alone; Fireworks, the provider's setting and MIND's pool stay forbidden there. The
+# morning's selectable DeepSeek judge (ANJO_SLEEP_JUDGE=deepseek, never Spark Open) may name Fireworks
+# in its wiring and scoring files, and nothing else on this list.
 ALLOWED: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {"tools/thought_channel.py": frozenset({"spark_provider"})})
+    {"tools/thought_channel.py": frozenset({"spark_provider"}),
+     "app/morning.py": frozenset({"fireworks"}), "probes/morning.py": frozenset({"fireworks"}),
+     "probes/score.py": frozenset({"fireworks"})})
 
 
 def _ok(model: str) -> dict[str, Any]:

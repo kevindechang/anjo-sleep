@@ -17,12 +17,10 @@ checkpoint id, never a reply or a probe, and nothing is written to history, evid
   though a later one serves, and its file says ``pinned``; what serves never changes.
 - Arm 3x needs the registered donor's promoted adapter. Without one, 3x is left out and recorded
   under ``unavailable`` (specificity is then inconclusive); it is never filled in.
-- Every paid call is held first, the way ``night/holds.py`` does it: the arms on ``modal_usd`` and
-  ``baseten_sleep_usd``, the judge on ``meta_usd``. The judge's hold is taken before any arm runs, so
-  a pool without room stops the run before the first call. The judge's hold is ``JUDGE_USD_PER_CALL`` a
-  call; it settles at the replies' tokens at the judge's list price (``Morning.judge_tokens``, priced at
-  ``Morning.prices``' Spark lines, ANJO_SLEEP_PRICES), and a call that reported no usage (or failed) at
-  that per-call bound, counted in ``MorningResult.judge_estimated``.
+- Every paid call is held first: the arms on ``modal_usd`` and ``baseten_sleep_usd``, and the judge on
+  its provider pool plus ``judge_usd``. Muse holds the entire morning; DeepSeek checks room before arms
+  and holds each call's full context separately. Both settle at metered list prices, or at the bound
+  for failed or unmetered calls, counted in ``MorningResult.judge_estimated``.
 - With ``concurrency`` above 1 every arm's question is prepared first, on the calling thread
   (``arms.prepare``: adapters, context C, the stored evidence), then the questions are asked side by
   side, then every (pair, probe) is judged side by side, at most ``concurrency`` at once
@@ -60,10 +58,11 @@ from datetime import date
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Any, Final
 
-from anjo.sleep.budget import Bound, Ledger
-from anjo.sleep.model_api import ModelApiError
+from anjo.sleep import fireworks_api
+from anjo.sleep.budget import Bound, Ledger, Pool
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.parallel import Calls
@@ -75,6 +74,7 @@ from anjo.sleep.probes.score import (
     BootstrapConfig,
     JudgeError,
     JudgeTokens,
+    MuseJudge,
     NoVerdict,
     PairScore,
     PairwiseJudge,
@@ -103,7 +103,12 @@ NO_VERDICT: Final = "no_verdict"
 # fails most of them. Under it, a comparison's score still rests on three quarters of its probes.
 NO_VERDICT_MAX_SHARE: Final = 0.25
 ARM_POOLS: Final = ("modal_usd", "baseten_sleep_usd")
-JUDGE_POOLS: Final = ("meta_usd",)
+JUDGE_POOLS: Final[tuple[Pool, ...]] = ("meta_usd", "judge_usd")
+DEEPSEEK_JUDGE_POOLS: Final[tuple[Pool, ...]] = ("fireworks_sleep_usd", "judge_usd")
+# Full context at the higher output rate: Fireworks limits prompt plus completion to the context window.
+# https://fireworks.ai/models/deepseek-ai/deepseek-v4p1-flash
+# https://docs.fireworks.ai/api-reference/post-chatcompletions
+DEEPSEEK_JUDGE_USD_PER_CALL: Final = 1_048_576 * fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES[1] / 1e6
 SCORES: Final = "scores"
 DONOR_UNAVAILABLE: Final = "donor_unavailable"
 logger = logging.getLogger(__name__)
@@ -194,6 +199,22 @@ class Morning:
     concurrency: int = 1  # model calls at once (``parallel.Calls``); 1 is the serial run
     retries: Callable[[], int] = field(default=lambda: 0)  # the arms' running count of requests sent again (the night log's)
     judge_tokens: JudgeTokens | None = None  # the judge's metered usage (``MuseJudge.tokens``); None: every call estimated
+    judge_model: str = "unknown"  # injected judges must identify themselves in the wiring
+
+    def __post_init__(self) -> None:
+        if isinstance(self.judge, MuseJudge):
+            actual = ("muse-spark-1.3" if self.judge.model == "muse-spark" else self.judge.model)
+            if self.judge_model not in ("unknown", actual):
+                raise ValueError("judge_model does not match the configured judge")
+            object.__setattr__(self, "judge_model", actual)
+
+    @property
+    def judge_pools(self) -> tuple[Pool, ...]:
+        return DEEPSEEK_JUDGE_POOLS if self.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH else JUDGE_POOLS
+
+    @property
+    def judge_call_usd(self) -> float:
+        return DEEPSEEK_JUDGE_USD_PER_CALL if self.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH else JUDGE_USD_PER_CALL
 
 
 @dataclass(frozen=True)
@@ -257,6 +278,33 @@ class _Counting:
             raise NoVerdict(reason) from None
 
 
+class _HeldDeepseekChat:
+    """Hold and settle each call on its own key; the calls run side by side (the ledger's holds are
+    concurrent-safe), so only the call number is taken under the lock. Busy-provider HTTP retries are
+    unbilled."""
+
+    def __init__(self, chat: Any, ledger: Ledger, key: str) -> None:
+        self.chat, self.ledger, self.key = chat, ledger, key
+        self._lock = threading.Lock()
+        self._number = 0
+
+    def __call__(self, model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+                 timeout_s: float, *, temperature: float | None = None, max_tokens: int | None = None) -> ChatResult:
+        with self._lock:
+            self._number += 1
+            key = f"{self.key}:call-{self._number}"
+        cost = [DEEPSEEK_JUDGE_USD_PER_CALL]  # failed or unmetered calls settle conservatively
+        with held(self.ledger, key, DEEPSEEK_JUDGE_POOLS, usd(DEEPSEEK_JUDGE_USD_PER_CALL), lambda: cost[0]):
+            kwargs: dict[str, Any] = {"temperature": temperature}
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            result: ChatResult = self.chat(model, messages, tools, timeout_s, **kwargs)
+            if result.input_tokens > 0 or result.output_tokens > 0:
+                rates = fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES
+                cost[0] = (result.input_tokens * rates[0] + result.output_tokens * rates[1]) / 1e6
+            return result
+
+
 def _judge_usage(morning: Morning) -> tuple[int, int, int]:
     return (0, 0, 0) if morning.judge_tokens is None else morning.judge_tokens.read()
 
@@ -266,8 +314,10 @@ def _judge_spend(judge: _Counting, morning: Morning, before: tuple[int, int, int
     reported no usage (or failed) at ``JUDGE_USD_PER_CALL``, the hold's bound; and how many those were."""
     metered, tokens_in, tokens_out = (now - then for now, then in zip(_judge_usage(morning), before, strict=True))
     estimated = max(0, judge.calls - metered)
-    tokens = (tokens_in * morning.prices.spark_in_per_m + tokens_out * morning.prices.spark_out_per_m) / 1e6
-    return tokens + estimated * JUDGE_USD_PER_CALL, estimated
+    rates = (fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES if morning.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH
+             else (morning.prices.spark_in_per_m, morning.prices.spark_out_per_m))
+    tokens = (tokens_in * rates[0] + tokens_out * rates[1]) / 1e6
+    return tokens + estimated * morning.judge_call_usd, estimated
 
 
 def _next_file(folder: Path, night: date, subset: str | None = None, *, any_set: bool = True) -> Path:
@@ -420,15 +470,27 @@ def _run_morning(
                    context_cache={})
     worst_judge = _worst_judge_calls(probes, arms)
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
-    judge = _Counting(morning.judge, retries)
-    spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
     # A backfill holds under a key of its own, so a failed morning's settled spend still counts (``latest_attempts``)
     key = f"morning:{night.isoformat()}:{user_id}" + (f":backfill-{probe_set(subset)}" if pinned else "")
+    inner = morning.judge
+    per_call = morning.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH and morning.ledger is not None
+    if per_call:
+        if not isinstance(inner, MuseJudge):
+            raise MorningError("DeepSeek requires the configured MuseJudge")
+        assert morning.ledger is not None
+        inner = replace(inner, chat=_HeldDeepseekChat(inner.chat, morning.ledger, f"{key}:judge"))
+        # Check room before any arm call; subsequent reservations protect concurrent judge calls.
+        with held(morning.ledger, f"{key}:judge:preflight", DEEPSEEK_JUDGE_POOLS,
+                  usd(DEEPSEEK_JUDGE_USD_PER_CALL), lambda: 0.0):
+            pass
+    judge = _Counting(inner, retries)
+    spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
-        holds.enter_context(held(morning.ledger, f"{key}:judge", JUDGE_POOLS,
-                                 usd((worst_judge + retries) * JUDGE_USD_PER_CALL), lambda: spend()[0]))
+        if not per_call:
+            holds.enter_context(held(morning.ledger, f"{key}:judge", morning.judge_pools,
+                                     usd((worst_judge + retries) * morning.judge_call_usd), lambda: spend()[0]))
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
                                  lambda: morning.prices.serve_gpu_per_hour * max(0.0, morning.timer() - started) / 3600.0))
@@ -460,7 +522,7 @@ def _run_morning(
     if stats:  # arm 1 against itself takes the shape of an arm that was scored
         stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
-        "night": night.isoformat(), "label": label, "probes": len(probes),
+        "night": night.isoformat(), "label": label, "probes": len(probes), "judge_model": morning.judge_model,
         "checkpoint": None if checkpoint is None else checkpoint.id,
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
