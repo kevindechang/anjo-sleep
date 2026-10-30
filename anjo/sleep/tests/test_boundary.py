@@ -121,6 +121,17 @@ def test_a_stock_license_text_is_not_moved_code(tmp_path: Path) -> None:
     assert _found(trunk.path) == set()
 
 
+def test_a_font_the_site_also_serves_is_not_moved_code(tmp_path: Path) -> None:
+    trunk = make_trunk(tmp_path)
+    font = "glyf head hhea hmtx loca maxp name post " * 4
+    git(trunk.path, "switch", "-q", BASE)
+    trunk.commit("feat: site type", {"anjo/dashboard/static/fonts/geist-400.ttf": font})
+    git(trunk.path, "switch", "-q", "hackathon/sleep")
+    trunk.commit("feat: demo type", {"anjo/sleep/web/fonts/geist-400.ttf": font})
+
+    assert _found(trunk.path) == set()
+
+
 def test_tiny_common_files_are_not_moved_code(tmp_path: Path) -> None:
     trunk = make_trunk(tmp_path)
     # An empty __init__.py matches the base's empty anjo/__init__.py; it carries no code.

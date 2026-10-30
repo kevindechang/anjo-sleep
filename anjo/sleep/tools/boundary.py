@@ -11,8 +11,9 @@ It reads the branch's own changes, ``merge-base(base, HEAD)..HEAD``, and reports
   billing, deploy, and the crisis, output-guard and age-lock modules)
 - ``moved_private_code``: a published file whose content is byte-identical to a file in
   the base (moved or copied in), or a deleted outside file whose content now sits in a
-  published folder. Files under 64 bytes (empty ``__init__.py`` and the like) and stock
-  license texts (base files named LICENSE, LICENCE or COPYING) are not matched.
+  published folder. Files under 64 bytes (empty ``__init__.py`` and the like), stock
+  license texts (base files named LICENSE, LICENCE or COPYING) and font files (a typeface
+  such as Geist ships under its own open licence) are not matched.
 
 ``docs/`` and ``ops/sleep/`` are private planning: exempt here and never published.
 
@@ -45,6 +46,7 @@ MIN_MOVED_BLOB_BYTES = 64
 DEFAULT_BASE = "origin/main"
 _NULL_BLOB = "0" * 40
 _LICENSE_NAMES = ("LICENSE", "LICENCE", "COPYING")
+_FONT_SUFFIXES = (".ttf", ".otf", ".woff", ".woff2")
 
 # Glob patterns (fnmatch: `*` also crosses `/`). Each area lists its modules and their tests,
 # because editing a module's tests can weaken it as surely as editing the module.
@@ -236,13 +238,19 @@ def _is_license_text(path: str) -> bool:
     return path.rsplit("/", 1)[-1].upper().startswith(_LICENSE_NAMES)
 
 
+def _is_font(path: str) -> bool:
+    """A font file is a third party's typeface under its own licence, not Anjo's private code: the
+    demo page serves the same Geist files the site does."""
+    return path.lower().endswith(_FONT_SUFFIXES)
+
+
 def _base_blobs(repo: Path, base: str, since: str) -> set[str]:
     """Blob ids of every unpublished file in the branch point's tree and in the base's tip."""
     refs = dict.fromkeys(_git.text(repo, "rev-parse", ref) for ref in (since, base))
     found: set[str] = set()
     for ref in refs:
         for blob, path, _ in _tree_entries(repo, ref):
-            if not is_published(path) and not _is_license_text(path):
+            if not is_published(path) and not _is_license_text(path) and not _is_font(path):
                 found.add(blob)
     return found
 
