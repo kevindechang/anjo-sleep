@@ -1,7 +1,7 @@
 """The 17b test's arms (Task 17b): M, M+replay and M+shuffled on the held-out APD lives.
 
-All three are Task 17's MIND arm (``MindArm()``) on the same world query, screen, resolver, brief
-and budget; only the thinker differs: base Glimmer for M, thinker-1's adapter for M+replay and
+All three are Task 17's MIND arm (``MindArm()``) on the same world query, resolver, brief and
+budget; only the thinker differs: base Glimmer for M, thinker-1's adapter for M+replay and
 thinker-shuffled's for M+shuffled (``served.arm_thinker``), each prompt dated on its night
 (the arms set the thinkers' shared clock as each night starts). They run on held-out lives only, and
 each run is scored by Task 17's ``score_sheet`` under the audited judge and rescored under Gemini,

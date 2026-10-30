@@ -14,8 +14,8 @@ The fakes stand where the real things stand, so the code that runs is the code t
   world query, predicts, searches, assesses and concludes, so the resolver and ``world_query`` both
   fire), a scripted notebook agent for B and a scripted reflection for A; a system turn with
   ``world_query_v1.md`` gets a world answer. Each completion records the date it was rendered on.
-- ``FakeSparkChat`` is Spark Open as a ``ChatFn``: the screen allows, the resolver says true once
-  evidence arrives, and the labeller picks the plan-change hypothesis.
+- ``FakeSparkChat`` is Spark Open as a ``ChatFn``: the resolver says true once evidence arrives,
+  and the labeller picks the plan-change hypothesis.
 - ``FakeLifeChat`` writes and extracts a life as ``generate`` asks, and ``FakeGateReader`` and
   ``FakeGateAuditor`` pass the gates; ``fake_judge`` is Muse Spark's or Gemini's text model.
 
@@ -407,9 +407,9 @@ def _reply(text: str, model: str = SPARK_OPEN, *, cap: int = 64) -> ChatResult:
 
 @dataclass
 class FakeSparkChat:
-    """Spark Open as a ``ChatFn``: the screen allows, the resolver says true, the labeller picks the
-    plan-change hypothesis, the intervention test's writer names a wrong one. ``model`` names
-    another model to test provenance."""
+    """Spark Open as a ``ChatFn``: the resolver says true, the labeller picks the plan-change
+    hypothesis, the intervention test's writer names a wrong one. ``model`` names another model to
+    test provenance."""
 
     model: str = SPARK_OPEN
     calls: int = 0
@@ -424,7 +424,8 @@ class FakeSparkChat:
         letters = {m["statement"]: m["letter"] for m in (_LETTER.match(line) for line in user.splitlines()) if m}
         if letters:
             return _reply(json.dumps({"holds": letters.get(CHANGES, "undetermined")}), self.model, cap=max_tokens)
-        return _reply(json.dumps({"allowed": True}), self.model, cap=max_tokens)
+        # Any other prompt is a call some test only counts (``SparkCalls``'s holds): an empty object.
+        return _reply("{}", self.model, cap=max_tokens)
 
 
 @dataclass

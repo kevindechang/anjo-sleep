@@ -648,7 +648,7 @@ below.
   takes Spark Open's rates as its first two values, the same for either provider:
   `--prices 1.25,4.25,<train_gpu_hour>,<serve_gpu_hour>`. The ledger prices every input token at
   the full rate, cached or not, so it never counts less than Fireworks bills.
-- **The budget.** Every Spark Open call of the experiment on Fireworks, the screen's included, is
+- **The budget.** Every Spark Open call of the experiment on Fireworks, the resolver's included, is
   held first on `fireworks_mind_usd`, capped at $80 (with Sleep's $20 `fireworks_sleep_usd`, the
   $100 credit; the full core set needs about $21). The two pools borrow nothing from each
   other, so a MIND night there waits only on other MIND nights. With `baseten`,

@@ -220,8 +220,11 @@ def test_a_sigkilled_child_settles_its_journal_plus_one_calls_worst_case(tmp_pat
     data = DataDir(tmp_path / "data")
     (life,) = _lives(data, "held_out", 1)
     backend = _backend(ledger)
+    # The second night's CONCLUDE, after its resolver call: the killed child has a night's Spark Open
+    # hold open (nothing else now calls Spark Open before it).
+    kill_at = 24
     with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:
-        (result,) = pilot.kill_lives(data, [life], session, 12, backend, lambda _line: None, parallel=1)
+        (result,) = pilot.kill_lives(data, [life], session, kill_at, backend, lambda _line: None, parallel=1)
     assert result.digest_equal and result.conclusions_agree
     held, settled = _held(ledger), _settled(ledger)
     kill_holds = {job: amount for job, amount in held.items() if job.startswith(f"apd:kill:{life.id}:")}
@@ -235,7 +238,7 @@ def test_a_sigkilled_child_settles_its_journal_plus_one_calls_worst_case(tmp_pat
     assert data.kill_result(life.id) is not None  # done: a rerun skips it
     lines: list[str] = []
     with pilot.serving(backend, fakes.SETTINGS, fakes.SERVE_S, lambda _line: None) as session:
-        pilot.kill_lives(data, [life], session, 12, backend, lines.append, parallel=1)
+        pilot.kill_lives(data, [life], session, kill_at, backend, lines.append, parallel=1)
     spark_jobs = {job for job in _settled(ledger) if job.startswith("apd:")}
     assert any("already" in line for line in lines) and spark_jobs == {job for job in settled if job.startswith("apd:")}
 

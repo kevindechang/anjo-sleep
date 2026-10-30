@@ -5,8 +5,8 @@
   loop's allowance. The server is woken before the first call (the GPU job wakes it later anyway); a
   nap makes no call, so it wakes nothing (``night/sleep_night.py``).
   A failed call is empty text charged its cap, as on Spark Open (``spark_inquiry.call``).
-- **The screen and the blind resolver:** Spark Open (``app/screen.py``, ``SparkResolver``), every
-  call through the step's wrapper, which counts it for the ``baseten_mind_usd`` hold and prices it.
+- **The blind resolver:** Spark Open (``SparkResolver``), every call through the step's wrapper,
+  which counts it for the ``baseten_mind_usd`` hold and prices it.
 - **``research``:** Muse Wonder (``WonderResearch``), on the night's Wonder meter, held on ``meta_usd``.
 - **Her workspace:** ``storage.workspace_log``, exported and erased with her other sleep files.
 """
@@ -17,8 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
 
-from anjo.sleep.app.names import person_names
-from anjo.sleep.app.screen import SparkScreen
 from anjo.sleep.app.storage import workspace_log
 from anjo.sleep.budget import Ledger
 from anjo.sleep.homework.agent import MetaWonder
@@ -91,10 +89,9 @@ def build_mind(
 ) -> MindNight:
     glimmer = glimmer_chat(client, seed=seed, wake=wake)
 
-    def models(user_id: str, spark: SparkWrap) -> MindModels:
+    def models(_user_id: str, spark: SparkWrap) -> MindModels:
         return MindModels(
             thinker=GlimmerThinker(glimmer), world=GlimmerWorldQuery(glimmer),
-            screen=SparkScreen(names=person_names(user_id), chat=spark(spark_open)),
             resolver=SparkResolver(chat=spark(spark_open)), model=GLIMMER,
         )
 
@@ -102,7 +99,6 @@ def build_mind(
         return WonderResearch(
             user_id=call.user_id, night=call.night, at=call.at, store=call.store, meter=call.wonder,
             wonder=MetaWonder(), search=WikipediaSearch(), fetcher=SafeFetcher(), ledger=ledger,
-            names=tuple(person_names(call.user_id)),
         )
 
     return MindNight(models=models, log=workspace_log, prices=prices, research=research, ledger=ledger)

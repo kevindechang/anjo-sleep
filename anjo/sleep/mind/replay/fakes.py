@@ -33,13 +33,7 @@ from typing import Any, Final
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.mind.apd.score import Ruling
 from anjo.sleep.mind.apd.types import ArmModels, FindingReport, Life, PlantedItem, ProblemFile, Session, Split
-from anjo.sleep.mind.inquiry.types import (
-    ASSESS_BUCKETS,
-    ModelReply,
-    ResolverReply,
-    Screened,
-    ScreenPurpose,
-)
+from anjo.sleep.mind.inquiry.types import ASSESS_BUCKETS, ModelReply, ResolverReply
 from anjo.sleep.mind.replay.sample import ReplayModels
 from anjo.sleep.mind.replay.types import BRANCH_TEMPERATURE, STOPPED, CallEnd
 from anjo.sleep.model_api import ChatResult
@@ -239,12 +233,6 @@ class FakeWorld:
 
 
 @dataclass(frozen=True)
-class FakeScreen:
-    def screen(self, text: str, purpose: ScreenPurpose, max_tokens: int) -> Screened:
-        return Screened(allowed=True, tokens=0)
-
-
-@dataclass(frozen=True)
 class FakeResolver:
     """The blind prediction resolver; the fake thinker never predicts, so it is never asked."""
 
@@ -254,7 +242,7 @@ class FakeResolver:
 
 def fake_models(thinker: FakeGlimmer | None = None) -> ArmModels:
     """The M arm's models: the thinker at temperature 0 unless given."""
-    return ArmModels(thinker=thinker or FakeGlimmer(), world=FakeWorld(), screen=FakeScreen(), resolver=FakeResolver())
+    return ArmModels(thinker=thinker or FakeGlimmer(), world=FakeWorld(), resolver=FakeResolver())
 
 
 def _branch_thinker(seed: int, night: date) -> FakeGlimmer:
@@ -278,8 +266,7 @@ class FakeResolverChat:
 def fake_replay_models(model: str = SPARK_OPEN) -> ReplayModels:
     """The branches' models: the thinker at ``BRANCH_TEMPERATURE`` with each branch's seed, the
     resolver reporting ``model``."""
-    return ReplayModels(thinker_for=_branch_thinker, world=FakeWorld(), screen=FakeScreen(),
-                        resolver_chat=FakeResolverChat(model))
+    return ReplayModels(thinker_for=_branch_thinker, world=FakeWorld(), resolver_chat=FakeResolverChat(model))
 
 
 @dataclass

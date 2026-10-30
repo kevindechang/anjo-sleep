@@ -16,8 +16,8 @@ person unless ``ANJO_SLEEP_MIND_FAKE_LATENTS=1`` (development only): her night t
 the dream step's record (a no-op) and the log saying why, and runs on as it would without it. Observing gives
 each item its surprise weight (``Core.surprise_weights``, bounded and averaging 1: the Sleep link).
 Then one dream (``Core.dream_states``, the night's seeded rng). Each ignition opens a question in
-her workspace through the kernel (``bridge.ignite``, citing her real evidence only, no screen
-call; a collision only with ``ANJO_SLEEP_MIND_CONTRADICTIONS=1``, off by default), logged under tonight's notice pass (a notice ``RunStart`` for tonight is logged first when
+her workspace through the kernel (``bridge.ignite``, citing her real evidence only; a collision
+only with ``ANJO_SLEEP_MIND_CONTRADICTIONS=1``, off by default), logged under tonight's notice pass (a notice ``RunStart`` for tonight is logged first when
 there was none); once tonight's inquiry has begun (a rerun of a killed night) nothing is opened,
 so its resume reads the log it left. Its ignitions and the core's predictions rank her threads,
 and the curriculum picks the evidence practice rehearses (``curriculum.pick``; off with

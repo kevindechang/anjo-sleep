@@ -9,9 +9,9 @@ targets those items name, among the run's. ``risk`` opens an anomaly and ``missi
 off by default: no method has yet beaten the untrained rule "the constraint matches no earlier
 event" at telling a conflict from an unrelated plan, so a collision is dropped as
 ``contradictions_off``); switched on, it opens a contradiction when it cites items from two days
-(the kernel's K3), else an anomaly. The subject is neutral, built from the targets' labels. The kernel checks it, the screen
-reads it (purpose ``question``) and the step is logged like any other, so a fold of the log
-rebuilds the workspace. An ignition with nothing real, no target, or a live question already on
+(the kernel's K3), else an anomaly. The subject is neutral, built from the targets' labels. The
+kernel checks it and the step is logged like any other, so a fold of the log rebuilds the
+workspace. An ignition with nothing real, no target, or a live question already on
 the same targets and kind, is dropped with that reason and logs nothing.
 
 **The switch.** ``ANJO_SLEEP_MIND_CORE=1`` turns the core on for a live night (``core_on``; the
@@ -39,7 +39,7 @@ from anjo.sleep.mind.choose import NOTE_ACTION
 from anjo.sleep.mind.core.types import Decision, Ignition, IgnitionKind, Predictions
 from anjo.sleep.mind.inquiry import controller, kernel
 from anjo.sleep.mind.inquiry.loop import CONTROLLER, Decider
-from anjo.sleep.mind.inquiry.ports import ScreenPort, WorkspaceLog
+from anjo.sleep.mind.inquiry.ports import WorkspaceLog
 from anjo.sleep.mind.inquiry.types import (
     LIVE_STATUSES,
     PRIORITY_FLOOR,
@@ -61,7 +61,6 @@ from anjo.sleep.types import Choice, ChoiceContext, Opportunity, Target, Want, W
 CORE_ENV: Final = "ANJO_SLEEP_MIND_CORE"
 CONTRADICTIONS_ENV: Final = "ANJO_SLEEP_MIND_CONTRADICTIONS"  # "1": a collision opens a question
 CORE_DECIDER: Final = "mind-core"  # the name a core-decided run's RunStart records
-SCREEN_TOKENS: Final = 256  # the screen's allowance for one ignition's subject
 QUESTION_OF: Final[Mapping[IgnitionKind, QuestionKind]] = {
     "risk": "anomaly", "missing": "gap", "collision": "contradiction",
 }
@@ -124,11 +123,11 @@ def _notice(ws: Workspace, ignition: Ignition, targets: Sequence[Target]) -> Not
 
 def ignite(
     ws: Workspace, ignitions: Sequence[Ignition], log: WorkspaceLog, *, targets: Sequence[Target], as_of: datetime,
-    screen: ScreenPort | None = None, collisions: bool = False,
+    collisions: bool = False,
 ) -> Ignited:
-    """Open a question for each ignition, strongest first, through the kernel and the screen;
-    every step is appended to ``log`` the moment it applies. A collision opens one only with
-    ``collisions`` (``contradictions_on``)."""
+    """Open a question for each ignition, strongest first, through the kernel; every step is
+    appended to ``log`` the moment it applies. A collision opens one only with ``collisions``
+    (``contradictions_on``)."""
     events: list[WorkspaceEvent] = []
     dropped: list[tuple[Ignition, DropReason]] = []
     target_ids = frozenset(target.id for target in targets)
@@ -137,11 +136,8 @@ def ignite(
         if not isinstance(op, NoticeOp):
             dropped.append((ignition, op))
             continue
-        code, tokens = kernel.check(ws, op, target_ids=target_ids), 0
-        if code is None and screen is not None:
-            screened = screen.screen(op.subject, "question", SCREEN_TOKENS)
-            code, tokens = (None if screened.allowed else "domain_screen"), screened.tokens
-        applied = kernel.apply(ws, Step(seq=ws.seq, at=as_of, entry=op, code=code, tokens=tokens))
+        code = kernel.check(ws, op, target_ids=target_ids)
+        applied = kernel.apply(ws, Step(seq=ws.seq, at=as_of, entry=op, code=code))
         if isinstance(applied, Rejected):
             raise RuntimeError(f"the kernel refused an ignition it had admitted ({applied.code})")
         log.append(applied.event)

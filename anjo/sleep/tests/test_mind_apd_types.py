@@ -85,9 +85,6 @@ class _Port:
     def ask(self, text: str, max_tokens: int) -> it.ModelReply:
         return it.ModelReply(text=text, tokens=1, model="fake")
 
-    def screen(self, text: str, purpose: it.ScreenPurpose, max_tokens: int) -> it.Screened:
-        return it.Screened(allowed=True, tokens=1)
-
     def resolve(self, claim: str, evidence: Any) -> it.ResolverReply:
         return it.ResolverReply(verdict="undetermined", tokens=1)
 
@@ -96,7 +93,7 @@ def _samples() -> dict[str, object]:
     port = _Port()
     return {
         "Session": _life().sessions[0], "PlantedItem": _item(), "ProblemFile": apd.ProblemFile("life-1", (_item(),)),
-        "Life": _life(), "FindingReport": _report(), "ArmModels": apd.ArmModels(port, port, port, port),
+        "Life": _life(), "FindingReport": _report(), "ArmModels": apd.ArmModels(port, port, port),
         "ArmRun": _run(), "ItemScore": apd.ItemScore("i1", "gap", "f1", apd.SUSPECTED),
         "UnmatchedScore": apd.UnmatchedScore("f2", apd.WRONG),
         "LifeScore": apd.LifeScore("life-1", "M", "audited", (), ()),

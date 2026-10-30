@@ -265,23 +265,21 @@ def test_hypothesize_once_unless_catch_all_dominates() -> None:
     assert fresh.code(hypothesize("q1", 0.2, 0.2, 0.2, 0.2, 0.2)) == "hypothesis_count"
 
 
-def test_person_diagnosis_question_rejected() -> None:
-    assert set(kernel.DENYLIST) >= {"traits", "health", "feelings", "relationships"}
+def test_health_inference_rejected_and_the_rest_of_her_life_open() -> None:
+    # Owner ruling 2026-10-30: only health stays gated (Spark Open's Usage Policy on sensitive
+    # inference; crisis signals belong to the crisis check). The person, their feelings and the
+    # people in their life are hers to think about.
+    assert set(kernel.DENYLIST) == {"health"}
+    assert set(kernel.DENYLISTS["denylist-v1"]) >= {"traits", "health", "feelings", "relationships"}
     w = Ws()
-    w.start()
+    w.start(denylist=kernel.DENYLIST_VERSION)
     w.arrive(E1, E2)
     assert w.code(notice_op([E1.id, E2.id], subject="Whether they are depressed about the shoot")) == "domain_denylist"
-    assert w.code(notice_op([E1.id, E2.id], subject="Her relationship with the producer")) == "domain_denylist"
-    w.ok(notice_op([E1.id, E2.id]))
-    diagnosis = it.HypothesizeOp(
-        "q1", (it.Alternative("She doesn’t know an 85 mm lens needs distance", 0.5),
-               it.Alternative("The plan assumes room the kitchen lacks", 0.3)), 0.2,
-    )
-    assert w.code(diagnosis) == "domain_denylist"
+    w.ok(notice_op([E1.id, E2.id], subject="Her relationship with the producer"))
     assert w.code(it.InvestigateOp("q1", "evidence_search", "her anxiety before shoots")) == "domain_denylist"
     w.ok(hypothesize("q1", 0.5, 0.3))
     claim = it.PredictOp("q1", "They feel overwhelmed by the shoot", _likelihoods(w, 0.2, 0.8, 0.5), 2)
-    assert w.code(claim) == "domain_denylist"
+    w.ok(claim)
     for fine in ("The plan assumes room for an 85 mm lens", "a sad scene in a small kitchen", "the emotional beat"):
         assert not kernel.denied(fine)
 

@@ -1,10 +1,9 @@
 """Spark Open behind MIND's model ports (Task 17): a ``Thinker``, ``world_query`` and the blind
 ``PredictionResolver``, through ``baseten_api.chat`` (the provider ``ANJO_SLEEP_SPARK`` selects).
 
-The resolver always runs here (``resolve_prediction_v1.md``), and so does the screen
-(``anjo.sleep.mind.screen``, through ``call``). The live night's thinker is base Glimmer and APD's
-is Glimmer on Colab; the Spark Open thinker and ``world_query`` serve development runs and the
-thinker swap.
+The resolver always runs here (``resolve_prediction_v1.md``). The live night's thinker is base
+Glimmer and APD's is Glimmer on Colab; the Spark Open thinker and ``world_query`` serve
+development runs and the thinker swap.
 
 **Capped, and charged when they fail.** Every call is one attempt (``model_api`` doesn't retry),
 capped at the smaller of its own ceiling (``*_MAX_TOKENS``) and the allowance the loop passes, and

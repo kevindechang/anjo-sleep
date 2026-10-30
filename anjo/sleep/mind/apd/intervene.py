@@ -12,8 +12,8 @@ the snapshot.
   the model that generated the life, from the question, its hypotheses and the development life's
   planted problems, so the injected one is plausible and wrong. A held-out life's problem file is
   never read here (``DataDir.development_problems``).
-- **Spend:** each snapshot-edit is one work item, its Spark Open calls (both twins' screen and
-  resolver, and the writer's) held first on the provider's pool (``mind.spark_provider``) at
+- **Spend:** each snapshot-edit is one work item, its Spark Open calls (both twins' resolvers,
+  and the writer's) held first on the provider's pool (``mind.spark_provider``) at
   ``EDIT_SPARK_CALLS`` calls' worst case and journaled (``SparkCalls``), as the runs are held.
 - **Never twice, never mixed:** each finished item is stored under its snapshot's identity
   (``item_name``: the life, its M run, the step the snapshot ends at and its question, then the
@@ -55,7 +55,7 @@ from anjo.sleep.spark_inquiry import ChatFn
 WRONG_PATH: Final = Path(__file__).parent / "prompts" / "wrong_hypothesis_v1.md"
 WRONG_MAX_TOKENS: Final = 256
 SNAPSHOT_SEED: Final = 17  # registered with the protocol
-EDIT_SPARK_CALLS: Final = 2 * MIND_SPARK_CALLS + 1  # both twins' screen and resolver calls, and the writer's
+EDIT_SPARK_CALLS: Final = 2 * MIND_SPARK_CALLS + 1  # both twins' resolver calls, and the writer's
 Done = tuple[tuple[InterventionResult, ...], tuple[Skipped, ...]]
 _UNSAFE: Final = re.compile(r"[^\w.+-]")
 

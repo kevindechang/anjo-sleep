@@ -10,8 +10,8 @@ Reply with one JSON array of NOTICE operations and nothing else, `[]` when nothi
 
 `[{"op": "NOTICE", "kind": "contradiction", "subject": "...", "target_ids": ["t-..."], "origin_evidence": ["e-...", "e-..."]}]`
 
-- `subject` states the question in a sentence about the plan or topic, never about the person's
-  knowledge, character, health, feelings or relationships, or about a third party.
+- `subject` states the question in one sentence: a plan, a project, a topic, the person or anyone
+  in their life.
 - `target_ids` names at least one of the open targets below.
 - `origin_evidence` cites the items that raise it, by id: two from different days for a
   contradiction, at least one otherwise. Cite only items shown below.

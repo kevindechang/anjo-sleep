@@ -33,7 +33,7 @@ night glue call them. Only the two ``loop`` functions drive ports; the rest are 
   ``Rejected(code)``, and the loop logs the same step with that code. Every other step (an
   observation, a rejected or malformed step, a ``RunStart``, an ``Edit``) is recorded with its
   effect (a ``Resolved`` outcome, a wipe, an edit; an edit that can't apply raises
-  ``ValueError``). The returned event's step is ``step``; the LLM screen is the loop's.
+  ``ValueError``). The returned event's step is ``step``.
 - ``kernel.fold(events: Iterable[WorkspaceEvent]) -> Workspace``: applies each event's step from
   ``Workspace()`` under the rules of the latest ``RunStart``, and raises ``ValueError`` when an
   event's ``before`` isn't the digest so far, its ``after`` isn't the digest it produces, or a
@@ -153,7 +153,6 @@ from anjo.sleep.types import QuestionStatus as QuestionStatus
 Verdict = Literal["true", "false", "undetermined"]  # what the resolver may answer
 UpdateSource = Literal["resolved_prediction", "assessed_evidence"]
 FindingKind = Literal["suspicion", "resolution", "retraction"]
-ScreenPurpose = Literal["question", "hypothesis", "research_query"]
 DecisionKind = Literal["continue", "investigate", "park", "stop"]
 DecisionReason = Literal["stalled", "cycle_cap", "token_cap", "below_floor"]
 
@@ -200,8 +199,7 @@ class Question:
 
     ``target_ids`` is never empty: a question's subject is a plan or topic of the person's (a
     ``Target``), and a question may span several. ``origin_evidence`` is what raised it (K3).
-    ``subject`` is the question in her words, which the domain rule screens and the render shows;
-    it is never the person or a third party named in the evidence. Statuses: ``open`` (noticed),
+    ``subject`` is the question in her words, which the render shows. Statuses: ``open`` (noticed),
     ``active`` (hypothesized), ``parked`` (by PARK; a ``Wake`` sets it live again on new evidence
     on a target), ``concluded`` (a resolution, which later evidence may still retract),
     ``retracted``, ``abandoned``.
@@ -229,8 +227,8 @@ class Hypothesis:
     """One alternative in a question's set, or its catch-all (``catch_all_id``).
 
     A question's credences are one normalized vector, a heuristic wherever they are shown.
-    Hypotheses are about plans, projects, the world or her own misreading, never about the
-    person's knowledge or character.
+    Hypotheses are the alternatives she considers: about a plan, a project, the person, anyone in
+    their life or the world.
     """
 
     id: str
@@ -541,18 +539,6 @@ class ModelReply:
     def __post_init__(self) -> None:
         check_count("tokens", self.tokens)
         check_text("model", self.model)
-
-
-@dataclass(frozen=True)
-class Screened:
-    """The screen's verdict on one text, and the tokens it generated (they count against the
-    cap). A screen call that failed refuses (``allowed=False``) and still reports its tokens."""
-
-    allowed: bool
-    tokens: int
-
-    def __post_init__(self) -> None:
-        check_count("tokens", self.tokens)
 
 
 @dataclass(frozen=True)

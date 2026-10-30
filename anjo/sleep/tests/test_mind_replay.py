@@ -20,6 +20,7 @@ from anjo.sleep.mind.apd.arms import load_brief, run_arm
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.replay import dataset, fakes, resolve, sample, score, settings
 from anjo.sleep.mind.replay.types import (
+    BRANCH_TEMPERATURE,
     REPLAY_K,
     CallEnd,
     Branch,
@@ -312,6 +313,20 @@ def test_undetermined_start_state_dropped_for_all_branches() -> None:
     assert set(sampled) == {start.id for start in starts if start.id not in undetermined}  # never branched
 
 
+@dataclasses.dataclass(frozen=True)
+class _AsksTheWorldOnce(fakes.FakeGlimmer):
+    """A branch thinker that asks the world on its first cycle, then thinks as ``FakeGlimmer``."""
+
+    asked: list[bool] = dataclasses.field(default_factory=list, compare=False)
+
+    def _cycle(self, text: str, rng: random.Random) -> dict[str, Any]:
+        if not self.asked:
+            self.asked.append(True)
+            question, _, _ = fakes._question(text)
+            return {"op": "INVESTIGATE", "question_id": question, "tool": "world_query", "query": fakes.WORLD_QUESTION}
+        return super()._cycle(text, rng)
+
+
 def test_replay_dataset_refuses_uncleared_provenance() -> None:
     life, starts, branches, book = _labelled()
     kept = [start for start in starts if book.labels[start.id].holds is not None]
@@ -337,8 +352,11 @@ def test_replay_dataset_refuses_uncleared_provenance() -> None:
             assert first.id not in _ids(data)
     tainted = [dataclasses.replace(first, ancestry=frozenset({SPARK_OPEN, hosted})), *kept[1:]]
     assert dataset.build([life], tainted, branches, book, brief=BRIEF, penalty=LAMBDA).dropped["provenance"] == 1
-    world = dataclasses.replace(fakes.fake_replay_models(), world=fakes.FakeWorld(model=hosted))
-    assert any(hosted in (b.ancestry or ()) for b in _branches(first, life, world))  # a world answer's model
+    asking = dataclasses.replace(
+        fakes.fake_replay_models(), world=fakes.FakeWorld(model=hosted),
+        thinker_for=lambda seed, night: _AsksTheWorldOnce(seed, BRANCH_TEMPERATURE),
+    )
+    assert any(hosted in (b.ancestry or ()) for b in _branches(first, life, asking))  # a world answer's model
 
 
 def test_a_label_trains_only_when_spark_opens_reply_names_it() -> None:

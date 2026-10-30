@@ -20,9 +20,12 @@ every other step is recorded with its effect. ``fold`` replays a log from ``Work
 - **Hypothesize once:** a second set only splits the catch-all while it holds more than
   ``SPLIT_MIN``.
 - **A prediction's horizon** is 1 to ``MAX_HORIZON_DAYS`` days; anything longer is ``malformed``.
-- **The domain rule:** ``DENYLIST`` holds person-diagnosis terms (traits, knowledge, health,
-  feelings, relationships), checked on what she would investigate: a question's subject, a
-  hypothesis, a prediction's claim and a tool's query. The LLM screen behind it is the loop's.
+- **The domain rule:** ``DENYLIST`` holds health terms only (owner ruling 2026-10-30: no gate on
+  what she thinks about, beyond what the law and Spark Open's licence require; its Usage Policy
+  forbids inferring sensitive information without the right to, and crisis signals belong to the
+  crisis check), checked on what she would investigate: a question's subject, a hypothesis, a
+  prediction's claim and a tool's query. ``denylist-v1`` also held traits, knowledge, feelings and
+  relationships; runs that recorded it still fold under it.
   Each version of the list is kept in ``DENYLISTS``; a ``RunStart`` records the version its run
   checked under, and ``check`` reads it from the workspace, so a fold admits every logged
   operation under the terms it was admitted with.
@@ -141,8 +144,15 @@ _DENYLIST_V1: Final[Mapping[str, tuple[str, ...]]] = {
         "break up", "broke up", "affair", "sex life",
     ),
 }
-DENYLISTS: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = {_FIRST_VERSION: _DENYLIST_V1}
-DENYLIST_VERSION: Final = _FIRST_VERSION  # what a new run records and checks under
+# Owner ruling 2026-10-30: her thinking about the person, their feelings and the people in their
+# life is not gated. Health stays: Spark Open's Usage Policy (it binds what is trained on its
+# outputs) forbids inferring sensitive information without the right to, and crisis signals belong
+# to the crisis check.
+_DENYLIST_V2: Final[Mapping[str, tuple[str, ...]]] = {"health": _DENYLIST_V1["health"]}
+DENYLISTS: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = {
+    _FIRST_VERSION: _DENYLIST_V1, "denylist-v2": _DENYLIST_V2,
+}
+DENYLIST_VERSION: Final = "denylist-v2"  # what a new run records and checks under
 DENYLIST: Final = DENYLISTS[DENYLIST_VERSION]
 
 

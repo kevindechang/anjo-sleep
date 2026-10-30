@@ -31,11 +31,11 @@ sleep stores.
   shared result stands only while its finding does, unchanged, on the anchor it was shared on
   (``results``): the snapshot and the note leave out the rest.
 
-**Holds.** Each step holds its Spark Open worst case (the screen and the resolver, at most
+**Holds.** Each step holds its Spark Open worst case (the resolver, at most
 ``MIND_SPARK_CALLS``) on ``baseten_mind_usd`` and its Glimmer worst case (the thinker and
 ``world_query``, at most ``MIND_GLIMMER_CALLS`` of at most ``GLIMMER_CALL_S`` each, and one wake)
 on ``modal_usd``, and settles what it metered. Past either count a call returns empty and costs
-nothing: the screen then refuses and the resolver says ``undetermined``. A hold with no room ends
+nothing: the resolver then says ``undetermined``. A hold with no room ends
 the step cleanly (``budget``); a failure inside the run ends it as ``failed``. Neither fails the night.
 A log that doesn't fold does, at the step that reads it (RF1), except at step 10, after promotion,
 where it shares nothing. A cancel (RF2) stops the run before its next log write and reaches the
@@ -60,7 +60,6 @@ from anjo.sleep.mind.inquiry.ports import (
     InquiryPorts,
     PredictionResolver,
     Research,
-    ScreenPort,
     Thinker,
     WorkspaceLog,
     WorldQuery,
@@ -96,7 +95,7 @@ from anjo.sleep.types import Evidence, QuestionView, Result
 
 logger = logging.getLogger(__name__)
 
-MIND_SPARK_CALLS: Final = 48  # a step's screen and resolver calls: a few per cycle, 12 cycles
+MIND_SPARK_CALLS: Final = 48  # a step's resolver calls: a few per cycle, 12 cycles
 MIND_GLIMMER_CALLS: Final = 2 * CYCLE_CAP + 2  # a thinker and a world_query a cycle, the notice pass, a resumed tool
 GLIMMER_CALL_S: Final = REQUEST_TIMEOUT_S  # one Glimmer call, inside the client's request timeout
 SEARCH_POOL: Final = 100  # items asked of the store before practice scenes are dropped
@@ -114,7 +113,6 @@ class MindModels:
 
     thinker: Thinker
     world: WorldQuery
-    screen: ScreenPort
     resolver: PredictionResolver
     model: str
 
@@ -272,7 +270,7 @@ class _Batched:
     def debit(self) -> None:
         """For a failed pass: its ``RunStart`` and one step carrying every token it logged (no
         operation came of it: ``malformed``), so tonight's budget (``tonight``) still counts its
-        thinker and screen calls. Nothing else reaches her."""
+        thinker calls. Nothing else reaches her."""
         tokens = sum(event.step.tokens for event in self.held)
         if tokens == 0:
             return
@@ -516,7 +514,7 @@ class MindNight:
         models = self._models(call.user_id, meters.spark)
         search = StoreSearch(call.store)
         ports = InquiryPorts(
-            thinker=_TimedThinker(models.thinker, meters, models.model), screen=models.screen, search=search,
+            thinker=_TimedThinker(models.thinker, meters, models.model), search=search,
             world=_TimedWorld(models.world, meters, models.model), resolver=models.resolver,
             log=log, research=research,
         )

@@ -101,19 +101,13 @@ class World:
 
 
 @dataclass
-class Screen:
-    def screen(self, text: str, purpose: it.ScreenPurpose, max_tokens: int) -> it.Screened:
-        return it.Screened(allowed=True, tokens=0)
-
-
-@dataclass
 class Resolver:
     def resolve(self, claim: str, evidence: Sequence[t.Evidence]) -> it.ResolverReply:
         return it.ResolverReply(verdict="undetermined", tokens=5)
 
 
 def models(thinker: ScriptThinker, world: World | None = None) -> apd.ArmModels:
-    return apd.ArmModels(thinker=thinker, world=world or World(), screen=Screen(), resolver=Resolver())
+    return apd.ArmModels(thinker=thinker, world=world or World(), resolver=Resolver())
 
 
 # ── The fake kernel ───────────────────────────────────────────────────────────

@@ -38,7 +38,7 @@ from typing import Any, Protocol
 
 from anjo.sleep.mind.apd.arms import BriefedThinker, LifeSearch, MemoryLog, MindCore, load_brief, mind_core, seen_by
 from anjo.sleep.mind.apd.types import ArmRun, Life, model_written
-from anjo.sleep.mind.inquiry.ports import InquiryPorts, ScreenPort, Thinker, WorldQuery
+from anjo.sleep.mind.inquiry.ports import InquiryPorts, Thinker, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
     LIVE_STATUSES,
     Budget,
@@ -78,13 +78,12 @@ ThinkerFactory = Callable[[int, date], RecordingThinker]  # a branch's seed and 
 class ReplayModels:
     """The branches' models. ``thinker_for(seed, night)`` is the thinker for one branch (Glimmer
     at ``BRANCH_TEMPERATURE`` with that seed, dated on that night: ``served.branch_thinkers``); the
-    world query and screen
-    are the M arm's. The resolver is the M arm's too, ``SparkResolver`` over ``resolver_chat``
-    (Spark Open), built per branch on a chat that keeps the model each reply names."""
+    world query is the M arm's. The resolver is the M arm's too, ``SparkResolver`` over
+    ``resolver_chat`` (Spark Open), built per branch on a chat that keeps the model each reply
+    names."""
 
     thinker_for: ThinkerFactory
     world: WorldQuery
-    screen: ScreenPort
     resolver_chat: ChatFn
 
 
@@ -217,9 +216,8 @@ def _branch(start: StartState, life: Life, models: ReplayModels, index: int, see
     world, resolver = _SeenWorld(models.world), _SeenChat(models.resolver_chat)
     thinker = models.thinker_for(seed, start.night)
     ports = InquiryPorts(
-        thinker=BriefedThinker(thinker, brief), screen=models.screen,
-        search=LifeSearch(life.evidence), world=world, resolver=SparkResolver(chat=resolver),
-        log=MemoryLog(start.events),
+        thinker=BriefedThinker(thinker, brief), search=LifeSearch(life.evidence), world=world,
+        resolver=SparkResolver(chat=resolver), log=MemoryLog(start.events),
     )
     begun = core.fold(start.events)
     run = core.run_inquiry(
