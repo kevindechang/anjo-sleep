@@ -34,10 +34,11 @@ from typing import Any, Final
 
 from anjo.sleep.demo.heldout import HeldOutText
 from anjo.sleep.demo.night_view import story_view
-from anjo.sleep.mind.inquiry.types import LIVE_STATUSES, Question, Workspace
+from anjo.sleep.demo.timeline import DecisionRecord, TimelineSources, timeline_view
+from anjo.sleep.mind.inquiry.types import LIVE_STATUSES, Question, Workspace, WorkspaceEvent
 from anjo.sleep.night.sleep_pressure import SleepMark, SleepRecordError, sleep_mark
 from anjo.sleep.night.story import Story, StoryError, story_from, tell
-from anjo.sleep.types import Expectation, Target
+from anjo.sleep.types import Evidence, Expectation, Result, Target
 
 SHOWN_STATUSES: Final = (*sorted(LIVE_STATUSES), "parked")  # a question's statuses the panel shows
 
@@ -83,18 +84,24 @@ class NightRecord:
     note: str | None
     sleep: SleepMark | None = None
     story: Story | None = None
+    confidence: float | None = None  # the chooser's own confidence, when its record carries one
 
 
 @dataclass(frozen=True)
 class MindSources:
     """What the app read. ``None``: that source couldn't be read, so its sections are unavailable.
-    ``returns``: when the person's own evidence came back to each target (``expect.returning``)."""
+    ``returns``: when the person's own evidence came back to each target (``expect.returning``).
+    ``events`` is MIND's whole log (a wipe keeps the ids the timeline cites); ``evidence`` and
+    ``results`` are what its searches and shares are read against."""
 
     nights: Sequence[NightRecord] | None = None
     workspace: Workspace | None = None
     targets: Sequence[Target] | None = None
     expectations: Sequence[Expectation] | None = None
     returns: Mapping[str, Sequence[datetime]] = field(default_factory=dict)
+    events: Sequence[WorkspaceEvent] | None = None
+    evidence: Sequence[Evidence] | None = None
+    results: Sequence[Result] | None = None
 
 
 # ── reading a night ───────────────────────────────────────────────────────────
@@ -127,6 +134,20 @@ def _step(steps: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
     return next((step for step in steps if step.get("step") == name), {})
 
 
+def _confidence(receipt: Any, summary_choice: Mapping[str, Any], step: Mapping[str, Any]) -> float | None:
+    """The chooser's confidence in this decision, wherever the record keeps it: the receipt's own
+    field, the winning candidate's, or the step's. None for a record written before it had one."""
+    chosen = next((c for c in summary_choice.get("considered") or []
+                   if isinstance(c, dict) and c.get("status") == "won"), {})
+    for raw in (receipt.get("confidence") if isinstance(receipt, dict) else None,
+                chosen.get("confidence") if isinstance(chosen, dict) else None,
+                step.get("confidence")):
+        value = _number(raw)
+        if value is not None:
+            return value
+    return None
+
+
 def _story(night: date, summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]],
            raw: Mapping[str, Any] | None) -> Story | None:
     """The night's ``story.json``, else (none, or one an older schema wrote) its story told from its
@@ -155,7 +176,8 @@ def night_record(
     if not isinstance(choices, list):
         raise PanelError("a night's choices are not a list")
     first = choices[0] if choices and isinstance(choices[0], dict) else {}  # step 4's choice
-    receipt = _step(steps, "choose").get("receipt")
+    choose = _step(steps, "choose")
+    receipt = choose.get("receipt")
     try:
         sleep = sleep_mark(summary.get("sleep"))
     except SleepRecordError as error:
@@ -167,6 +189,7 @@ def night_record(
         gates=_gates(summary.get("gates") or {}),
         outcome=_text(receipt.get("outcome")) if isinstance(receipt, dict) else None,
         note=_text(_step(steps, "note").get("outcome")), sleep=sleep, story=_story(night, summary, steps, story),
+        confidence=_confidence(receipt, first, choose),
     )
 
 
@@ -252,6 +275,15 @@ def _gate_nights(nights: Sequence[NightRecord] | None) -> list[dict[str, Any]] |
             for n, r in numbered(nights)]
 
 
+def _decisions(nights: Sequence[NightRecord] | None) -> tuple[DecisionRecord, ...]:
+    """Each night's choice for the timeline, dated by its night and clocked at the day's end."""
+    if not nights:
+        return ()
+    return tuple(DecisionRecord(r.night, datetime.combine(r.night + timedelta(days=1), time.min, timezone.utc),
+                                r.action, r.target_id, r.outcome, r.status, r.confidence)
+                 for _, r in numbered(nights))
+
+
 def _outcome(made: Expectation, returns: Sequence[datetime], as_of: datetime | None) -> str:
     """The stored outcome, else what the person's side shows by ``as_of``."""
     if made.outcome is not None:
@@ -291,4 +323,7 @@ def mind_view(sources: MindSources, held: HeldOutText) -> dict[str, Any]:
         "expectations": _section(_expectations(sources, labels, as_of, held)),
         "gates": _section(_gate_nights(sources.nights)),
         "story": story_view(None if sources.nights is None else [(n, r.story) for n, r in numbered(sources.nights)]),
+        "timeline": timeline_view(TimelineSources(
+            events=sources.events, evidence=sources.evidence, results=sources.results,
+            decisions=_decisions(sources.nights), labels=labels, as_of=as_of), held),
     }

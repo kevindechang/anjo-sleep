@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -186,6 +187,9 @@ def test_page_served_only_with_sleep_host(unmounted_app: Any, auth_client: Any, 
         assert "app.js" in page.text and "demo.css" in page.text
         assert mounted.get("/sleep/demo/app.js").headers["content-type"].startswith("text/javascript")
         assert mounted.get("/sleep/demo/demo.css").status_code == 200
+        assert mounted.get("/sleep/demo/timeline.js").headers["content-type"].startswith("text/javascript")
+        font = mounted.get("/sleep/demo/fonts/geist-400.ttf")
+        assert font.status_code == 200 and font.headers["content-type"] == "font/ttf" and len(font.content) > 1000
         assert mounted.get("/sleep/demo/register.py").status_code == 404
         monkeypatch.delenv("ANJO_SLEEP_HOST")
         for path in ("/sleep/demo", "/sleep/demo/app.js", "/api/sleep/demo/page"):
@@ -199,10 +203,15 @@ def test_the_page_loads_nothing_from_elsewhere_and_sets_text_only_as_text() -> N
     page = page_html()
     scripts = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".js")]
     styles = [(WEB_DIR / name).read_text() for name in ASSETS if name.endswith(".css")]
-    assert len(scripts) == 6 and len(styles) == 3  # app, model, nights, mind, night and dailies; demo, mind and dailies css
+    assert len(scripts) == 7 and len(styles) == 3  # app, model, nights, mind, night, timeline and dailies; demo, mind and dailies css
     for text in (page, *scripts, *styles):
         assert "http://" not in text and "https://" not in text and "//cdn" not in text
-        assert "@import" not in text and "url(" not in text
+        assert "@import" not in text
+    for style in styles:  # the only url() is the page's own type, served by this host
+        for found in re.findall(r"url\(([^)]*)\)", style):
+            assert found.strip("'\" ").startswith("/sleep/demo/fonts/"), found
+    assert "/sleep/demo/fonts/geist-400.ttf" in styles[0] and "/sleep/demo/fonts/geist-600.ttf" in styles[0]
+    assert "font-display: swap" in styles[0] and "@font-face" in styles[0]
     for script in scripts:
         assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "outerHTML" not in script
         assert "eval(" not in script and "localStorage" not in script and "document.write" not in script

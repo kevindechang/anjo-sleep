@@ -232,6 +232,20 @@ def test_the_panel_carries_last_nights_loop_from_its_story_file() -> None:
     assert "MARKER" not in json.dumps(story)  # no held-out text, no gate's reason
 
 
+def test_the_return_route_carries_the_same_moment_as_the_panel() -> None:
+    _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
+    _seed_mind(_held_out())
+    client = _client(_service())
+    assert client.get(f"{API}/return").status_code == 401  # behind the visit, like every model-written word
+    headers = _visit(client)
+    panel = client.get(f"{API}/mind", headers=headers).json()
+    moment = client.get(f"{API}/return", headers=headers).json()
+    assert moment == panel["return"]
+    assert moment["state"] in ("none", "ok", "withheld") and moment["quiet_days"] >= 0
+    assert "MARKER" not in json.dumps(moment) and "kitchen" not in json.dumps(moment)
+    assert client.get(f"{API}/return", headers={HEADER: "not-a-visit"}).status_code == 401
+
+
 def test_the_panel_fails_closed_when_the_filter_cannot_be_built(monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.app import demo_mind
 

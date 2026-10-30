@@ -1,7 +1,23 @@
 /* The live demo page (Task 13a). A quiet editorial sheet: cream paper, ink type, one rust accent
    for actions and focus. Her model and the baseline get their own colours only after the vote.
-   Type comes from system stacks only (no font downloads): a book serif for reading, a grotesque
-   for the interface, a mono for labels and numbers. */
+   Type is the anjo.love redesign's: Geist 400 and 600 (SIL OFL, served from this host) for reading
+   and headings, and a mono stack for data, ids and timestamps. */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/sleep/demo/fonts/geist-400.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("/sleep/demo/fonts/geist-600.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   color-scheme: light dark;
@@ -22,9 +38,9 @@
   --alert-paper: #f4e3dc;
   --grain: rgb(29 27 24 / 0.035);
 
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", Georgia, serif;
-  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --serif: "Geist", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, monospace;
 
   --text-small: 0.8125rem;
   --text-base: clamp(0.975rem, 0.94rem + 0.2vw, 1.0625rem);
@@ -429,6 +445,76 @@ p { margin: 0; }
 @media (max-width: 30rem) {
   .yours-change { grid-template-columns: max-content minmax(0, 1fr); }
   .yours-change-line { grid-column: 1 / -1; }
+}
+
+/* ── the return moment: her message after quiet days ───────────────────── */
+
+.return-band {
+  max-width: 76rem;
+  margin: var(--space-6) auto 0;
+  padding: 0 var(--gutter);
+  animation: settle 260ms var(--ease) both;
+}
+@keyframes settle {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.return-inner {
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  box-shadow: var(--lift);
+}
+.return-inner h2 {
+  margin: var(--space-3) 0 0;
+  max-width: 24ch;
+  font-size: var(--text-h2);
+  line-height: 1.12;
+}
+.return-quiet { margin-top: var(--space-2); font-family: var(--mono); letter-spacing: 0.02em; }
+.return-body { margin-top: var(--space-4); display: grid; gap: var(--space-3); max-width: var(--measure); }
+.return-kind { text-transform: uppercase; letter-spacing: 0.1em; }
+.return-message {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  background: var(--paper);
+  border-left: 2px solid var(--product);
+  font: 400 var(--text-reply)/1.6 var(--serif);
+  color: var(--ink);
+  text-wrap: pretty;
+}
+.return-message p + p { margin-top: var(--space-3); }
+.return-record { font-family: var(--mono); }
+.return-sources {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-small);
+  color: var(--ink-soft);
+}
+.return-sources li { display: flex; flex-wrap: wrap; gap: var(--space-2); overflow-wrap: anywhere; }
+.return-sources code { font-family: var(--mono); color: var(--ink); }
+.return-trace {
+  display: inline-block;
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  font: 600 0.875rem/1 var(--sans);
+  color: var(--ink);
+  text-decoration: none;
+  transition: transform var(--duration) var(--ease), opacity var(--duration) var(--ease);
+}
+.return-trace:hover { transform: translateY(-1px); opacity: 0.85; }
+.return-trace:active { transform: translateY(0); }
+.return-trace::after { content: " →"; content: " →" / ""; }
+
+@media (max-width: 30rem) {
+  .return-inner { padding: var(--space-4); }
+  .return-message { padding: var(--space-3) var(--space-4); }
 }
 
 /* ── colophon ──────────────────────────────────────────────────────────── */
