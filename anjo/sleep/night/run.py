@@ -198,12 +198,13 @@ class NightRunner(CoreSteps):
             if sweep is not None:  # what the command's start swept for this batch, as counts
                 p.log.step(
                     "sweep",
-                    "ok",
+                    "skipped" if sweep.sessions_skipped else "ok",
                     uses="new",
                     system=None,
                     holds_settled=sweep.holds_settled,
                     sessions_stopped=sweep.sessions_stopped,
                     sessions_not_ours=sweep.sessions_not_ours,
+                    **({"sessions_skipped": sweep.sessions_skipped} if sweep.sessions_skipped else {}),
                 )
             if (
                 p.uid in days

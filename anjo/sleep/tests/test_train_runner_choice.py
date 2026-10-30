@@ -17,12 +17,13 @@ import pytest
 
 import anjo.sleep
 from anjo.sleep.budget import Ledger
+from anjo.sleep.night.sweep import Stopped
 from anjo.sleep.serving import config
 from anjo.sleep.tests.test_modal_runner import FakeCalls
 from anjo.sleep.train import smoke, thinker
 from anjo.sleep.train.lora import TrainError
 from anjo.sleep.train.runners import choice
-from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, ColabCli, ColabRunner
+from anjo.sleep.train.runners.colab import MIND_SESSION_PREFIX, ColabCli, ColabError, ColabRunner
 from anjo.sleep.train.runners.modal import CALLS_DIR, A100_USD_PER_HOUR, CallRecords, ModalRunner
 
 SLEEP = Path(anjo.sleep.__file__).parent
@@ -51,7 +52,7 @@ def test_runner_setting_picks_modal_by_default_and_colab_on_request(tmp_path: Pa
     modal_run, colab_run = _build(tmp_path, "modal"), _build(tmp_path, "colab")
     assert isinstance(modal_run.runner, ModalRunner) and modal_run.name == "modal"
     assert isinstance(colab_run.runner, ColabRunner) and colab_run.name == "colab"
-    assert modal_run.sweep() == (0, 0)  # no call left behind, and Colab is never asked
+    assert modal_run.sweep() == Stopped(0, 0)  # no call left behind, and Colab is never asked
 
 
 def test_the_night_trains_on_the_chosen_runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -83,6 +84,58 @@ def test_the_night_trains_on_the_chosen_runner(monkeypatch: pytest.MonkeyPatch, 
 class _EmptyColab:
     def call(self, *args: str, timeout_s: float) -> str:
         return "[colab] No active sessions found on server.\n" if args[0] == "sessions" else ""
+
+
+class _FlakyColab:
+    """A Colab CLI whose session listing hiccups, as the CLI does now and then."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def call(self, *args: str, timeout_s: float) -> str:
+        self.calls += 1
+        raise ColabError("colab sessions failed with exit 1")
+
+
+@pytest.mark.parametrize(("runner", "calls"), [("modal", 1), ("colab", 2)])
+def test_a_failed_colab_listing_skips_a_modal_night_and_is_retried_once_for_a_colab_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: str, calls: int,
+) -> None:
+    """Training on Modal doesn't depend on Colab: its listing is skipped and the night goes on. On
+    Colab the listing is tried once more, and then fails as it always has."""
+    monkeypatch.setattr(choice, "colab_installed", lambda: True)
+    cli = _FlakyColab()
+    chosen = choice.build(runner, ledger=Ledger(tmp_path / "budget.jsonl"), calls_dir=tmp_path / CALLS_DIR,
+                          is_synthetic=lambda uid: True, colab_cli=lambda: cli, modal_calls=FakeCalls)
+    if runner == "colab":
+        with pytest.raises(ColabError, match="exit 1"):
+            chosen.sweep()
+    else:
+        assert chosen.sweep() == Stopped(0, 0, "colab listing failed (ColabError)")
+    assert cli.calls == calls
+
+
+def test_the_night_goes_on_when_a_modal_nights_colab_listing_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from anjo.sleep.night import __main__ as night_command
+
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(choice, "colab_installed", lambda: True)
+    monkeypatch.setattr(night_command, "_colab_cli", _FlakyColab)
+    monkeypatch.setattr(night_command, "_modal_calls", FakeCalls)
+    seen: list[Any] = []
+
+    def wiring(trainer: Any, options: object) -> object:
+        seen.append(trainer._runner)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(night_command, "_wiring", lambda path: wiring)
+    monkeypatch.delenv(choice.RUNNER_ENV, raising=False)
+    with pytest.raises(RuntimeError, match="stop here"):  # the sweep didn't fail the command
+        night_command.execute(wiring="w:x", night=datetime(2026, 10, 28).date(), users=["u1"],
+                              personas={"u1": "founder"})
+    assert isinstance(seen[-1], ModalRunner)
 
 
 def test_the_night_lets_modal_train_only_the_real_people_it_names(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

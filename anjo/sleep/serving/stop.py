@@ -4,7 +4,10 @@ scale-down window (``config.SCALEDOWN_S``), which bills about $0.33 a night on t
 
 It stops from this host, through Modal's own CLI run by the night's own Python (``python -m modal
 container list --json``, then ``container stop <id> --yes --graceful``): no change to the serve app,
-no redeploy, no undeploy. A graceful stop lets a request the container already runs finish.
+no redeploy, no undeploy. A graceful stop lets a request the container already runs finish. Modal
+only supports it for a container running a Modal Function, so a serving container's graceful stop
+is refused and the plain stop follows (``stop --yes``); a container already gone counts as
+stopped, and the report says whether each stop was graceful.
 
 **It never cuts a live chat.** People's chats and the live page use the same container.
 Before it lists the containers, and again right before each stop, the stop reads the host's turns
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -48,6 +52,10 @@ from anjo.sleep.serving.wake import read_window
 
 QUIET_S: Final = float(SCALEDOWN_S)  # a turn inside Modal's own window keeps the container, as Modal would
 CLI_TIMEOUT_S: Final = 60.0  # each CLI call, bounded well under ``activity.STOPPING_STALE_S``
+# A container already gone is stopped as far as the night is concerned; the words are Modal's.
+_ALREADY_GONE: Final = re.compile(
+    r"not found|does not exist|no such container|no running container|already (?:stopped|gone|terminated)",
+    re.IGNORECASE)
 
 StopStatus = Literal["ok", "skipped", "failed"]
 Report = Callable[[StopStatus, Mapping[str, Any]], None]
@@ -59,11 +67,19 @@ logger = logging.getLogger(__name__)
 class Containers(Protocol):
     def running(self, app: str) -> list[str]: ...
 
-    def stop(self, container: str) -> None: ...
+    def stop(self, container: str) -> bool:
+        """Stop one container; True when it stopped gracefully, False when it had to be forced or was
+        already gone."""
+        ...
 
 
 def _run(args: Sequence[str], timeout_s: float) -> str:
     return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout_s, check=True).stdout
+
+
+def _said(error: subprocess.CalledProcessError) -> str:
+    """The CLI's own words on a failed call: its stderr, and its stdout when that is all there is."""
+    return " ".join(str(part) for part in (error.stderr, error.stdout) if part)
 
 
 @dataclass(frozen=True)
@@ -81,8 +97,25 @@ class ModalCli:
             raise ValueError("modal container list gave no list")
         return [str(row["container_id"]) for row in rows if isinstance(row, dict) and row.get("app_name") == app]
 
-    def stop(self, container: str) -> None:
-        self.run([*self.command, "container", "stop", container, "--yes", "--graceful"], self.timeout_s)
+    def stop(self, container: str) -> bool:
+        """Stop ``container`` gracefully when Modal allows it for this container, plainly when it
+        refuses (a serving container isn't a Modal Function), and count one already gone as stopped.
+        Returns whether it stopped gracefully; False when it was forced or already gone."""
+        try:
+            self.run([*self.command, "container", "stop", container, "--yes", "--graceful"], self.timeout_s)
+            return True
+        except subprocess.CalledProcessError as refused:
+            if _ALREADY_GONE.search(_said(refused)):
+                return False
+            # Modal refuses a graceful stop for a container that isn't running a Modal Function (a
+            # serving container); whatever its words, the plain stop below is the one that decides.
+        try:
+            self.run([*self.command, "container", "stop", container, "--yes"], self.timeout_s)
+        except subprocess.CalledProcessError as failed:
+            if _ALREADY_GONE.search(_said(failed)):
+                return False
+            raise
+        return False
 
 
 @dataclass(eq=False)  # one stop is one object: ``phase`` runs each pending sleep once, by identity
@@ -140,23 +173,26 @@ class GpuStop:
         why, since = self._busy()
         found = [] if why is not None or self.turns is None else self.containers.running(self.app)
         stopped: list[str] = []
+        graceful = True
         error: str | None = None
         if found and self.turns is not None:
             with activity.stopping(self.turns) as refresh:  # removed once the last stop returns
-                stopped, error, why, since = self._each(found, refresh)
+                stopped, graceful, error, why, since = self._each(found, refresh)
         if error is not None:
             return "failed", {"error": error, "containers": len(stopped), "seconds_saved": len(stopped) * SCALEDOWN_S}
         known = {"since_last_turn_s": None if since is None else round(since, 1)}
         if not stopped:
             return "skipped", {"why": why or "none_running", "seconds_saved": 0, **known}
-        return "ok", {"containers": len(stopped), "seconds_saved": len(stopped) * SCALEDOWN_S, "graceful": True,
+        return "ok", {"containers": len(stopped), "seconds_saved": len(stopped) * SCALEDOWN_S, "graceful": graceful,
                       **({"why": why} if why else {}), **known}
 
     def _each(self, found: list[str], refresh: Callable[[], None],
-              ) -> tuple[list[str], str | None, str | None, float | None]:
-        """Stop each container, looking at the host right before each: the containers stopped, the
+              ) -> tuple[list[str], bool, str | None, str | None, float | None]:
+        """Stop each container, looking at the host right before each: the containers stopped,
+        whether every one stopped gracefully (False when one was forced or was already gone), the
         stop's error, and why it stopped early (None: it didn't), with seconds since her last turn."""
         stopped: list[str] = []
+        graceful = True
         error: str | None = None
         why: str | None = None
         since: float | None = None
@@ -166,9 +202,10 @@ class GpuStop:
             if why is not None:
                 break
             try:
-                self.containers.stop(container)
+                was_graceful = self.containers.stop(container)
             except Exception as failed:  # the rest stay up for Modal's window; reported, never raised
                 error = type(failed).__name__
                 break
             stopped.append(container)
-        return stopped, error, why, since
+            graceful = graceful and was_graceful
+        return stopped, graceful, error, why, since

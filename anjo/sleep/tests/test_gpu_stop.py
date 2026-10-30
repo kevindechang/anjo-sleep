@@ -9,6 +9,7 @@ import fcntl
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -34,19 +35,20 @@ UID = "p1"
 class Containers:
     """Modal's containers as the stop sees them: ``found`` running for the app until stopped."""
 
-    def __init__(self, *found: str, fail: Exception | None = None) -> None:
+    def __init__(self, *found: str, fail: Exception | None = None, graceful: bool = True) -> None:
         self.found, self.stopped, self.listed = list(found), list[str](), 0
-        self.fail = fail
+        self.fail, self.graceful = fail, graceful
 
     def running(self, app: str) -> list[str]:
         assert app == APP
         self.listed += 1
         return [c for c in self.found if c not in self.stopped]
 
-    def stop(self, container: str) -> None:
+    def stop(self, container: str) -> bool:
         if self.fail is not None:
             raise self.fail
         self.stopped.append(container)
+        return self.graceful
 
 
 def _host(tmp_path: Path) -> Path:
@@ -189,6 +191,37 @@ def test_modal_cli_lists_the_apps_containers_and_stops_one_gracefully() -> None:
                                            [*modal, "container", "stop", "ta-1", "--yes", "--graceful"]]
     with pytest.raises(ValueError):
         ModalCli(run=lambda args, timeout_s: "{not a list").running(APP)
+
+
+def test_modal_cli_stops_plainly_when_modal_refuses_a_graceful_serving_container() -> None:
+    """The serving container isn't a Modal Function: its graceful stop is refused, and the plain
+    stop is the one that works. The report says the stop was not graceful."""
+    calls: list[list[str]] = []
+
+    def run(args: Sequence[str], timeout_s: float) -> str:
+        calls.append(list(args))
+        if "--graceful" in args:
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="Graceful stops are only supported for containers running a Modal Function")
+        return ""
+
+    cli = ModalCli(run=run)
+    assert cli.stop("ta-1") is False
+    assert [("--graceful" in args) for args in calls] == [True, False]
+
+
+def test_modal_cli_counts_a_container_already_gone_as_stopped() -> None:
+    def run(args: Sequence[str], timeout_s: float) -> str:
+        raise subprocess.CalledProcessError(1, list(args), stderr="container ta-1 not found")
+
+    assert ModalCli(run=run).stop("ta-1") is False
+
+
+def test_a_forced_or_already_gone_stop_is_reported_as_not_graceful(tmp_path: Path) -> None:
+    stop, reports = _stop(_host(tmp_path), Containers("c1", graceful=False))
+    stop()
+    [(status, fields)] = reports
+    assert status == "ok" and fields["containers"] == 1 and fields["graceful"] is False
 
 
 def test_a_turn_that_cant_be_marked_untracks_the_host_so_no_stop_follows(tmp_path: Path) -> None:

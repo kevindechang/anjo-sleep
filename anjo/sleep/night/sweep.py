@@ -8,7 +8,9 @@ bound forever, and its Colab VM or Modal call may still run. So ``swept_night``,
    host. A second command stops with ``NightBusy`` and touches nothing;
 2. stops every Colab session and cancels every Modal call a training run left, whichever runner
    this night trains on (the night command passes that step in, so this module never imports
-   training). A stop that fails raises, and every hold stays open;
+   training). A stop that fails raises, and every hold stays open. A runner whose Colab listing
+   couldn't be read is skipped instead when it isn't the runner training the night (``Stopped``),
+   and the night log says so: an unreachable CLI is no reason to lose the night;
 3. settles every open hold of the night's own kinds at its full bound. Work may have run, so the
    worst case is the honest charge: a release could undercount.
 
@@ -39,10 +41,22 @@ class NightBusy(RuntimeError):
 
 
 @dataclass(frozen=True)
+class Stopped:
+    """What a start's leftover sweep did: sessions stopped, others up (not ours), and why a runner's
+    listing was skipped (None: it ran)."""
+
+    sessions_stopped: int
+    sessions_not_ours: int
+    skipped: str | None = None
+
+
+@dataclass(frozen=True)
 class Sweep:
     holds_settled: int
     sessions_stopped: int
     sessions_not_ours: int
+    # Why a runner's leftover listing was skipped (the night goes on without it); None: it ran.
+    sessions_skipped: str | None = None
 
 
 def _settle_stale(ledger: Ledger) -> int:
@@ -102,8 +116,16 @@ def night_lock(ledger: Ledger) -> Iterator[None]:
 
 
 @contextmanager
-def swept_night(ledger: Ledger, stop_sessions: Callable[[], tuple[int, int]]) -> Iterator[Sweep]:
-    """Hold the night lock for the run, after stopping leftover VMs and settling stale holds."""
+def swept_night(
+    ledger: Ledger, stop_sessions: Callable[[], Stopped | tuple[int, int]],
+) -> Iterator[Sweep]:
+    """Hold the night lock for the run, after stopping leftover VMs and settling stale holds. A
+    runner's list that couldn't be read may be reported as skipped (``Stopped.skipped``): the night
+    goes on without it, and its log says so."""
     with _locked(ledger):
-        stopped, not_ours = stop_sessions()  # VMs first: a hold is settled only once its VM is down
-        yield Sweep(_settle_stale(ledger), stopped, not_ours)
+        found = stop_sessions()  # VMs first: a hold is settled only once its VM is down
+        if isinstance(found, Stopped):
+            stopped, not_ours, skipped = found.sessions_stopped, found.sessions_not_ours, found.skipped
+        else:
+            stopped, not_ours, skipped = found[0], found[1], None
+        yield Sweep(_settle_stale(ledger), stopped, not_ours, skipped)

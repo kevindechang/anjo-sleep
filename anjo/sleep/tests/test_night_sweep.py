@@ -13,7 +13,7 @@ from anjo.sleep.budget import Bound, Ledger, Pool
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.holds import attempt_key
 from anjo.sleep.night.run import run_night_batch_with
-from anjo.sleep.night.sweep import NightBusy, Sweep, swept_night
+from anjo.sleep.night.sweep import NightBusy, Stopped, Sweep, swept_night
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, hold_base
 
@@ -104,3 +104,36 @@ def test_the_night_log_records_the_sweep_as_counts(tmp_path: Path) -> None:
     assert step(result.log_path, "sweep") == {"step": "sweep", "status": "ok", "uses": "new", "system": None,
                                              "noop": False, "holds_settled": 3, "sessions_stopped": 1,
                                              "sessions_not_ours": 2}
+
+
+def test_a_skipped_colab_listing_is_logged_as_a_skipped_sweep(tmp_path: Path) -> None:
+    """A night that trained elsewhere goes on without the Colab listing, and its log says why."""
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    sweep = Sweep(2, 0, 0, sessions_skipped="colab listing failed (ColabError)")
+    result = run_night_batch_with(world.deps(), {"p1": NIGHT}, sweep=sweep)["p1"]
+    logged = step(result.log_path, "sweep")
+    assert result.status == "promoted" and logged["status"] == "skipped" and logged["holds_settled"] == 2
+    assert logged["sessions_skipped"] == "colab listing failed (ColabError)"
+
+
+def test_a_sweep_reports_a_skip_through_swept_night(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl")
+
+    class Skip:
+        calls = 0
+
+        def __call__(self) -> Stopped:
+            self.calls += 1
+            return Stopped(0, 0, "colab listing failed (ColabError)")
+
+    def stop() -> Stopped:
+        return Stopped(0, 0, "colab listing failed (ColabError)")
+
+    with swept_night(ledger, stop) as swept:
+        assert swept.sessions_skipped == "colab listing failed (ColabError)"
+    with swept_night(ledger, lambda: (0, 0)) as plain:  # a tuple still reads as counts
+        assert plain == Sweep(0, 0, 0)
+    skip = Skip()
+    with swept_night(ledger, skip) as again:
+        assert again.sessions_skipped and skip.calls == 1
