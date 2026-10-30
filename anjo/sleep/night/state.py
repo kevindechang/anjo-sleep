@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Any, Final
 
+from anjo.sleep.agent_baseline.types import AgentOutcome
 from anjo.sleep.mind import receipt
 from anjo.sleep.night.deps import Dreamt, InquiryOutcome, StudyOutcome
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
@@ -53,6 +54,7 @@ class PersonNight:
     note_choice: Choice | None = None
     study: StudyOutcome | None = None
     inquiry: InquiryOutcome | None = None
+    agent: AgentOutcome | None = None  # the comparison's baseline pass (arm 2A); None: it didn't run
     shared: tuple[str, ...] = ()  # results MIND's findings shared at step 10 (Task 17)
     dreamt: Dreamt = field(default_factory=Dreamt)  # MIND's core: tonight's dream (step 2d)
     data: Dataset | None = None

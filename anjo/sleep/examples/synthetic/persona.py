@@ -18,7 +18,7 @@ from anjo.sleep.types import Evidence, EvidenceKind, Probe
 
 HERE: Final = Path(__file__).parent
 SCHEMA: Final = "anjo-sleep-example/1"
-VISIBLE_KINDS: Final = frozenset(get_args(EvidenceKind)) - {"homework", "practice"}
+VISIBLE_KINDS: Final = frozenset(get_args(EvidenceKind)) - {"homework", "practice", "agent_note"}
 MIN_NEW_WORK: Final = 3
 
 

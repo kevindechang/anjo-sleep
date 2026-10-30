@@ -62,21 +62,27 @@ class EvidenceStore(Protocol):
         """Append items; an id already stored is not added twice."""
 
     def for_day(self, day: date) -> list[Evidence]:
-        """Every item stamped with ``day``, held-out ones included."""
+        """Every item stamped with ``day``, held-out ones included, but never an agent note."""
 
     def trainable(self, until: date) -> list[Evidence]:
         """Items through ``until`` that may train: never held-out items, never items with unknown
-        ancestry, and never items with hosted ancestry while hosted outputs can't train."""
+        ancestry, never items with hosted ancestry while hosted outputs can't train, and never the
+        comparison's agent notes (``agent_note``: ``agent_notes``, arm 2A's read)."""
 
     def stored(self, until: date) -> list[Evidence]:
-        """Every non-held-out item through ``until``, for served context and arm 2F."""
+        """Every non-held-out item through ``until``, for served context and arm 2F; the agent
+        notes are left out (only arm 2A reads them, through ``agent_notes``)."""
 
     def held_out(self, day: date) -> list[Evidence]:
         """The held-out items stamped with ``day``."""
 
+    def agent_notes(self, until: date) -> list[Evidence]:
+        """The baseline arm's notes through ``until``, oldest first: what the morning arm 2A reads,
+        and the only way they leave this store."""
+
     def search(self, query: str, as_of: datetime, k: int) -> list[Evidence]:
         """``evidence_search`` (Task 17): the top ``k`` non-held-out items for ``query`` among
-        those created at or before ``as_of``."""
+        those created at or before ``as_of``, never an agent note."""
 
     def export(self) -> dict[str, object]:
         """The person's evidence for the account export."""

@@ -58,11 +58,11 @@ from anjo.sleep.types import CheckpointRef, Evidence, Target
 DEVELOPMENT: Final = "development"
 MONTH_NIGHTS: Final = 30
 CEILING_USD: Final = 10.0  # a person's nightly upkeep, a month (spec §5.5)
-CEILING_PARTS: Final = ("extract", "practice", "training", "gates", "brief")  # every cost part but MIND
+CEILING_PARTS: Final = ("extract", "practice", "training", "gates", "brief")  # every cost part but MIND's and the agent arm's
 TRAINING_STEPS: Final = ("practice", "dataset", "train", "gates", "promote")  # a night failed here had started training
 CARD_PARTS: Final = ("day", "practice", "training", "morning", "rest")
 SUMMARY_PARTS: Final[Mapping[str, tuple[str, ...]]] = {
-    "practice": ("practice",), "training": ("training",), "rest": ("extract", "gates", "brief", "mind")}
+    "practice": ("practice",), "training": ("training",), "rest": ("extract", "gates", "brief", "mind", "agent")}
 TIMED_STEPS: Final[Mapping[str, tuple[str, ...]]] = {
     "practice": ("practice",), "training": ("train",), "morning": ("morning", "dailies"), "rest": ("gates",)}
 TRAIN_HOLDS: Final = ("modal_train",)  # Colab's (``colab_train``) are compute units, never dollars

@@ -377,6 +377,19 @@ def test_wonder_research_screens_its_query_and_stores_hosted_sources(tmp_path: P
     assert spent.research("q1", "optical sorting") == ()
 
 
+def test_wonder_research_can_keep_its_sources_out_of_the_store(tmp_path: Path) -> None:
+    """``keep=False`` is the comparison agent's port: it gets the sources, and the store keeps
+    none, so nothing of arm 2A's work folds into the brief or another arm's context."""
+    store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", UID, codec=PLAIN, guard=NO_GUARD)
+    at = datetime.combine(NIGHT + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    port = WonderResearch(user_id=UID, night=NIGHT, at=at, store=store, meter=WonderMeter(12, 3.0),
+                          wonder=FakeWonder(research_script()), search=FakeSearch(),
+                          fetcher=study_web().fetcher(), keep=False)
+    items = port.research("q1", "optical sorting film plastics")
+    assert {item.source for item in items} == {STUDY_URL, GUIDE_URL} and all(item.kind == "homework" for item in items)
+    assert store.stored(NIGHT) == [] and store.for_day(NIGHT) == []
+
+
 # ── RF2, budget stops and kill-resume ────────────────────────────────────────
 
 

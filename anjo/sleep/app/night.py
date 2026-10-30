@@ -50,6 +50,10 @@ night's client; with the core off the dreams are not wired. With ``ANJO_SLEEP_DR
 (the channel on) each dream's reply goes through the thought channel over its own imagined state,
 and its row carries that state. Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
+
+With ``ANJO_SLEEP_AGENT_BASELINE=1`` the night also runs the comparison's conventional agent (arm
+2A): one stateless pass a night on Spark Open, after MIND's step, reading the person's evidence and
+served brief and leaving notes only the morning arm 2A reads. Off, the night holds no such port.
 """
 from __future__ import annotations
 
@@ -65,6 +69,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from anjo.sleep import baseten_api, meta_api, parallel
+from anjo.sleep.agent_baseline.night import AgentNight
+from anjo.sleep.agent_baseline.night import on as baseline_on
+from anjo.sleep.agent_baseline.types import AgentCall
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL
 from anjo.sleep.app.delivery import OutreachNotifier, passes_reply_check
@@ -118,6 +125,7 @@ from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.app.names import person_names
 from anjo.sleep.homework.agent import MetaWonder, WonderHomework
+from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.critics import ThirdPartyCritic, deepseek_critic, held_critic
 from anjo.sleep.practice.full import CappedChat, FullPractice
@@ -306,6 +314,27 @@ def gpu_stop(serving: backend.Serving, environ: Mapping[str, str], ledger: Ledge
                    window=window_path(data_root()), night_running=lambda: held_elsewhere(ledger))
 
 
+def build_baseline(ledger: Ledger, prices: Prices, environ: Mapping[str, str]) -> AgentNight | None:
+    """The comparison's conventional agent (arm 2A), or None when ``ANJO_SLEEP_AGENT_BASELINE``
+    isn't 1. Its model turns on Spark Open through the provider switch; a pass that asks for
+    research meets the same Wonder tool MIND's inquiry uses, on the night's Wonder meter and the
+    person's monthly cap. Its own spend is held on ``baseten_sleep_usd``, which the ledger remaps
+    when the switch sends Sleep's Spark Open to its other provider."""
+    if not baseline_on(environ):
+        return None
+
+    def research(call: AgentCall) -> WonderResearch:
+        # ``keep=False``: arm 2A's sources stay in its own pass's scratchpad. Stored as homework
+        # evidence they would fold into the served brief and every arm's context, so the arm would
+        # feed the others rather than stand beside them.
+        return WonderResearch(user_id=call.user_id, night=call.night, at=call.at, store=call.store,
+                              meter=call.wonder, wonder=MetaWonder(), search=WikipediaSearch(),
+                              fetcher=SafeFetcher(), ledger=ledger, names=tuple(person_names(call.user_id)),
+                              keep=False)
+
+    return AgentNight(prices=prices, research=research, ledger=ledger)
+
+
 def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     require_sleep_host()
     for user_id, persona in options.personas.items():
@@ -345,6 +374,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
                               evidence=evidence_store, ledger=ledger, names=person_names)
     mind = (build_mind(client, ledger, night_prices, seed=night_settings.seed, wake=serving.wake)
             if options.mind_inquiry else None)
+    baseline = build_baseline(ledger, night_prices, os.environ)
 
     return NightDeps(
         extractor=lambda chat: HistorySource(chat=chat), extract_chat=spark_open,
@@ -365,6 +395,6 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
         core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
                                       channel=dreams_channel(os.environ, channel)),
-        estimator=registered_estimator(),
+        estimator=registered_estimator(), baseline=baseline,
     )
 

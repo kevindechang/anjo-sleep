@@ -14,6 +14,9 @@ import it.
 - ``Inquiry`` (Task 17's ``inquire``) and ``Notice`` (Task 17's step 2b): ``NoInquiry`` and
   ``NoNotice``. ``anjo.sleep.night.mind.MindNight`` is both, and the night calls it only while
   ``NightSettings.mind_inquiry`` is on; off, the night is Task 7a's as specced.
+- ``AgentBaseline`` (the comparison's conventional agent, arm 2A): ``None``, which is off. Switched
+  on (``ANJO_SLEEP_AGENT_BASELINE=1``), ``anjo.sleep.agent_baseline`` runs one stateless pass a
+  night after MIND's step and leaves its notes where only the morning arm 2A reads them.
 
 ``estimator`` is Task 16's registered ``p_needed`` estimator: ``None`` until its coefficients are
 registered, and a chosen study then records no expectation.
@@ -29,6 +32,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
+from anjo.sleep.agent_baseline.types import AgentBaseline
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
@@ -410,6 +414,9 @@ class NightDeps:
     inquiry: Inquiry = field(default_factory=NoInquiry)
     notice: Notice = field(default_factory=NoNotice)
     core: MindCore = field(default_factory=NoCore)  # MIND's core (ANJO_SLEEP_MIND_CORE=1); off, the night is today's
+    # The comparison's conventional agent (arm 2A, ``ANJO_SLEEP_AGENT_BASELINE=1``); None is off, and
+    # the night is byte-identical to one run before the arm.
+    baseline: AgentBaseline | None = None
     estimator: Coefficients | None = None  # Task 16's registered estimator
     intentions: IntentionSource = field(default_factory=NoIntentions)
     cancel: Callable[[str], bool] = field(default=lambda user_id: False)
