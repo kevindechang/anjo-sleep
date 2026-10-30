@@ -19,6 +19,7 @@ SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "trainable": ("until",),
         "stored": ("until",),
         "held_out": ("day",),
+        "agent_notes": ("until",),
         "search": ("query", "as_of", "k"),
         "export": (),
     },
