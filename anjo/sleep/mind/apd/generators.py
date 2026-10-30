@@ -69,7 +69,7 @@ DEEPSEEK: Final = Generator(
     "deepseek-v4p1-flash", fireworks_api.DEEPSEEK_V4P1_FLASH, reasoning_effort="none",  # its non-thinking mode
     trains="DeepSeek V4.1 Flash: MIT licence (huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash), cleared by Kevin on "
            "2026-10-28 to train the MIND core only",
-    list_prices=(0.30, 1.20))  # Fireworks serverless, 2026-10-28; its $0.006 cached input is not counted
+    list_prices=fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES)  # uncached list price
 GPT_OSS: Final = Generator("gpt-oss-120b", fireworks_api.GPT_OSS_120B, reasoning_effort="low")
 GLM: Final = Generator("glm-5p3-flash", fireworks_api.GLM_5P3_FLASH)
 GENERATORS: Final = MappingProxyType({found.name: found for found in (SPARK, DEEPSEEK, GPT_OSS, GLM)})

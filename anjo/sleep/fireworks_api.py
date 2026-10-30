@@ -16,7 +16,7 @@ from typing import Any, Final, Literal
 
 import httpx
 
-from anjo.sleep.model_api import ChatResult, post_chat
+from anjo.sleep.model_api import ChatResult, Retries, post_chat
 
 KEY_ENV = "ANJO_FIREWORKS_API_KEY"
 URL = "https://api.fireworks.ai/inference/v1/chat/completions"
@@ -25,6 +25,9 @@ SPARK_OPEN: Final = "accounts/fireworks/models/muse-spark-open"
 GPT_OSS_120B: Final = "accounts/fireworks/models/gpt-oss-120b"
 GLM_5P3_FLASH: Final = "accounts/fireworks/models/glm-5p3-flash"
 DEEPSEEK_V4P1_FLASH: Final = "accounts/fireworks/models/deepseek-v4p1-flash"
+# Fireworks serverless list price, USD per million tokens, 2026-10-28:
+# https://fireworks.ai/pricing (uncached input and output).
+DEEPSEEK_V4P1_FLASH_PRICES: Final = (0.30, 1.20)
 
 SparkOpenModel = Literal["accounts/fireworks/models/muse-spark-open"]
 GeneratorModel = Literal["accounts/fireworks/models/gpt-oss-120b", "accounts/fireworks/models/glm-5p3-flash",
@@ -32,7 +35,7 @@ GeneratorModel = Literal["accounts/fireworks/models/gpt-oss-120b", "accounts/fir
 
 
 def chat(
-    model: SparkOpenModel,
+    model: SparkOpenModel | Literal["accounts/fireworks/models/deepseek-v4p1-flash"],
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
     timeout_s: float,
@@ -40,8 +43,9 @@ def chat(
     temperature: float | None = None,
     max_tokens: int | None = None,
     transport: httpx.BaseTransport | None = None,
+    retries: Retries | None = None,
 ) -> ChatResult:
-    """One chat completion on Spark Open, its reply capped at ``max_tokens`` when given (MIND's
+    """One chat completion on Spark Open or DeepSeek, its reply capped at ``max_tokens`` when given (MIND's
     calls are). ``transport`` is for tests (``httpx.MockTransport``)."""
     return post_chat(
         provider="Fireworks",
@@ -54,6 +58,7 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+        retries=retries,
     )
 
 

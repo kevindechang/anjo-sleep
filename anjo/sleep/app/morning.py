@@ -9,7 +9,7 @@ stores for one synthetic person.
   ``$ANJO_SLEEP_DONORS`` (``user=donor,user=donor``: the registered donor account of each life);
 - probes: the person's sealed file, ``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``, re-keyed to the
   account that plays the persona;
-- judge: Muse Spark with the persona's judge brief (``MuseJudge``), which only the judge reads;
+- judge: Muse Spark or DeepSeek, selected by ``ANJO_SLEEP_JUDGE``, with the persona's judge brief;
 - the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default); a
   judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and the night log counts
   those with the requests Glimmer's client sent again.
@@ -24,7 +24,7 @@ from datetime import date
 from pathlib import Path
 from typing import Final
 
-from anjo.sleep import meta_api, parallel
+from anjo.sleep import fireworks_api, meta_api, parallel
 from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
 from anjo.sleep.app.flags import require_sleep_host
@@ -42,6 +42,19 @@ from anjo.sleep.serving import backend
 from anjo.sleep.types import Probe
 
 DONORS_ENV: Final = "ANJO_SLEEP_DONORS"
+JUDGE_ENV: Final = "ANJO_SLEEP_JUDGE"
+
+
+def make_judge(persona: str, tokens: JudgeTokens, resent: _Resent) -> MuseJudge:
+    """Select the judge before any calls; Spark Open is never a selectable judge."""
+    selected = os.environ.get(JUDGE_ENV, "muse").strip() or "muse"
+    retries = Retries(counted=resent)
+    if selected == "muse":
+        return MuseJudge(partial(meta_api.chat, retries=retries), lambda _person: judge_brief(persona), tokens=tokens)
+    if selected == "deepseek":
+        return MuseJudge(partial(fireworks_api.chat, retries=retries), lambda _person: judge_brief(persona),
+                         tokens=tokens, model=fireworks_api.DEEPSEEK_V4P1_FLASH)
+    raise ValueError(f"{JUDGE_ENV} must be muse or deepseek")
 
 
 def _env(name: str) -> str:
@@ -85,8 +98,8 @@ def build(user_id: str, persona: str, night: date) -> Morning:
         evidence=evidence_store, logprobs=client, donors=donors(), until=night)
     resent = _Resent()
     tokens = JudgeTokens()  # the judge settles at its tokens, priced at ANJO_SLEEP_PRICES' Spark lines
-    judge = MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona),
-                      tokens=tokens)
+    judge = make_judge(persona, tokens, resent)
     return Morning(arms=arms, sealed=probes, judge=judge, prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
                    wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ),
-                   retries=lambda: client.retries() + resent.count, judge_tokens=tokens)
+                   retries=lambda: client.retries() + resent.count, judge_tokens=tokens,
+                   judge_model=meta_api.PINNED_MODELS["muse-spark"] if judge.model == "muse-spark" else judge.model)

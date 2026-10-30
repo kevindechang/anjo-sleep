@@ -26,9 +26,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, runtime_checkable
+from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from anjo.sleep.context.template import render
+from anjo.sleep import baseten_api, fireworks_api
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.probes.arms import ArmReply
 from anjo.sleep.probes.logprob import expected_margin
@@ -85,10 +86,10 @@ class JudgeChat(Protocol):
 
 
 def judge_prompt(probe: Probe, brief: str, first: str, second: str) -> str:
-    return render(JUDGE_PROMPT.read_text(encoding="utf-8"), {
+    return cast(str, render(JUDGE_PROMPT.read_text(encoding="utf-8"), {
         "BRIEF": brief, "KIND": probe.kind, "PROMPT": probe.prompt,
         "REPLY_A": first, "REPLY_B": second,
-    })
+    }))
 
 
 def parse_verdict(text: str) -> Verdict:
@@ -136,6 +137,13 @@ class MuseJudge:
     chat: JudgeChat
     brief_for: Callable[[str], str]
     tokens: JudgeTokens | None = None
+    model: str = JUDGE_MODEL
+
+    def __post_init__(self) -> None:
+        if self.model in (baseten_api.SPARK_OPEN, fireworks_api.SPARK_OPEN, "muse-spark-open"):
+            raise ValueError("Spark Open cannot be used as a judge")
+        if self.model not in (JUDGE_MODEL, fireworks_api.DEEPSEEK_V4P1_FLASH):
+            raise ValueError("unsupported judge model")
 
     def verdict(self, probe: Probe, first: str, second: str) -> Verdict:
         return self._ask(probe, first, second, None)
@@ -147,9 +155,9 @@ class MuseJudge:
         """One judge call; an unreadable answer's error names how it ended and its length, never its words."""
         prompt = judge_prompt(probe, self.brief_for(probe.person_id), first, second)
         messages = [{"role": "user", "content": prompt}]
-        result = (self.chat(JUDGE_MODEL, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE)
+        result = (self.chat(self.model, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE)
                   if max_tokens is None else
-                  self.chat(JUDGE_MODEL, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE,
+                  self.chat(self.model, messages, None, JUDGE_TIMEOUT_S, temperature=JUDGE_TEMPERATURE,
                             max_tokens=max_tokens))
         if self.tokens is not None:
             self.tokens.record(result)

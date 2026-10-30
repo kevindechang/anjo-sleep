@@ -78,7 +78,8 @@ def test_morning_run_never_saved_to_history(tmp_path: Path) -> None:
     body = done.path.read_text(encoding="utf-8")
     assert "reply from" not in body and all(p.prompt not in body for p in rig.probes)  # no reply or probe text
     assert set(json.loads(body)) == {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable",
-                               "outcomes", "seconds"}  # its wall time (the arms and the judge), a number only
+                               "outcomes", "seconds", "judge_model"}  # its wall time (the arms and the judge), a number only
+    assert json.loads(body)["judge_model"] == "unknown"  # the fake has no model ID
 
 
 def test_morning_rerun_refused_once_scored(tmp_path: Path) -> None:
@@ -142,7 +143,7 @@ def test_paid_calls_are_held_first_and_settled(tmp_path: Path) -> None:
     Rig(tmp_path, ledger=ledger).run()
     events = read_records(ledger.path, PLAIN)
     reserves = [e for e in events if e["op"] == "reserve"]
-    assert [e["pools"] for e in reserves] == [["meta_usd"], ["modal_usd", "baseten_sleep_usd"]]  # both held before a call
+    assert [e["pools"] for e in reserves] == [["meta_usd", "judge_usd"], ["modal_usd", "baseten_sleep_usd"]]  # both held before a call
     assert [e["op"] for e in events].count("settle") == 2 and not ledger.open_holds()
     assert all(e["job"].startswith("morning:2026-11-03:") for e in reserves)
 
@@ -282,7 +283,7 @@ def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
     # Every call, retries included, is counted, and the judge's hold covers them all: no overage.
     assert done.judge_calls == len(chat.caps)
     events = read_records(ledger.path, PLAIN)
-    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd"])
+    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd", "judge_usd"])
     settled = next(e for e in events if e["op"] == "settle" and e["job"] == held["job"])
     assert settled["amount"] <= held["amount"] and not ledger.open_holds()
 
@@ -312,7 +313,7 @@ def _metered_run(tmp_path: Path, *, usage: bool) -> tuple[Any, MeteredChat, dict
                           judge_tokens=tokens)
     done = rig.run()
     events = read_records(ledger.path, PLAIN)
-    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd"])
+    held = next(e for e in events if e["op"] == "reserve" and e["pools"] == ["meta_usd", "judge_usd"])
     settled = next(e for e in events if e["op"] == "settle" and e["job"] == held["job"])
     return done, chat, settled
 
