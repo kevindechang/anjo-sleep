@@ -1,7 +1,7 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """MIND's loop, controller, render and parser (Task 17), on fake ports: the notice pass, the
-cycles, the blind resolver, the screen, K5, kill-resume, and a lenient reading of model text."""
+cycles, the blind resolver, K5, kill-resume, and a lenient reading of model text."""
 from __future__ import annotations
 
 import inspect
@@ -17,7 +17,6 @@ from anjo.sleep.mind.inquiry.ports import InquiryPorts, PredictionResolver
 from anjo.sleep.tests.inquiry_fakes import (
     FakeResearch,
     FakeResolver,
-    FakeScreen,
     FakeWorld,
     Kill,
     KillingLog,
@@ -109,15 +108,14 @@ def _noticed_life() -> Life:
 
 def test_notice_pass_logs_its_start_the_new_items_and_each_notice() -> None:
     life = Life()
-    screen = FakeScreen()
     thinker = ScriptedThinker([NOTICED], tokens=300)
-    run = life.notice(5, [E1, E3, E2, HELD], [], thinker=thinker, screen=screen)
+    run = life.notice(5, [E1, E3, E2, HELD], [], thinker=thinker)
     kinds = [type(e.step.entry).__name__ for e in run.events]
     assert kinds == ["RunStart", "Retrieved", "NoticeOp"]
     arrived = run.events[1].step
     assert [i.id for i in arrived.entry.items] == [E1.id, E3.id, E2.id] and arrived.tokens == 300  # type: ignore[union-attr]
-    assert run.events[2].step.tokens == 5 and screen.seen == [(NOTICED[0]["subject"], "question")]
-    assert run.ws.questions[0].id == "q1" and run.budget == it.Budget(tokens_used=305)
+    assert run.events[2].step.tokens == 0
+    assert run.ws.questions[0].id == "q1" and run.budget == it.Budget(tokens_used=300)
     assert [t.seq for t in run.turns] == [1] and all(e.step.cycle is None for e in run.events)
     assert "HELD-OUT" not in thinker.prompts[0] and E1.text in thinker.prompts[0]
     assert life.log.events() == run.events
@@ -188,7 +186,7 @@ def test_prediction_committed_before_outcome_and_resolver_blind_to_hypotheses() 
     assert (update.source, update.ref, update.evidence_ids) == ("resolved_prediction", prediction.id, (E6.id,))
 
 
-# ── Tools and the screen ──────────────────────────────────────────────────────
+# ── Tools ─────────────────────────────────────────────────────────────────────
 
 
 def test_world_query_answer_is_rendered_and_never_moves_credence() -> None:
@@ -203,21 +201,19 @@ def test_world_query_answer_is_rendered_and_never_moves_credence() -> None:
     assert world.answer in thinker.prompts[-1]
 
 
-def test_research_query_carries_no_personal_terms() -> None:
+def test_research_query_naming_a_person_goes_through() -> None:
     source = ev("e-web-1", "Telephoto lenses need distance for a medium shot.", n=5, kind="homework",
                 model="wonder", ancestry=frozenset({"wonder"}), source="https://example.org/lenses")
     research = FakeResearch((source,))
-    screen = FakeScreen(lambda text, purpose: purpose == "research_query" and ("Mira" in text or "Thursday" in text))
     life = _noticed_life()
     personal = {"op": "INVESTIGATE", "question_id": "q1", "tool": "research", "query": "Mira kitchen 85mm Thursday"}
     topical = {"op": "INVESTIGATE", "question_id": "q1", "tool": "research", "query": "85mm lens distance medium shot"}
     life.items = (*ITEMS, source)
-    run = life.inquire(5, [_hyp(), personal, topical], research=research, screen=screen,
-                       budget=it.Budget(cycle_cap=3))
+    run = life.inquire(5, [_hyp(), personal, topical], research=research, budget=it.Budget(cycle_cap=3))
     codes = [(type(e.step.entry).__name__, e.step.code) for e in run.events]
-    assert ("InvestigateOp", "domain_screen") in codes
-    assert research.queries == ["85mm lens distance medium shot"] and run.research_calls == 1
-    assert ("research_query" in {purpose for _, purpose in screen.seen})
+    assert ("InvestigateOp", None) in codes
+    assert research.queries == ["Mira kitchen 85mm Thursday", "85mm lens distance medium shot"]
+    assert run.research_calls == 2
     assert kernel.research_sources(life.ws, "q1") == {source.id}
 
     without = _noticed_life()
@@ -225,15 +221,13 @@ def test_research_query_carries_no_personal_terms() -> None:
     assert run.events[-1].step.code == "unavailable"
 
 
-def test_person_diagnosis_question_refused_by_the_screen_behind_the_denylist() -> None:
-    screen = FakeScreen(lambda text, purpose: "Dana" in text)
+def test_a_question_naming_a_person_goes_through() -> None:
     life = Life()
     third_party = {**NOTICED[0], "subject": "Whether Dana will still lend the camera for scene 4"}
     diagnosis = {**NOTICED[0], "subject": "Whether they are anxious about scene 4"}
-    run = life.notice(5, [E1, E2], [[third_party, diagnosis]], screen=screen)
-    assert [e.step.code for e in run.events[2:]] == ["domain_screen", "domain_denylist"]
-    assert run.events[2].step.tokens == 5 and len(screen.seen) == 1  # the denylist needs no screen call
-    assert run.ws.questions == ()
+    run = life.notice(5, [E1, E2], [[third_party, diagnosis]])
+    assert [e.step.code for e in run.events[2:]] == [None, "domain_denylist"]
+    assert [q.subject for q in run.ws.questions] == [third_party["subject"]]
 
 
 # ── The controller ────────────────────────────────────────────────────────────

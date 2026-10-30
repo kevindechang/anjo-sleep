@@ -13,9 +13,8 @@ inside a prediction's window. No clock is read.
    call logs nothing and marks nothing seen, so a later cycle asks again;
 2. the loop fetches the question's items by id (``EvidenceSearch.get``), renders, and asks the
    thinker for one operation, with ``max_tokens`` the budget's ``tokens_left``;
-3. the reply is parsed leniently; the kernel checks the operation, then the screen reads what she
-   would investigate (a question's subject, a hypothesis, a research query), and the step is
-   logged with its code and every token it cost, so a rejection costs the cycle;
+3. the reply is parsed leniently; the kernel checks the operation and the step is logged with its
+   code and every token it cost, so a rejection costs the cycle;
 4. an applied ``INVESTIGATE`` runs its tool and logs what came back.
 
 Cycles are numbered from the budget's ``cycles_used``, so a resumed run continues the numbering.
@@ -50,12 +49,10 @@ from anjo.sleep.mind.inquiry.types import (
     ControlMode,
     Decision,
     EvidenceRef,
-    HypothesizeOp,
     InquiryRun,
     InvestigateOp,
     KernelRules,
     ModelReply,
-    NoticeOp,
     Observation,
     Op,
     Prediction,
@@ -64,7 +61,6 @@ from anjo.sleep.mind.inquiry.types import (
     Resolved,
     Retrieved,
     RunStart,
-    ScreenPurpose,
     Step,
     Turn,
     Wake,
@@ -150,32 +146,12 @@ def _masked(items: Sequence[Evidence], as_of: datetime) -> tuple[Evidence, ...]:
     return tuple(item for item in items if not item.held_out and item.created_at <= as_of)
 
 
-# ── Admission: the kernel, then the screen ────────────────────────────────────
+# ── Admission: the kernel ─────────────────────────────────────────────────────
 
 
-def _screened_texts(op: Op) -> list[tuple[str, ScreenPurpose]]:
-    if isinstance(op, NoticeOp):
-        return [(op.subject, "question")]
-    if isinstance(op, HypothesizeOp):
-        return [(alt.statement, "hypothesis") for alt in op.hypotheses]
-    if isinstance(op, InvestigateOp) and op.tool == "research":
-        return [(op.query, "research_query")]
-    return []
-
-
-def _admit(run: _Run, ctx: _Context, op: Op, pending: int) -> tuple[RejectCode | None, int]:
-    """The code ``op`` is logged with, and the screen's tokens. ``pending`` is the tokens this
-    step has already cost but not yet charged."""
-    code = kernel.check(run.ws, op, rules=run.rules, target_ids=ctx.target_ids, tools=ctx.tools)
-    if code is not None:
-        return code, 0
-    spent = 0
-    for text, purpose in _screened_texts(op):
-        screened = ctx.ports.screen.screen(text, purpose, max(run.budget.tokens_left - pending - spent, 0))
-        spent += screened.tokens
-        if not screened.allowed:
-            return "domain_screen", spent
-    return None, spent
+def _admit(run: _Run, ctx: _Context, op: Op) -> RejectCode | None:
+    """The code ``op`` is logged with."""
+    return kernel.check(run.ws, op, rules=run.rules, target_ids=ctx.target_ids, tools=ctx.tools)
 
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
@@ -245,8 +221,8 @@ def _cycle(run: _Run, ctx: _Context, focus: str, cycle: int) -> _Run:
     if isinstance(parsed, Rejected):
         step = _step(run, ctx, None, code=parsed.code, cycle=cycle, focus=focus, tokens=reply.tokens)
         return _turn(_log(run, ctx, step), step.seq, prompt, reply)
-    code, screened = _admit(run, ctx, parsed, reply.tokens)
-    step = _step(run, ctx, parsed, code=code, cycle=cycle, focus=focus, tokens=reply.tokens + screened)
+    code = _admit(run, ctx, parsed)
+    step = _step(run, ctx, parsed, code=code, cycle=cycle, focus=focus, tokens=reply.tokens)
     run = _turn(_log(run, ctx, step), step.seq, prompt, reply)
     if code is None and isinstance(parsed, InvestigateOp):
         run = _investigate(run, ctx, parsed, cycle, focus)
@@ -331,8 +307,7 @@ def notice(
     if isinstance(parsed, Rejected):
         return _result(_log(run, ctx, _step(run, ctx, None, code=parsed.code)))
     for op in parsed:
-        code, screened = _admit(run, ctx, op, 0)
-        run = _log(run, ctx, _step(run, ctx, op, code=code, tokens=screened))
+        run = _log(run, ctx, _step(run, ctx, op, code=_admit(run, ctx, op)))
     return _result(run)
 
 

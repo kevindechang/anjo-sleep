@@ -32,7 +32,6 @@ from anjo.sleep.mind.apd.store import DataDir
 from anjo.sleep.mind.replay import dataset, resolve, sample, settings
 from anjo.sleep.mind.replay import fakes as replay_fakes
 from anjo.sleep.mind.replay.types import Label, ReplayRefused, check_synthetic
-from anjo.sleep.mind.screen import SCREEN_PROMPT
 from anjo.sleep.model_api import ChatResult, MissingApiKey
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import usd
@@ -117,7 +116,7 @@ def test_fireworks_chat_posts_to_fireworks_with_its_key_at_call_time(monkeypatch
         return ChatResult("ok", (), model, 5, 1, "stop")
 
     monkeypatch.setattr(fireworks_api, "chat", recorded)
-    spark_provider.FIREWORKS.chat(MESSAGES, 200)  # MIND's capped calls: the screen, the resolver, the labels
+    spark_provider.FIREWORKS.chat(MESSAGES, 200)  # MIND's capped calls: the resolver, the labels
     assert sent == [{"model": FIREWORKS, "tools": None, "temperature": 0.0, "max_tokens": 200}]
 
 
@@ -233,7 +232,6 @@ def test_every_fireworks_call_held_on_fireworks_mind_usd(tmp_path: Path, monkeyp
     code, text = _main(["--fake", "--data", str(data), "--only", "2"])  # life 2 has planted items for the gates
     assert code == 0, text
     seen = set(systems)
-    assert SCREEN_PROMPT.splitlines()[0] in seen  # the screen's calls too
     for prompt in ("# resolve_prediction_v1", "# resolve_v1", "# wrong_hypothesis_v1", "# life_v1", "# extract_open_v1",
                    "# leak_v1", "# discover_v1"):
         assert any(line.startswith(prompt) for line in seen), prompt
@@ -252,7 +250,7 @@ def test_a_fireworks_night_never_waits_on_sleeps_baseten_holds(tmp_path: Path) -
     waits: list[float] = []
     calls = live.SparkCalls(fakes.FakeSparkChat(model=FIREWORKS), PRICES, ledger, "fw", pool="fireworks_mind_usd",
                             wait=waits.append)
-    calls(MESSAGES, 10)
+    calls([{"role": "system", "content": spark_inquiry.RESOLVE_PROMPT}, {"role": "user", "content": "a claim"}], 10)
     calls.close()
     assert waits == [] and ledger.used("fireworks_mind_usd") > 0 and ledger.used("baseten_mind_usd") == 0.0
     assert ledger.remaining("baseten_mind_usd") == 0.0  # Baseten's shared total is untouched by Fireworks
@@ -283,7 +281,7 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         return ChatResult("{}", (), kw["model"], 1, 1, "stop")
 
     monkeypatch.setattr(baseten_api, "post_chat", post)
-    spark_inquiry.spark_open(MESSAGES, 10)  # the night's MIND step: its screen and resolver
+    spark_inquiry.spark_open(MESSAGES, 10)  # the night's MIND step: its resolver
     assert posted == [f"Baseten {baseten_api.URL} {baseten_api.KEY_ENV} {BASETEN}"]
     called: list[str] = []
 

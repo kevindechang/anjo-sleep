@@ -6,8 +6,8 @@ Live, and only after ``--live --yes``:
   each session on a throwaway key made in the data dir's ``ssh`` folder, after a ``preflight`` of
   the CLI, ``ssh`` and ``ssh-keygen``;
 - **Spark Open** on the experiment's provider (``mind.spark_provider``: Fireworks by default, or
-  Baseten): the life writer and extractor, the gates' readers, the screen, the resolver, 17b's
-  labels and the intervention test's writer;
+  Baseten): the life writer and extractor, the gates' readers, the resolver, 17b's labels and the
+  intervention test's writer;
 - **Muse Spark** (Meta's API): the gates' auditor and the APD judge;
 - **Gemini** (Vertex, ``probes.second_judge.MODEL_ID``): the rescoring judge. Its SDK is imported
   only when a live judge first calls it, with Vertex's own application-default credentials. Gemini

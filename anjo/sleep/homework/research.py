@@ -1,8 +1,6 @@
-"""MIND's ``research`` tool in the live night (Task 17): Wonder studies one screened query.
+"""MIND's ``research`` tool in the live night (Task 17): Wonder studies one query.
 
-- **The query is all Wonder sees.** The loop's screen passed it as topic terms only
-  (``anjo.sleep.app.screen``); here it meets homework's ``screen_query`` again (no ``@``, URL,
-  run of digits or word of the person's names) and becomes the study's topic, with none of the
+- **The query is all Wonder sees.** Her query becomes the study's topic, with none of the
   person's evidence beside it.
 - **Each verified source is a homework item** that Wonder wrote, so its ancestry is hosted and
   ``provenance.may_train`` keeps it out of training while hosted outputs can't train. It is stored
@@ -21,7 +19,7 @@ from datetime import date, datetime
 from typing import Final
 
 from anjo.sleep.budget import Ledger
-from anjo.sleep.homework.agent import WONDER_ID, Source, WonderClient, do_homework, screen_query
+from anjo.sleep.homework.agent import WONDER_ID, Source, WonderClient, do_homework
 from anjo.sleep.homework.tools import PageFetcher, WebSearch
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.meter import WonderMeter, WonderSpent
@@ -54,17 +52,13 @@ class WonderResearch:
     search: WebSearch
     fetcher: PageFetcher
     ledger: Ledger | None = None
-    names: tuple[str, ...] = ()
 
     def research(self, question_id: str, query: str) -> tuple[Evidence, ...]:
-        if screen_query(query, self.names) is not None:
-            return ()
         topic = Target(id=f"mind-{question_id}", person_id=self.user_id, kind="thread", label=query, check_after=None,
                        status="open", revision=0, acted_revision=0, confidence=None, last_mentioned=self.night)
         try:
             homework = do_homework(self.user_id, self.night, topic, "inquire", (), wonder=self.wonder,
-                                   search=self.search, fetcher=self.fetcher, meter=self.meter, ledger=self.ledger,
-                                   names=self.names)
+                                   search=self.search, fetcher=self.fetcher, meter=self.meter, ledger=self.ledger)
         except WonderSpent:
             return ()
         except RESEARCH_FAILURES as error:

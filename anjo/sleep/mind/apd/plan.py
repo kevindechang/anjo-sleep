@@ -43,7 +43,7 @@ from anjo.sleep.night.holds import spark_worst_usd
 from anjo.sleep.night.mind import MIND_SPARK_CALLS
 from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, MIND_SESSION_PREFIX
 
-NIGHT_WHAT: Final = "screen and resolver, held at a night's first call and settled at what it priced"
+NIGHT_WHAT: Final = "resolver, held at a night's first call and settled at what it priced"
 
 
 @dataclass(frozen=True)
@@ -274,7 +274,7 @@ def timing_plan(prices: Prices, session_s: float, parallel: int, *, provider: Sp
                     _night(provider, prices, lives * LIFE_DAYS, f"Spark Open per M night: {NIGHT_WHAT}", None),
                     Hold(pool, spark_worst_usd(prices, 1), 0, "Spark Open per start state's label, held first"),
                     Hold(pool, spark_worst_usd(prices, 4 * MIND_SPARK_CALLS), 0,
-                         "Spark Open per start state's branches (screen and resolver), one start state at a time"),
+                         "Spark Open per start state's branches (resolvers), one start state at a time"),
                     Hold(pool, spark_worst_usd(prices, EDIT_SPARK_CALLS), len(EDIT_KINDS),
                          "Spark Open per snapshot-edit of the intervention test"),
                 ), (_spark(provider), "the training is planned only: no training job runs"))
@@ -286,7 +286,7 @@ def intervene_plan(prices: Prices, session_s: float, timing: Timing | None, *, p
     return Plan(f"the intervention test: {INTERVENTION_SNAPSHOTS} snapshots x {len(EDIT_KINDS)} edits, one at a time",
                 session_s, (
                     Hold(provider.pool, spark_worst_usd(prices, EDIT_SPARK_CALLS), items, expected=expected,
-                         what="Spark Open per snapshot-edit: both twins' screen and resolver, and the wrong "
+                         what="Spark Open per snapshot-edit: both twins' resolvers, and the wrong "
                               "hypothesis's writer"),
                 ), (_spark(provider), "a snapshot-edit already on disk is skipped",
                     "one at a time: vLLM at temperature 0 isn't batch-invariant, and the twins are compared token "

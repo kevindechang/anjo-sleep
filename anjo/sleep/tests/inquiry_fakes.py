@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -92,10 +92,12 @@ class Ws:
         assert isinstance(result, it.Rejected), "expected a rejection"
         return result.code
 
-    def start(self, n: int = 0, *, rules: it.KernelRules | None = None, wipe: bool = False) -> None:
+    def start(self, n: int = 0, *, rules: it.KernelRules | None = None, wipe: bool = False,
+              denylist: str | None = None) -> None:
         rules = rules or self.rules
         self.rules = rules
-        self.ok(it.RunStart(day(n), night(n), "inquiry", rules, "priority", None, it.Budget(), wipe), at=night(n))
+        self.ok(it.RunStart(day(n), night(n), "inquiry", rules, "priority", None, it.Budget(), wipe, denylist),
+                at=night(n))
 
     def arrive(self, *items: Evidence, at: datetime | None = None) -> None:
         self.ok(it.Retrieved(None, "new_evidence", "", tuple(ref(i) for i in items)), at=at)
@@ -172,17 +174,6 @@ class ScriptedThinker:
 
 
 @dataclass
-class FakeScreen:
-    refuse: Callable[[str, it.ScreenPurpose], bool] = lambda text, purpose: False
-    tokens: int = 5
-    seen: list[tuple[str, it.ScreenPurpose]] = field(default_factory=list)
-
-    def screen(self, text: str, purpose: it.ScreenPurpose, max_tokens: int) -> it.Screened:
-        self.seen.append((text, purpose))
-        return it.Screened(allowed=not self.refuse(text, purpose), tokens=min(self.tokens, max_tokens))
-
-
-@dataclass
 class FakeWorld:
     answer: str = "An 85 mm lens needs about 3 m of distance for a medium shot."
     tokens: int = 30
@@ -233,12 +224,12 @@ class KillingLog(MemoryWorkspaceLog):
 
 
 def ports(
-    items: Sequence[Evidence], script: list[Any], *, screen: FakeScreen | None = None,
-    resolver: FakeResolver | None = None, world: FakeWorld | None = None, research: FakeResearch | None = None,
+    items: Sequence[Evidence], script: list[Any], *, resolver: FakeResolver | None = None,
+    world: FakeWorld | None = None, research: FakeResearch | None = None,
     log: MemoryWorkspaceLog | None = None, thinker: ScriptedThinker | None = None,
 ) -> InquiryPorts:
     return InquiryPorts(
-        thinker=thinker or ScriptedThinker(script), screen=screen or FakeScreen(), search=MemorySearch(items),
+        thinker=thinker or ScriptedThinker(script), search=MemorySearch(items),
         world=world or FakeWorld(), resolver=resolver or FakeResolver(), log=log or MemoryWorkspaceLog(),
         research=research,
     )

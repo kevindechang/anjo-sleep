@@ -16,7 +16,7 @@ from anjo.sleep.mind.core.types import Decision, Ignition, Predictions, SlotPred
 from anjo.sleep.mind.inquiry import codec, controller, kernel, loop
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.mind.inquiry.log import MemoryWorkspaceLog
-from anjo.sleep.tests.inquiry_fakes import FakeScreen, Ws, commitment, day, ev, night, noon, ports
+from anjo.sleep.tests.inquiry_fakes import Ws, commitment, day, ev, night, noon, ports
 from anjo.sleep.types import Want, WantSnapshot
 
 SHOOT = "t-shoot"
@@ -34,13 +34,11 @@ def _held() -> tuple[Ws, MemoryWorkspaceLog]:
 
 def test_ignition_opens_a_question_through_the_kernel() -> None:
     w, log = _held()
-    screen = FakeScreen()
     fired = Ignition(slot=2, other=None, kind="risk", score=0.91, cited_event_ids=(CANCELLED.id, "dreamt-7", CAMERA.id))
-    done = bridge.ignite(w.ws, (fired,), log, targets=TARGETS, as_of=night(5), screen=screen)
+    done = bridge.ignite(w.ws, (fired,), log, targets=TARGETS, as_of=night(5))
     question = done.ws.questions[-1]
     assert question.origin_evidence == (CAMERA.id, CANCELLED.id)  # real items only, oldest first
     assert question.target_ids == (SHOOT,) and question.status == "open"
-    assert screen.seen and screen.seen[0][1] == "question"
     assert kernel.fold(log.events()) == done.ws  # logged through the kernel, one step at a time
     assert done.events and all(e.step.applied for e in done.events)
 

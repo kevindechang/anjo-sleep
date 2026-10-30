@@ -7,7 +7,7 @@ providers at the same list price. MIND's experiment, everything under ``mind/apd
 - ``fireworks`` (the default): ``fireworks_api``, every call held on ``fireworks_mind_usd``;
 - ``baseten``: ``baseten_api``, every call held on ``baseten_mind_usd``, as before.
 
-The lives' writer and extractor, the gates' readers, the screen, the resolver, 17b's labels and
+The lives' writer and extractor, the gates' readers, the resolver, 17b's labels and
 the intervention test's writer all go through it. The two providers' snapshots may differ, so a
 pilot never mixes them: its data dir pins the provider and model id at its first Spark Open
 command and refuses the other after that (``DataDir.pin_spark``).
@@ -50,9 +50,9 @@ class WriteFn(Protocol):
 @dataclass(frozen=True)
 class SparkProvider:
     """One provider of Spark Open: the id it serves under (and its replies report), the pool every
-    call of MIND's experiment on it is held on, its capped calls (``chat``: the screen, the
-    resolver, the labels and the wrong hypothesis) and its generation calls (``write``: the lives'
-    writer and extractor, and the gates' readers)."""
+    call of MIND's experiment on it is held on, its capped calls (``chat``: the resolver, the
+    labels and the wrong hypothesis) and its generation calls (``write``: the lives' writer and
+    extractor, and the gates' readers)."""
 
     name: ProviderName
     label: str

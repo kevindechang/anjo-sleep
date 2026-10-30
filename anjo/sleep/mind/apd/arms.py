@@ -7,7 +7,7 @@ Every arm gets the same things, and only these:
 - the life's own ``evidence_search`` (``LifeSearch``), masked to each night, and the same
   ``world_query``;
 - the same budget, fresh each night: ``CYCLE_CAP`` cycles and ``TOKEN_CAP`` generated tokens,
-  retries and screening included, with every capped call given the tokens left as ``max_tokens``;
+  retries included, with every capped call given the tokens left as ``max_tokens``;
 - the same ``report_finding``, stamped into one ``FindingRegistry`` per arm and life, so its
   ``FINDING_CAP`` distinct findings hold across every night and M-persist's wipes. A cite of an
   item the arm couldn't have seen by that night is dropped from the report.
@@ -629,7 +629,7 @@ def mind_ports(models: ArmModels, life: Life, log: WorkspaceLog, brief: str) -> 
     """A MIND arm's ports on one life: the shared models behind the brief, the life's search, and
     ``log``. No research: APD runs offline."""
     return InquiryPorts(
-        thinker=BriefedThinker(models.thinker, brief), screen=models.screen, search=LifeSearch(life.evidence),
+        thinker=BriefedThinker(models.thinker, brief), search=LifeSearch(life.evidence),
         world=models.world, resolver=models.resolver, log=log,
     )
 

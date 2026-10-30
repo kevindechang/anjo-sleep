@@ -21,7 +21,6 @@ from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
 from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.mind.inquiry import types as it
-from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.deps import MindCall, NightSettings
 from anjo.sleep.night.meter import WonderMeter
 from anjo.sleep.night.mind import tonight
@@ -32,7 +31,7 @@ from anjo.sleep.provenance import may_train
 from anjo.sleep.sim.accelerated import FAKE_PERSONA, FAKE_USER, PERSONAS, run_accelerated
 from anjo.sleep.tests.accelerated_rig import FakeAccelerated
 from anjo.sleep.tests.homework_fakes import GUIDE_URL, STUDY_URL, FakeSearch, FakeWonder, research_script, study_web
-from anjo.sleep.tests.inquiry_fakes import FakeResolver, FakeScreen, Kill
+from anjo.sleep.tests.inquiry_fakes import FakeResolver, Kill
 from anjo.sleep.tests.mind_night_fakes import (
     RESEARCH_URL,
     STATEMENT,
@@ -324,7 +323,7 @@ def test_sourceless_finding_never_trainable(tmp_path: Path) -> None:
     assert all(STATEMENT not in data for data in trainer.data)
 
 
-# ── Research: the personal-terms screen, and the paid caps ───────────────────
+# ── Research: the query goes through, and the paid caps ──────────────────────
 
 
 def test_spent_wonder_offers_no_research(tmp_path: Path) -> None:
@@ -357,16 +356,16 @@ def test_research_that_reached_wonder_spends_an_action_when_the_inquiry_then_fai
     assert (summary(result.log_path)["paid_actions"], summary(result.log_path)["wonder_calls"]) == (1, 1)
 
 
-def test_wonder_research_screens_its_query_and_stores_hosted_sources(tmp_path: Path) -> None:
+def test_wonder_research_stores_hosted_sources(tmp_path: Path) -> None:
     store = JsonlEvidenceStore(tmp_path / "evidence.jsonl", UID, codec=PLAIN, guard=NO_GUARD)
     wonder, meter = FakeWonder(research_script()), WonderMeter(12, 3.0)
     at = datetime.combine(NIGHT + timedelta(days=1), time.min, tzinfo=timezone.utc)
     port = WonderResearch(user_id=UID, night=NIGHT, at=at, store=store, meter=meter, wonder=wonder,
-                          search=FakeSearch(), fetcher=study_web().fetcher(), names=("Maya Lin",))
-    assert port.research("q1", "how maya sorts film") == () and wonder.calls == []
-    items = port.research("q1", "optical sorting film plastics")
+                          search=FakeSearch(), fetcher=study_web().fetcher())
+    items = port.research("q1", "how Maya Lin sorts film")
     assert {i.source for i in items} == {STUDY_URL, GUIDE_URL} and {i.id for i in store.stored(NIGHT)} == {i.id for i in items}
     assert all(i.kind == "homework" and not may_train(i.ancestry, hosted_in_training=False) for i in items)
+    assert "how Maya Lin sorts film" in wonder.calls[0]["messages"][1]["content"]  # the query, name included, went out
     assert "(nothing yet)" in wonder.calls[0]["messages"][1]["content"]  # none of the person's evidence went out
     assert meter.calls == 3 and meter.usd > 0
     again = replace(port, wonder=FakeWonder(research_script()))
@@ -419,20 +418,48 @@ def test_budget_stop_ends_mind_steps_cleanly(tmp_path: Path) -> None:
     assert len(workspace(world, UID).events()) == held and len(thinker.prompts) == asked
 
 
+class _KillOnExtend:
+    """The person's workspace log for a notice pass killed as it commits: nothing is written."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def append(self, event: Any) -> None:
+        self._inner.append(event)
+
+    def events(self) -> Any:
+        return self._inner.events()
+
+    def extend(self, events: Any) -> None:
+        raise Kill()
+
+
+class _FailOnceOnExtend:
+    """The log refuses the pass's one record, then takes its spend (``_Batched.debit``)."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner, self._failed = inner, False
+
+    def append(self, event: Any) -> None:
+        self._inner.append(event)
+
+    def events(self) -> Any:
+        return self._inner.events()
+
+    def extend(self, events: Any) -> None:
+        if not self._failed:
+            self._failed = True
+            raise ValueError("the log refused the record")
+        self._inner.extend(events)
+
+
 def test_a_notice_pass_killed_before_its_questions_are_logged_offers_its_items_again(tmp_path: Path) -> None:
     world = _world(tmp_path)
     thinker = LifeThinker(targets=(f"{UID}-t1",), notices=2)
-    killed: list[str] = []
-
-    def kill_at_the_screen(text: str, purpose: it.ScreenPurpose) -> bool:  # after the reply, before its ops
-        if not killed:
-            killed.append(purpose)
-            raise Kill()
-        return False
 
     with pytest.raises(Kill):
-        _night(world, mind_night(world, thinker, screen=FakeScreen(refuse=kill_at_the_screen)))
-    assert killed == ["question"] and workspace(world, UID).events() == ()  # the pass wrote nothing
+        _night(world, mind_night(world, thinker, log=lambda uid: _KillOnExtend(workspace(world, uid))))
+    assert workspace(world, UID).events() == ()  # the pass wrote nothing
 
     rerun = _night(world, mind_night(world, thinker))
     notice = step(rerun.log_path, "notice")
@@ -443,10 +470,7 @@ def test_a_notice_pass_that_fails_after_its_reply_still_spends_tonights_tokens(t
     world = _world(tmp_path)
     thinker = LifeThinker(targets=(f"{UID}-t1",), notices=2, tokens=1500)
 
-    def down(text: str, purpose: it.ScreenPurpose) -> bool:  # the screen fails after the thinker replied
-        raise ModelApiError("the screen's provider is down")
-
-    failed = _night(world, mind_night(world, thinker, screen=FakeScreen(refuse=down)))
+    failed = _night(world, mind_night(world, thinker, log=lambda uid: _FailOnceOnExtend(workspace(world, uid))))
     assert step(failed.log_path, "notice")["stopped"] == "failed" and len(thinker.prompts) == 1
     start, spent = workspace(world, UID).events()  # its RunStart and its spend: no item, no question
     assert isinstance(start.step.entry, it.RunStart) and start.step.entry.call == "notice"
@@ -456,7 +480,7 @@ def test_a_notice_pass_that_fails_after_its_reply_still_spends_tonights_tokens(t
     rerun = _night(world, mind_night(world, thinker))
     notice = step(rerun.log_path, "notice")
     assert notice["new"] == 3 and notice["questions_opened"] == 1  # its items are offered again
-    assert notice["budget"]["tokens_used"] == 1500 + 1500 + FakeScreen().tokens  # the failed pass counts
+    assert notice["budget"]["tokens_used"] == 1500 + 1500  # the failed pass counts
 
 
 def test_killed_inquiry_resumes_its_cut_off_tool(tmp_path: Path) -> None:

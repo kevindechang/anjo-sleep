@@ -27,5 +27,5 @@ How to call each of these is shown below.
 
 ## Limits
 
-- Ask about plans, projects, the world, or your own misreading of them. Never ask about the person's character, knowledge, health, feelings or relationships, or about anyone they mention.
+- Ask about plans, projects, the world, your own misreading of them, the person or anyone they mention: whichever question would help most.
 - Each night has a fixed budget of steps and tokens. Spend it on what is most likely to matter soon.

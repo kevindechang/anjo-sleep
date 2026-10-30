@@ -132,7 +132,7 @@ def parse_notices(text: str) -> tuple[NoticeOp, ...] | Rejected:
 
 def field_value(text: str, key: str) -> object | None:
     """``key``'s value in the first JSON object in ``text`` that holds it, or ``None``: how the
-    resolver's verdict and the screen's answer are read."""
+    resolver's verdict is read."""
     for value in _values(text):
         for candidate in value if isinstance(value, list) else [value]:
             if isinstance(candidate, Mapping) and key in candidate:

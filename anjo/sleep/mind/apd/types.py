@@ -73,7 +73,7 @@ from anjo.sleep.mind.inquiry._check import (
     freeze_ids,
     freeze_tuple,
 )
-from anjo.sleep.mind.inquiry.ports import PredictionResolver, ScreenPort, Thinker, WorldQuery
+from anjo.sleep.mind.inquiry.ports import PredictionResolver, Thinker, WorldQuery
 from anjo.sleep.mind.inquiry.types import (
     FINDING_KINDS,
     Answered,
@@ -426,14 +426,13 @@ class Reported:
 @dataclass(frozen=True)
 class ArmModels:
     """The model-backed ports every arm shares: the same Glimmer at the same precision as the
-    thinker, the same ``world_query``, the screen and the resolver (MIND's arms use the last
-    two). ``clock`` is the night the thinker and world query date their prompts on, which every
-    arm sets as each night starts; ``reported`` receives the model each world answer and resolver
-    reply named (live ports only: ``apd.live``)."""
+    thinker, the same ``world_query``, and the resolver (MIND's arms use it). ``clock`` is the
+    night the thinker and world query date their prompts on, which every arm sets as each night
+    starts; ``reported`` receives the model each world answer and resolver reply named (live
+    ports only: ``apd.live``)."""
 
     thinker: Thinker
     world: WorldQuery
-    screen: ScreenPort
     resolver: PredictionResolver
     clock: NightClock | None = field(default=None, compare=False)
     reported: Reported | None = field(default=None, compare=False)

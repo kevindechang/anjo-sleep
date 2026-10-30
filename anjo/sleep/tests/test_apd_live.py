@@ -23,7 +23,6 @@ from anjo.sleep.mind.apd.arms import load_brief
 from anjo.sleep.mind.apd.types import ArmName, ArmRun, Life, Written, model_written
 from anjo.sleep.mind.inquiry.types import Answered, RunStart
 from anjo.sleep.mind.replay import dataset, resolve, sample, served, settings
-from anjo.sleep.mind.screen import SCREEN_PROMPT
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.provenance import GLIMMER, may_train
@@ -122,12 +121,12 @@ def test_every_spark_open_call_held_on_baseten_mind_usd(tmp_path: Path, vm: fake
     spark = _HeldSpark(ledger)
     with fakes.serving(vm=vm) as session:
         live.run_live("M", _development(), session, spark, ledger=ledger, prices=PRICES)
-    assert SCREEN_PROMPT in spark.systems and RESOLVE_PROMPT in spark.systems  # the screen's calls too
+    assert RESOLVE_PROMPT in spark.systems  # the resolver's calls
     assert ledger.open_holds() == () and ledger.used("baseten_mind_usd") > 0
     capped = live.SparkCalls(fakes.FakeSparkChat(), PRICES, ledger, "capped", per_night=2)
     with pytest.raises(Exception, match="holds"):
         for _ in range(3):
-            capped([{"role": "system", "content": SCREEN_PROMPT}, {"role": "user", "content": "x"}], 10)
+            capped([{"role": "system", "content": RESOLVE_PROMPT}, {"role": "user", "content": "x"}], 10)
     assert capped.calls == 2 and capped.chat.calls == 2  # type: ignore[attr-defined]
     assert len(ledger.open_holds()) == 1  # held before the first call, open while the night runs
     capped.close()
@@ -157,7 +156,7 @@ def test_replay_accepts_a_recorded_m_run_and_refuses_an_unrecorded_one(vm: fakes
         labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=fakes.FakeSparkChat()))
         spark = live.SparkCalls(fakes.FakeSparkChat(), None)
         arm = live.arm_models(session, spark)
-        models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=arm.world, screen=arm.screen,
+        models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=arm.world,
                                      resolver_chat=fakes.FakeSparkChat())
         branches = sample.sample_all([(life, starts)], models, labels, k=2)
     data = dataset.build([life], starts, branches, labels, brief=load_brief(), penalty=settings.token_penalty())

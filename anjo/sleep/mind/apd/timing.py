@@ -198,16 +198,16 @@ def _timed(clock: Callable[[], float], work: Callable[[], object]) -> tuple[obje
 def _branches(life: Life, start: StartState, labels: resolve.LabelBook, session: ColabSession, backend: Backend,
               metered: SparkCalls, holds: Holds | None) -> tuple[Mapping[str, tuple[Branch, ...]], float]:
     """One start state's branches: their world query dated on its night, as their thinkers are,
-    and their screen's Spark Open held for this start state alone, settled before the next."""
-    screen = SparkCalls(backend.spark, backend.prices, backend.ledger, f"timing:branch-screens:{start.id}",
-                        backend.provider.pool, per_night=REPLAY_K * MIND_SPARK_CALLS)
-    models = arm_models(session, screen)
+    and their resolver's Spark Open held for this start state alone, settled before the next."""
+    spark = SparkCalls(backend.spark, backend.prices, backend.ledger, f"timing:branch-spark:{start.id}",
+                       backend.provider.pool, per_night=REPLAY_K * MIND_SPARK_CALLS)
+    models = arm_models(session, spark)
     date_night(models.clock, start.night)
     replay_models = sample.ReplayModels(thinker_for=served.branch_thinkers(session), world=models.world,
-                                        screen=models.screen, resolver_chat=metered)
-    with held_run(screen):
+                                        resolver_chat=metered)
+    with held_run(spark):
         found = sample.sample_all([(life, [start])], replay_models, labels, holds=holds)
-    return found, screen.total_usd
+    return found, spark.total_usd
 
 
 def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, out: Out,
@@ -221,11 +221,11 @@ def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, 
                          per_night=10**9)  # 17b holds these itself
     labels = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=metered), holds=holds)
     branches: dict[str, tuple[Branch, ...]] = {}
-    screens, started = 0.0, clock()
+    branch_usd, started = 0.0, clock()
     for start in starts:
         found, usd = _branches(life, start, labels, session, backend, metered, holds)
         branches.update(found)
-        screens += usd
+        branch_usd += usd
     seconds = max(0.0, clock() - started)
     replay = dataset.build([life], starts, branches, labels, brief=load_brief(), penalty=settings.token_penalty())
     out(f"17b on {life.id}: {len(starts)} start state(s), {sum(len(b) for b in branches.values())} branch(es), "
@@ -235,7 +235,7 @@ def _replay(life: Life, m_run: ArmRun, session: ColabSession, backend: Backend, 
         planned = thinker.plan(replay, scale=DEVELOPMENT_LIVES)
         out(thinker.describe(planned))
         training = planned.compute_units
-    return seconds, metered.total_usd + screens, training
+    return seconds, metered.total_usd + branch_usd, training
 
 
 def _check(backend: Backend) -> None:

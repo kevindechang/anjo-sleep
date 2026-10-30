@@ -48,7 +48,6 @@ RejectCode = Literal[
     "hypothesize_once",       # a second HYPOTHESIZE while the catch-all holds SPLIT_MIN or less
     "hypothesis_count",       # a first set that isn't 2-4 alternatives, or a split past 4
     "domain_denylist",        # a person-diagnosis term from the kernel's denylist
-    "domain_screen",          # ScreenPort refused it: its subject is the person or a named third party
 ]
 # K5 and K6 never reject an operation. K5 acts through the controller (a Decision with reason
 # "stalled"); K6 is every event's before and after digest, which kernel.fold checks. The finding
@@ -56,7 +55,7 @@ RejectCode = Literal[
 
 REJECT_CODES: Final = frozenset(get_args(RejectCode))
 CYCLE_CAP: Final = 12  # a night
-TOKEN_CAP: Final = 20_000  # a night: generated tokens of the thinker, world_query and screen, retries included
+TOKEN_CAP: Final = 20_000  # a night: generated tokens of the thinker and world_query, retries included
 
 
 # ── What a run records when it starts ─────────────────────────────────────────
@@ -306,8 +305,8 @@ class Step:
     - ``focus`` is the question in focus, set on every cycle step, so a malformed reply counts
       against the right question in K5's stall count.
     - ``tokens`` is the capped tokens charged with this step. The thinker's go on the step its
-      reply produced, the screen's on the step it screened and ``world_query``'s on its
-      ``Answered``; the resolver's are reported apart.
+      reply produced and ``world_query``'s on its ``Answered``; the resolver's are reported
+      apart.
     """
 
     seq: int

@@ -6,11 +6,10 @@
 - **``world_query``:** the same base Glimmer, under ``world_query_v1.md``, at temperature 0 with no
   adapter, dated the same, as the night wires it (``app/mind_night.py``): the world query asks the
   thinker's own model.
-- **The screen and the blind resolver:** Spark Open (``mind.screen.SparkScreen``, with no names,
-  since a synthetic life has none, and ``SparkResolver``) on the experiment's provider
-  (``mind.spark_provider``). Every Spark Open call of a run, the screen's included, goes through
-  one ``SparkCalls``: counted against the run's hold on the provider's pool (``baseten_mind_usd``
-  or ``fireworks_mind_usd``; no call past it) and priced as it returns.
+- **The blind resolver:** Spark Open (``SparkResolver``) on the experiment's provider
+  (``mind.spark_provider``). Every Spark Open call of a run goes through one ``SparkCalls``:
+  counted against the run's hold on the provider's pool (``baseten_mind_usd`` or
+  ``fireworks_mind_usd``; no call past it) and priced as it returns.
 - **Provenance:** the model each world answer's and resolver verdict's reply named, as its API
   reported it, goes to ``ArmModels.reported``, which the arms pair with the step that logs it.
 - **No run with a failed call:** a transient failure (a 429, a 5xx, a timeout or a reset) is
@@ -53,7 +52,6 @@ from anjo.sleep.mind.inquiry.types import Budget, ModelReply
 from anjo.sleep.mind.replay.served import ServedThinker, arm_thinker
 from anjo.sleep.mind.replay.spend import SPARK_POOL, colab_client
 from anjo.sleep.mind.replay.types import CallEnd
-from anjo.sleep.mind.screen import SparkScreen
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import hold, spark_usd, spark_worst_usd, usd
@@ -144,7 +142,7 @@ class SparkCalls:
     """Every Spark Open call of one run, held a night at a time as the night's MIND step holds them:
     at a night's first call (``clock``), its worst case of ``per_night`` calls is held on ``pool``,
     the provider's (the night before settled at what it priced), and a call past that count
-    is refused (the port then refuses or says undetermined). Each call is journaled with its real
+    is refused (the resolver then says undetermined). Each call is journaled with its real
     tokens before it returns. A transient failure is tried again (``retry``), ``wait``-ing its
     backoff, each try a call of its own under the night's count; a failed try is priced at one
     call's worst case, since what it cost is unknown, and journaled as failed. A call that still
@@ -284,15 +282,15 @@ def room_wait(ledger: Ledger, need: float, pool: Pool = SPARK_POOL) -> float | N
 
 def arm_models(session: ColabSession, spark: SparkCalls, *, adapter: CheckpointRef | None = None) -> ArmModels:
     """One run's models: Glimmer on ``session`` (``adapter`` for M+replay and M+shuffled) as the
-    thinker and the world query, Spark Open through ``spark`` as the screen and the resolver, all
-    on one night clock."""
+    thinker and the world query, Spark Open through ``spark`` as the resolver, all on one night
+    clock."""
     clock, reported = NightClock(), Reported()
     spark.clock, spark.serving = clock, session
     client = colab_client(session)
     return ArmModels(
         thinker=StrictThinker(arm_thinker(session, adapter, clock)),
         world=GlimmerWorld(GlimmerChat(client, clock), reported),
-        screen=SparkScreen(names=(), chat=spark), resolver=SparkResolver(chat=spark.reporting(reported, "resolver")),
+        resolver=SparkResolver(chat=spark.reporting(reported, "resolver")),
         clock=clock, reported=reported,
     )
 

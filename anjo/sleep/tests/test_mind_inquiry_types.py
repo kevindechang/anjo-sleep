@@ -136,7 +136,7 @@ def _samples() -> dict[str, object]:
         "WorkspaceEvent": event, "Workspace": ws, "Applied": it.Applied(ws=ws, event=event),
         "Rejected": it.Rejected("k1_bucket"), "KernelRules": it.FULL_RULES, "Priority": _priority(),
         "Budget": budget, "Decision": decision, "ModelReply": reply,
-        "Screened": it.Screened(allowed=True, tokens=12), "ResolverReply": it.ResolverReply("true", 30),
+        "ResolverReply": it.ResolverReply("true", 30),
         "Turn": turn,
         "InquiryRun": it.InquiryRun(ws=ws, events=(event,), decisions=(decision,), turns=(turn,), budget=budget),
         "Alternative": it.Alternative("She will shoot from the courtyard", 0.3),
@@ -523,7 +523,6 @@ def test_codec_errors_never_repeat_the_models_text() -> None:
 
 PORTS: dict[str, dict[str, tuple[str, ...]]] = {
     "Thinker": {"propose": ("rendered", "max_tokens")},
-    "ScreenPort": {"screen": ("text", "purpose", "max_tokens")},
     "EvidenceSearch": {"search": ("query", "as_of", "k"), "get": ("ids", "as_of")},
     "WorldQuery": {"ask": ("text", "max_tokens")},
     "Research": {"research": ("question_id", "query")},
@@ -557,7 +556,7 @@ def test_research_is_absent_outside_the_live_night() -> None:
     fields = {f.name: f for f in dataclasses.fields(ports.InquiryPorts)}
     assert fields["research"].default is None
     assert [name for name, f in fields.items() if f.default is dataclasses.MISSING] == [
-        "thinker", "screen", "search", "world", "resolver", "log",
+        "thinker", "search", "world", "resolver", "log",
     ]
 
 

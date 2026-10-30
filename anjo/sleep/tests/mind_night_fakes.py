@@ -19,7 +19,7 @@ from anjo.sleep.night.deps import MindCall
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.night.mind import MindModels, MindNight, SparkWrap
 from anjo.sleep.provenance import GLIMMER
-from anjo.sleep.tests.inquiry_fakes import FakeResolver, FakeScreen, FakeWorld
+from anjo.sleep.tests.inquiry_fakes import FakeResolver, FakeWorld
 from anjo.sleep.tests.night_fakes import World
 from anjo.sleep.tests.sleep_fakes import WONDER
 from anjo.sleep.types import Evidence
@@ -215,16 +215,14 @@ class Researches:
 
 
 def mind_night(
-    world: World, thinker: Any, *, screen: Any = None, research: Callable[[MindCall], Any] | None = None,
-    resolver: Any = None, **kw: Any,
+    world: World, thinker: Any, *, research: Callable[[MindCall], Any] | None = None,
+    resolver: Any = None, log: Callable[[str], Any] | None = None, **kw: Any,
 ) -> MindNight:
-    """``MindNight`` over ``world``'s files with fake models; ``screen`` may take the step's Spark
-    wrapper (``screen(spark)``) to build a real screen on a fake chat."""
+    """``MindNight`` over ``world``'s files with fake models; ``log`` may replace the workspace log
+    (a log that fails a write, say)."""
 
     def models(user_id: str, spark: SparkWrap) -> MindModels:
-        built = screen(spark) if callable(screen) else screen or FakeScreen()
-        return MindModels(thinker=thinker, world=FakeWorld(), screen=built, resolver=resolver or FakeResolver(),
-                          model=GLIMMER)
+        return MindModels(thinker=thinker, world=FakeWorld(), resolver=resolver or FakeResolver(), model=GLIMMER)
 
-    return MindNight(models=models, log=lambda uid: workspace(world, uid), prices=world.deps().prices,
+    return MindNight(models=models, log=log or (lambda uid: workspace(world, uid)), prices=world.deps().prices,
                      research=research, timer=world.tick, **kw)
