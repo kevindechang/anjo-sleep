@@ -16,6 +16,7 @@
 <script src="/sleep/demo/nights.js" defer></script>
 <script src="/sleep/demo/mind.js" defer></script>
 <script src="/sleep/demo/night.js" defer></script>
+<script src="/sleep/demo/timeline.js" defer></script>
 <script src="/sleep/demo/dailies.js" defer></script>
 </head>
 <body>
@@ -26,6 +27,16 @@
   <h1>{{headline}}</h1>
   <p class="lede">{{lede}}</p>
 </header>
+
+<section id="return-band" class="return-band" aria-labelledby="return-heading" hidden>
+  <div class="return-inner">
+    <p class="kicker">{{return_kicker}}</p>
+    <h2 id="return-heading">{{return_heading}}</h2>
+    <p id="return-quiet" class="note return-quiet" aria-live="polite">{{return_loading}}</p>
+    <div id="return-body" class="return-body"></div>
+    <a id="return-trace" class="return-trace" href="#mind-timeline" hidden>{{return_trace}}</a>
+  </div>
+</section>
 
 <div class="layout">
   <aside id="brief" class="brief" aria-labelledby="brief-heading">
@@ -174,6 +185,15 @@
     <p id="mind-glance" class="mind-glance">{{mind_loading}}</p>
     <p class="note">{{mind_note}}</p>
   </header>
+  <section id="mind-timeline" class="timeline" aria-labelledby="timeline-heading">
+    <header class="timeline-head">
+      <p class="kicker">{{mind_kicker}}</p>
+      <h3 id="timeline-heading">{{timeline_heading}}</h3>
+      <p class="note">{{timeline_note}}</p>
+      <p id="mind-timeline-state" class="timeline-state" aria-live="polite">{{timeline_loading}}</p>
+    </header>
+    <div id="mind-timeline-body" class="timeline-body"></div>
+  </section>
   <section id="mind-night" class="night-loop" aria-labelledby="night-loop-heading">
     <p class="kicker">{{story_kicker}}</p>
     <h3 id="night-loop-heading">{{story_heading}}</h3>

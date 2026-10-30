@@ -20,11 +20,16 @@ The full step, under the same prefixes (the carve-out is unchanged):
   pre-generated answer), ``POST /api/sleep/demo/nights/<stop>/ask`` (the visitor's question at one
   stop, live), ``POST /api/sleep/demo/toggles/<scene>`` (the labeled "notes off" and swap pairs) and
   ``GET /api/sleep/demo/mind`` (her mind panel, its held-out text filtered on the server);
+- with the visit token: ``GET /api/sleep/demo/return``: the return moment, her own message from the
+  records her mind panel reads (the held note waiting for the next open, else a share MIND raised),
+  with how many quiet days it answers. The page shows it above the chat when the visit starts;
 - with the visit token: ``GET /api/sleep/demo/dailies`` and ``/api/sleep/demo/dailies/<night>``
   (Dailies, the morning card for her latest night or night ``<night>``, filtered the same way; 404
   for a night she hasn't run). No GPU, no model;
 - ``GET /sleep/demo/nights.js``, ``/sleep/demo/mind.js``, ``/sleep/demo/night.js``,
-  ``/sleep/demo/mind.css``, ``/sleep/demo/dailies.js``, ``/sleep/demo/dailies.css``: their files.
+  ``/sleep/demo/timeline.js``, ``/sleep/demo/mind.css``, ``/sleep/demo/dailies.js``,
+  ``/sleep/demo/dailies.css`` and ``/sleep/demo/fonts/geist-400.ttf`` / ``geist-600.ttf``: their
+  files.
 
 The page is public: there is no account, no cookie and no stored message. ``PUBLIC_PREFIXES`` are
 the only paths ``register_sleep`` opens to anonymous visitors (the app's auth middleware reads them
@@ -203,6 +208,17 @@ def page_file(name: str) -> Response:
     return Response(content, media_type=media_type, headers=NO_STORE)
 
 
+@page_router.get("/fonts/{name}")
+def font_file(name: str) -> Response:
+    """The page's own type, one level under ``/fonts``: it never walks past its folder."""
+    _require_host()
+    found = asset(f"fonts/{name}")
+    if found is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    content, media_type = found
+    return Response(content, media_type=media_type, headers=NO_STORE)
+
+
 # ── the API ───────────────────────────────────────────────────────────────────
 
 
@@ -332,6 +348,17 @@ def mind(
 ) -> dict[str, Any]:
     try:
         return dict(service.mind(_client(request, service), x_demo_visit, _now()))
+    except Refused as refused:
+        raise _refusal(refused) from None
+
+
+@router.get("/return")
+def return_moment(
+    request: Request, x_demo_visit: str = Header(default="", max_length=256),
+    service: DemoService = Depends(demo_service),
+) -> dict[str, Any]:
+    try:
+        return dict(service.return_moment(_client(request, service), x_demo_visit, _now()))
     except Refused as refused:
         raise _refusal(refused) from None
 

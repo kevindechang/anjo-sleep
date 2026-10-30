@@ -411,6 +411,11 @@ class DemoService:
             raise Refused(503, "resting")
         return self._mind()
 
+    def return_moment(self, client: str, token: str, now: datetime) -> Mapping[str, Any]:
+        """The message she left while the person was away, from the same read as her mind panel."""
+        moment = self.mind(client, token, now).get("return")
+        return moment if isinstance(moment, Mapping) else {"state": "unavailable"}
+
     def dailies(self, client: str, token: str, night: int | None, now: datetime) -> Mapping[str, Any]:
         """Night ``night``'s morning card (by its number), or the latest night's when None."""
         self._visit(token, now)

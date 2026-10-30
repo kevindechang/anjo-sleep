@@ -58,6 +58,61 @@
     }
   }
 
+  function fill(template, values) {
+    return String(template).replace(/\{(\w+)\}/g, (slot, name) => (name in values ? String(values[name]) : slot));
+  }
+
+  function quietDays(n) {
+    return fill(copy[n === 1 ? "return_days_one" : "return_days_many"], { n });
+  }
+
+  // The return moment: her own message from the records, never fixed copy. Shown above the chat as
+  // soon as the visit starts; the mind band's timeline is where its working out is read.
+  function renderReturn(moment) {
+    const body = byId("return-body");
+    const trace = byId("return-trace");
+    const state = moment && moment.state ? moment.state : "unavailable";
+    body.replaceChildren();
+    trace.hidden = state !== "ok";
+    if (state !== "ok") {
+      byId("return-quiet").textContent = "";
+      body.append(element("p", "return-note", copy[`return_${state}`] || copy.return_unavailable));
+      return;
+    }
+    byId("return-quiet").textContent = quietDays(moment.quiet_days || 0);
+    body.append(element("p", "note return-kind", copy[`return_kind_${moment.kind}`] || ""));
+    const message = element("blockquote", "return-message");
+    paragraphs(message, moment.text);
+    body.append(message);
+    const record = moment.record || {};
+    if (moment.kind === "held_note" && record.night) {
+      body.append(element("p", "note return-record", fill(copy.return_record_note, { night: record.night })));
+    } else if (record.id) {
+      body.append(element("p", "note return-record",
+        fill(copy.return_record_share, { id: record.id, event: record.event || copy.timeline_detail_record })));
+    }
+    if (moment.sources && moment.sources.length) {
+      const list = element("ul", "return-sources");
+      list.setAttribute("aria-label", copy.return_sources);
+      for (const source of moment.sources) {
+        const row = element("li");
+        row.append(element("code", "", source.id));
+        if (source.url) row.append(element("span", "note", source.url));
+        list.append(row);
+      }
+      body.append(list);
+    }
+  }
+
+  async function loadReturn() {
+    byId("return-band").hidden = false;
+    try {
+      renderReturn(await call("/return"));
+    } catch (error) {
+      renderReturn({ state: "unavailable" });
+    }
+  }
+
   // The brief is plain text: "## " lines are headings and "- " lines are list items.
   function renderBrief(text) {
     const body = byId("brief-body");
@@ -275,6 +330,7 @@
       say("");
       byId("scenes-heading").focus();
       document.dispatchEvent(new CustomEvent("demo:visit", { detail: { scenes } }));
+      loadReturn();
     } catch (error) {
       say(error.message);
     }

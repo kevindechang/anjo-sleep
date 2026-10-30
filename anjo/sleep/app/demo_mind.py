@@ -29,7 +29,7 @@ import logging
 import threading
 from functools import partial
 from collections.abc import Callable, Iterator
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Any, Final, TypeVar, cast
@@ -52,6 +52,7 @@ from anjo.sleep.demo.night_answers import NightAnswers
 from anjo.sleep.demo.night_answers import load as load_answers
 from anjo.sleep.demo.panel import MindSources, NightRecord, mind_view
 from anjo.sleep.demo.record import chart_view, ledger_view, task16_view
+from anjo.sleep.demo.return_view import HeldNote, ReturnSources, return_view
 from anjo.sleep.demo.slider import NightMark, Stop, plan_stops
 from anjo.sleep.demo.toggles import SwapSet, load_swaps
 from anjo.sleep.mind import expect
@@ -159,9 +160,8 @@ def _read(what: str, read: Callable[[], T]) -> T | None:
         return None
 
 
-def _returns(user: str) -> dict[str, tuple[datetime, ...]]:
+def _returns(items: list[Any]) -> dict[str, tuple[datetime, ...]]:
     """When the person's own evidence came back to each target: the start of its day."""
-    items = evidence_store(user).stored(date.max)
     by_target: dict[str, list[datetime]] = {}
     for item in items:
         if item.target_id is not None and expect.returning([item], item.target_id):
@@ -170,14 +170,71 @@ def _returns(user: str) -> dict[str, tuple[datetime, ...]]:
 
 
 def _sources(user: str) -> MindSources:
-    returns = _read("her evidence", lambda: _returns(user))
+    items = _read("her evidence", lambda: evidence_store(user).stored(date.max))
+    returns = None if items is None else _returns(items)
     return MindSources(
         nights=_read("her nights", lambda: night_records(user)),
         workspace=_read("MIND's workspace", lambda: workspace_log(user).workspace()),
         targets=_read("her targets", lambda: target_store(user).targets()),
         expectations=None if returns is None else _read("her expectations", lambda: target_store(user).expectations()),
         returns=returns or {},
+        events=_read("MIND's log", lambda: workspace_log(user).events()),
+        evidence=items,
+        results=_read("her results", lambda: target_store(user).results()),
     )
+
+
+def _when(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _note_record(user: str, at: datetime | None) -> tuple[str | None, date | None]:
+    """The latest night's held note: its id and night. A note queued this morning matches its own
+    night first; without a date the newest held one is the record behind the pending text."""
+    found = [(files.record.night, step.get("note_id"))
+             for files in night_files(user) for step in files.steps
+             if step.get("step") == "note" and step.get("outcome") == "held" and isinstance(step.get("note_id"), str)]
+    if at is not None:
+        same = [pair for pair in found if pair[0] == at.date()]
+        if same:
+            return same[-1][1], same[-1][0]
+    return (found[-1][1], found[-1][0]) if found else (None, None)
+
+
+def _pending_note(user: str) -> HeldNote | None:
+    """The note waiting for the next open, when it is Anjo Sleep's and not another outreach's."""
+    from anjo.core.outreach import export_pending_outreach
+
+    from anjo.sleep.note.hold import SOURCE
+
+    data = export_pending_outreach(user)
+    if not isinstance(data, dict) or data.get("source") != SOURCE:
+        return None
+    text = data.get("message")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    at = _when(data.get("created_at"))
+    note_id, night = _note_record(user, at)
+    return HeldNote(text=text, id=note_id, night=night, at=at)
+
+
+def return_payload(user: str, sources: MindSources, held: HeldOutText) -> dict[str, Any]:
+    """Her message for the return moment: the held note, else the share MIND raised. Its words are
+    the record's, filtered; the labels around it are the page's."""
+    note = _read("her held note", lambda: _pending_note(user))
+    as_of = None if not sources.nights else datetime.combine(
+        max(record.night for record in sources.nights) + timedelta(days=1), time.min, timezone.utc)
+    try:
+        return return_view(ReturnSources(note=note, events=sources.events, evidence=sources.evidence,
+                                         results=sources.results, as_of=as_of), held)
+    except READ_ERRORS as error:
+        logger.error("the demo's return moment can't be read: %s", type(error).__name__)
+        return {"state": "unavailable", "quiet_days": 0}
 
 
 def _lives(published: Path, mine: Path) -> list[list[results.Night]]:
@@ -221,16 +278,17 @@ def _closed() -> dict[str, Any]:
     """The panel with every section unavailable: what a non-synthetic account or a failed filter gets."""
     view = mind_view(MindSources(), HeldOutText(()))
     return {**view, "chart": {**UNAVAILABLE, "final": None}, "task16": {**UNAVAILABLE, "lines": []},
-            "ledger": {**UNAVAILABLE, "entries": []}}
+            "ledger": {**UNAVAILABLE, "entries": []}, "return": {**UNAVAILABLE, "quiet_days": 0}}
 
 
-def _built(user: str, held: HeldOutText) -> dict[str, Any]:
+def _built(user: str, sources: MindSources, held: HeldOutText) -> dict[str, Any]:
     try:
         chart = _chart(user)
     except READ_ERRORS as error:
         logger.error("the demo's results chart can't be read: %s", type(error).__name__)
         chart = {**UNAVAILABLE, "final": None}
-    return {**mind_view(_sources(user), held), "chart": chart, "task16": _task16(held), "ledger": _ledger(held)}
+    return {**mind_view(sources, held), "chart": chart, "task16": _task16(held), "ledger": _ledger(held),
+            "return": return_payload(user, sources, held)}
 
 
 def mind_payload(user: str | None) -> dict[str, Any]:
@@ -265,7 +323,9 @@ def _fingerprint(user: str) -> Fingerprint:
 
 class PanelCache:
     """``mind_payload`` for one account, kept until a file it reads changes or ``PANEL_TTL_S``
-    passes. One build at a time: requests that arrive during a build wait for it, then share it."""
+    passes. One build at a time: requests that arrive during a build wait for it, then share it.
+    The return moment travels in the same payload: it is read from the same records, and a visit
+    asks for both."""
 
     def __init__(self, user: str | None, *, clock: Callable[[], float] = monotonic) -> None:
         self._user = user
@@ -286,7 +346,7 @@ class PanelCache:
             held = held_out(user)
             if held is None:
                 return _closed()  # never kept: the next request tries the filter again
-            built = _built(user, held)
+            built = _built(user, _sources(user), held)
             if key is not None:
                 self._kept = (key, self._clock(), built)
             return built

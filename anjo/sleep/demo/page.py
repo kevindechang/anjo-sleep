@@ -25,8 +25,12 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "mind.js": "text/javascript; charset=utf-8",  # her mind panel and its chart
     "night.js": "text/javascript; charset=utf-8",  # last night as one loop, in the mind band
     "mind.css": "text/css; charset=utf-8",
+    "timeline.js": "text/javascript; charset=utf-8",  # How she got here: the quiet days' logged work
     "dailies.js": "text/javascript; charset=utf-8",  # Dailies: the morning card
     "dailies.css": "text/css; charset=utf-8",
+    # The page's own type: Geist 400 and 600 (SIL OFL), served from this host like every other file.
+    "fonts/geist-400.ttf": "font/ttf",
+    "fonts/geist-600.ttf": "font/ttf",
 })
 COPY_SLOT: Final = "{{@copy}}"
 _SLOT = re.compile(r"\{\{([a-z0-9_]+)\}\}")
