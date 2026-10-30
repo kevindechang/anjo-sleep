@@ -5,6 +5,7 @@ an intact prefix; a display window must never become an input to the kernel.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timezone
@@ -49,6 +50,46 @@ class WeekHistory:
     moments: tuple[Moment, ...]
     digest: str
     recorded_outcomes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QuietNight:
+    """What her own thinking did on one night the person wrote nothing, counted from her log.
+
+    ``credence_change`` sums the absolute move of every alternative, a new one from zero, so a
+    night that only added an alternative still counts. ``predictions_resolved`` counts a prediction
+    that left ``pending``: the resolver answered it (true, false or undetermined) or its horizon
+    censored it, so a censored prediction is a resolution, not a stillness.
+    """
+
+    night: date
+    questions_opened: int
+    credence_change: float
+    predictions_committed: int
+    predictions_resolved: int
+
+
+def quiet_week(nights: Sequence[NightSlice]) -> tuple[QuietNight, ...]:
+    """One count per night stamped ``alone``. The nights must be ``slices``' own contiguous run, so
+    each night's state folds from the whole prefix before it and never from a display window."""
+    seen: tuple[WorkspaceEvent, ...] = ()
+    out: list[QuietNight] = []
+    for section in nights:
+        before = kernel.fold(seen)
+        seen = (*seen, *section.events)
+        if section.alone:
+            out.append(_quiet_counts(section.night, before, kernel.fold(seen)))
+    return tuple(out)
+
+
+def _quiet_counts(night: date, before: Workspace, after: Workspace) -> QuietNight:
+    held = {h.id: h.credence for h in before.hypotheses}
+    change = math.fsum(abs(h.credence - held.get(h.id, 0.0)) for h in after.hypotheses)
+    was = {p.id: p.pending for p in before.predictions}
+    opened = {q.id for q in after.questions} - {q.id for q in before.questions}
+    committed = {p.id for p in after.predictions} - {p.id for p in before.predictions}
+    resolved = {p.id for p in after.predictions if was.get(p.id, True) and not p.pending}
+    return QuietNight(night, len(opened), round(change, 6), len(committed), len(resolved))
 
 
 def _prefix(events: Sequence[WorkspaceEvent], night: date) -> tuple[WorkspaceEvent, ...]:

@@ -5,7 +5,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
 
-from anjo.sleep.mind.week import WeekHistory, diff
+from anjo.sleep.mind.week import QuietNight, WeekHistory, diff, quiet_week
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,11 @@ def _comparison(trace: ProbeTrace) -> dict[str, object]:
             'week_reply_sha256': sha(trace.week_reply), 'empty_reply_sha256': sha(trace.empty_reply)}
 
 
+def _quiet(history: WeekHistory) -> tuple[QuietNight, ...]:
+    """The quiet nights' counts, when the week has any: a week alone still works."""
+    return quiet_week(history.nights)
+
+
 def render(history: WeekHistory, trace: ProbeTrace) -> str:
     """Show dated transitions and both diffs without implying that different means better."""
     comparison = _comparison(trace)
@@ -75,6 +80,17 @@ def render(history: WeekHistory, trace: ProbeTrace) -> str:
         lines += ['## Recorded ledger outcomes', '',
                   'Current snapshot; resolution timestamps are unavailable. These are not dated transitions.',
                   '', *(f'- {line}' for line in history.recorded_outcomes), '']
+    quiet = _quiet(history)
+    if quiet:
+        lines += ['## A quiet week', '',
+                  'Nights the person wrote nothing, counted from her own log. No message opened these: '
+                  'her state did.', '',
+                  *(f'- {q.night.isoformat()}: {q.questions_opened} question(s) opened, '
+                    f'{q.credence_change:.6f} of credence moved, {q.predictions_committed} prediction(s) '
+                    f'committed, {q.predictions_resolved} resolved' for q in quiet), '',
+                  f'Totals: {sum(q.questions_opened for q in quiet)} opened, '
+                  f'{sum(q.predictions_committed for q in quiet)} committed, '
+                  f'{sum(q.predictions_resolved for q in quiet)} resolved.', '']
     lines += ['## One probe, two replies', '', trace.prompt, '',
               f'Full replies differ: {comparison["reply_changed"]}; full briefs differ: {comparison["brief_changed"]}.',
               'Diffs below compare short excerpts. Full inputs and exact diffs are in probe-inputs.local.json.',
@@ -95,6 +111,7 @@ def to_json(history: WeekHistory, trace: ProbeTrace) -> str:
                 'nights': [{'night': n.night.isoformat(), 'alone': n.alone, 'event_seqs': [e.step.seq for e in n.events]}
                            for n in history.nights],
                 'moments': [asdict(m) for m in history.moments], 'probe': asdict(trace),
+                'quiet_week': [asdict(q) for q in _quiet(history)],
                 'recorded_outcomes_undated': history.recorded_outcomes, 'comparison': comparison,
                 'brief_diff': diff(trace.week_brief, trace.empty_brief),
                 'reply_diff': diff(trace.week_reply, trace.empty_reply)}

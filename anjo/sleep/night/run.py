@@ -52,6 +52,7 @@ them; the wall-clock end alone drives budgets and timeouts.
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
@@ -100,6 +101,7 @@ from anjo.sleep.context.brief import BriefError
 from anjo.sleep.night.state import Window as Window
 from anjo.sleep.night.state import day_window as day_window
 from anjo.sleep.mind import expect, points, receipt
+from anjo.sleep.mind.wants import own_wants_on
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
@@ -551,6 +553,8 @@ class NightRunner(CoreSteps):
         """Task 16: a chosen study records how likely she thinks the person is to need it."""
         if self.deps.estimator is None or choice.want is None or not self.deps.is_synthetic(p.uid):
             return None
+        if choice.want.kind not in expect.STUDY_KINDS:
+            return None  # the registered estimator was fit on the person's pulls, not her own
         if choice.action == "inquire" and all(
             q.view.id != choice.question_id for q in raw.questions
         ):
@@ -570,7 +574,7 @@ class NightRunner(CoreSteps):
         deps = self.deps
         raw = self._raw(p)
         offered = offered_tonight(deps, p)
-        state = points.build(raw, inquiry_offered="inquire" in offered)
+        state = points.build(raw, inquiry_offered="inquire" in offered, own_wants=own_wants_on(os.environ))
         ctx = ChoiceContext(
             policy=deps.policy,
             allowance=p.wonder.allowance(p.actions_left),
@@ -903,7 +907,8 @@ class NightRunner(CoreSteps):
         if not offer:
             self._point(p, "post_result", raw, ctx, None)
             return None
-        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(points.build(raw, inquiry_offered=ctx.allows("inquire"))), ctx)
+        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(points.build(
+            raw, inquiry_offered=ctx.allows("inquire"), own_wants=own_wants_on(os.environ))), ctx)
         p.choices.append(choice)
         self._point(p, "post_result", raw, ctx, choice)
         if choice.action != "hold_note":

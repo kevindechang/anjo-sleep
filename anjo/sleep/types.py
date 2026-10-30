@@ -7,7 +7,7 @@ those, so a caller serializes a ``NightResult`` field by field. Every time here 
 is virtual in accelerated runs; nothing in this module reads the wall clock.
 
 Smaller types that one task names (``Source``, ``Change``, ``HeldNote``) live in that task's own
-module. ``Commitment`` and ``QuestionView`` are here because ``WantSnapshot`` and the
+module. ``Commitment``, ``QuestionView`` and ``OwnView`` are here because ``WantSnapshot`` and the
 ``IntentionSource`` port carry them.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ TargetKind = Literal["commitment", "thread"]
 TargetStatus = Literal["open", "paused", "closed"]
 ResultBasis = Literal["research", "evidence"]
 QuestionStatus = Literal["open", "active", "parked", "concluded", "retracted", "abandoned"]
-WantKind = Literal["follow_up", "understand", "share"]
+WantKind = Literal["follow_up", "understand", "share", "know", "settle"]
 Action = Literal["prepare_commitment", "revisit_thread", "inquire", "hold_note"]
 Opportunity = Literal["away"]
 ConsideredStatus = Literal["won", "held_back", "rejected"]
@@ -241,11 +241,48 @@ class QuestionView:
 
 
 @dataclass(frozen=True)
+class OwnView:
+    """What her own inquiry holds on one question, as her own wants read it (Task 18).
+
+    Built from her workspace, never from the person's words. ``credences`` is the question's
+    alternatives with the catch-all left out: a standoff against "something else" is not two claims
+    in conflict. ``stake`` and ``uncertainty`` are the priority's factors as
+    ``controller.priority`` computed them, so a want weighs a question the way the night's own
+    inquiry does instead of inventing a second scale. ``prediction_due`` is the earliest horizon
+    among the predictions she committed and hasn't settled, ``resolved_prediction`` and ``finding``
+    say whether her own thinking has something to say, and ``last_worked_at`` is the last cycle that
+    took the question up, on her own clock.
+    """
+
+    question_id: str
+    target_ids: tuple[str, ...]
+    status: QuestionStatus
+    credences: tuple[float, ...]
+    stake: float
+    uncertainty: float
+    prediction_due: datetime | None
+    resolved_prediction: bool
+    finding: bool
+    last_worked_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.target_ids:
+            raise ValueError("an own view names at least one target")
+        for credence in self.credences:
+            _check_unit("credence", credence)
+        _check_unit("uncertainty", self.uncertainty)
+        if self.stake < 0:
+            raise ValueError(f"stake must not be negative, got {self.stake}")
+
+
+@dataclass(frozen=True)
 class WantSnapshot:
     """The state ``derive`` reads: built by ``snapshot.build`` from the stores (Task 7a).
 
     ``last_message_at`` is the person's last message on the night's clock, ``None`` if they have
-    never written.
+    never written. ``own`` is her own inquiry's state (Task 18), which ``snapshot.build`` doesn't
+    read: a point fills it from ``QuestionState.own``. ``own_wants`` is her own pulls' switch, off
+    only when the ablation says so.
     """
 
     as_of: datetime
@@ -255,6 +292,8 @@ class WantSnapshot:
     intentions: tuple[Commitment, ...] = ()
     questions: tuple[QuestionView, ...] = ()
     inquiry_offered: bool = True  # the offer gates commitment inquiry and its changed precedence
+    own: tuple[OwnView, ...] = ()
+    own_wants: bool = True
 
 
 @dataclass(frozen=True)

@@ -303,6 +303,8 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "want_kind_follow_up": "follow up",
     "want_kind_understand": "understand",
     "want_kind_share": "share",
+    "want_kind_know": "keep asking",
+    "want_kind_settle": "settle it",
     "action_prepare_commitment": "prepare a plan",
     "action_revisit_thread": "revisit a thread",
     "action_inquire": "think a question through",
