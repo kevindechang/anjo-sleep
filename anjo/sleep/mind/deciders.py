@@ -221,7 +221,7 @@ def _rule_want(target: Target, *, note: bool) -> Want:
 
 
 def _replay(raw: RawSnapshot, ctx: ChoiceContext) -> Choice:
-    return choose("away", wants.derive_wants(points.build(raw)), ctx)
+    return choose("away", wants.derive_wants(points.build(raw, inquiry_offered=ctx.allows("inquire"))), ctx)
 
 
 def no_confidence(inp: DeciderInput) -> Choice:

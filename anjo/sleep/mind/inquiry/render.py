@@ -4,7 +4,7 @@ instruction files once, at import.
 ``render`` is an inquiry cycle's whole input: ``think_v1.md``, then the focal question, its
 hypotheses and credences (labeled heuristic), its open and settled predictions, its finding, the
 answers its world queries got, the evidence items the loop fetched by id, and the last
-``RECENT_OPS`` operations. ``render_notice`` is the notice pass's: ``notice_v1.md``, the targets,
+``RECENT_OPS`` operations. ``render_notice`` is the notice pass's: ``notice_v2.md``, the targets,
 the questions she holds, earlier items and the day's new ones. Neither takes the conversation, so
 neither can show it: evidence items are what extraction kept, by id. The output depends only on
 its arguments, so a resumed run renders the same.
@@ -33,7 +33,7 @@ from anjo.sleep.types import Evidence, Target
 
 _PROMPTS: Final = Path(__file__).parent / "prompts"
 THINK: Final = (_PROMPTS / "think_v1.md").read_text()
-NOTICE: Final = (_PROMPTS / "notice_v1.md").read_text()
+NOTICE: Final = (_PROMPTS / "notice_v2.md").read_text()
 ANSWERS_SHOWN: Final = 3
 
 

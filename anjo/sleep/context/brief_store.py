@@ -24,7 +24,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from anjo.sleep.context.brief import BriefChat, BriefState, fold_day
+from anjo.sleep.context.brief import DEFAULT_BUDGET_TOKENS, EMPTY_BRIEF, BriefChat, BriefError, BriefState, fold_day
+from anjo.sleep.context.mind_brief import refresh
 from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.provenance import may_train
@@ -130,6 +131,7 @@ class JsonlBriefStore:
     def fold(
         self, night: date, new: Sequence[Evidence], *, at: datetime, hosted_in_training: bool,
         chat: BriefChat | None = None,
+        mind_refresh: bool = False,
     ) -> BriefRecord:
         """Fold ``new`` into both briefs, store the result and return it."""
         if any(item.person_id != self.person_id for item in new):
@@ -138,7 +140,21 @@ class JsonlBriefStore:
         state = BriefState(
             served=prev.served if prev else None, training=prev.training if prev else None,
         )
-        folded = fold_day(state, new, hosted_in_training=hosted_in_training, chat=chat)
+        try:
+            folded = fold_day(state, new, hosted_in_training=hosted_in_training, chat=chat)
+        except BriefError:
+            homework = [item for item in new if item.kind == "homework" and item.id.startswith("mind-")]
+            if not mind_refresh or not homework:
+                raise
+            served, included = refresh(state.served, homework, DEFAULT_BUDGET_TOKENS)
+            # A fallback folds only complete homework; other evidence is still owed a normal fold.
+            new = included
+            trainable_homework = [item for item in new if may_train(
+                item.ancestry, hosted_in_training=hosted_in_training)]
+            training = state.training
+            if trainable_homework:
+                training, _ = refresh(training, trainable_homework, DEFAULT_BUDGET_TOKENS)
+            folded = BriefState(served, training if training is not None else EMPTY_BRIEF)
         trainable = [item for item in new if may_train(item.ancestry, hosted_in_training=hosted_in_training)]
         record = BriefRecord(
             night=night, served=str(folded.served), training=str(folded.training),

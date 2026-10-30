@@ -113,6 +113,7 @@ from anjo.sleep.types import (
     MAX_NIGHT_ACTIONS,
     Choice,
     ChoiceContext,
+    CostPart,
     Evidence,
     NightResult,
     NightStatus,
@@ -425,18 +426,18 @@ class NightRunner(CoreSteps):
         return f"night:{step}:{p.uid}:{p.night.isoformat()}"
 
     def _metered(
-        self, p: PersonNight, part: str, step: str, calls: int, out: int = SPARK_MAX_OUT_TOKENS
+        self, p: PersonNight, part: CostPart, step: str, calls: int, out: int = SPARK_MAX_OUT_TOKENS
     ) -> Any:
         """Hold ``step``'s Spark Open worst case (``calls``, each writing up to ``out``) on
         ``baseten_sleep_usd``; settle what ``part`` metered."""
-        before = p.spend.parts().get(part, 0.0)  # type: ignore[call-overload]
+        before = p.spend.parts().get(part, 0.0)
         return held(
             self.deps.ledger,
             self._job(p, step),
             ("baseten_sleep_usd",),
             usd(spark_worst_usd(self.deps.prices, calls, out)),
             lambda: p.spend.parts().get(part, 0.0) - before,
-        )  # type: ignore[call-overload]
+        )
 
     def _close_day(self, p: PersonNight) -> Mapping[str, Any]:
         start, end = p.window
@@ -567,8 +568,8 @@ class NightRunner(CoreSteps):
     def _choose(self, p: PersonNight) -> Mapping[str, Any]:
         deps = self.deps
         raw = self._raw(p)
-        state = points.build(raw)
         offered = offered_tonight(deps, p)
+        state = points.build(raw, inquiry_offered="inquire" in offered)
         ctx = ChoiceContext(
             policy=deps.policy,
             allowance=p.wonder.allowance(p.actions_left),
@@ -704,19 +705,22 @@ class NightRunner(CoreSteps):
         p.spend.part = "brief"
         try:
             with self._metered(p, "brief", "brief", BRIEF_MAX_CALLS, BRIEF_MAX_TOKENS):
-                briefs.fold(
+                folded = briefs.fold(
                     p.night,
                     new,
                     at=p.stamp,
                     hosted_in_training=self.deps.hosted_in_training,
                     chat=p.spend.wrap_chat(self.deps.spark_chat),
+                    mind_refresh=self._mind() and any(
+                        item.kind == "homework" and item.id.startswith("mind-") for item in new
+                    ),
                 )
         except (
             BriefError
         ) as error:  # written badly twice: nothing is stored, and she keeps the briefs she had
             latest = briefs.latest()
             return kept_brief(None if latest is None else latest.night, len(new), error)
-        return {"folded": len(new)}
+        return {"folded": len(folded.folded)}
 
     # ── the GPU steps ────────────────────────────────────────────────────────
 
@@ -898,7 +902,7 @@ class NightRunner(CoreSteps):
         if not offer:
             self._point(p, "post_result", raw, ctx, None)
             return None
-        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(points.build(raw)), ctx)
+        choice = self.deps.chooser.choose("away", self.deps.chooser.derive(points.build(raw, inquiry_offered=ctx.allows("inquire"))), ctx)
         p.choices.append(choice)
         self._point(p, "post_result", raw, ctx, choice)
         if choice.action != "hold_note":

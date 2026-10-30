@@ -254,6 +254,7 @@ class WantSnapshot:
     results: tuple[Result, ...]
     intentions: tuple[Commitment, ...] = ()
     questions: tuple[QuestionView, ...] = ()
+    inquiry_offered: bool = True  # the offer gates commitment inquiry and its changed precedence
 
 
 @dataclass(frozen=True)
