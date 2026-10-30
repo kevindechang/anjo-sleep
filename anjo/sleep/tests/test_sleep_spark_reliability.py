@@ -146,6 +146,11 @@ def test_sleeps_delegated_policy_sends_a_dropped_connection_again() -> None:
     assert fireworks_api.SLEEP_RETRIES.connect_attempts == fireworks_api.CONNECT_RETRIES + 1 > 1
 
 
+def test_sleeps_delegated_policy_sends_a_lost_reply_once_more() -> None:
+    """Practice, the brief and MIND go through this policy: one lost reply no longer fails a night."""
+    assert fireworks_api.SLEEP_RETRIES.reply_attempts == fireworks_api.REPLY_ATTEMPTS == 2
+
+
 def test_a_callers_policy_replaces_the_selected_providers_and_reaches_fireworks(monkeypatch: pytest.MonkeyPatch) -> None:
     """``baseten_api.chat``'s own ``retries`` wins over the provider's default on the Fireworks path."""
     from anjo.sleep import baseten_api

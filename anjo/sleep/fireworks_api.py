@@ -23,10 +23,14 @@ KEY_ENV = "ANJO_FIREWORKS_API_KEY"
 URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 SPARK_OPEN: Final = "accounts/fireworks/models/muse-spark-open"
 # A night's Spark Open call is sent again when its connection never opened (it was charged nothing):
-# the first try and CONNECT_RETRIES more. A read timeout is never sent again here: the request was
-# sent and may have been charged, and the night's holds cover one attempted call, not a second.
+# the first try and CONNECT_RETRIES more. A reply that never came whole is sent once more too
+# (REPLY_ATTEMPTS in all), though that resend may be charged twice and the night's holds cover one
+# attempted call: on 2026-10-31 one ReadError among a night's dozens of practice calls failed the
+# whole night, on 3 of 7 nights. The meter debits the reply that came, so a lost attempt's cost is
+# not in the night's ledger.
 CONNECT_RETRIES: Final = 2
-SLEEP_RETRIES: Final = Retries(connect_attempts=CONNECT_RETRIES + 1)
+REPLY_ATTEMPTS: Final = 2
+SLEEP_RETRIES: Final = Retries(connect_attempts=CONNECT_RETRIES + 1, reply_attempts=REPLY_ATTEMPTS)
 # Cheaper writers of MIND's core splits and pairs (``mind.apd.generators``); never Spark Open's stand-in.
 GPT_OSS_120B: Final = "accounts/fireworks/models/gpt-oss-120b"
 GLM_5P3_FLASH: Final = "accounts/fireworks/models/glm-5p3-flash"
@@ -55,7 +59,8 @@ def chat(
     """One chat completion on Spark Open or DeepSeek, its reply capped at ``max_tokens`` when given (MIND's
     calls are), sampled under ``seed`` when given (Sleep's brief retry). ``transport`` is for tests
     (``httpx.MockTransport``). ``retries`` sends a 429, a 5xx or a connection that never opened
-    again; a read timeout is not sent again, because it may have been charged."""
+    again, and a reply that never came whole only when its ``reply_attempts`` says so (it may have
+    been charged)."""
     return post_chat(
         provider="Fireworks",
         url=URL,
