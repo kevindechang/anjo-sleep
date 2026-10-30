@@ -31,6 +31,7 @@ the base model and against another person's trained weights. MIND, her inquiry p
 problems nobody assigned, works on them across nights, and changes a belief only on evidence.
 
 Built for the Meta Global AI Developer Hackathon, October 27 to November 4, 2026.
+Built with Muse Spark Open, under the Muse Model License and its Usage Policy (see NOTICE).
 
 ## Architecture
 

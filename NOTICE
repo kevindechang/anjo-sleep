@@ -8,8 +8,5 @@ Built with Muse Spark Open.
 Muse Spark Open is a Meta model, used under the Muse Model License and its Usage Policy. Any
 copy of a personal model trained by this code carries both documents with it.
 
-  Muse Model License:  https://PLACEHOLDER.invalid/muse-model-license
-  Usage Policy:        https://PLACEHOLDER.invalid/muse-usage-policy
-
-TODO(kevin): replace both PLACEHOLDER links with Meta's published URLs before the repo goes
-public.
+  Muse Model License:  https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md
+  Usage Policy:        Exhibit A of the same file

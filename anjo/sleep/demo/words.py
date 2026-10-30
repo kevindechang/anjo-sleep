@@ -527,7 +527,7 @@ COPY: Final[Mapping[str, str]] = MappingProxyType({
     "cost_ceiling": "{ceiling} ceiling",
     "footer": (
         "Votes keep only your choice, which side was which and the time. Your questions are never "
-        "stored."
+        "stored. Built with Muse Spark Open."
     ),
 })
 
