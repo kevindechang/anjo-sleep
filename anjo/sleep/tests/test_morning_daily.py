@@ -23,7 +23,7 @@ NIGHT = date(2026, 11, 3)
 PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.95)
 COUNTS: dict[ProbeKind, int] = {"new_work": 25, "vocab": 15, "tone_hold": 15, "taste_ab": 15, "pushback": 10}  # a life's registered probes
 FULL_KEYS = {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable", "outcomes",
-             "seconds"}
+             "seconds", "judge_model"}
 
 
 def sealed() -> list[Any]:

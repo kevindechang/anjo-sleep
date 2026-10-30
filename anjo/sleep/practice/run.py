@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from anjo.sleep import spark_provider
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import union
@@ -185,6 +186,6 @@ class MinimalPractice:
         return PracticeTranscript(
             id=f"pr-{digest}", person_id=user_id, night=night, scene=index, message=message, reply=reply,
             context=context, f_ids=f_ids,
-            ancestry=union((frozenset({SPARK_OPEN, GLIMMER}), f_ancestry, c_ancestry)),
+            ancestry=union((frozenset({spark_provider.current().model, GLIMMER}), f_ancestry, c_ancestry)),
             created_at=at + timedelta(seconds=index),
         )

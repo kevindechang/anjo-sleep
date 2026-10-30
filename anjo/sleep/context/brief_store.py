@@ -9,7 +9,8 @@ night's practice items included, which are stored after its fold).
 the model that compiled it (Spark Open, called only when there are items to fold). So its ancestry
 is the union of all three, and ``None`` when any part is unknown. Text built from a brief with
 unknown ancestry never trains, so the training brief, which only ever folds items that may train,
-always has known ancestry.
+always has known ancestry. ``compiler`` names the id the brief records: the one
+``ANJO_SLEEP_SPARK`` selects (Baseten's by default).
 
 ``ServedBriefs`` and ``TrainingBriefs`` are the two ``BriefSource`` views the context builders
 read (``anjo.sleep.app.prompt.set_context_setup``). The log is append-only JSON Lines: the app
@@ -23,14 +24,19 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import BriefChat, BriefState, fold_day
 from anjo.sleep.context.builder import StoredBrief
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.provenance import may_train
 from anjo.sleep.types import Evidence
 
-COMPILER = SPARK_OPEN
+
+def compiler() -> str:
+    """The id the brief records as its compiler: Spark Open's on the provider
+    ``ANJO_SLEEP_SPARK`` selects (Baseten's by default)."""
+    from anjo.sleep import spark_provider  # imported here: spark_provider imports this package
+
+    return spark_provider.current().model
 
 
 def union(parts: Iterable[frozenset[str] | None]) -> frozenset[str] | None:
@@ -49,7 +55,7 @@ def folded_ancestry(
     """A brief's ancestry after folding ``items`` into a brief of ancestry ``prev``."""
     if not items:
         return prev
-    return union((prev, *(item.ancestry for item in items), frozenset({COMPILER})))
+    return union((prev, *(item.ancestry for item in items), frozenset({compiler()})))
 
 
 @dataclass(frozen=True)

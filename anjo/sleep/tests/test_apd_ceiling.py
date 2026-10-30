@@ -92,7 +92,7 @@ def test_ceiling_counts_only_this_runs_settlements(tmp_path: Path) -> None:
     data = tmp_path / "pilot"  # earlier runs and Sleep spent far past the ceiling on the same ledger
     data.mkdir()
     earlier = Ledger(data / "fake-budget.jsonl")
-    for job, pool, amount in (("apd:gen:earlier:spark:a1", "fireworks_mind_usd", 50.0),
+    for job, pool, amount in (("apd:gen:earlier:spark:a1", "fireworks_mind_usd", 15.0),
                               ("apd:judge:muse:earlier:a1", "meta_usd", 5.0),
                               ("night:sleep:2026-10-28:a1", "baseten_sleep_usd", 30.0)):
         found = earlier.reserve(job, (pool,), usd(amount))  # type: ignore[arg-type]

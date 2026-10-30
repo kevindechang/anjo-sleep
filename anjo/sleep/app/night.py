@@ -150,6 +150,11 @@ def prices() -> Prices:
     if len(parts) != 4:
         raise ValueError(f"{PRICES_ENV} holds four prices")
     spark_in, spark_out, train, serve = (float(part) for part in parts)
+    from anjo.sleep import spark_provider  # the switch's price for Spark Open, when it has one
+
+    listed = spark_provider.current().price
+    if listed is not None:
+        spark_in, spark_out = listed
     return Prices(spark_in_per_m=spark_in, spark_out_per_m=spark_out, train_gpu_per_hour=train,
                   serve_gpu_per_hour=serve)
 

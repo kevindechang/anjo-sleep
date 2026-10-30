@@ -1,5 +1,5 @@
 """Spark Open behind MIND's model ports (Task 17): a ``Thinker``, ``world_query`` and the blind
-``PredictionResolver``, on Baseten's OpenAI-compatible API (``baseten_api``).
+``PredictionResolver``, through ``baseten_api.chat`` (the provider ``ANJO_SLEEP_SPARK`` selects).
 
 The resolver always runs here (``resolve_prediction_v1.md``), and so does the screen
 (``anjo.sleep.mind.screen``, through ``call``). The live night's thinker is base Glimmer and APD's
@@ -29,7 +29,7 @@ from typing import Any, Final
 from anjo.sleep import baseten_api
 from anjo.sleep.mind.inquiry.parse import field_value
 from anjo.sleep.mind.inquiry.types import ModelReply, ResolverReply, Verdict
-from anjo.sleep.model_api import ChatResult, ModelApiError, post_chat
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.types import Evidence
 
 logger = logging.getLogger(__name__)
@@ -46,25 +46,31 @@ _VERDICTS: Final[dict[str, Verdict]] = {"true": "true", "false": "false", "undet
 ChatFn = Callable[[list[dict[str, Any]], int], ChatResult]  # messages, max_tokens
 
 
+def _spark_model() -> str:
+    """Spark Open's id on the provider ``ANJO_SLEEP_SPARK`` selects (Baseten's by default)."""
+    from anjo.sleep import spark_provider  # imported here: spark_provider imports baseten_api
+
+    return spark_provider.current().model
+
+
 def spark_open(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
-    """One Spark Open call on Baseten at temperature 0, no tools, its reply capped."""
-    return post_chat(
-        provider="Baseten", url=baseten_api.URL, key_env=baseten_api.KEY_ENV, model=baseten_api.SPARK_OPEN,
-        messages=messages, tools=None, timeout_s=TIMEOUT_S, temperature=0.0, transport=None, max_tokens=max_tokens,
-    )
+    """One Spark Open call at temperature 0, no tools, its reply capped, through
+    ``baseten_api.chat``: the provider ``ANJO_SLEEP_SPARK`` selects."""
+    return baseten_api.chat(baseten_api.SPARK_OPEN, messages, None, TIMEOUT_S, temperature=0.0,
+                            max_tokens=max_tokens)
 
 
 def call(chat: ChatFn, messages: list[dict[str, Any]], cap: int) -> ModelReply:
     """One capped call. No allowance left means no call; a failed call is empty text charged
     ``cap``."""
     if cap <= 0:
-        return ModelReply(text="", tokens=0, model=baseten_api.SPARK_OPEN)
+        return ModelReply(text="", tokens=0, model=_spark_model())
     try:
         result = chat(messages, cap)
     except ModelApiError as exc:
         logger.warning("MIND's Spark Open call failed, charged its cap of %d tokens: %s", cap, exc)
-        return ModelReply(text="", tokens=cap, model=baseten_api.SPARK_OPEN)
-    return ModelReply(text=result.text, tokens=result.output_tokens, model=result.model or baseten_api.SPARK_OPEN)
+        return ModelReply(text="", tokens=cap, model=_spark_model())
+    return ModelReply(text=result.text, tokens=result.output_tokens, model=result.model or _spark_model())
 
 
 def resolver_messages(claim: str, evidence: Sequence[Evidence]) -> list[dict[str, Any]]:

@@ -128,7 +128,7 @@ def test_the_default_chat_is_spark_open_on_baseten(monkeypatch: pytest.MonkeyPat
         return ChatResult(text="ok", tool_calls=(), model=baseten_api.SPARK_OPEN, input_tokens=1, output_tokens=1,
                           finish_reason="stop")
 
-    monkeypatch.setattr(spark_inquiry, "post_chat", post_chat)
+    monkeypatch.setattr(baseten_api, "post_chat", post_chat)
     chat: Callable[[list[dict[str, Any]], int], ChatResult] = spark_inquiry.spark_open
     chat([{"role": "user", "content": "x"}], 77)
     assert (seen["provider"], seen["url"], seen["key_env"], seen["model"]) == (
