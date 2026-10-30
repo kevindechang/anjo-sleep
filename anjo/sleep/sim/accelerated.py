@@ -67,6 +67,7 @@ from anjo.sleep.night.nightlog import SUMMARY, NightLog
 from anjo.sleep.night.run import day_window, run_night_batch_with
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.personas.model import Persona, load_person_file
+from anjo.sleep.practice.full import MAX_SCENES, MIN_SCENES
 from anjo.sleep.probes.morning import (
     MORNING_PROBES,
     Morning,
@@ -329,6 +330,7 @@ def _trained(result: NightResult) -> dict[str, Any]:
 
 def _report(
     results: Sequence[NightResult], *, fake: bool, days: int, sha: str, scores: Sequence[Mapping[str, Any]] = (),
+    practice_scenes: int = 16,
 ) -> dict[str, Any]:
     summaries = [_normal(json.loads((r.log_path.parent / SUMMARY).read_text(encoding="utf-8"))) for r in results]
     timeless = [{k: v for k, v in sc.items() if k != "seconds"} for sc in scores]  # a morning's wall time varies
@@ -339,6 +341,7 @@ def _report(
                **_trained(r)}
               for s, r in zip(summaries, results, strict=True)]
     return {"accelerated": True, "fake": fake, "days": days, "git_sha": sha, "nights": nights, "digest": digest,
+            "practice_scenes": practice_scenes,
             "scored_nights": len(scores), "scores": [{"night": sc["night"], "arms": sc["arms"], "pairs": sc["pairs"],
                                                       "unavailable": sc["unavailable"]} for sc in scores]}
 
@@ -361,7 +364,7 @@ def _dated(parser: argparse.ArgumentParser, start: date | None, days: int, now: 
 
 
 def _fake(days: int, start: date | None, seed: int, mind: bool, label: str,
-          parser: argparse.ArgumentParser, alone_from: int | None = None) -> int:
+          parser: argparse.ArgumentParser, alone_from: int | None = None, practice_scenes: int = 16) -> int:
     """The whole loop on fakes: no model, no GPU, no network, no data dir, on the rig's fake clock.
     ``mind`` turns on MIND's inquiry on a fake thinker. A fake run is not on git, so a final one
     (``label``) needs no ``--require-sha`` and any given one is ignored."""
@@ -371,9 +374,18 @@ def _fake(days: int, start: date | None, seed: int, mind: bool, label: str,
     start = _dated(parser, start, days, clock.now)
     with tempfile.TemporaryDirectory(prefix="anjo-sleep-fake-") as root:
         fake = rig_module.FakeAccelerated(Path(root), clock=clock, mind_from=start if mind else None)
-        results = run_accelerated(FAKE_USER, person, days, start, rig=fake.rig(sha="0" * 40), seed=seed, label=label, alone_from=alone_from)
+        rig = fake.rig(sha="0" * 40)
+        deps_for = rig.deps_for
+
+        def configured(night: date) -> NightDeps:
+            deps = deps_for(night)
+            return replace(deps, settings=replace(deps.settings, practice_scenes=practice_scenes))
+
+        results = run_accelerated(FAKE_USER, person, days, start, rig=replace(rig, deps_for=configured),
+                                  seed=seed, label=label, alone_from=alone_from)
         scores = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(fake.scores_dir(FAKE_USER).glob("night-*.json"))]
-        print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores), indent=1, sort_keys=True))
+        print(json.dumps(_report(results, fake=True, days=days, sha="0" * 40, scores=scores,
+                                 practice_scenes=practice_scenes), indent=1, sort_keys=True))
         return _exit(results)  # while the run's folder still holds its logs
 
 
@@ -464,7 +476,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                                   publish=night_command._publisher(chosen.name),
                                   revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
             rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
-                night=night, personas=personas, mind_inquiry=args.mind)), terms),
+                night=night, personas=personas, mind_inquiry=args.mind, practice_scenes=args.practice_scenes)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       score=score, subset=subset, require_sha=args.require_sha, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
@@ -473,7 +485,8 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except NightBusy as busy:
         raise SystemExit(str(busy)) from None
     sha = git_sha()
-    print(json.dumps({uid: _report(done, fake=False, days=args.days, sha=sha) for uid, done in results.items()},
+    print(json.dumps({uid: _report(done, fake=False, days=args.days, sha=sha, practice_scenes=args.practice_scenes)
+                      for uid, done in results.items()},
                      indent=1, sort_keys=True))
     return _exit([r for done in results.values() for r in done])
 
@@ -493,17 +506,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--user", action="append", default=[], dest="users")
     parser.add_argument("--persona", action="append", default=[], dest="personas")
     parser.add_argument("--mind", action="store_true", help="MIND's inquiry in each night (Task 17)")
+    parser.add_argument("--practice-scenes", type=int, default=16, help="full practice's scenes, 16 to 20")
     parser.add_argument("--match-file", type=Path, default=None,
                         help="the live comparison's matched control only: JSON of each night's date and budget minutes")
     parser.add_argument("--require-sha", default=None,
                         help="the frozen code's 40-character git sha a real final run must be on")
     args = parser.parse_args(argv)
+    if not MIN_SCENES <= args.practice_scenes <= MAX_SCENES:
+        parser.error(f"--practice-scenes must be between {MIN_SCENES} and {MAX_SCENES} (inclusive)")
     if args.days < 1:
         parser.error("--days is at least 1")
     if args.alone_from is not None and not 1 <= args.alone_from <= args.days:
         parser.error("--alone-from must be between 1 and --days (inclusive)")
     if args.fake:  # a fake run is not on git: it ignores --require-sha, well-formed or not
-        return _fake(args.days, args.start, args.seed, args.mind, args.label, parser, args.alone_from)
+        return _fake(args.days, args.start, args.seed, args.mind, args.label, parser, args.alone_from,
+                     practice_scenes=args.practice_scenes)
     if args.require_sha is not None and not is_sha(args.require_sha):
         parser.error("--require-sha is a full 40-character hex git sha")
     return _real(args, parser)
