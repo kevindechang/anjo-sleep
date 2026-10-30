@@ -6,6 +6,13 @@ through ``trainable``, ``stored`` or ``search``. ``trainable`` also refuses any 
 ancestry isn't cleared (``anjo.sleep.provenance``). The codec and the writer guard are always
 named: the app passes encryption and the account's guard, tests and the public example pass
 ``PLAIN`` and ``NO_GUARD``.
+
+**The comparison's agent notes never leave through the ordinary readers.** An ``agent_note``
+(``AGENT_NOTE``: the baseline arm's nightly note, ``agent-`` ids) is a model's note about the
+person, not the person's own evidence, and it is read only by the morning arm 2A (``agent_notes``).
+Its ancestry is Spark Open, which ``may_train`` accepts, so the kind is what keeps it out of
+training and out of every other reader: ``trainable``, ``stored``, ``for_day`` and ``search`` leave
+it out, and so every brief, practice seed and inquiry that reads through them does too.
 """
 from __future__ import annotations
 
@@ -13,13 +20,15 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Final, get_args
 
 from anjo.sleep.evidence.jsonl import Codec, Guard, LogError, append_records, read_records
 from anjo.sleep.provenance import may_train
 from anjo.sleep.types import Evidence, EvidenceKind
 
+AGENT_NOTE: Final = "agent_note"  # the baseline arm's nightly note (arm 2A reads it, and only it)
 _KINDS = frozenset(get_args(EvidenceKind))
+_QUIET_KINDS: Final[frozenset[str]] = frozenset({AGENT_NOTE})  # what the ordinary readers leave out
 _WORD = re.compile(r"\w+")
 
 
@@ -149,19 +158,33 @@ class JsonlEvidenceStore:
             append_records(self.path, self._codec, fresh)
 
     def for_day(self, day: date) -> list[Evidence]:
-        return [item for item in self._items() if item.day == day]
+        """Every item stamped with ``day``, held-out ones included, but never an agent note."""
+        return [item for item in self._items() if item.day == day and item.kind not in _QUIET_KINDS]
 
     def trainable(self, until: date) -> list[Evidence]:
         return [
             item for item in self.stored(until)
-            if may_train(item.ancestry, hosted_in_training=self.hosted_in_training)
+            if item.kind not in _QUIET_KINDS
+            and may_train(item.ancestry, hosted_in_training=self.hosted_in_training)
         ]
 
     def stored(self, until: date) -> list[Evidence]:
-        return [item for item in self._items() if item.day <= until and not item.held_out]
+        """Every non-held-out item through ``until``, for served context and arm 2F; the baseline's
+        notes are left out, since only arm 2A reads them (``agent_notes``)."""
+        return [
+            item for item in self._items()
+            if item.day <= until and not item.held_out and item.kind not in _QUIET_KINDS
+        ]
 
     def held_out(self, day: date) -> list[Evidence]:
         return [item for item in self.for_day(day) if item.held_out]
+
+    def agent_notes(self, until: date) -> list[Evidence]:
+        """The baseline's notes through ``until``, oldest first: arm 2A's one source for them."""
+        return [
+            item for item in self._items()
+            if item.kind == AGENT_NOTE and item.day <= until and not item.held_out
+        ]
 
     def search(self, query: str, as_of: datetime, k: int) -> list[Evidence]:
         """Lexical overlap with ``query``; equal overlap puts the newer item first."""
@@ -169,7 +192,7 @@ class JsonlEvidenceStore:
         scored = [
             (len(wanted & _words(item.text)), item)
             for item in self._items()
-            if not item.held_out and item.created_at <= as_of
+            if not item.held_out and item.created_at <= as_of and item.kind not in _QUIET_KINDS
         ]
         ranked = sorted(
             ((score, item) for score, item in scored if score > 0),

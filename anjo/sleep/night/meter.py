@@ -6,7 +6,8 @@ retries and failed calls included, so the second offer at step 10 sees what step
 ``SpendMeter`` prices one person's night for ``NightResult.cost_parts`` at list prices (§5.5): the
 Spark Open tokens of extraction, the brief and practice's scenes, the training GPU's minutes, and
 the serving GPU's time spent on that person's practice and gates. ``mind`` stays 0 until Task 17
-runs thinker cycles.
+runs thinker cycles; ``agent`` is the comparison's baseline arm (arm 2A), which stays 0 unless the
+night switched it on.
 
 Both are shared by calls running side by side (``parallel.Calls``): every counter changes, and is
 read together with the others, under the meter's lock, so the totals are exact whatever order the

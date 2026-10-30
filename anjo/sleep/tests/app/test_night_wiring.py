@@ -292,6 +292,25 @@ def test_build_refuses_a_persona_on_a_real_account(monkeypatch: pytest.MonkeyPat
         night.build(NoTrainer(), NightOptions(night=date(2026, 10, 28), personas={"person-real": "founder"}))
 
 
+def test_the_comparison_agent_is_wired_only_when_switched_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.agent_baseline.night import FLAG, AgentNight
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.night.deps import NightOptions
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    assert night.build(NoTrainer(), options).baseline is None  # off: the night it always was
+    monkeypatch.setenv(FLAG, "1")
+    deps = night.build(NoTrainer(), options)
+    assert isinstance(deps.baseline, AgentNight)
+    assert deps.baseline.ledger is deps.ledger and deps.baseline.prices == deps.prices
+    assert deps.baseline.research is not None  # the inquiry's web tool, on the night's Wonder meter
+
+
 def test_the_safety_floor_holds_on_main() -> None:
     from anjo.sleep.app.safety_gate import load_cases
 

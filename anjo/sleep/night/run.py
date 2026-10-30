@@ -21,6 +21,9 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    a no-op. ``hold_note`` is written at step 10. A chosen study records her expectation once the
    estimator is registered (Task 16), and a synthetic life records the offer's decision point.
    With ``mind_inquiry`` on, her questions join the snapshot and ``inquire`` runs MIND (Task 17).
+   With ``ANJO_SLEEP_AGENT_BASELINE=1`` the night runs the comparison's conventional agent right
+   after it (``agent_baseline``): one stateless pass a night that leaves ``agent_note`` items only
+   the morning arm 2A reads.
 6. ``brief``: both briefs fold the evidence no night has folded yet (before practice, so the
    training brief is the pre-practice one). A brief that breaks a rule twice (``context.brief``)
    keeps both briefs she had: the step is logged ``failed`` with the night it kept (``kept_brief``),
@@ -96,6 +99,7 @@ from anjo.sleep.night.state import (
     study_outcome,
 )
 from anjo.sleep.night.story import KEPT
+from anjo.sleep.agent_baseline.types import AgentCall
 from anjo.sleep.context.brief import MAX_TOKENS as BRIEF_MAX_TOKENS
 from anjo.sleep.context.brief import BriefError
 from anjo.sleep.night.state import Window as Window
@@ -135,6 +139,7 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "sleep": ("new", None),
     "probes": ("new", None),
     "inquire": ("new", None),
+    "agent": ("new", None),
     "choose": ("new", None),
     "brief": ("new", None),
     "practice": ("new", None),
@@ -247,6 +252,7 @@ class NightRunner(CoreSteps):
                 ("probes", self._probes),
                 ("choose", self._choose),
                 *((("inquire", self._quiet_inquire),) if self.deps.settings.quiet_inquiry and self._mind() else ()),
+                *((("agent", self._agent),) if self.deps.baseline is not None else ()),
                 ("brief", self._brief),
             ):
                 if (why := put_off(self.deps, p, step)) is not None:
@@ -702,6 +708,26 @@ class NightRunner(CoreSteps):
             }
         }
 
+    def _agent(self, p: PersonNight) -> Mapping[str, Any]:
+        """The comparison's conventional agent (arm 2A): one stateless pass after MIND's step.
+
+        It reads tonight's evidence and the served brief, and leaves notes only arm 2A reads. It
+        never naps: a scheduled agent has no sleep pressure, and its own hold on
+        ``baseten_sleep_usd`` (the ledger remaps it when Sleep's Spark Open is switched) is what
+        stops it when the comparison's credit is spent."""
+        baseline = self.deps.baseline
+        if baseline is None:
+            raise RuntimeError("the night has no baseline agent to run")
+        latest = self.deps.briefs(p.uid).latest()
+        outcome = baseline.night(AgentCall(
+            user_id=p.uid, night=p.night, as_of=p.as_of, at=p.stamp, store=p.store, wonder=p.wonder,
+            spend=p.spend, job=self._job(p, "agent"), brief=None if latest is None else latest.served,
+            cancelled=lambda: self.deps.cancel(p.uid),
+        ))
+        p.agent = outcome
+        return {"notes": len(outcome.notes), "tokens_used": outcome.tokens_used, "calls": outcome.calls,
+                "usd": round(outcome.usd, 6), "stopped": outcome.stopped}
+
     def _brief(self, p: PersonNight) -> Mapping[str, Any]:
         briefs = self.deps.briefs(p.uid)
         new = briefs.unfolded(p.store.stored(p.night))
@@ -1039,6 +1065,8 @@ class NightRunner(CoreSteps):
 
     def _finish(self, p: PersonNight) -> NightResult:
         parts = p.spend.parts()
+        if p.agent is None:  # off: no cost line, so a night without the arm is byte-identical
+            parts.pop("agent", None)
         status: NightStatus = p.status or "failed"
         result = NightResult(
             status=status,
@@ -1071,6 +1099,9 @@ class NightRunner(CoreSteps):
                 "wonder_usd": p.wonder.usd,
                 "steps": [record["step"] for record in p.log.steps()],
                 **self._kept(p),
+                **({} if p.agent is None else {
+                    "agent": {"notes": list(p.agent.notes), "tokens_used": p.agent.tokens_used,
+                              "stopped": p.agent.stopped}}),
                 **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
                 **kept_summary(p.receipts),
                 **(

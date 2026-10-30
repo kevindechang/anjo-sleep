@@ -4,7 +4,9 @@
   person's evidence beside it.
 - **Each verified source is a homework item** that Wonder wrote, so its ancestry is hosted and
   ``provenance.may_train`` keeps it out of training while hosted outputs can't train. It is stored
-  in the person's evidence store before it is returned, as the ``Research`` port promises.
+  in the person's evidence store before it is returned, as the ``Research`` port promises — unless
+  the caller passes ``keep=False``, as the comparison's agent does: those sources stay in that
+  night's scratchpad, since stored homework would fold into the brief and reach every other arm.
 - **Paid like a study.** Every Wonder call comes off the night's ``WonderMeter`` (the $3-a-month
   cap) and is held on ``meta_usd`` (``do_homework``); the night debits one paid action for an
   inquiry that researched. With nothing left, or when the study fails, it returns nothing and the
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Final
 
@@ -52,6 +54,9 @@ class WonderResearch:
     search: WebSearch
     fetcher: PageFetcher
     ledger: Ledger | None = None
+    # False: the caller keeps the sources in its own pass and the store never sees them. The
+    # comparison's agent passes it; MIND, which serves what it finds, keeps the default.
+    keep: bool = field(default=True, kw_only=True)
 
     def research(self, question_id: str, query: str) -> tuple[Evidence, ...]:
         topic = Target(id=f"mind-{question_id}", person_id=self.user_id, kind="thread", label=query, check_after=None,
@@ -65,10 +70,11 @@ class WonderResearch:
             logger.warning("MIND's research call failed (%s); the inquiry goes on without it", type(error).__name__)
             return ()
         items = [self._item(question_id, source) for source in homework.sources]
-        held = {item.id for item in self.store.stored(self.night)}
-        fresh = [item for item in items if item.id not in held]
-        if fresh:
-            self.store.add(fresh)
+        if self.keep:  # the agent baseline keeps its sources in its pass, so the store never holds them
+            held = {item.id for item in self.store.stored(self.night)}
+            fresh = [item for item in items if item.id not in held]
+            if fresh:
+                self.store.add(fresh)
         return tuple(items)
 
     def _item(self, question_id: str, source: Source) -> Evidence:
