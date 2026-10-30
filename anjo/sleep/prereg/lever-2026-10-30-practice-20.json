@@ -1,0 +1,17 @@
+{
+  "lever": "practice",
+  "order": 2,
+  "date": "2026-10-30",
+  "rule": "spec schedule, Oct 31 row: if the development CI for 3 against 1 or against 3x, on either dimension, includes 50%, the levers apply before the Nov 1 freeze in order: SFT plus DPO, then more practice up to night_token_cap; each a dated ledger entry judged on development only",
+  "trigger": {
+    "read": "anjo.sleep.reports.development, four registered development lives, nights 2026-10-27..28, full morning on night 2",
+    "3_vs_1": {"knowledge": {"score": 0.5781, "ci": [0.5094, 0.6469], "label": "win"},
+               "interaction": {"score": 0.5208, "ci": [0.4625, 0.5792], "label": "inconclusive"}},
+    "3_vs_3x": {"knowledge": {"score": 0.5594, "ci": [0.4938, 0.6281], "label": "inconclusive"},
+                "interaction": {"score": 0.525, "ci": [0.4708, 0.5792], "label": "inconclusive"}}
+  },
+  "lever_1": "SFT plus DPO is already the default objective (anjo/sleep/train/objective.py DEFAULT_OBJECTIVE = sft_dpo), so the read above already includes it",
+  "change": {"practice_scenes": {"from": 16, "to": 20}, "unchanged": ["objective sft_dpo", "night_token_cap 16384", "candidates 3 + 1 teacher", "practice_f_cap 8000"]},
+  "judged_on": "development only: four fresh accounts of the same four personas replay nights 2026-10-27..28 with practice_scenes 20, then a full morning on night 2; the same pooled 3 vs 1 and 3 vs 3x per-dimension rule from prereg/thresholds.json",
+  "kept_if": "the spec sets no keep-versus-default threshold; the lever's read is reported beside the default's, and the final test runs either way"
+}
