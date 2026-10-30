@@ -5,10 +5,11 @@ at temperature 0 and lists what Anjo can learn from them, with any target each i
 plan the person dated, or a topic she was lost on or that stays open. Her own turns are never
 sent: they carry Anjo's untagged memory in their context (§3).
 
-- **Provenance:** an extracted item's ``model`` is Spark Open (Baseten's id; APD's lives pass
-  their provider's), and a reply that names any other model (or none) is refused. Its ancestry is Spark Open plus the ancestry of every turn the call
-  read, since the model saw them all: empty for a real person's words, {Spark Open} for a
-  simulated person's, unknown (``None``) when any read turn's is unknown.
+- **Provenance:** an extracted item's ``model`` is Spark Open's id on the provider
+  ``ANJO_SLEEP_SPARK`` selects (Baseten's by default; APD's lives pass their provider's), and a
+  reply that names any other id is refused. Its ancestry is Spark Open plus the ancestry of every
+  turn the call read, since the model saw them all: empty for a real person's words, {Spark Open}
+  for a simulated person's, unknown (``None``) when any read turn's is unknown.
 - **Ids:** an extracted item's id comes from the person, the day, its source turn, its kind and
   its place among that turn's items of that kind, never from the model's wording, so a re-run
   whose reply words an item differently names the same item. ``ExtractionLog`` makes a committed
@@ -61,8 +62,24 @@ ChatFn = Callable[[list[dict[str, Any]]], ChatResult]
 
 
 def spark_open(messages: list[dict[str, Any]]) -> ChatResult:
-    """The extraction call: Spark Open on Baseten at temperature 0, no tools."""
+    """The extraction call: Spark Open at temperature 0, no tools, through ``baseten_api.chat``'s
+    provider switch."""
     return baseten_api.chat(SPARK_OPEN, messages, None, TIMEOUT_S, temperature=0.0)
+
+
+def _accepted_models(configured: str) -> frozenset[str]:
+    """The ids a reply may name: the one ``chat`` is configured with, and the one
+    ``ANJO_SLEEP_SPARK`` selects. Both are the cleared Spark Open (``provenance``)."""
+    from anjo.sleep import spark_provider  # imported here: spark_provider imports this package
+
+    return frozenset({configured, spark_provider.current().model})
+
+
+def _selected_model() -> str:
+    """The Spark Open id the provider ``ANJO_SLEEP_SPARK`` selects serves (Baseten's by default)."""
+    from anjo.sleep import spark_provider  # imported here: spark_provider imports this package
+
+    return spark_provider.current().model
 
 
 class ExtractionError(ValueError):
@@ -170,21 +187,24 @@ def extract(
     known_ids: frozenset[str],
     now: datetime,
     chat: ChatFn = spark_open,
-    model: str = SPARK_OPEN,
+    model: str | None = None,
 ) -> Extraction:
     """The day's new evidence, stamped with ``day`` and created at ``now`` (the night's clock).
-    ``model`` is the Spark Open id ``chat`` serves: Baseten's for the night, the experiment's
-    provider's for APD's lives."""
+    ``model`` is the Spark Open id ``chat`` serves: the provider ``ANJO_SLEEP_SPARK`` selects when
+    not given, the experiment's provider's for APD's lives. A reply naming either the configured id
+    or the selected one is accepted: both are the same cleared model (``provenance``)."""
+    served = _selected_model() if model is None else model
+    accepted = _accepted_models(served)
     own = own_turns(turns)
     found: list[tuple[Evidence, Mention | None]] = []
     refused: list[str] = []
     input_tokens = output_tokens = 0
     if own:
         reply = chat(_messages(day, own, targets))
-        if reply.model != model:
+        if reply.model not in accepted:
             raise ExtractionError("the extraction reply doesn't name the extraction model")
         input_tokens, output_tokens = reply.input_tokens, reply.output_tokens
-        found, refused = _read_reply(person_id, day, own, targets, now, reply.text, model)
+        found, refused = _read_reply(person_id, day, own, targets, now, reply.text, served)
     for item in imported:
         found.append((Evidence(
             id="e-" + _hash(person_id, "imported", item.source)[:20], person_id=person_id, day=day,

@@ -75,6 +75,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol
 
+from anjo.sleep import spark_provider
 from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.context.brief import CUT, REASONING_ROOM
 from anjo.sleep.context.brief_store import union
@@ -460,7 +461,7 @@ class FullPractice:
         return PracticeTranscript(
             id=f"pr-{digest}", person_id=ctx.user_id, night=ctx.night, scene=index, message=message,
             reply=verdict.best.text, context=scene.context, f_ids=ctx.f_ids,
-            ancestry=union((frozenset({SPARK_OPEN, GLIMMER}), ctx.f_ancestry, scene.c_ancestry)),
+            ancestry=union((frozenset({spark_provider.current().model, GLIMMER}), ctx.f_ancestry, scene.c_ancestry)),
             created_at=ctx.at + timedelta(seconds=index), target=verdict.best.source,
             rejected=verdict.worst.text if verdict.worst else None,
             rejected_from=verdict.worst.source if verdict.worst else None,

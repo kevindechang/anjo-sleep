@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Final, Protocol
 
-from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep import spark_provider
 from anjo.sleep.budget import Ledger
 from anjo.sleep.mind import snapshot
 from anjo.sleep.mind.core import bridge
@@ -181,7 +181,7 @@ class _Meters:
     def spark(self, inner: ChatFn) -> ChatFn:
         def chat(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
             if self.spark_calls >= MIND_SPARK_CALLS:  # past the hold's count: no call, nothing spent
-                return ChatResult(text="", tool_calls=(), model=SPARK_OPEN, input_tokens=0, output_tokens=0,
+                return ChatResult(text="", tool_calls=(), model=spark_provider.current().model, input_tokens=0, output_tokens=0,
                                   finish_reason=None)
             self.spark_calls += 1
             result = inner(messages, max_tokens)

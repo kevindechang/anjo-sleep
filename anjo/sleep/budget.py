@@ -19,11 +19,17 @@ still counts after the clearing.
 The caps are §12.1's. Baseten's $100 credit is two pools, and Sleep has priority: when
 ``baseten_sleep_usd`` runs short it may take MIND's unspent balance, so the two together never
 pass $100 and MIND never passes its own $40. Fireworks' $100 credit is two pools that together
-never pass it (``FIREWORKS_TOTAL``): ``fireworks_mind_usd`` ($80), for MIND's experiment when it runs
-Spark Open there (``mind.spark_provider``; the full core set needs about $21), and
-``fireworks_sleep_usd`` ($20), Sleep's practice critic when DeepSeek V4.1 Flash plays it
+never pass it (``FIREWORKS_TOTAL``): ``fireworks_mind_usd`` ($20), for MIND's experiment when it runs
+Spark Open there (``mind.spark_provider``), and
+``fireworks_sleep_usd`` ($80), Sleep's practice critic when DeepSeek V4.1 Flash plays it
 (``practice.critics``). They share nothing with Baseten's. ``vertex_mind_usd`` holds MIND's data's
 Gemini gate reads (``mind.apd.readers``), apart from ``vertex_usd``'s diagnostic judge.
+
+**One switch, one pool.** With ``ANJO_SLEEP_SPARK=fireworks`` Sleep's Spark Open runs on Fireworks
+(``spark_provider``), so a reservation naming ``baseten_sleep_usd`` or ``baseten_mind_usd`` holds
+``fireworks_sleep_usd`` instead: ``selected_pools`` is the one mapping, applied when the hold is
+recorded, and ``settle`` and ``release`` account the job on the pool its hold names, so a job's hold
+and its settlement never straddle the switch.
 
 The ledger is an append-only JSON Lines file in the data dir (``anjo/sleep/evidence/jsonl.py``,
 in plain text: it holds no person's words), one event per line. Every reserve, settle, release
@@ -62,8 +68,8 @@ CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "meta_usd": 140.0,  # $10 under the $150 credit, for billing lag
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b
-    "fireworks_mind_usd": 80.0,  # Tasks 17 and 17b on Fireworks; with Sleep's $20, the $100 credit
-    "fireworks_sleep_usd": 20.0,  # Sleep's practice critic on DeepSeek V4.1 Flash (coordinator, 2026-10-29)
+    "fireworks_mind_usd": 20.0,  # MIND's protocol-only experiment
+    "fireworks_sleep_usd": 80.0,  # Sleep's share of the Fireworks credit
     "vertex_usd": 50.0,  # the Gemini diagnostic judge
     "vertex_mind_usd": 150.0,  # MIND's data: Gemini's gate reads of the core splits and the pairs (GCP credits)
     "judge_usd": 100.0,  # judges' sleep-now nights, inside the totals above
@@ -124,6 +130,28 @@ def _job(job: object) -> str:
     if not isinstance(job, str) or not job.strip():
         raise BudgetError("a reservation names its job")
     return job
+
+
+# The pools Sleep's Spark Open leaves when ANJO_SLEEP_SPARK selects Fireworks.
+_SPARK_POOLS: Final[Mapping[Pool, Pool]] = MappingProxyType({
+    "baseten_sleep_usd": "fireworks_sleep_usd", "baseten_mind_usd": "fireworks_sleep_usd",
+})
+
+
+def _spark_on_fireworks() -> bool:
+    from anjo.sleep.spark_provider import selected  # imported here: spark_provider imports this module
+
+    return selected(os.environ) == "fireworks"
+
+
+def selected_pools(pools: tuple[Pool, ...]) -> tuple[Pool, ...]:
+    """The pools a reservation really holds: with ``ANJO_SLEEP_SPARK=fireworks`` either Baseten
+    Spark pool holds ``fireworks_sleep_usd`` instead, since that is where Sleep's Spark Open spend
+    goes. ``reserve`` maps the pools it is handed; ``settle`` and ``release`` read the mapped pool
+    back from the hold, so a job's hold and its settlement stay on one pool."""
+    if not _spark_on_fireworks():
+        return pools
+    return _pools(tuple(_SPARK_POOLS.get(pool, pool) for pool in pools))
 
 
 @dataclass(frozen=True)
@@ -207,7 +235,7 @@ class Ledger:
         """Hold ``bound`` on every pool in ``pools`` under the key ``job``, or nothing when any
         pool would pass its cap or waits on a cleared overage. A key that already holds returns
         that same hold."""
-        key, checked = _job(job), _pools(pools)
+        key, checked = _job(job), selected_pools(_pools(pools))
         if not isinstance(bound, Bound):
             raise BudgetError("a reservation holds a Bound: the rate over the hard timeout")
         with self._locked():

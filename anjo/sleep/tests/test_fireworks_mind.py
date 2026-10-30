@@ -2,8 +2,9 @@
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """MIND's experiment on Spark Open through Fireworks (Tasks 17 and 17b): one provider per
 experiment from ``ANJO_SLEEP_MIND_SPARK``, pinned in the data dir; Spark Open's exact Fireworks id
-cleared beside Baseten's; every Fireworks call held on ``fireworks_mind_usd``; Sleep's night still
-on Baseten. Every model is a fake and every request goes to ``httpx.MockTransport``: no network."""
+cleared beside Baseten's; every Fireworks call held on ``fireworks_mind_usd``. Sleep's night keeps
+Baseten unless ``ANJO_SLEEP_SPARK`` says otherwise (``spark_provider``). Every model is a fake and
+every request goes to ``httpx.MockTransport``: no network."""
 from __future__ import annotations
 
 import dataclasses
@@ -46,8 +47,13 @@ MESSAGES: list[dict[str, Any]] = [{"role": "user", "content": "hello"}]
 ROOT = Path(__file__).parents[1]
 # Where Fireworks may be named: its client, provenance, the ledger's pool, the setting and MIND's experiment
 # (the thought channel's pretraining targets included: generated lives, on MIND's Spark pool, never a night).
-FIREWORKS_HOMES = ("fireworks_api.py", "provenance.py", "budget.py", "mind/spark_provider.py", "mind/apd/",
-                   "mind/replay/", "tests/", "deploy/")
+# Sleep's own modules may name only the selector (``spark_provider``), never a Fireworks id or pool: one
+# switch, ``ANJO_SLEEP_SPARK``, moves them.
+FIREWORKS_HOMES = ("fireworks_api.py", "spark_provider.py", "provenance.py", "budget.py", "mind/spark_provider.py",
+                   "mind/apd/", "mind/replay/", "tests/", "deploy/")
+# Sleep's Spark Open choke point and the modules that ask it which id to record.
+SELECTOR_HOMES = ("baseten_api.py", "spark_inquiry.py", "evidence/extract.py", "context/brief_store.py",
+                  "practice/run.py", "practice/full.py", "sim/persona_sim.py", "night/mind.py", "app/night.py")
 # Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) is the one Sleep file
 # that may name Fireworks, and never MIND's pool, Spark Open provider or setting: Sleep's Spark Open stays
 # on Baseten.
@@ -231,11 +237,11 @@ def test_every_fireworks_call_held_on_fireworks_mind_usd(tmp_path: Path, monkeyp
     spark = [job for job, pools in reserved if "fireworks_mind_usd" in pools]
     assert spark and any(job.startswith("apd:kill:") for job in spark)  # kill-resume's children too
     assert not any("baseten_mind_usd" in pools or "baseten_sleep_usd" in pools for _, pools in reserved)
-    assert "the $80 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
+    assert "the $20 fireworks_mind_usd cap" in text and Ledger(data / "fake-budget.jsonl").open_holds() == ()
 
 
 def test_a_fireworks_night_never_waits_on_sleeps_baseten_holds(tmp_path: Path) -> None:
-    assert CAPS["fireworks_mind_usd"] == 80.0
+    assert CAPS["fireworks_mind_usd"] == 20.0
     ledger = Ledger(tmp_path / "budget.jsonl", caps=CAPS)
     assert ledger.reserve("night:sleep:a1", ("baseten_sleep_usd",), usd(CAPS["baseten_sleep_usd"] +
                                                                          CAPS["baseten_mind_usd"])) is not None
@@ -257,18 +263,22 @@ def test_sleep_night_path_still_uses_baseten(monkeypatch: pytest.MonkeyPatch) ->
         if name.startswith(FIREWORKS_HOMES):
             continue
         text = path.read_text(encoding="utf-8").casefold()
-        terms = ("spark_provider", SETTING.casefold(), "fireworks_mind_usd") + (
-            () if name == CRITIC_HOME else ("fireworks",))
-        for term in (t for t in terms if t not in ALLOWED.get(name, frozenset())):
-            assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten"
-    monkeypatch.setenv(SETTING, "fireworks")
+        if name.startswith(SELECTOR_HOMES):  # the choke point names the client's module, never its id or key
+            terms = {"fireworks_sleep_usd", "fireworks_mind_usd", "accounts/fireworks", "anjo_fireworks"}
+        else:
+            terms = {"fireworks", "fireworks_mind_usd", "spark_provider", SETTING.casefold()}
+        if name == CRITIC_HOME:  # its own Fireworks pool, never Spark Open's provider or setting
+            terms -= {"fireworks"}
+        for term in sorted(terms - ALLOWED.get(name, frozenset())):
+            assert term not in text, f"{name} names {term}: Sleep's night stays on Baseten by default"
+    monkeypatch.delenv(SETTING, raising=False)  # unset: today's Baseten path, unchanged
     posted: list[str] = []
 
     def post(**kw: Any) -> ChatResult:
         posted.append(f"{kw['provider']} {kw['url']} {kw['key_env']} {kw['model']}")
         return ChatResult("{}", (), kw["model"], 1, 1, "stop")
 
-    monkeypatch.setattr(spark_inquiry, "post_chat", post)
+    monkeypatch.setattr(baseten_api, "post_chat", post)
     spark_inquiry.spark_open(MESSAGES, 10)  # the night's MIND step: its screen and resolver
     assert posted == [f"Baseten {baseten_api.URL} {baseten_api.KEY_ENV} {BASETEN}"]
     called: list[str] = []

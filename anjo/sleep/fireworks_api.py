@@ -2,7 +2,8 @@
 
 The same open-weight model as Baseten's (``baseten_api``), under the same Muse Model License, so
 its exact id is cleared for training beside Baseten's (``provenance``). MIND's experiment calls it
-when ``ANJO_SLEEP_MIND_SPARK`` says so (``mind.spark_provider``); Sleep's night stays on Baseten.
+when ``ANJO_SLEEP_MIND_SPARK`` says so (``mind.spark_provider``), and Sleep's night when
+``ANJO_SLEEP_SPARK=fireworks`` (``spark_provider``), through ``baseten_api.chat``'s switch.
 It's served through Fireworks' OpenAI-compatible API. The key comes from
 ``ANJO_FIREWORKS_API_KEY``, read at call time. ``generate`` calls the cheaper models that may write
 MIND's core splits and pairs instead (``mind.apd.generators``); they are not Spark Open, and
@@ -39,10 +40,12 @@ def chat(
     *,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    seed: int | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> ChatResult:
     """One chat completion on Spark Open, its reply capped at ``max_tokens`` when given (MIND's
-    calls are). ``transport`` is for tests (``httpx.MockTransport``)."""
+    calls are), sampled under ``seed`` when given (Sleep's brief retry). ``transport`` is for tests
+    (``httpx.MockTransport``)."""
     return post_chat(
         provider="Fireworks",
         url=URL,
@@ -54,6 +57,7 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+        extra=None if seed is None else {"seed": seed},
     )
 
 

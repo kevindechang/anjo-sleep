@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep import spark_provider
 from anjo.sleep.personas.model import Persona
 from anjo.sleep.provenance import union
 
@@ -46,7 +46,7 @@ class Turn:
 def simulated_ancestry(read: Iterable[frozenset[str] | None]) -> frozenset[str] | None:
     """A simulated line's ancestry: Spark Open's, and that of every reply it read (unknown if
     any reply's is)."""
-    return union([frozenset({SPARK_OPEN}), *read])
+    return union([frozenset({spark_provider.current().model}), *read])
 
 
 class SimModel(Protocol):

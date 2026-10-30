@@ -271,7 +271,7 @@ def test_the_module_reserve_uses_the_data_dir(tmp_path: Path, monkeypatch: pytes
 def test_the_caps_and_time_limits_are_section_12_1s() -> None:
     assert dict(budget.CAPS) == {
         "modal_usd": 500.0, "colab_cu": 100.0, "meta_usd": 140.0, "baseten_sleep_usd": 60.0,
-        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 80.0, "fireworks_sleep_usd": 20.0, "vertex_usd": 50.0,
+        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 20.0, "fireworks_sleep_usd": 80.0, "vertex_usd": 50.0,
         "vertex_mind_usd": 150.0, "judge_usd": 100.0,
     }
     assert budget.UNITS["colab_cu"] == "cu" and budget.BASETEN_TOTAL == 100.0
@@ -281,6 +281,6 @@ def test_the_caps_and_time_limits_are_section_12_1s() -> None:
 
 def test_the_fireworks_pools_together_stay_inside_its_100_dollar_credit() -> None:
     fireworks = {pool: cap for pool, cap in budget.CAPS.items() if pool.startswith("fireworks_")}
-    assert fireworks == {"fireworks_mind_usd": 80.0, "fireworks_sleep_usd": 20.0}
+    assert fireworks == {"fireworks_mind_usd": 20.0, "fireworks_sleep_usd": 80.0}
     # every Fireworks pool, a new one too, counts against the one credit
     assert sum(fireworks.values()) == budget.FIREWORKS_TOTAL <= budget.FIREWORKS_CREDIT_USD == 100.0

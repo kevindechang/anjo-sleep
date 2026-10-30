@@ -1,9 +1,15 @@
-"""Muse Spark Open on Baseten (spec §3.2, Task 1).
+"""Muse Spark Open on Baseten (spec §3.2, Task 1), and Sleep's way to another provider.
 
 Spark Open plays the person and the critic in practice, compiles the brief, extracts evidence
 and runs the simulator, so every training ancestor is licence-cleared (§3). It's served through
 Baseten's OpenAI-compatible Model API. The key comes from ``ANJO_BASETEN_API_KEY``, read at call
 time.
+
+**One switch.** ``ANJO_SLEEP_SPARK`` selects the provider (``spark_provider``); when it selects the
+other one, a call asking for ``SPARK_OPEN`` is sent to ``fireworks_api`` instead, with the same
+messages, tools, temperature, cap, timeout and seed, and its reply names that provider's id. Unset or
+``baseten`` calls Baseten exactly as before, so ``chat`` is the one place Sleep's Spark Open traffic
+turns.
 """
 from __future__ import annotations
 
@@ -33,7 +39,15 @@ def chat(
 ) -> ChatResult:
     """One chat completion on Spark Open, its reply capped at ``max_tokens`` when given (full
     practice caps each role, the brief its folds), sampled under ``seed`` when given (the brief's
-    retry). ``transport`` is for tests (``httpx.MockTransport``)."""
+    retry). ``transport`` is for tests (``httpx.MockTransport``). When ``ANJO_SLEEP_SPARK`` selects
+    the other provider, a call for ``SPARK_OPEN`` goes to ``fireworks_api`` instead."""
+    if model == SPARK_OPEN:
+        from anjo.sleep import spark_provider  # imported here: spark_provider imports this module
+
+        selected = spark_provider.current()
+        if selected.model != SPARK_OPEN:
+            return selected.chat(selected.model, messages, tools, timeout_s, temperature=temperature,
+                                 max_tokens=max_tokens, transport=transport, seed=seed)
     return post_chat(
         provider="Baseten",
         url=URL,
