@@ -251,6 +251,17 @@ def state_brief(ws: Workspace, targets: Sequence[Target], expectations: Sequence
     return '\n'.join((*fixed, '<MIND>', *lines, '</MIND>')) + '\n'
 
 
+def probe_brief(ws: Workspace, targets: Sequence[Target], expectations: Sequence[Expectation], as_of: datetime,
+                served: str) -> str:
+    """The probe's whole input: the served brief inside its delimiters, ``ws``'s state around it.
+
+    The week probe's two arms and the causal run compose their briefs here, so two conditions
+    differ only in the state block or the served prose they are handed, never in the framing.
+    """
+    fixed, _, mind = state_brief(ws, targets, expectations, as_of, variant='week').partition('<MIND>\n')
+    return fixed + '<MIND>\n<SERVED_BRIEF>\n' + served + '\n</SERVED_BRIEF>\n' + mind
+
+
 def diff(week: str, empty: str) -> tuple[str, ...]:
     """A stable unified diff, usable for either briefs or replies."""
     return tuple(unified_diff(week.splitlines(), empty.splitlines(), fromfile='week', tofile='empty', lineterm=''))
