@@ -23,7 +23,9 @@ class StoredEvidence(Protocol):
     def stored(self, until: date) -> list[Evidence]: ...
 
 
-def _default_embed() -> Embed:
+def default_embed() -> Embed:
+    """The host's MiniLM embedder, loaded on first use. Named here rather than imported: the
+    Sleep engine loads this seam by name so no engine module imports ``anjo.memory``."""
     from anjo.memory.embedder import embed_semantic
 
     embed: Embed = embed_semantic
@@ -48,7 +50,7 @@ class MiniLmRecall:
     ) -> None:
         self._evidence = evidence
         self._until = until
-        self._embed = embed if embed is not None else _default_embed()
+        self._embed = embed if embed is not None else default_embed()
         self._hosted_in_training = hosted_in_training
         self._vectors: dict[str, Sequence[float]] = {}
 

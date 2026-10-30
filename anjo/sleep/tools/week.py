@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from typing import Literal
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -16,8 +15,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from anjo.sleep.context.recall_common import estimate_tokens
-from anjo.sleep.mind.inquiry.types import WorkspaceEvent
-from anjo.sleep.mind.week import NightSlice, ResolutionInputs, WeekHistory, diff, fold_to, history, state_brief
+from anjo.sleep.mind.inquiry import kernel
+from anjo.sleep.mind.inquiry.types import Workspace, WorkspaceEvent
+from anjo.sleep.mind.week import NightSlice, ResolutionInputs, WeekHistory, diff, fold_to, history, probe_brief
 from anjo.sleep.ports import EvidenceStore
 from anjo.sleep.probes import arms
 from anjo.sleep.probes.clients import ModelClient
@@ -151,23 +151,27 @@ def _empty_served(text: str, mind_ids: tuple[str, ...], workspace_ids: frozenset
     return ''.join(kept)
 
 
-def _briefs(source: Records, end: date, as_of: datetime) -> tuple[str, str]:
-    ws = fold_to(source.events, end)
+def _state_ids(ws: Workspace) -> frozenset[str]:
+    """Every MIND record id the state holds: what a served line's citations may name."""
+    return frozenset(r.id for records in (ws.questions, ws.hypotheses, ws.predictions, ws.findings) for r in records)
+
+
+def served_without_mind(source: Records, ws: Workspace) -> str:
+    """The served brief less exactly its MIND-cited lines: the empty-state twin's prose."""
     if not source.common.strip():
         raise ValueError('the probe requires the full served brief')
     if any(marker in source.common for marker in ('<MIND>', '</MIND>', '<SERVED_BRIEF>', '</SERVED_BRIEF>')):
         raise ValueError('served brief contains reserved probe delimiters; exact framing is unavailable')
-    ids = frozenset(r.id for records in (ws.questions, ws.hypotheses, ws.predictions, ws.findings) for r in records)
-    empty_served = _empty_served(source.common, source.mind_evidence_ids, ids)
+    return _empty_served(source.common, source.mind_evidence_ids, _state_ids(ws))
 
-    def build(variant: Literal['week', 'empty'], served: str) -> str:
-        state = state_brief(ws, source.targets, source.expectations, as_of, variant=variant)
-        fixed, _, mind = state.partition('<MIND>\n')
-        # The envelope retains all unrelated served text verbatim in both variants;
-        # only MIND-cited lines and the kernel state change inside its delimiters.
-        return fixed + '<MIND>\n<SERVED_BRIEF>\n' + served + '\n</SERVED_BRIEF>\n' + mind
 
-    return build('week', source.common), build('empty', empty_served)
+def _briefs(source: Records, end: date, as_of: datetime) -> tuple[str, str]:
+    ws = fold_to(source.events, end)
+    empty_served = served_without_mind(source, ws)
+    # The envelope retains all unrelated served text verbatim in both variants;
+    # only MIND-cited lines and the kernel state change inside its delimiters.
+    return (probe_brief(ws, source.targets, source.expectations, as_of, source.common),
+            probe_brief(kernel.fold(()), source.targets, source.expectations, as_of, empty_served))
 
 
 def paired(source: Records, user: str, prompt: str, end: date, as_of: datetime,
