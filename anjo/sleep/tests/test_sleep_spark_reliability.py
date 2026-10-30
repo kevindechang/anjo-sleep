@@ -1,0 +1,135 @@
+# mypy: disallow-untyped-decorators=False
+# (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
+"""Sleep's Spark Open on Fireworks survives a dropped connection and a long practice reply.
+
+A connection that never opened was charged nothing, so the delegated Spark Open call sends it again
+a bounded number of times; a read timeout is never sent again, because the request was sent and may
+have been charged. A capped reply's wait is scaled to its cap, so a practice scene isn't cut at
+180 s. Fakes only: ``httpx.MockTransport`` and a fake ``post_chat``, no network."""
+from __future__ import annotations
+
+from typing import Any, Final
+
+import httpx
+import pytest
+
+from anjo.sleep import fireworks_api
+from anjo.sleep.mind.apd.retry import reply_timeout_s
+from anjo.sleep.model_api import BACKOFF_S, ChatResult, ConnectFailed, ModelApiError, Retries
+
+MESSAGES: Final = [{"role": "user", "content": "hello"}]
+
+
+def _ok(model: str) -> dict[str, Any]:
+    return {"model": model, "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+
+@pytest.fixture(autouse=True)
+def _key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "fw-fake")
+
+
+def _chat(transport: httpx.BaseTransport, *, retries: Retries | None = None, timeout_s: float = 180.0,
+          max_tokens: int | None = None) -> ChatResult:
+    return fireworks_api.chat(fireworks_api.SPARK_OPEN, MESSAGES, None, timeout_s, transport=transport,
+                              retries=retries, max_tokens=max_tokens)
+
+
+def test_a_connection_that_never_opened_is_sent_again_then_succeeds() -> None:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    counted: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) < 3:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json=_ok(fireworks_api.SPARK_OPEN))
+
+    retries = Retries(connect_attempts=3, sleep=slept.append, counted=lambda: counted.append(1))
+    result = _chat(httpx.MockTransport(handler), retries=retries)
+    assert result.text == "ok" and len(seen) == 3
+    assert slept == list(BACKOFF_S) and counted == [1, 1]
+
+
+def test_a_connection_that_never_opens_is_sent_a_bounded_number_of_times() -> None:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    retries = Retries(connect_attempts=3, sleep=slept.append)
+    with pytest.raises(ConnectFailed, match="ConnectError"):
+        _chat(httpx.MockTransport(handler), retries=retries)
+    assert len(seen) == 3 and slept == list(BACKOFF_S)  # no fourth try, no wait after the last
+
+
+def test_without_a_policy_a_dropped_connection_fails_at_once() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with pytest.raises(ConnectFailed):
+        _chat(httpx.MockTransport(handler))
+    assert len(seen) == 1
+
+
+def test_a_read_timeout_is_never_sent_again_even_with_a_policy() -> None:
+    """The request reached the provider and may have been charged: only a connect failure retries."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ReadTimeout("slow reply", request=request)
+
+    with pytest.raises(ModelApiError, match="timed out"):
+        _chat(httpx.MockTransport(handler), retries=Retries(connect_attempts=3, sleep=lambda _s: None))
+    assert len(seen) == 1
+
+
+def test_sleeps_delegated_policy_sends_a_dropped_connection_again() -> None:
+    assert fireworks_api.SLEEP_RETRIES.connect_attempts == fireworks_api.CONNECT_RETRIES + 1 > 1
+
+
+def _recording_post(served: list[dict[str, Any]]):
+    def post(**kw: Any) -> ChatResult:
+        served.append(kw)
+        return ChatResult("ok", (), kw["model"], 5, 1, "stop")
+
+    return post
+
+
+def _routed(monkeypatch: pytest.MonkeyPatch, timeout_s: float, max_tokens: int | None) -> float:
+    """The wait Sleep's Spark Open call reaches Fireworks with, through ``baseten_api.chat``."""
+    from anjo.sleep import baseten_api
+
+    served: list[dict[str, Any]] = []
+    monkeypatch.setenv("ANJO_SLEEP_SPARK", "fireworks")
+    monkeypatch.setattr(fireworks_api, "post_chat", _recording_post(served))
+    baseten_api.chat(baseten_api.SPARK_OPEN, [{"role": "user", "content": "hi"}], None, timeout_s,
+                     max_tokens=max_tokens)
+    return served[-1]["timeout_s"]
+
+
+def test_a_capped_reply_waits_for_its_cap_not_a_flat_180_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _routed(monkeypatch, 180.0, 4_096) == reply_timeout_s(4_096) > 180.0
+
+
+def test_an_uncapped_call_keeps_the_callers_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _routed(monkeypatch, 180.0, None) == 180.0
+
+
+def test_a_callers_longer_wait_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _routed(monkeypatch, 900.0, 1_024) == 900.0
+
+
+def test_a_direct_fireworks_call_keeps_its_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    served: list[dict[str, Any]] = []
+    monkeypatch.setattr(fireworks_api, "post_chat", _recording_post(served))
+    _chat(httpx.MockTransport(lambda r: httpx.Response(200)), timeout_s=30.0, max_tokens=4_096)
+    assert served[-1]["timeout_s"] == 30.0  # MIND's experiment and the judge set their own waits

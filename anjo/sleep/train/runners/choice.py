@@ -16,21 +16,27 @@ uploads it only where it didn't land (SageMaker's bucket); a Colab-trained one i
 """
 from __future__ import annotations
 
+import logging
+import subprocess
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 from anjo.sleep.budget import Ledger
+from anjo.sleep.night.sweep import Stopped
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.train.lora import AdapterPublisher
 from anjo.sleep.train.runners import colab as colab_runner
-from anjo.sleep.train.runners.colab import ColabCli, ColabRunner, stop_leftover_sessions
+from anjo.sleep.train.runners.colab import ColabCli, ColabError, ColabRunner, stop_leftover_sessions
 from anjo.sleep.train.runners.modal import CallRecords, ModalCalls, ModalRunner, cancel_leftover_calls
 
 RUNNER_ENV: Final = "ANJO_SLEEP_TRAIN_RUNNER"
 RUNNERS: Final = ("modal", "colab")
 DEFAULT_RUNNER: Final = "modal"
+# What a hiccup of the Colab CLI's session listing raises: a refused call, a hang, or a missing CLI.
+LISTING_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
+logger = logging.getLogger(__name__)
 
 
 class RunnerChoiceError(ValueError):
@@ -39,11 +45,12 @@ class RunnerChoiceError(ValueError):
 
 @dataclass(frozen=True)
 class Chosen:
-    """The runner the setting picked, by name, and its sweep (how many stopped, how many not ours)."""
+    """The runner the setting picked, by name, and its sweep (how many stopped, how many not ours,
+    and why a Colab listing it couldn't read was skipped)."""
 
     name: str
     runner: GpuRunner
-    sweep: Callable[[], tuple[int, int]]
+    sweep: Callable[[], Stopped]
 
 
 def runner_name(environ: Mapping[str, str]) -> str:
@@ -59,13 +66,26 @@ def colab_installed() -> bool:
     return Path(colab_runner.COLAB_BIN).is_file()
 
 
-def _sweep(records: CallRecords, calls: ModalCalls, cli: ColabCli | None) -> Callable[[], tuple[int, int]]:
+def _sweep(name: str, records: CallRecords, calls: ModalCalls,
+           cli: ColabCli | None) -> Callable[[], Stopped]:
     """Both runners' leftovers: Modal's recorded calls, and Sleep's Colab sessions when ``cli`` is given.
-    Returns how many were stopped and how many Colab sessions weren't ours."""
-    def sweep() -> tuple[int, int]:
-        stopped, not_ours = stop_leftover_sessions(cli) if cli is not None else (0, 0)
+    Returns how many were stopped and how many Colab sessions weren't ours. A Colab listing that
+    fails is retried once when Colab trains this night (its own VMs may be up, so the sweep must
+    not be skipped); on any other runner it is logged and skipped, and the night goes on."""
+    def sweep() -> Stopped:
+        stopped = not_ours = 0
+        skipped: str | None = None
+        if cli is not None:
+            try:
+                stopped, not_ours = stop_leftover_sessions(cli)
+            except LISTING_FAILURES as error:
+                if name == "colab":
+                    stopped, not_ours = stop_leftover_sessions(cli)  # one retry, then fail as today
+                else:
+                    skipped = f"colab listing failed ({type(error).__name__})"
+                    logger.warning("the Colab session sweep was skipped on the %s runner: %s", name, skipped)
         cancelled, _ = cancel_leftover_calls(records, calls)
-        return stopped + cancelled, not_ours
+        return Stopped(stopped + cancelled, not_ours, skipped)
 
     return sweep
 
@@ -82,11 +102,11 @@ def build(
     if name == "modal":
         modal = ModalRunner(calls=calls, ledger=ledger, records=records, is_synthetic=is_synthetic,
                             allow_real=allow_real)
-        return Chosen(name, modal, _sweep(records, calls, colab_cli() if colab_installed() else None))
+        return Chosen(name, modal, _sweep(name, records, calls, colab_cli() if colab_installed() else None))
     if name == "colab":
         cli = colab_cli()
         colab = ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_synthetic, allow_real=bool(allow_real))
-        return Chosen(name, colab, _sweep(records, calls, cli))
+        return Chosen(name, colab, _sweep(name, records, calls, cli))
     raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(RUNNERS)}")
 
 

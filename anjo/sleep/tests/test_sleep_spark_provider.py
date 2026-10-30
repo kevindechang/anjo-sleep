@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep.mind.apd.retry import reply_timeout_s
+
 from anjo.sleep import baseten_api, fireworks_api, spark_inquiry, spark_provider
 from anjo.sleep.budget import Bound, Ledger
 from anjo.sleep.context.brief_store import folded_ancestry
@@ -74,16 +76,17 @@ def test_a_spark_chat_reaches_the_fireworks_client_when_switched(monkeypatch: py
     sent: list[dict[str, Any]] = []
 
     def fireworks(model: str, messages: Any, tools: Any, timeout_s: float, *, temperature: float | None = None,
-                  max_tokens: int | None = None, seed: int | None = None,
-                  transport: Any = None) -> ChatResult:
+                  max_tokens: int | None = None, seed: int | None = None, transport: Any = None,
+                  retries: Any = None) -> ChatResult:
         sent.append({"model": model, "messages": messages, "tools": tools, "timeout_s": timeout_s,
-                     "temperature": temperature, "max_tokens": max_tokens, "seed": seed})
+                     "temperature": temperature, "max_tokens": max_tokens, "seed": seed, "retries": retries})
         return _result(model)
 
     monkeypatch.setattr(fireworks_api, "chat", fireworks)
     result = baseten_api.chat(baseten_api.SPARK_OPEN, messages, None, 30.0, temperature=0.0, max_tokens=64, seed=7)
-    assert sent == [{"model": fireworks_api.SPARK_OPEN, "messages": messages, "tools": None, "timeout_s": 30.0,
-                     "temperature": 0.0, "max_tokens": 64, "seed": 7}]
+    assert sent == [{"model": fireworks_api.SPARK_OPEN, "messages": messages, "tools": None, "timeout_s": reply_timeout_s(64),
+                     "temperature": 0.0, "max_tokens": 64, "seed": 7,
+                     "retries": fireworks_api.SLEEP_RETRIES}]
     assert result.model == fireworks_api.SPARK_OPEN
 
 

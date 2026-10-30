@@ -7,9 +7,10 @@ time.
 
 **One switch.** ``ANJO_SLEEP_SPARK`` selects the provider (``spark_provider``); when it selects the
 other one, a call asking for ``SPARK_OPEN`` is sent to ``fireworks_api`` instead, with the same
-messages, tools, temperature, cap, timeout and seed, and its reply names that provider's id. Unset or
-``baseten`` calls Baseten exactly as before, so ``chat`` is the one place Sleep's Spark Open traffic
-turns.
+messages, tools, temperature, cap and seed, and its reply names that provider's id. The other
+provider's own retry policy goes with it (Fireworks sends a dropped connection again; Baseten
+passes none, so its calls are exactly as before). Unset or ``baseten`` calls Baseten exactly as
+before, so ``chat`` is the one place Sleep's Spark Open traffic turns.
 """
 from __future__ import annotations
 
@@ -46,8 +47,14 @@ def chat(
 
         selected = spark_provider.current()
         if selected.model != SPARK_OPEN:
+            # A capped reply waits what its cap needs at a slow but healthy decode speed on the
+            # serverless provider (a practice scene capped at thousands of tokens is not cut at 180 s).
+            if max_tokens is not None:
+                from anjo.sleep.mind.apd.retry import reply_timeout_s
+
+                timeout_s = max(timeout_s, reply_timeout_s(max_tokens))
             return selected.chat(selected.model, messages, tools, timeout_s, temperature=temperature,
-                                 max_tokens=max_tokens, transport=transport, seed=seed)
+                                 max_tokens=max_tokens, transport=transport, seed=seed, retries=selected.retries)
     return post_chat(
         provider="Baseten",
         url=URL,

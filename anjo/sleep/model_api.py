@@ -9,9 +9,12 @@ key.
 There are no retries unless the caller passes ``Retries``: then a reply of 429 or 5xx (the
 provider was busy, and charged nothing) is asked for again, ``Retries.attempts`` in all, after the
 provider's ``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or the backoff in ``BACKOFF_S``.
-Any other status, and a transport failure, is raised at once. Each call still counts once in what
-the caller meters: a retried status carries no tokens. ``budget.py`` debits every attempt the caller
-makes, failed ones included (Task 5).
+A connection that never opened (``httpx.ConnectError`` or ``ConnectTimeout``) is sent again too, up
+to ``Retries.connect_attempts`` in all: the request never reached the provider, so nothing was
+charged. A read timeout is never sent again without such a policy telling it to, because the request
+was sent and may have been charged. Any other status, and any other transport failure, is raised at
+once. Each call still counts once in what the caller meters: a retried status carries no tokens.
+``budget.py`` debits every attempt the caller makes, failed ones included (Task 5).
 """
 from __future__ import annotations
 
@@ -46,6 +49,12 @@ class RateLimited(ModelApiError):
         self.retry_after_s = retry_after_s
 
 
+class ConnectFailed(ModelApiError):
+    """A connection that never opened: refused, its host's name not found, its network unreachable
+    or its connect timing out. The request never reached the provider, so nothing was charged, and
+    a caller may send it again when its policy allows it."""
+
+
 class MissingApiKey(ModelApiError):
     """The environment variable that should hold a provider key is unset or blank. A
     ``ModelApiError``, so one ``except ModelApiError`` catches every failed call."""
@@ -75,11 +84,14 @@ class ChatResult:
 
 @dataclass(frozen=True)
 class Retries:
-    """How a call answered 429 or 5xx goes again: ``len(BACKOFF_S) + 1`` attempts in all. ``counted``
-    hears each one sent again (the night log's count)."""
+    """How a call answered 429 or 5xx goes again: ``len(BACKOFF_S) + 1`` attempts in all. A
+    connection that never opened goes again up to ``connect_attempts`` in all (1: only the first
+    try), waiting the backoff in ``BACKOFF_S``; a read timeout is never sent again, because it may
+    have been charged. ``counted`` hears each one sent again (the night log's count)."""
 
     sleep: Callable[[float], None] = time.sleep
     counted: Callable[[], None] = field(default=lambda: None)
+    connect_attempts: int = 1
 
     def pause(self, attempt: int, response: httpx.Response) -> float | None:
         """The wait before sending again after ``response`` on ``attempt`` (from 0); None: never again."""
@@ -144,14 +156,16 @@ def post_chat(
     where = f"{provider} chat with {model}"
     try:
         with httpx.Client(timeout=timeout_s, transport=transport) as client:
-            response = client.post(url, json=body, headers=headers)
+            response = _send(client, url, body, headers, where=where, retries=retries)
             attempt = 0
             while retries is not None and (pause := retries.pause(attempt, response)) is not None:
                 retries.counted()
                 retries.sleep(pause)
-                response, attempt = client.post(url, json=body, headers=headers), attempt + 1
+                response, attempt = _send(client, url, body, headers, where=where, retries=retries), attempt + 1
     except httpx.ConnectTimeout:  # no connection made in time: a failed connection, not a slow reply
-        raise ModelApiError(f"{where} failed in transport (ConnectTimeout)") from None
+        raise ConnectFailed(f"{where} failed in transport (ConnectTimeout)") from None
+    except httpx.ConnectError:
+        raise ConnectFailed(f"{where} failed in transport (ConnectError)") from None
     except httpx.TimeoutException:
         raise ModelApiError(f"{where} timed out after {timeout_s:g}s") from None
     except httpx.HTTPError as exc:
@@ -171,6 +185,27 @@ def post_chat(
         where, response.status_code, result.input_tokens, result.output_tokens,
     )
     return result
+
+
+def _send(
+    client: httpx.Client, url: str, body: Mapping[str, Any], headers: Mapping[str, str], *,
+    where: str, retries: Retries | None,
+) -> httpx.Response:
+    """POST once, sending again when the connection never opened: ``Retries.connect_attempts`` in
+    all. A connection that never opened was charged nothing; a reply too slow may have been, so a
+    read timeout is never retried here."""
+    attempts = 1 if retries is None else max(1, retries.connect_attempts)
+    attempt = 0
+    while True:
+        try:
+            return client.post(url, json=body, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if attempt + 1 >= attempts:
+                raise ConnectFailed(f"{where} failed in transport ({type(exc).__name__})") from None
+            assert retries is not None  # attempts > 1 only with a policy
+            retries.counted()
+            retries.sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
+            attempt += 1
 
 
 def _parse(response: httpx.Response, where: str, *, count_reasoning: bool = False) -> ChatResult:
