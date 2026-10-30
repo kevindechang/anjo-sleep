@@ -11,7 +11,8 @@ stores for one synthetic person.
   account that plays the persona;
 - judge: Muse Spark or DeepSeek, selected by ``ANJO_SLEEP_JUDGE``, with the persona's judge brief;
 - the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default); a
-  judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and the night log counts
+  judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and so does a DeepSeek
+  reply that never came whole, which cost a whole morning on 2026-10-30; the night log counts
   those with the requests Glimmer's client sent again.
 """
 from __future__ import annotations
@@ -48,10 +49,13 @@ JUDGE_ENV: Final = "ANJO_SLEEP_JUDGE"
 def make_judge(persona: str, tokens: JudgeTokens, resent: _Resent) -> MuseJudge:
     """Select the judge before any calls; Spark Open is never a selectable judge."""
     selected = os.environ.get(JUDGE_ENV, "muse").strip() or "muse"
-    retries = Retries(counted=resent)
     if selected == "muse":
-        return MuseJudge(partial(meta_api.chat, retries=retries), lambda _person: judge_brief(persona), tokens=tokens)
+        return MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona),
+                         tokens=tokens)
     if selected == "deepseek":
+        # A reply that never came whole failed a whole morning on 2026-10-30: it is sent again, up
+        # to two attempts, though the resend may be charged twice.
+        retries = Retries(counted=resent, connect_attempts=3, reply_attempts=2)
         return MuseJudge(partial(fireworks_api.chat, retries=retries), lambda _person: judge_brief(persona),
                          tokens=tokens, model=fireworks_api.DEEPSEEK_V4P1_FLASH)
     raise ValueError(f"{JUDGE_ENV} must be muse or deepseek")

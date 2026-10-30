@@ -11,10 +11,12 @@ provider was busy, and charged nothing) is asked for again, ``Retries.attempts``
 provider's ``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or the backoff in ``BACKOFF_S``.
 A connection that never opened (``httpx.ConnectError`` or ``ConnectTimeout``) is sent again too, up
 to ``Retries.connect_attempts`` in all: the request never reached the provider, so nothing was
-charged. A read timeout is never sent again without such a policy telling it to, because the request
-was sent and may have been charged. Any other status, and any other transport failure, is raised at
-once. Each call still counts once in what the caller meters: a retried status carries no tokens.
-``budget.py`` debits every attempt the caller makes, failed ones included (Task 5).
+charged. A request sent whose reply never came whole (a read timeout, a dropped or broken read) is
+sent again only when ``Retries.reply_attempts`` says so, and that resend may be charged twice: only
+a caller whose single failure costs a whole night or morning opts in, so 1, the default, never sends
+one again. Any other status, and any other transport failure, is raised at once. Each call still
+counts once in what the caller meters: a retried status carries no tokens. ``budget.py`` debits
+every attempt the caller makes, failed ones included (Task 5).
 """
 from __future__ import annotations
 
@@ -86,12 +88,15 @@ class ChatResult:
 class Retries:
     """How a call answered 429 or 5xx goes again: ``len(BACKOFF_S) + 1`` attempts in all. A
     connection that never opened goes again up to ``connect_attempts`` in all (1: only the first
-    try), waiting the backoff in ``BACKOFF_S``; a read timeout is never sent again, because it may
-    have been charged. ``counted`` hears each one sent again (the night log's count)."""
+    try), waiting the backoff in ``BACKOFF_S``; a reply that never came whole goes again up to
+    ``reply_attempts`` in all (1: never), the same way. Such a resend may be charged twice, so only
+    a caller whose single failure costs a whole night or morning sets ``reply_attempts`` above 1.
+    ``counted`` hears each one sent again (the night log's count)."""
 
     sleep: Callable[[float], None] = time.sleep
     counted: Callable[[], None] = field(default=lambda: None)
     connect_attempts: int = 1
+    reply_attempts: int = 1
 
     def pause(self, attempt: int, response: httpx.Response) -> float | None:
         """The wait before sending again after ``response`` on ``attempt`` (from 0); None: never again."""
@@ -191,21 +196,40 @@ def _send(
     client: httpx.Client, url: str, body: Mapping[str, Any], headers: Mapping[str, str], *,
     where: str, retries: Retries | None,
 ) -> httpx.Response:
-    """POST once, sending again when the connection never opened: ``Retries.connect_attempts`` in
-    all. A connection that never opened was charged nothing; a reply too slow may have been, so a
-    read timeout is never retried here."""
-    attempts = 1 if retries is None else max(1, retries.connect_attempts)
-    attempt = 0
+    """POST once, sending again when the connection never opened (``Retries.connect_attempts`` in
+    all) or, only when the caller asks for it, when the reply never came whole
+    (``Retries.reply_attempts`` in all). A connection that never opened was charged nothing; a reply
+    too slow or dropped mid-read may have been, so it goes again only because that caller's one
+    failure costs a whole night or morning. The last failure is raised as it came, so ``post_chat``
+    names it exactly as it always has."""
+    connects = 1 if retries is None else max(1, retries.connect_attempts)
+    replies = 1 if retries is None else max(1, retries.reply_attempts)
+    connect_sends = reply_sends = 0  # resends after each kind of failure, capped above
     while True:
         try:
             return client.post(url, json=body, headers=headers)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            if attempt + 1 >= attempts:
+            if connect_sends + 1 >= connects:
                 raise ConnectFailed(f"{where} failed in transport ({type(exc).__name__})") from None
-            assert retries is not None  # attempts > 1 only with a policy
+            assert retries is not None  # connects > 1 only with a policy
             retries.counted()
-            retries.sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
-            attempt += 1
+            retries.sleep(BACKOFF_S[min(connect_sends, len(BACKOFF_S) - 1)])
+            connect_sends += 1
+        except httpx.HTTPError as exc:
+            if reply_sends + 1 >= replies or not _reply_lost(exc):
+                raise
+            assert retries is not None  # replies > 1 only with a policy
+            retries.counted()
+            retries.sleep(BACKOFF_S[min(reply_sends, len(BACKOFF_S) - 1)])
+            reply_sends += 1
+
+
+def _reply_lost(exc: httpx.HTTPError) -> bool:
+    """A request sent whose reply never came whole: a timeout other than a connection's, a read
+    dropped, or a protocol broken mid-reply. The provider may have charged it; ``post_chat`` still
+    names it as it always has when it is the last try."""
+    return isinstance(exc, (httpx.ReadError, httpx.RemoteProtocolError)) or (
+        isinstance(exc, httpx.TimeoutException) and not isinstance(exc, httpx.ConnectTimeout))
 
 
 def _parse(response: httpx.Response, where: str, *, count_reasoning: bool = False) -> ChatResult:
