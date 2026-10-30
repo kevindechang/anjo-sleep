@@ -7,6 +7,13 @@ probe, and cue-free (never "as we discussed"). Glimmer, the base model, answers 
 F, and that reply is the training target. Each scene keeps the snapshot of context C from before
 tonight's practice (``TrainingContext``), which becomes its training input.
 
+**Her focus (the MIND loop, ``ANJO_SLEEP_MIND_LOOP=1``).** A night that hands practice focus targets
+(``mind.loop_focus.FocusTarget``: what her own questions are working on) draws ``FOCUS_SHARE`` of
+its scenes from them through ``scenes_v2.md``, which is handed the targets and the visible evidence on
+them; the rest are today's scenes. Each scene records whether it was a focus scene and its target, so
+the night's practice record can count what kept her own reply. With no focus, and always with the
+loop off, the prompt, the scenes and the record are exactly today's.
+
 **F** is the person's trainable evidence without ``practice`` items, and without homework while
 hosted outputs can't train (§3), newest first, inside ``practice_f_cap`` tokens.
 
@@ -29,12 +36,14 @@ from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import union
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.context.template import render
+from anjo.sleep.mind.loop_focus import FOCUS_SHARE, FocusTarget
 from anjo.sleep.practice.transcripts import PracticeTranscript
 from anjo.sleep.probes.clients import ModelClient
 from anjo.sleep.provenance import GLIMMER, may_train
 from anjo.sleep.types import Evidence
 
 PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "scenes_v1.md"
+FOCUS_PATH: Final = Path(__file__).parent / "prompts" / "scenes_v2.md"
 SCENES: Final = 8
 PRACTICE_F_CAP: Final = 8000  # tokens of F (§5.5), set on development against the cost ceiling
 SCENE_TIMEOUT_S: Final = 180.0
@@ -127,10 +136,39 @@ def _scenes(raw: str, count: int) -> list[str]:
     return [scene for scene in scenes if scene][:count]
 
 
+def focus_count(count: int, share: float = FOCUS_SHARE) -> int:
+    """The scenes one night draws from her focus targets: a named share of the night's scenes,
+    and never all of them, so a night always has scenes its focus is compared with."""
+    return max(0, min(count - 1, int(count * share)))
+
+
+def focus_prompt(focus: Sequence[FocusTarget], count: int, known: str) -> str:
+    """``scenes_v2.md`` with the focus targets, the visible evidence on them and the scene count."""
+    working = "\n".join(f"- {target.target_id}: {target.label}" for target in focus)
+    evidence = "\n".join(f"[{target.target_id}] {line}" for target in focus for line in target.evidence)
+    return render(FOCUS_PATH.read_text(encoding="utf-8"), {
+        "KNOWN": known, "COUNT": str(count), "FOCUS": working,
+        "EVIDENCE": evidence or "- (nothing they have said about it yet)",
+    })
+
+
+def focus_scenes(raw: str, focus: Sequence[FocusTarget], count: int) -> list[tuple[str, str]]:
+    """The focus scenes Spark Open wrote, each with the target it is about: pairs whose target isn't
+    one of the night's focus targets are dropped, as a scene about nothing she works on is no focus
+    scene."""
+    try:
+        data: Any = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+        pairs = [(str(scene["target"]).strip(), str(scene["message"]).strip()) for scene in data["scenes"]]
+    except (ValueError, KeyError, TypeError):
+        raise PracticeError("Spark Open's focus scenes are not the JSON asked for") from None
+    known = {target.target_id for target in focus}
+    return [(target_id, message) for target_id, message in pairs if target_id in known and message][:count]
+
+
 class MinimalPractice:
     """Task 5's practice: ``run`` for the night (with counts), ``practice`` for the spec's port."""
 
-    max_spark_calls: Final = 1  # the scenes
+    max_spark_calls: Final = 1  # the scenes; a focus night's second call is counted by the night
 
     def __init__(
         self, *, chat: ChatFn, client: ModelClient, snapshot: Snapshot, seed: int,
@@ -149,30 +187,59 @@ class MinimalPractice:
 
     def run(
         self, user_id: str, night: date, evidence: Sequence[Evidence], hw: object | None, *, at: datetime,
+        focus: Sequence[FocusTarget] = (),
     ) -> PracticeRun:
         if hw is not None and not self._hosted:
             raise ValueError("homework never reaches practice while hosted outputs can't train (§3)")
         f = practice_f(evidence, hosted_in_training=self._hosted, cap_tokens=self._f_cap)
         if not f:
             return PracticeRun((), (), 0)
-        prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": _known(f), "COUNT": str(self._count)})
-        written = self._chat(SPARK_OPEN, [{"role": "user", "content": prompt}], None, SCENE_TIMEOUT_S,
-                             temperature=SCENE_TEMPERATURE)
-        messages = _scenes(written.text, self._count)
-        cue_free = [message for message in messages if not has_cue(message)]
-        f_text = "## What you know about this person\n" + _known(f)
+        known = _known(f)
+        try:
+            focus_pairs = self._focus_scenes(focus, known) if focus else []
+        except PracticeError:
+            # Malformed focus scenes are the loop's failure, not the night's: the rest of tonight's
+            # scenes are today's, and the prediction resolves from what practice did keep.
+            focus_pairs = []
+        rest = max(0, self._count - len(focus_pairs))
+        messages = [] if rest == 0 else _scenes(self._ask(rest, known), rest)
+        planned = [(message, True, target_id) for target_id, message in focus_pairs]
+        planned += [(message, False, None) for message in messages]
+        cue_free = [scene for scene in planned if not has_cue(scene[0])]
+        f_text = "## What you know about this person\n" + known
         f_ancestry = union(item.ancestry for item in f)
         scenes = [
-            self._scene(user_id, night, index, message, f_text, f_ancestry, tuple(e.id for e in f), at)
-            for index, message in enumerate(cue_free)
+            self._scene(user_id, night, index, message, f_text, f_ancestry, tuple(e.id for e in f), at,
+                        focus=focus_scene, target_id=target_id)
+            for index, (message, focus_scene, target_id) in enumerate(cue_free)
         ]
         transcripts = tuple(scene for scene in scenes if scene is not None)
-        return PracticeRun(transcripts, tuple(item.id for item in f), len(messages) - len(cue_free),
+        return PracticeRun(transcripts, tuple(item.id for item in f), len(planned) - len(cue_free),
                            dropped_cut=len(scenes) - len(transcripts))
+
+    def _ask(self, count: int, known: str) -> str:
+        prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": known, "COUNT": str(count)})
+        written = self._chat(SPARK_OPEN, [{"role": "user", "content": prompt}], None, SCENE_TIMEOUT_S,
+                             temperature=SCENE_TEMPERATURE)
+        return written.text
+
+    def _focus_scenes(self, focus: Sequence[FocusTarget], known: str) -> list[tuple[str, str]]:
+        """Her focus scenes, asked for in their own call so each one names its target."""
+        asked = focus_count(self._count)
+        if asked == 0:
+            return []
+        try:
+            prompt = focus_prompt(focus, asked, known)
+        except (KeyError, OSError):  # the loop's prompt can't be read: tonight's scenes are today's
+            return []
+        written = self._chat(SPARK_OPEN, [{"role": "user", "content": prompt}], None, SCENE_TIMEOUT_S,
+                             temperature=SCENE_TEMPERATURE)
+        return focus_scenes(written.text, focus, asked)
 
     def _scene(
         self, user_id: str, night: date, index: int, message: str, f_text: str,
         f_ancestry: frozenset[str] | None, f_ids: tuple[str, ...], at: datetime,
+        *, focus: bool = False, target_id: str | None = None,
     ) -> PracticeTranscript | None:
         context, c_ancestry = self._snapshot(user_id, message)  # before the reply exists
         answer = self._client.complete(
@@ -187,5 +254,5 @@ class MinimalPractice:
             id=f"pr-{digest}", person_id=user_id, night=night, scene=index, message=message, reply=reply,
             context=context, f_ids=f_ids,
             ancestry=union((frozenset({spark_provider.current().model, GLIMMER}), f_ancestry, c_ancestry)),
-            created_at=at + timedelta(seconds=index),
+            created_at=at + timedelta(seconds=index), focus=focus, target_id=target_id,
         )

@@ -5,6 +5,9 @@ A practice transcript is one scene: the person's message (Spark Open playing the
 and the snapshot of context C taken before tonight's practice, which becomes the example's input.
 Full practice (Task 7) also keeps where the target came from (``target``: ``glimmer`` or
 ``teacher``) and the critic's worst candidate (``rejected``), for the night's preference pairs.
+Under the MIND loop a scene also says whether it was drawn from one of her focus targets and which
+(``focus``, ``target_id``) and whether the critic flagged her kept candidate (``flagged``), so the
+night's practice record can decide what her own prediction said it would.
 The night stores each transcript twice:
 
 - as a ``practice`` evidence item, readable in her served context and folded into the next brief;
@@ -49,6 +52,9 @@ class PracticeTranscript:
     rejected: str | None = None
     rejected_from: Candidate | None = None
     core: str | None = None  # the core state the reply was made under (``night.core_snapshot``, as JSON), channel on
+    focus: bool = False  # a scene drawn from a focus target of her own questions (the MIND loop)
+    target_id: str | None = None  # the focus target it was drawn from; None for every other scene
+    flagged: bool = False  # the critic listed the kept candidate as missing a constraint
 
     def evidence(self) -> Evidence:
         """The transcript as a ``practice`` evidence item."""
@@ -69,6 +75,8 @@ def transcript_record(item: PracticeTranscript) -> dict[str, Any]:
         "created_at": item.created_at.isoformat(),
         "target": item.target, "rejected": item.rejected, "rejected_from": item.rejected_from,
         **({} if item.core is None else {"core": item.core}),
+        **({"focus": True, "target_id": item.target_id} if item.focus else {}),
+        **({"flagged": True} if item.flagged else {}),
     }
 
 
@@ -98,6 +106,9 @@ def transcript_from_record(record: Mapping[str, Any]) -> PracticeTranscript:
             rejected=None if rejected is None else str(rejected),
             rejected_from=_candidate(record.get("rejected_from"), optional=True),
             core=None if record.get("core") is None else str(record["core"]),
+            focus=bool(record.get("focus", False)),
+            target_id=None if record.get("target_id") is None else str(record["target_id"]),
+            flagged=bool(record.get("flagged", False)),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise LogError(f"not a practice transcript ({type(error).__name__})") from None

@@ -4,8 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
+from typing import Final
 
-from anjo.sleep.mind.week import QuietNight, WeekHistory, diff, quiet_week
+from anjo.sleep.mind.week import Moment, QuietNight, WeekHistory, diff, quiet_week
+
+PRACTICE_RECORD: Final = "practice:"  # the MIND loop's practice record id, as a resolution cites it
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,14 @@ def _quiet(history: WeekHistory) -> tuple[QuietNight, ...]:
     return quiet_week(history.nights)
 
 
+def _loop(history: WeekHistory) -> tuple[Moment, ...]:
+    """The MIND loop's own resolutions: a prediction she committed about her practice, resolved from
+    the night's practice record (the moment's sources name ``practice:<night>``)."""
+    return tuple(moment for moment in history.moments
+                 if moment.kind == "prediction resolved"
+                 and any(source.startswith(PRACTICE_RECORD) for source in moment.sources))
+
+
 def render(history: WeekHistory, trace: ProbeTrace) -> str:
     """Show dated transitions and both diffs without implying that different means better."""
     comparison = _comparison(trace)
@@ -80,6 +91,12 @@ def render(history: WeekHistory, trace: ProbeTrace) -> str:
         lines += ['## Recorded ledger outcomes', '',
                   'Current snapshot; resolution timestamps are unavailable. These are not dated transitions.',
                   '', *(f'- {line}' for line in history.recorded_outcomes), '']
+    loop = _loop(history)
+    if loop:
+        lines += ['## One loop: what she practised, and what came of it', '',
+                  'Her own questions chose a share of what practice rehearsed; the night\'s practice record, '
+                  'by code, decided whether her own reply held up. The morning probes are not read here.', '',
+                  *(f'- {(moment.night or moment.at.date()).isoformat()}: {moment.text}' for moment in loop), '']
     quiet = _quiet(history)
     if quiet:
         lines += ['## A quiet week', '',
@@ -112,6 +129,8 @@ def to_json(history: WeekHistory, trace: ProbeTrace) -> str:
                            for n in history.nights],
                 'moments': [asdict(m) for m in history.moments], 'probe': asdict(trace),
                 'quiet_week': [asdict(q) for q in _quiet(history)],
+                'loop_resolutions': [{'night': None if m.night is None else m.night.isoformat(),
+                                      'at': m.at.isoformat(), 'text': m.text} for m in _loop(history)],
                 'recorded_outcomes_undated': history.recorded_outcomes, 'comparison': comparison,
                 'brief_diff': diff(trace.week_brief, trace.empty_brief),
                 'reply_diff': diff(trace.week_reply, trace.empty_reply)}

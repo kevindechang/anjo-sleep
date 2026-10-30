@@ -40,6 +40,7 @@ from datetime import date, datetime
 from typing import Final, Protocol
 
 from anjo.sleep.mind.inquiry import controller, kernel, parse, render
+from anjo.sleep.mind.inquiry.loop_mark import is_loop_start, is_self_practice
 from anjo.sleep.mind.inquiry.ports import InquiryPorts
 from anjo.sleep.mind.inquiry.types import (
     FULL_RULES,
@@ -210,8 +211,17 @@ def _rendered_ids(ws: Workspace, focus: str) -> list[str]:
 # ── A cycle ───────────────────────────────────────────────────────────────────
 
 
+def _self_practice(ws: Workspace, question_id: str) -> bool:
+    """Whether ``question_id`` is the loop's question about her own practice: its predictions are
+    the night's to resolve, never this resolver's."""
+    question = ws.question(question_id)
+    return question is not None and is_self_practice(question.subject)
+
+
 def _cycle(run: _Run, ctx: _Context, focus: str, cycle: int) -> _Run:
-    for prediction in [p for p in run.ws.predictions if p.question_id == focus and p.pending]:
+    for prediction in [p for p in run.ws.predictions
+                       if p.question_id == focus and p.pending
+                       and not _self_practice(run.ws, p.question_id)]:
         if kernel.unseen(run.ws, prediction, ctx.as_of):
             run, _ = _resolve(run, ctx, prediction, cycle, focus)
     evidence = _masked(ctx.ports.search.get(_rendered_ids(run.ws, focus), ctx.as_of), ctx.as_of)
@@ -232,8 +242,12 @@ def _cycle(run: _Run, ctx: _Context, focus: str, cycle: int) -> _Run:
 def _settle_expired(run: _Run, ctx: _Context) -> _Run:
     """Predictions past their horizon: one last resolution on unseen items in their window (live
     or concluded questions only), then censored if still undetermined. A failed resolver call
-    leaves the prediction pending, to be asked again."""
-    for prediction_id in [p.id for p in run.ws.predictions if p.pending and p.horizon <= ctx.as_of]:
+    leaves the prediction pending, to be asked again. The MIND loop's own predictions are never
+    resolved or censored here: the night settles them from its practice record, so unrelated
+    evidence in the same window can't move her credence."""
+    for prediction_id in [p.id for p in run.ws.predictions
+                          if p.pending and p.horizon <= ctx.as_of
+                          and not _self_practice(run.ws, p.question_id)]:
         prediction = next(p for p in run.ws.predictions if p.id == prediction_id)
         question = run.ws.question(prediction.question_id)
         watched = question is not None and question.status in kernel.WATCHED
@@ -410,9 +424,12 @@ class Resume:
 
 
 def resume(events: Sequence[WorkspaceEvent]) -> Resume:
-    """``ValueError`` when the log doesn't fold or holds no run."""
+    """``ValueError`` when the log doesn't fold or holds no run to resume. The practice loop's own
+    ``RunStart`` (``loop_mark.LOOP_DECIDER``) is not a run to resume, so it can never displace the
+    night's inquiry start, its budget or its focus."""
     ws = kernel.fold(events)
-    starts = [n for n, event in enumerate(events) if isinstance(event.step.entry, RunStart)]
+    starts = [n for n, event in enumerate(events)
+              if isinstance(event.step.entry, RunStart) and not is_loop_start(event.step.entry)]
     if not starts:
         raise ValueError("a log with no RunStart can't be resumed")
     start = events[starts[-1]].step.entry

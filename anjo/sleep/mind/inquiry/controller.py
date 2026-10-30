@@ -33,6 +33,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from anjo.sleep.mind.inquiry import kernel
+from anjo.sleep.mind.inquiry.loop_mark import is_loop_start
 from anjo.sleep.mind.inquiry.types import (
     A_READY,
     A_WAITING,
@@ -135,8 +136,10 @@ def priority(ws: Workspace, question_id: str, *, targets: Sequence[Target], as_o
 
 
 def _night(ws: Workspace) -> tuple[Step, ...]:
-    """The steps of the latest run's night: from the first ``RunStart`` naming it."""
-    starts = [(n, step.entry) for n, step in enumerate(ws.history) if isinstance(step.entry, RunStart)]
+    """The steps of the latest run's night: from the first notice or inquiry ``RunStart`` naming
+    it. The practice loop's own start is skipped: it is no run, and has no cycles to count."""
+    starts = [(n, step.entry) for n, step in enumerate(ws.history)
+              if isinstance(step.entry, RunStart) and not is_loop_start(step.entry)]
     if not starts:
         return ()
     night = starts[-1][1].night

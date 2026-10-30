@@ -81,6 +81,7 @@ from anjo.sleep.context.brief import CUT, REASONING_ROOM
 from anjo.sleep.context.brief_store import union
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.context.template import render
+from anjo.sleep.mind.loop_focus import FocusTarget
 from anjo.sleep.parallel import Calls
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.practice.critics import ThirdPartyCritic
@@ -92,9 +93,13 @@ from anjo.sleep.practice.run import (
     SCENE_TIMEOUT_S,
     PracticeRun,
     Snapshot,
+    PracticeError,
     _known,
     _scenes,
     _seed,
+    focus_count,
+    focus_prompt,
+    focus_scenes,
     has_cue,
     practice_f,
 )
@@ -231,6 +236,7 @@ class _Verdict:
     unreadable: bool = False
     glimmer_all_miss: bool = False  # all three Glimmer candidates miss a constraint: the teacher may win
     flagged: int = 0  # candidates the critic listed as missing a constraint
+    best_flagged: bool = False  # the critic listed the kept candidate among them
 
 
 @dataclass(frozen=True)
@@ -239,6 +245,8 @@ class _Scene:
     message: str
     context: str | None  # the snapshot of C, taken before any candidate exists
     c_ancestry: frozenset[str] | None
+    focus: bool = False  # drawn from a focus target of her own questions (the MIND loop)
+    target_id: str | None = None  # which one; None for every other scene
 
 
 @dataclass(frozen=True)
@@ -253,6 +261,7 @@ class _Night:
     at: datetime
     spark: _Spark
     critic: Callable[[str], _Said]
+    flags: bool = False  # the MIND loop's night: record whether the critic flagged the kept reply
 
 
 def _marks(text: str, labels: dict[str, _Candidate]) -> tuple[dict[_Candidate, float], set[_Candidate]] | None:
@@ -286,7 +295,7 @@ def _pick(candidates: Sequence[_Candidate], scores: dict[_Candidate, float], mis
     worst = min(candidates, key=lambda c: (scores[c], c.source != "teacher", -c.place))
     all_miss = len(glimmer) == GLIMMER_CANDIDATES and all(c in misses for c in glimmer)
     return _Verdict(best, worst if scores[best] > scores[worst] else None, glimmer_all_miss=all_miss,
-                    flagged=len(misses))
+                    flagged=len(misses), best_flagged=best in misses)
 
 
 def spark_calls(scenes: int, *, teacher: bool = True, glimmer_person: bool = False, lazy_teacher: bool = False) -> int:
@@ -338,13 +347,14 @@ class FullPractice:
         return {"person": "glimmer" if self._glimmer_person else "spark", "teacher": teacher,
                 "critic": third.critic.model if third is not None else "spark"}
 
-    def _write_scenes(self, spark: _Spark, user_id: str, night: date, prompt: str) -> ChatResult:
+    def _write_scenes(self, spark: _Spark, user_id: str, night: date, prompt: str, *,
+                      seed_key: str = "person") -> ChatResult:
         messages = [{"role": "user", "content": prompt}]
         if not self._glimmer_person:
             return spark.ask("person", messages, SCENE_TEMPERATURE)
         glimmer: Any = self._client  # VllmClient: the base model, capped for this call alone
         written: ChatResult = glimmer.complete(
-            None, messages, temperature=SCENE_TEMPERATURE, seed=_seed(self._seed, user_id, night.isoformat(), "person"),
+            None, messages, temperature=SCENE_TEMPERATURE, seed=_seed(self._seed, user_id, night.isoformat(), seed_key),
             max_tokens=VISIBLE_TOKENS["person"])
         return written
 
@@ -353,18 +363,44 @@ class FullPractice:
 
     def run(
         self, user_id: str, night: date, evidence: Sequence[Evidence], hw: object | None, *, at: datetime,
+        focus: Sequence[FocusTarget] = (),
     ) -> PracticeRun:
         if hw is not None and not self._hosted:
             raise ValueError("homework never reaches practice while hosted outputs can't train (§3)")
         f = practice_f(evidence, hosted_in_training=self._hosted, cap_tokens=self._f_cap)
         if not f:
             return PracticeRun((), (), 0)
-        prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": _known(f), "COUNT": str(SCENES_ASKED)})
+        known = _known(f)
         spark = _Spark(self._chat, self._caps)
-        written = self._write_scenes(spark, user_id, night, prompt)
-        cut = written.finish_reason == CUT  # the scene it was writing is dropped, the whole ones kept
-        messages = _salvaged(written.text)[:SCENES_ASKED] if cut else _scenes(written.text, SCENES_ASKED)
-        cue_free = [message for message in messages if not has_cue(message)]
+        cut = False
+        focus_pairs: list[tuple[str, str]] = []
+        if focus:  # her focus scenes first, in their own call, so each names its target
+            asked = max(1, focus_count(self._count))
+            try:
+                focus_text = focus_prompt(focus, asked, known)
+            except (KeyError, OSError):  # the loop's prompt can't be read: tonight's scenes are today's
+                focus_pairs = []
+            else:
+                focus_written = self._write_scenes(spark, user_id, night, focus_text, seed_key="focus")
+                try:
+                    focus_pairs = focus_scenes(focus_written.text, focus, asked)
+                    cut = focus_written.finish_reason == CUT
+                except PracticeError:
+                    # Malformed focus scenes are the loop's failure, not the night's: the rest of
+                    # tonight's scenes are today's, and the prediction resolves as it can.
+                    focus_pairs = []
+        rest = max(0, SCENES_ASKED - len(focus_pairs))
+        if rest:
+            prompt = render(PROMPT_PATH.read_text(encoding="utf-8"), {"KNOWN": known, "COUNT": str(rest)})
+            written = self._write_scenes(spark, user_id, night, prompt)
+            cut = cut or written.finish_reason == CUT  # the scene it was writing is dropped, the whole ones kept
+            messages = _salvaged(written.text)[:rest] if written.finish_reason == CUT else _scenes(written.text, rest)
+        else:
+            messages = []
+        drafts: list[tuple[str, bool, str | None]] = [(message, True, target_id) for target_id, message in focus_pairs]
+        drafts += [(message, False, None) for message in messages]
+        cue_free = [draft for draft in drafts if not has_cue(draft[0])]
+        dropped = len(drafts) - len(cue_free)
         third = _ThirdParty(self._critic) if self._critic is not None and self._third_party(user_id) else None
 
         def critic(text: str) -> _Said:
@@ -373,17 +409,20 @@ class FullPractice:
             reply = spark.ask("critic", [{"role": "user", "content": text}], CRITIC_TEMPERATURE)
             return _Said(reply.text, reply.finish_reason == CUT)
 
-        ctx = _Night(user_id, night, _known(f), "## What you know about this person\n" + _known(f),
+        ctx = _Night(user_id, night, known, "## What you know about this person\n" + known,
                      tuple(item.id for item in f), union(item.ancestry for item in f), self._adapter(user_id), at,
-                     spark, critic)
-        scenes = [_Scene(index, message, *self._snapshot(user_id, message))  # C before any candidate
-                  for index, message in enumerate(cue_free[: self._count])]
+                     spark, critic, flags=bool(focus))
+        # Numbered after the cue filter, as practice always has: a scene's index seeds its candidates and
+        # names its record, so with no focus a night's scenes are exactly today's. C before any
+        # candidate, taken on the calling thread, for the kept scenes only.
+        scenes = [_Scene(index, message, *self._snapshot(user_id, message), focus=is_focus, target_id=target_id)
+                  for index, (message, is_focus, target_id) in enumerate(cue_free[: self._count])]
         calls = Calls(self._workers)
         done = calls.map(partial(self._scene, ctx, calls), scenes)
         kept = [(t, v) for t, v, _ in done if t is not None and v is not None]
         capped = sum(c for _, _, c in done)
         return PracticeRun(
-            tuple(t for t, _ in kept), ctx.f_ids, len(messages) - len(cue_free),
+            tuple(t for t, _ in kept), ctx.f_ids, dropped,
             dropped_cut=len(done) - len(kept) - capped, pairs=sum(v.worst is not None for _, v in kept),
             teacher_targets=sum(v.best.source == "teacher" for _, v in kept),
             critic_unreadable=sum(v.unreadable for _, v in kept), capped_scenes=capped + cut, spark=spark.counts(),
@@ -465,4 +504,6 @@ class FullPractice:
             created_at=ctx.at + timedelta(seconds=index), target=verdict.best.source,
             rejected=verdict.worst.text if verdict.worst else None,
             rejected_from=verdict.worst.source if verdict.worst else None,
+            focus=scene.focus, target_id=scene.target_id,
+            flagged=verdict.best_flagged and ctx.flags,  # today's bytes without the loop
         ), verdict, False

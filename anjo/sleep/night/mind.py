@@ -30,6 +30,10 @@ sleep stores.
   target log as a ``Result`` that the second offer reads; the note's facts carry its statement. A
   shared result stands only while its finding does, unchanged, on the anchor it was shared on
   (``results``): the snapshot and the note leave out the rest.
+- **The loop** (``ANJO_SLEEP_MIND_LOOP=1``): ``focus`` reads the targets her questions are working on
+  at the night's start (``mind.loop_focus``), ``self_predict`` commits her prediction about her own
+  learning on each before practice, and ``self_resolve`` settles it from the night's practice record
+  by code (``mind.self_predict``). Off, the night calls none of them and its log is today's.
 
 **Holds.** Each step holds its Spark Open worst case (the resolver, at most
 ``MIND_SPARK_CALLS``) on ``baseten_mind_usd`` and its Glimmer worst case (the thinker and
@@ -47,13 +51,13 @@ import logging
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any, Final, Protocol
 
 from anjo.sleep import spark_provider
 from anjo.sleep.budget import Ledger
-from anjo.sleep.mind import own, snapshot
+from anjo.sleep.mind import loop_focus, own, self_predict, snapshot
 from anjo.sleep.mind.core import bridge
 from anjo.sleep.mind.inquiry import controller, findings, kernel, loop
 from anjo.sleep.mind.inquiry.ports import (
@@ -505,6 +509,54 @@ class MindNight:
             research = sorted({i for i in finding.cites if i in kernel.research_sources(ws, finding.question_id)})
             out.append(_fact(finding, search.get(research, call.as_of)[:1], search.get(finding.cites, call.as_of)))
         return out
+
+    # ── the loop: what practice practises, and what it showed (ANJO_SLEEP_MIND_LOOP) ──
+
+    def focus(self, call: MindCall) -> loop_focus.Focus:
+        """The targets her own questions are working on, read from her log folded to the night's
+        start, with the visible evidence on each for the scene prompt (``mind.loop_focus``)."""
+        try:
+            found = loop_focus.focus_targets(
+                self._log(call.user_id).events(), call.night,
+                targets=call.targets.open_targets(call.as_of), as_of=call.as_of)
+        except ValueError as error:  # a log that doesn't fold: practice is today's, and the record says so
+            logger.warning("MIND's workspace didn't fold for practice (%s); practice is today's",
+                           type(error).__name__)
+            return loop_focus.Focus((), "her log didn't fold at the night's start")
+        items = [item for item in call.store.stored(call.night) if item.created_at <= call.as_of]
+        return replace(found, targets=tuple(
+            replace(target, evidence=loop_focus.visible(items, target.target_id)) for target in found.targets))
+
+    def self_predict(
+        self, call: MindCall, focus: Sequence[loop_focus.FocusTarget], history: Sequence[Mapping[str, object]],
+    ) -> self_predict.Commitment:
+        """Commit tonight's prediction about her own learning on each focus target, before practice,
+        through the kernel's normal path (``mind.self_predict``)."""
+        log = _Watched(self._log(call.user_id), call.cancelled)
+        return self_predict.commit(
+            log, kernel.fold(log.events()), night=call.night, at=call.at, history=history,
+            focus=tuple((target.target_id, target.label, target.question_id) for target in focus))
+
+    def self_resolve(
+        self, call: MindCall, predictions: Sequence[self_predict.SelfPrediction], record: self_predict.Record,
+        history: Sequence[Mapping[str, object]],
+    ) -> tuple[self_predict.Outcome, ...]:
+        """Resolve those predictions from the night's practice record, by code, so her credence moves
+        through the kernel's existing ``resolved_prediction`` update."""
+        log = _Watched(self._log(call.user_id), call.cancelled)
+        return self_predict.resolve(
+            log, kernel.fold(log.events()), night=call.night, at=call.at, record=record,
+            predictions=predictions, history=history)
+
+    def self_censor(
+        self, call: MindCall, predictions: Sequence[self_predict.SelfPrediction], record: self_predict.Record,
+        why: str,
+    ) -> tuple[self_predict.Outcome, ...]:
+        """Settle the loop's predictions the night could not resolve as censored, so MIND's inquiry
+        resolver never settles one from unrelated evidence. Censoring moves no credence."""
+        log = _Watched(self._log(call.user_id), call.cancelled)
+        return self_predict.censor(
+            log, kernel.fold(log.events()), at=call.at, record=record, predictions=predictions, why=why)
 
     # ── plumbing ─────────────────────────────────────────────────────────────
 

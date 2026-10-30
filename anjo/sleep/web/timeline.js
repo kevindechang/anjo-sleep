@@ -10,7 +10,7 @@
   const demo = window.anjoDemo;
   if (!demo) return;
   const { element, copy, byId } = demo;
-  const KINDS = new Set(["question", "credence", "prediction", "resolution", "search", "decision"]);
+  const KINDS = new Set(["question", "credence", "prediction", "resolution", "search", "decision", "practice"]);
 
   function fill(template, values) {
     return String(template).replace(/\{(\w+)\}/g, (slot, name) => (name in values ? String(values[name]) : slot));
@@ -104,6 +104,11 @@
       return fill(copy.timeline_plain_resolution, { verdict: word("timeline_verdict", item.verdict) });
     }
     if (item.kind === "search") return copy.timeline_plain_search;
+    if (item.kind === "practice") {
+      return fill(copy.timeline_plain_practice, {
+        target: item.target && typeof item.target.text === "string" ? item.target.text : copy.mind_no_target,
+      });
+    }
     if (item.kind === "decision") {
       return item.action
         ? fill(copy.timeline_plain_decision, { action: word("action", item.action) })
@@ -165,6 +170,14 @@
       const results = cites(detail.items, copy.timeline_detail_results);
       if (results) out.append(results);
       else out.append(element("p", "note", copy.timeline_no_results));
+    } else if (item.kind === "practice") {
+      const detail = item.detail || {};
+      list.append(row(copy.timeline_detail_target, said(item.target, "tl-exact")));
+      list.append(row(copy.timeline_detail_scenes, detail.scenes || 0));
+      list.append(row(copy.timeline_detail_kept, detail.kept || 0));
+      list.append(row(copy.timeline_detail_outcome,
+        word("prediction_outcome", item.outcome || "pending")));
+      out.append(list);
     } else if (item.kind === "decision") {
       list.append(row(copy.timeline_detail_action, item.action ? word("action", item.action) : copy.timeline_no_action));
       list.append(row(copy.timeline_detail_target, said(item.target, "tl-exact")));

@@ -61,6 +61,7 @@ from anjo.sleep.mind.core.evaluate import DREAM_STEPS
 from anjo.sleep.mind.core.event import EventLatent
 from anjo.sleep.mind.core.types import Decision, Ignition, days_of
 from anjo.sleep.mind.inquiry import kernel
+from anjo.sleep.mind.inquiry.loop_mark import is_loop_start
 from anjo.sleep.mind.inquiry.ports import WorkspaceLog
 from anjo.sleep.mind.inquiry.types import FULL_RULES, Budget, Rejected, RunStart, Step, WorkspaceEvent
 from anjo.sleep.night.channel_night import MindReading
@@ -136,7 +137,11 @@ def _guard(call: MindCall) -> None:
 
 
 def _runs_tonight(events: Sequence[WorkspaceEvent], night: date) -> tuple[RunStart, ...]:
-    return tuple(e.step.entry for e in events if isinstance(e.step.entry, RunStart) and e.step.entry.night == night)
+    """Tonight's notice and inquiry runs; the practice loop's own start is neither, so it neither
+    blocks an ignition nor starts tonight's notice pass."""
+    return tuple(e.step.entry for e in events
+                 if isinstance(e.step.entry, RunStart) and e.step.entry.night == night
+                 and not is_loop_start(e.step.entry))
 
 
 def ignite(log: WorkspaceLog, ignitions: Sequence[Ignition], call: MindCall, *, collisions: bool = False) -> dict[str, Any]:

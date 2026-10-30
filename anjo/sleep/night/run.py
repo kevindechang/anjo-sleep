@@ -27,6 +27,10 @@ Steps, in order, each writing its log record before the next starts (``nightlog.
    tonight's items wait for the next fold, and the night goes on with the kept briefs.
 5. ``practice``, 6. ``dataset``, 7. ``train``, 8. ``gates``: only on a training night, one whose
    cleared, non-practice evidence since the last trained night reaches ``min_new_examples``.
+   Under the MIND loop (``ANJO_SLEEP_MIND_LOOP=1`` with MIND on) practice first takes her focus from
+   her workspace at the night's start, she commits a prediction about her own learning on each focus
+   target, and that night's practice record resolves it by code (``mind/loop_focus.py``,
+   ``mind/self_predict.py``); off, practice and its record are today's.
    The last trained night is the night of the checkpoint that serves (the one the next night
    trains from), so a failed or rejected night's evidence stays new. Every due person in a batch
    runs inside one GPU session (a shared one is in each summary as ``gpu_batch``, so the month's spend
@@ -51,15 +55,19 @@ them; the wall-clock end alone drives budgets and timeouts.
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 
 from anjo.sleep.night.deps import (
     STUDY_ACTIONS,
+    MindCall,
     NightDeps,
     StudyOutcome,
 )
@@ -100,11 +108,12 @@ from anjo.sleep.context.brief import MAX_TOKENS as BRIEF_MAX_TOKENS
 from anjo.sleep.context.brief import BriefError
 from anjo.sleep.night.state import Window as Window
 from anjo.sleep.night.state import day_window as day_window
-from anjo.sleep.mind import expect, points, receipt
+from anjo.sleep.mind import expect, loop_focus, points, receipt, self_predict
 from anjo.sleep.mind.wants import own_wants_on
 from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
+from anjo.sleep.practice.run import PracticeRun
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.stops import BudgetStop, Cancelled
@@ -158,6 +167,25 @@ NOTE_MAX_S: Final = (
 # A study that fails this way stops the study, not the night: a Wonder error or timeout, a meta_usd
 # hold with no room, a request that can't fit its bound, a page in an unknown encoding.
 STUDY_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, LookupError)
+# What ends the MIND loop's share of a night, not the night: a log that can't be read or doesn't
+# fold, a summary or focus record of the wrong shape, a prompt file that can't be read. The loop
+# degrades to today's practice and the night trains; a cancel or a budget stop still reaches it.
+LOOP_FAILURES: Final = (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError)
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Focus:
+    """The MIND loop's share of a night's practice: the targets her questions are working on, the
+    practice step's record so far (None: the loop is off), the call the loop's writes go through, the
+    predictions she committed before practice, and the finished nights whose summaries hold her
+    baseline. Off, every field is empty and practice is today's."""
+
+    targets: tuple[loop_focus.FocusTarget, ...] = ()
+    record: Mapping[str, Any] | None = None
+    call: MindCall | None = None
+    commitment: self_predict.Commitment = self_predict.Commitment()
+    history: tuple[Mapping[str, object], ...] = ()
 
 
 class NightRunner(CoreSteps):
@@ -489,6 +517,11 @@ class NightRunner(CoreSteps):
         """MIND's inquiry runs only with the setting on (Task 17); off, the night is Task 7a's."""
         return mind_on(self.deps)
 
+    def _loop(self) -> bool:
+        """The MIND loop (practice draws her focus, and she predicts her own practice): on only with
+        ``ANJO_SLEEP_MIND_LOOP=1`` and MIND's inquiry on. Off, every night is byte-identical."""
+        return loop_focus.loop_on(os.environ) and self._mind()
+
     def _notice(self, p: PersonNight) -> Mapping[str, Any]:
         notice = self.deps.notice
         if not (self.deps.settings.mind_inquiry and notice.available):
@@ -741,6 +774,9 @@ class NightRunner(CoreSteps):
         kept = self.deps.transcripts(p.uid).for_night(p.night)
         if kept:  # a rerun of the night reuses the practice it already paid for
             p.store.add([transcript.evidence() for transcript in kept])
+            if self._loop():  # a rerun skips resolution: close what the earlier attempt left pending
+                self._censor(p, self._call(p, "practice"), self_predict.record(p.night, kept),
+                             "practice was reused, so the loop could not resolve it")
             return {
                 "scenes": len(kept),
                 "reused": True,
@@ -752,13 +788,17 @@ class NightRunner(CoreSteps):
         runner, channel = channel_night.practice(
             self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night
         )
-        with self._metered(p, "practice", "practice", runner.max_spark_calls):
-            run = runner.run(p.uid, p.night, seeded := self._seeded(p), None, at=p.stamp)
+        loop = self._focus(p)  # the MIND loop's commitments, before any scene exists
+        scene_kwargs = {"focus": loop.targets} if loop.targets else {}  # off, practice is called as today
+        with self._metered(p, "practice", "practice", runner.max_spark_calls + (1 if loop.targets else 0)):
+            run = runner.run(p.uid, p.night, seeded := self._seeded(p), None, at=p.stamp, **scene_kwargs)
         p.spend.add(
             "practice", run.critic_usd
         )  # a third-party critic's, held per call on its own pool
         self.deps.transcripts(p.uid).add(list(run.transcripts))
         p.store.add([transcript.evidence() for transcript in run.transcripts])
+        if loop.record is not None and loop.call is not None:  # resolved from this night's record, by code
+            loop = replace(loop, record=self._resolved(p, run, loop))
         share = run.teacher_targets / len(run.transcripts) if run.transcripts else 0.0
         return {
             "scenes": len(run.transcripts),
@@ -780,7 +820,63 @@ class NightRunner(CoreSteps):
             **channel,
             **self._seed_record(p, seeded),
             **self._serving(p, "practice", started),
+            **({} if loop.record is None else {"loop": loop.record}),
         }
+
+    def _focus(self, p: PersonNight) -> _Focus:
+        """MIND's share of practice (``ANJO_SLEEP_MIND_LOOP=1`` with MIND on): the targets her own
+        questions are working on, and the prediction she commits about herself before any scene is
+        written. Off, practice is today's and the record carries nothing. A loop that can't read her
+        focus or commit does the same and says why; a commitment it already made is censored."""
+        if not self._loop():
+            return _Focus()
+        call = self._call(p, "practice")
+        history: tuple[Mapping[str, object], ...] = ()
+        try:
+            history = tuple(summaries(self.deps.logs(p.uid)))
+            found = self.deps.inquiry.focus(call)
+            committed = (self.deps.inquiry.self_predict(call, found.targets, history) if found.targets
+                         else self_predict.Commitment())
+        except LOOP_FAILURES as error:  # the loop failed, not the night: practice is today's
+            logger.warning("MIND's loop didn't start practice (%s); practice is today's", type(error).__name__)
+            why = f"the loop failed before practice ({type(error).__name__})"
+            record = self_predict.record(p.night, ())
+            return _Focus((), self_predict.receipt(
+                (), record, self_predict.Commitment(), self._censor(p, call, record, why), why=why),
+                call, self_predict.Commitment(), ())
+        return _Focus(found.targets, self_predict.receipt(
+            found.targets, self_predict.record(p.night, ()), committed, (), why=found.why), call, committed, history)
+
+    def _resolved(self, p: PersonNight, run: PracticeRun, loop: _Focus) -> Mapping[str, Any]:
+        """Resolve her prediction on each focus target from the night's practice record: the counts,
+        the baseline its claim named and the verdict, which moves her credence through the kernel. A
+        resolution that fails censors what it left pending and still records the night's practice."""
+        assert loop.call is not None
+        record = self_predict.record(p.night, run.transcripts)
+        try:
+            outcomes = (self.deps.inquiry.self_resolve(loop.call, loop.commitment.predictions, record, loop.history)
+                        if loop.commitment.predictions else ())
+        except LOOP_FAILURES as error:  # the loop failed, not the night: close what it left pending
+            logger.warning("MIND's loop didn't resolve practice (%s)", type(error).__name__)
+            outcomes = self._censor(p, loop.call, record,
+                                    f"the loop couldn't resolve it ({type(error).__name__})",
+                                    loop.commitment.predictions)
+        why = None if loop.record is None else loop.record.get("why")
+        return self_predict.receipt(loop.targets, record, loop.commitment, outcomes,
+                                    why=None if why is None else str(why))
+
+    def _censor(
+        self, p: PersonNight, call: MindCall, record: self_predict.Record, why: str,
+        predictions: Sequence[self_predict.SelfPrediction] = (),
+    ) -> tuple[self_predict.Outcome, ...]:
+        """Settle the loop's unresolved predictions as censored, so MIND's inquiry resolver never
+        settles one from unrelated evidence. A censor that fails leaves them pending, which still
+        moves no credence, and never fails the night."""
+        try:
+            return self.deps.inquiry.self_censor(call, predictions, record, why)
+        except LOOP_FAILURES as error:
+            logger.warning("MIND's loop couldn't censor its predictions (%s)", type(error).__name__)
+            return ()
 
     def _dataset(self, p: PersonNight) -> Mapping[str, Any]:
         settings = self.deps.settings
@@ -1072,6 +1168,8 @@ class NightRunner(CoreSteps):
                 "steps": [record["step"] for record in p.log.steps()],
                 **self._kept(p),
                 **({"sleep": p.receipts["sleep"]} if "sleep" in p.receipts else {}),
+                **({"mind_loop": p.receipts["practice"]["loop"]}
+                   if "loop" in (p.receipts.get("practice") or {}) else {}),
                 **kept_summary(p.receipts),
                 **(
                     {}
