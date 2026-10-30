@@ -15,6 +15,8 @@ show yet) or ``unavailable`` (its source couldn't be read):
   waiting for the scorer, whose held-out half the page never reads);
 - ``gates``: each night's gates, their values and thresholds. A gate's ``reason`` is never shown:
   it can name the safety case that tripped;
+- ``timeline``: her quiet days' logged work (``timeline.py``), the practice the MIND loop drew
+  from her own questions included;
 - ``story``: her latest night as one loop, dream → rehearse → learn → check → wake
   (``night_view.story_view``), from the night's ``story.json``, or told from its log for a night
   from before stories (``night.story.tell``). A story that can't be read or told makes only this
@@ -34,7 +36,7 @@ from typing import Any, Final
 
 from anjo.sleep.demo.heldout import HeldOutText
 from anjo.sleep.demo.night_view import story_view
-from anjo.sleep.demo.timeline import DecisionRecord, TimelineSources, timeline_view
+from anjo.sleep.demo.timeline import DecisionRecord, PracticeMark, TimelineSources, timeline_view
 from anjo.sleep.mind.inquiry.types import LIVE_STATUSES, Question, Workspace, WorkspaceEvent
 from anjo.sleep.night.sleep_pressure import SleepMark, SleepRecordError, sleep_mark
 from anjo.sleep.night.story import Story, StoryError, story_from, tell
@@ -85,6 +87,7 @@ class NightRecord:
     sleep: SleepMark | None = None
     story: Story | None = None
     confidence: float | None = None  # the chooser's own confidence, when its record carries one
+    practised: tuple[PracticeMark, ...] = ()  # what the MIND loop made practice rehearse
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,35 @@ def _story(night: date, summary: Mapping[str, Any], steps: Sequence[Mapping[str,
         return None
 
 
+def _practised(night: date, summary: Mapping[str, Any]) -> tuple[PracticeMark, ...]:
+    """The MIND loop's practice record for the night, as its summary kept it (ids and counts only):
+    one mark per focus target, with what her prediction resolved to. A record from another schema,
+    or none, is no mark."""
+    loop = summary.get("mind_loop")
+    if not isinstance(loop, Mapping):
+        return ()
+    at = datetime.combine(night + timedelta(days=1), time.min, timezone.utc)  # the night's own clock
+    try:
+        outcomes = {}
+        for prediction in loop.get("predictions") or []:
+            if isinstance(prediction, Mapping) and isinstance(prediction.get("target_id"), str):
+                outcomes[prediction["target_id"]] = _text(prediction.get("outcome"))
+        marks = []
+        scenes = loop.get("scenes")
+        for focus in loop.get("focus") or []:
+            if not isinstance(focus, Mapping) or not isinstance(focus.get("target_id"), str):
+                continue
+            target_id = focus["target_id"]
+            counts = scenes.get(target_id) if isinstance(scenes, Mapping) else None
+            if not isinstance(counts, Mapping):
+                continue
+            marks.append(PracticeMark(night, at, target_id, int(counts.get("scenes", 0)),
+                                      int(counts.get("held_up", 0)), outcomes.get(target_id)))
+    except (TypeError, ValueError):
+        return ()  # a record from another schema is no mark: the page shows what it can read
+    return tuple(marks)
+
+
 def night_record(
     summary: Mapping[str, Any], steps: Sequence[Mapping[str, Any]], story: Mapping[str, Any] | None = None,
 ) -> NightRecord:
@@ -189,7 +221,7 @@ def night_record(
         gates=_gates(summary.get("gates") or {}),
         outcome=_text(receipt.get("outcome")) if isinstance(receipt, dict) else None,
         note=_text(_step(steps, "note").get("outcome")), sleep=sleep, story=_story(night, summary, steps, story),
-        confidence=_confidence(receipt, first, choose),
+        confidence=_confidence(receipt, first, choose), practised=_practised(night, summary),
     )
 
 
@@ -325,5 +357,6 @@ def mind_view(sources: MindSources, held: HeldOutText) -> dict[str, Any]:
         "story": story_view(None if sources.nights is None else [(n, r.story) for n, r in numbered(sources.nights)]),
         "timeline": timeline_view(TimelineSources(
             events=sources.events, evidence=sources.evidence, results=sources.results,
-            decisions=_decisions(sources.nights), labels=labels, as_of=as_of), held),
+            decisions=_decisions(sources.nights), labels=labels, as_of=as_of,
+            practised=[mark for _, record in numbered(sources.nights or ()) for mark in record.practised]), held),
     }

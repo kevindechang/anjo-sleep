@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 from anjo.sleep.mind.core.projector import PredictionsLike, Projector
 from anjo.sleep.mind.core.state import CoreState
+from anjo.sleep.mind.loop_focus import FocusTarget
 from anjo.sleep.night.core_snapshot import Channel, ChannelArm, SoftClient, snapshot
 from anjo.sleep.practice.full import CappedChat
 from anjo.sleep.practice.run import PracticeRun
@@ -139,8 +140,9 @@ class _Stamped:
 
     def run(
         self, user_id: str, night: date, evidence: Sequence[Evidence], hw: object | None, *, at: datetime,
+        focus: Sequence[FocusTarget] = (),
     ) -> PracticeRun:
-        run = self.runner.run(user_id, night, evidence, hw, at=at)
+        run = self.runner.run(user_id, night, evidence, hw, at=at, focus=focus)
         return replace(run, transcripts=tuple(self.channel.stamp(run.transcripts)))
 
 

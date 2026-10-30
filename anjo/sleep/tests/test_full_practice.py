@@ -21,7 +21,7 @@ from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.model_api import ChatResult
 from anjo.sleep.practice.full import CANDIDATE_TEMPERATURE, SCENES_ASKED, FullPractice
-from anjo.sleep.practice.transcripts import JsonlTranscriptStore, PracticeTranscript
+from anjo.sleep.practice.transcripts import JsonlTranscriptStore, PracticeTranscript, transcript_record
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.tests.sleep_fakes import WONDER, ev, probe
@@ -148,6 +148,24 @@ def test_full_practice_runs_16_to_20_scenes() -> None:
         with pytest.raises(ValueError):
             _practice(Spark(_scenes()), Glimmer(), scenes=wrong)
     assert _practice(Spark(_scenes()), Glimmer()).max_spark_calls == 1 + 2 * 16
+
+
+def test_a_loop_off_night_never_records_the_critic_flag() -> None:
+    """The loop's flag is her record's, not today's: off, a transcript stores exactly today's keys
+    even when the critic listed the kept candidate as missing a constraint."""
+    # Every Glimmer candidate misses a constraint, the kept one included; the teacher scores lower.
+    spark = Spark(_scenes(), scored(5, (6, 7, 8), lambda text: text.startswith("GLIMMER")))
+    run = _run(spark)
+    kept = run.transcripts[0]
+    assert run.flagged > 0 and kept.target == "glimmer"  # the critic did flag the candidate kept
+    assert kept.flagged is False
+    assert transcript_record(kept) == {
+        "id": kept.id, "person_id": kept.person_id, "night": NIGHT.isoformat(), "scene": kept.scene,
+        "message": kept.message, "reply": kept.reply, "context": kept.context,
+        "f_ids": list(kept.f_ids), "ancestry": sorted(kept.ancestry or ()),
+        "created_at": kept.created_at.isoformat(),
+        "target": kept.target, "rejected": kept.rejected, "rejected_from": kept.rejected_from,
+    }
 
 
 def test_practice_candidates_use_full_context_and_train_on_c(tmp_path: Path) -> None:

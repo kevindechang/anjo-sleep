@@ -10,6 +10,8 @@ person can read:
 - **predictions**, committed → resolved, and whether the outcome made the claim right or wrong;
 - **web searches she ran**, with the query and what came back (her own records' search is not a web
   search and is left out);
+- **what practice rehearsed because she was working on it** (the MIND loop): the target she was on,
+  its focus scenes and how many kept her own reply, with the prediction resolved beside it;
 - **each night's decision**, with the confidence she gave it when the record carries one.
 
 Each node names the logged record it comes from (``record.event``: the workspace step's seq, or a
@@ -66,11 +68,25 @@ class DecisionRecord:
 
 
 @dataclass(frozen=True)
+class PracticeMark:
+    """One night's practice on one of her focus targets (the MIND loop): the scenes it drew from the
+    target, how many kept her own reply, and what her prediction resolved to (None: none committed)."""
+
+    night: date
+    at: datetime
+    target_id: str
+    scenes: int
+    kept: int
+    outcome: str | None = None
+
+
+@dataclass(frozen=True)
 class TimelineSources:
     """What the timeline reads. ``None``: that source couldn't be read.
 
     ``events`` is MIND's workspace log, not the folded workspace: a wipe keeps the ids of everything
-    before it, and the timeline must be able to cite them.
+    before it, and the timeline must be able to cite them. ``practised`` is the MIND loop's practice
+    records, as each night's summary kept them.
     """
 
     events: Sequence[WorkspaceEvent] | None = None
@@ -79,6 +95,7 @@ class TimelineSources:
     decisions: Sequence[DecisionRecord] = ()
     labels: Mapping[str, str] = field(default_factory=dict)
     as_of: datetime | None = None
+    practised: Sequence[PracticeMark] = ()
 
 
 def quiet_start(evidence: Sequence[Evidence] | None, as_of: datetime | None) -> datetime | None:
@@ -156,6 +173,24 @@ def _decisions(decisions: Sequence[DecisionRecord], start: datetime, end: dateti
         "confidence": d.confidence,
         "target": held.item(labels.get(d.target_id or "")),
     } for d in sorted(kept, key=lambda d: (d.night, d.action or ""))]
+
+
+def _practised(practised: Sequence[PracticeMark], start: datetime, end: datetime,
+               labels: Mapping[str, str], held: HeldOutText) -> list[dict[str, Any]]:
+    """What her own questions made practice rehearse in the quiet days: the target she was working
+    on, how many scenes it drew and how many kept her own reply, with her prediction's verdict."""
+    kept = [p for p in practised if start.date() <= p.night <= end.date()]
+    return [{
+        "kind": "practice",
+        "at": p.at.isoformat(),
+        "day": p.night.isoformat(),
+        "night": p.night.isoformat(),
+        "seq": None,
+        "record": {"event": f"night-{p.night.isoformat()}-practice", "seq": None, "night": p.night.isoformat()},
+        "target": held.item(labels.get(p.target_id, "")),
+        "detail": {"scenes": p.scenes, "kept": p.kept, "target_id": p.target_id},
+        "outcome": p.outcome,
+    } for p in sorted(kept, key=lambda p: (p.night, p.target_id))]
 
 
 def _nodes(sources: TimelineSources, held: HeldOutText) -> tuple[list[dict[str, Any]], int]:
@@ -238,6 +273,7 @@ def _nodes(sources: TimelineSources, held: HeldOutText) -> tuple[list[dict[str, 
                 node["detail"]["items"] = [_cite(item.id, held, items) for item in entry.items]
         before = after
     nodes.extend(_decisions(sources.decisions, start, as_of, sources.labels, held))
+    nodes.extend(_practised(sources.practised, start, as_of, sources.labels, held))
     nodes.sort(key=lambda node: (node["at"], -1 if node["seq"] is None else node["seq"]))
     return nodes, quiet_days(start, as_of)
 
@@ -255,12 +291,15 @@ def timeline_view(sources: TimelineSources, held: HeldOutText) -> dict[str, Any]
                 "items": [], "counts": {}}
     start = quiet_start(sources.evidence, sources.as_of)
     counts = Counter(node["kind"] for node in nodes)
+    keys = ("question", "credence", "prediction", "resolution", "search", "decision")
+    tally = {key: counts.get(key, 0) for key in keys}
+    if counts.get("practice"):  # only a loop night has one: off, the payload is today's
+        tally["practice"] = counts["practice"]
     return {
         "state": "ok",
         "quiet_days": days,
         "from": None if start is None else start.isoformat(),
         "to": sources.as_of.isoformat(),
         "items": nodes,
-        "counts": {key: counts.get(key, 0) for key in
-                   ("question", "credence", "prediction", "resolution", "search", "decision")},
+        "counts": tally,
     }

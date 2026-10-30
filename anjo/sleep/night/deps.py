@@ -38,7 +38,14 @@ from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
 from anjo.sleep.mind.expect import Coefficients
+from anjo.sleep.mind.loop_focus import Focus, FocusTarget
 from anjo.sleep.mind.points import QuestionState
+from anjo.sleep.mind.self_predict import (
+    Commitment as LoopCommitment,
+    Outcome as LoopOutcome,
+    Record as LoopRecord,
+    SelfPrediction,
+)
 from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
 from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
@@ -166,6 +173,21 @@ class Inquiry(Protocol):
 
     def facts(self, call: MindCall, target_id: str) -> list[Fact]: ...
 
+    def focus(self, call: MindCall) -> Focus: ...
+
+    def self_predict(
+        self, call: MindCall, focus: Sequence[FocusTarget], history: Sequence[Mapping[str, object]],
+    ) -> LoopCommitment: ...
+
+    def self_resolve(
+        self, call: MindCall, predictions: Sequence[SelfPrediction], record: LoopRecord,
+        history: Sequence[Mapping[str, object]],
+    ) -> tuple[LoopOutcome, ...]: ...
+
+    def self_censor(
+        self, call: MindCall, predictions: Sequence[SelfPrediction], record: LoopRecord, why: str,
+    ) -> tuple[LoopOutcome, ...]: ...
+
 
 class NoInquiry:
     """No inquiry: no question, so no inquiry runs and nothing is shared."""
@@ -189,6 +211,25 @@ class NoInquiry:
 
     def facts(self, call: MindCall, target_id: str) -> list[Fact]:
         return []
+
+    def focus(self, call: MindCall) -> Focus:
+        return Focus()
+
+    def self_predict(
+        self, call: MindCall, focus: Sequence[FocusTarget], history: Sequence[Mapping[str, object]],
+    ) -> LoopCommitment:
+        return LoopCommitment()
+
+    def self_resolve(
+        self, call: MindCall, predictions: Sequence[SelfPrediction], record: LoopRecord,
+        history: Sequence[Mapping[str, object]],
+    ) -> tuple[LoopOutcome, ...]:
+        return ()
+
+    def self_censor(
+        self, call: MindCall, predictions: Sequence[SelfPrediction], record: LoopRecord, why: str,
+    ) -> tuple[LoopOutcome, ...]:
+        return ()
 
 
 @dataclass(frozen=True)
@@ -298,13 +339,15 @@ class ProbeRegistrar(Protocol):
 
 
 class PracticeRunner(Protocol):
-    """Step 5. ``max_spark_calls`` bounds its Spark Open calls, for the step's hold."""
+    """Step 5. ``max_spark_calls`` bounds its Spark Open calls, for the step's hold. ``focus`` is the
+    MIND loop's: the targets practice draws a share of its scenes from (empty off)."""
 
     @property
     def max_spark_calls(self) -> int: ...
 
     def run(
         self, user_id: str, night: date, evidence: Sequence[Evidence], hw: object | None, *, at: datetime,
+        focus: Sequence[FocusTarget] = (),
     ) -> PracticeRun: ...
 
 
