@@ -89,12 +89,12 @@ class DecisionPoint:
     choice: Choice | None
 
 
-def build(raw: RawSnapshot) -> WantSnapshot:
+def build(raw: RawSnapshot, *, inquiry_offered: bool = True) -> WantSnapshot:
     """``snapshot.build`` over the raw input: the state her chooser derives wants from."""
-    return snapshot.build(
+    return replace(snapshot.build(
         list(raw.targets), list(raw.results), raw.as_of, raw.last_message_at,
         intentions=raw.intentions, questions=tuple(q.view for q in raw.questions),
-    )
+    ), inquiry_offered=inquiry_offered)
 
 
 def study_target(choice: Choice | None, raw: RawSnapshot) -> str | None:

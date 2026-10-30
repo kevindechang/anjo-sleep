@@ -429,7 +429,8 @@ def test_understand_strength_scales_with_one_minus_confidence() -> None:
 def test_open_question_continues_without_new_evidence() -> None:
     thread = _thread("t1", revision=3, acted=3)
     (want,) = _wants(thread, questions=(_question(status="open", priority=1.2, continues=True),))
-    assert (want.action, want.question_id, want.strength) == ("inquire", "q1", pytest.approx(0.6))
+    assert (want.action, want.question_id) == ("inquire", "q1")
+    assert want.strength == pytest.approx(0.6)
     assert want.kind == "understand"
     (active,) = _wants(thread, questions=(_question(status="active", priority=2.0),))
     assert active.strength == 1.0
@@ -520,7 +521,8 @@ def test_inquiry_choice_ignores_a_question_that_is_not_ready() -> None:
     asleep = _question("A", status="open", priority=2.0, continues=False)
     ready = _question("B", status="active", priority=1.0, continues=True)
     (want,) = _wants(thread, questions=(asleep, ready))
-    assert (want.action, want.question_id, want.strength) == ("inquire", "B", pytest.approx(0.5))
+    assert (want.action, want.question_id) == ("inquire", "B")
+    assert want.strength == pytest.approx(0.5)
     fresh = _thread("t1", revision=4, acted=3)  # with new evidence any live question may be chosen
     (woken,) = _wants(fresh, questions=(asleep, ready))
     assert woken.question_id == "A"
@@ -549,3 +551,52 @@ def test_waiting_thread_result_shares_without_reopening_thread() -> None:
     (want,) = derive_wants(shot)
     assert (want.kind, want.action, want.target_id) == ("share", "hold_note", "t1")
     assert want.priority_class == "active_thread"
+
+
+@pytest.mark.parametrize('status', ['open', 'active'])
+def test_commitment_question_competes_with_distant_preparation(status: str) -> None:
+    plan = _commitment('c1', due=False)
+    wants = _wants(plan, questions=(_question(targets=('c1',), status=status, priority=1.6),))
+    assert {w.action for w in wants} == {'inquire', 'prepare_commitment'}
+    choice = choose('away', wants, CTX)
+    assert (choice.action, choice.question_id) == ('inquire', 'q1')
+    # Strength still decides; opening a weak question doesn't entitle it to the night.
+    weak = _wants(plan, questions=(_question(targets=('c1',), priority=0.3),))
+    assert choose('away', weak, CTX).action == 'prepare_commitment'
+    inquiry = next(c for c in choose('away', weak, CTX).considered if c.action == 'inquire')
+    assert inquiry.reason == 'below_threshold'
+
+
+@pytest.mark.parametrize('days', [-1, 0, 3, 7])
+def test_near_commitment_keeps_precedence_over_inquiry(days: int) -> None:
+    plan = _commitment('c1', check_after=NIGHT + timedelta(days=days))
+    wants = _wants(plan, questions=(_question(targets=('c1',), priority=2.0),))
+    assert choose('away', wants, CTX).action == 'prepare_commitment'
+    prepared = dataclasses.replace(plan, acted_revision=plan.revision)
+    if days <= 0:
+        assert choose('away', _wants(prepared, questions=(_question(targets=('c1',), priority=2.0),)), CTX).action == 'hold_note'
+
+
+def test_commitment_inquiry_uses_question_first_target_for_task16() -> None:
+    from anjo.sleep.mind import points
+    from anjo.sleep.mind.inquiry.types import Priority
+
+    q = _question(targets=('first', 'c1'), priority=1.6)
+    raw = points.RawSnapshot((_commitment('c1', due=False),), (), NIGHT, SPOKE,
+                             questions=(points.QuestionState(q, Priority('q1', 2.0, 0.8, 1.0, False)),))
+    choice = choose('away', derive_wants(points.build(raw)), CTX)
+    assert choice.action == 'inquire'
+    assert points.study_target(choice, raw) == 'first'
+
+
+def test_commitment_inquiry_needs_an_actual_offer() -> None:
+    from anjo.sleep.mind import points
+    from anjo.sleep.mind.inquiry.types import Priority
+
+    q = _question(targets=('c1',), priority=2.0)
+    raw = points.RawSnapshot((_commitment('c1', due=False), _thread('t1', revision=9)), (), NIGHT, SPOKE,
+                             questions=(points.QuestionState(q, Priority('q1', 2.0, 1.0, 1.0, True)),))
+    ctx = dataclasses.replace(CTX, allowed_actions=frozenset({'prepare_commitment', 'revisit_thread', 'hold_note'}))
+    wants = derive_wants(points.build(raw, inquiry_offered=ctx.allows('inquire')))
+    assert choose('away', wants, ctx).target_id == 'c1'
+    assert all(w.action != 'inquire' for w in wants)

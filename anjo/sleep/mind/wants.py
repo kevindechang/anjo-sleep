@@ -10,10 +10,11 @@ learned weights are autonomy Phase 2.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Final
 
-from anjo.sleep.mind.snapshot import LIVE_QUESTION, continuing_targets
+from anjo.sleep.mind.snapshot import EVIDENCE_WINDOW, LIVE_QUESTION, continuing_targets
 from anjo.sleep.types import QuestionView, Result, Target, Want, WantSnapshot
 
 COMMITMENT_CLASS: Final = "user_commitment"
@@ -36,7 +37,18 @@ def derive_wants(snapshot: WantSnapshot) -> tuple[Want, ...]:
             continue
         pull = _follow_up(target, snapshot) if target.kind == "commitment" else _understand(target, snapshot)
         if pull is not None:
+            # Only inquiry-enabled snapshots carry questions. Plans outside the existing
+            # seven-day follow-up window compete on strength while she has live inquiry work.
+            if (snapshot.inquiry_offered and target.kind == "commitment"
+                    and any(q.status in LIVE_QUESTION for q in snapshot.questions)
+                    and (target.check_after is None or target.check_after > snapshot.as_of + EVIDENCE_WINDOW)):
+                pull = replace(pull, priority_class=THREAD_CLASS)
             wants.append(pull)
+        if (snapshot.inquiry_offered and target.kind == "commitment"
+                and _inquiring(target, snapshot.questions) is not None):
+            inquiry = _understand(target, snapshot)
+            if inquiry is not None:
+                wants.append(inquiry)
     kinds = {t.id: t.kind for t in snapshot.targets}
     for target_id in sorted({r.target_id for r in snapshot.results}):
         note = _share(target_id, kinds.get(target_id, "thread"), snapshot)
