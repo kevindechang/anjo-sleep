@@ -151,7 +151,9 @@ def test_nothing_open_chooses_nothing() -> None:
         assert choice.considered == ()
 
 
-def test_time_alone_changes_no_want() -> None:
+def test_time_alone_pulls_only_through_her_own_state() -> None:
+    """The person's own wants still don't strengthen with the clock: their dates alone wake them.
+    Time moves her only through her own inquiry (Task 18), which this snapshot has none of."""
     targets = (
         _thread("moved", revision=3, acted=1, confidence=0.3),
         _thread("still", revision=4, acted=4),

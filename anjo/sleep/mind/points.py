@@ -10,6 +10,8 @@ on exactly what she saw (``deciders``).
 
 A point's record (``point_record``) holds ids, numbers, times and codes, never words: each target's
 label and person id are left out, and a replay that needs a label looks it up by id.
+``QuestionState.own`` is what her own inquiry held on a question (Task 18), recorded with it so a
+replay derives her own wants from the same state the night saw.
 
 Engine core, and pure: no clock, database, model call or environment read.
 """
@@ -36,6 +38,7 @@ from anjo.sleep.types import (
     Commitment,
     Considered,
     NightAllowance,
+    OwnView,
     Policy,
     QuestionView,
     Result,
@@ -52,16 +55,20 @@ STUDY_ACTIONS: Final[frozenset[Action]] = frozenset({"prepare_commitment", "revi
 @dataclass(frozen=True)
 class QuestionState:
     """One question of her workspace as the chooser saw it, with its priority's parts (Task 17), so
-    a replay can change one factor and recompute the value."""
+    a replay can change one factor and recompute the value. ``own`` is what her own inquiry holds on
+    it (Task 18), which her own wants read."""
 
     view: QuestionView
     parts: Priority
+    own: OwnView | None = None
 
     def __post_init__(self) -> None:
         if self.parts.question_id != self.view.id:
             raise ValueError("a question's priority parts are its own")
         if not math.isclose(self.view.priority, self.parts.value, rel_tol=1e-9, abs_tol=1e-12):
             raise ValueError(f"question {self.view.id}'s priority is not the value of its parts")
+        if self.own is not None and self.own.question_id != self.view.id:
+            raise ValueError("a question's own view is its own")
 
 
 @dataclass(frozen=True)
@@ -89,12 +96,14 @@ class DecisionPoint:
     choice: Choice | None
 
 
-def build(raw: RawSnapshot, *, inquiry_offered: bool = True) -> WantSnapshot:
-    """``snapshot.build`` over the raw input: the state her chooser derives wants from."""
+def build(raw: RawSnapshot, *, inquiry_offered: bool = True, own_wants: bool = True) -> WantSnapshot:
+    """``snapshot.build`` over the raw input: the state her chooser derives wants from. Her own
+    inquiry's views ride beside it (Task 18), which ``snapshot.build`` doesn't read."""
     return replace(snapshot.build(
         list(raw.targets), list(raw.results), raw.as_of, raw.last_message_at,
         intentions=raw.intentions, questions=tuple(q.view for q in raw.questions),
-    ), inquiry_offered=inquiry_offered)
+    ), inquiry_offered=inquiry_offered, own_wants=own_wants,
+        own=tuple(q.own for q in raw.questions if q.own is not None))
 
 
 def study_target(choice: Choice | None, raw: RawSnapshot) -> str | None:
@@ -159,7 +168,25 @@ def _when(value: str | None) -> datetime | None:
 def _question_record(state: QuestionState) -> dict[str, Any]:
     view, parts = state.view, state.parts
     return {"id": view.id, "target_ids": list(view.target_ids), "status": view.status, "priority": view.priority,
-            "continues": view.continues, "stake": parts.stake, "u": parts.u, "a": parts.a, "ready": parts.ready}
+            "continues": view.continues, "stake": parts.stake, "u": parts.u, "a": parts.a, "ready": parts.ready,
+            "own": None if state.own is None else _own_record(state.own)}
+
+
+def _own_record(view: OwnView) -> dict[str, Any]:
+    return {"question_id": view.question_id, "target_ids": list(view.target_ids), "status": view.status,
+            "credences": list(view.credences), "stake": view.stake, "uncertainty": view.uncertainty,
+            "prediction_due": _iso(view.prediction_due), "resolved_prediction": view.resolved_prediction,
+            "finding": view.finding, "last_worked_at": view.last_worked_at.isoformat()}
+
+
+def _own_from(record: Mapping[str, Any]) -> OwnView:
+    return OwnView(
+        question_id=record["question_id"], target_ids=tuple(record["target_ids"]), status=record["status"],
+        credences=tuple(float(c) for c in record["credences"]), stake=float(record["stake"]),
+        uncertainty=float(record["uncertainty"]), prediction_due=_when(record["prediction_due"]),
+        resolved_prediction=bool(record["resolved_prediction"]), finding=bool(record["finding"]),
+        last_worked_at=datetime.fromisoformat(record["last_worked_at"]),
+    )
 
 
 def _question_from(record: Mapping[str, Any]) -> QuestionState:
@@ -167,7 +194,8 @@ def _question_from(record: Mapping[str, Any]) -> QuestionState:
                         priority=float(record["priority"]), continues=bool(record["continues"]))
     parts = Priority(record["id"], float(record["stake"]), float(record["u"]), float(record["a"]),
                      bool(record["ready"]))
-    return QuestionState(view=view, parts=parts)
+    own = record.get("own")
+    return QuestionState(view=view, parts=parts, own=None if own is None else _own_from(own))
 
 
 def _ctx_record(ctx: ChoiceContext) -> dict[str, Any]:

@@ -53,7 +53,7 @@ from typing import Any, Final, Protocol
 
 from anjo.sleep import spark_provider
 from anjo.sleep.budget import Ledger
-from anjo.sleep.mind import snapshot
+from anjo.sleep.mind import own, snapshot
 from anjo.sleep.mind.core import bridge
 from anjo.sleep.mind.inquiry import controller, findings, kernel, loop
 from anjo.sleep.mind.inquiry.ports import (
@@ -72,6 +72,7 @@ from anjo.sleep.mind.inquiry.types import (
     OP_CLASSES,
     Applied,
     Budget,
+    Finding,
     InquiryRun,
     InvestigateOp,
     ModelReply,
@@ -363,7 +364,10 @@ class MindNight:
         for q in ws.questions:
             parts = controller.priority(ws, q.id, targets=targets, as_of=call.as_of)
             continues = q.status in LIVE_STATUSES and parts.a == A_READY and lasts
-            states.append(QuestionState(QuestionView(q.id, q.target_ids, q.status, parts.value, continues), parts))
+            states.append(QuestionState(
+                QuestionView(q.id, q.target_ids, q.status, parts.value, continues), parts,
+                own.view(ws, q, parts),
+            ))
         return tuple(states)
 
     def settle(self, call: MindCall) -> list[str]:
@@ -480,8 +484,10 @@ class MindNight:
         return tuple(shared)
 
     def facts(self, call: MindCall, target_id: str) -> list[Fact]:
-        """A standing shared finding's statement, for the note, with its source: the research
-        source's URL, or the days the person said what it cites."""
+        """A finding's statement, for the note, with its source: the research source's URL, or the
+        days the person said what it cites. A standing shared result's finding first; then any
+        finding of her own on a question about this plan, which her own note says with no result
+        behind it (``wants._own_note``)."""
         ws = kernel.fold(self._log(call.user_id).events())
         by_result = {f"{f.id}.{f.kind}": f for f in ws.findings}
         search = StoreSearch(call.store)
@@ -491,12 +497,15 @@ class MindNight:
             if finding is None or result.target_id != target_id or result.consumed:
                 continue
             source = search.get([result.homework_id], call.as_of) if result.homework_id else ()
-            if source:
-                out.append(Fact(text=finding.statement, source=source[0].source))
+            out.append(_fact(finding, source, search.get(finding.cites, call.as_of)))
+        said = {fact.text for fact in out}
+        for finding in ws.findings:
+            question = ws.question(finding.question_id)
+            if (finding.kind not in findings.SHARED_KINDS or finding.statement in said
+                    or question is None or target_id not in question.target_ids):
                 continue
-            days = sorted({i.day.isoformat() for i in search.get(finding.cites, call.as_of) if i.kind in findings.PERSON_KINDS})
-            # COPY-PENDING(kevin): how a note cites the person's own words.
-            out.append(Fact(text=finding.statement, source=f"what you told me on {', '.join(days) or 'earlier days'}"))
+            research = sorted({i for i in finding.cites if i in kernel.research_sources(ws, finding.question_id)})
+            out.append(_fact(finding, search.get(research, call.as_of)[:1], search.get(finding.cites, call.as_of)))
         return out
 
     # ── plumbing ─────────────────────────────────────────────────────────────
@@ -531,6 +540,15 @@ def _holds(ledger: Ledger | None, job: str, prices: Prices, rate: float, meters:
     with held(ledger, f"{job}:spark", ("baseten_mind_usd",), spark_bound, lambda: meters.spark_usd), \
             held(ledger, f"{job}:glimmer", ("modal_usd",), gpu_bound, lambda: meters.glimmer_usd):
         yield
+
+
+def _fact(finding: Finding, source: Sequence[Evidence], cited: Sequence[Evidence]) -> Fact:
+    """One finding as a note's fact: its statement, and the source it stands on."""
+    if source:
+        return Fact(text=finding.statement, source=source[0].source)
+    days = sorted({item.day.isoformat() for item in cited if item.kind in findings.PERSON_KINDS})
+    # COPY-PENDING(kevin): how a note cites the person's own words.
+    return Fact(text=finding.statement, source=f"what you told me on {', '.join(days) or 'earlier days'}")
 
 
 def _counts(run: InquiryRun, meters: _Meters) -> dict[str, object]:

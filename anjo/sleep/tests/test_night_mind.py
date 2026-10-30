@@ -133,7 +133,12 @@ def test_flag_off_night_is_unchanged(tmp_path: Path, ported: bool) -> None:
 # ── A life through the accelerated rig ───────────────────────────────────────
 
 
-def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(tmp_path: Path) -> None:
+def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With her own pulls ablated off, the person's result path alone decides what is said: a
+    finding more than seven days from a plan's date still waits for an anchor."""
+    monkeypatch.setenv("ANJO_SLEEP_MIND_OWN_WANTS", "0")
     start = date(2026, 10, 1)  # before the rig's wall clock, as every accelerated life is
     fake = FakeAccelerated(tmp_path, mind_from=start)  # the commitment is due nine days after night 1
     person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
@@ -164,6 +169,29 @@ def test_life_notices_inquires_under_caps_and_shares_only_with_an_anchor(tmp_pat
     assert len(fake.world.notifier.queued) == 1
     kept = workspace(fake.world, FAKE_USER)
     assert kept.replay_digest() == kept.digest()  # her workspace folds again from its log
+
+
+def test_her_own_finding_notes_the_live_plan_without_waiting_for_an_anchor(tmp_path: Path) -> None:
+    """The same life with her own pulls on: the finding her question reached on night one is hers to
+    say on the person's plan, and the plan's note is not said twice."""
+    start = date(2026, 10, 1)
+    fake = FakeAccelerated(tmp_path, mind_from=start)
+    person = load_person_file(PERSONAS / f"{FAKE_PERSONA}.json").visible
+    results = run_accelerated(FAKE_USER, person, 3, start, rig=fake.rig(sha="0" * 40))
+    assert [r.status for r in results] == ["promoted"] * 3
+    first, second, third = (r.log_path for r in results)
+
+    assert step(first, "choose")["action"] == "inquire"  # the question she noticed, worked
+    choose = step(second, "choose")
+    assert choose["action"] == "hold_note" and choose["receipt"]["winner"] == "share:fake-life-c1"
+    note = step(second, "note")
+    assert note["outcome"] == "held" and note["target_id"] == "fake-life-c1" and "shared" not in note
+    topic, facts = fake.world.writer.calls[-1]
+    assert topic == "the pilot demo" and [f.text for f in facts] == [STATEMENT]
+    assert step(third, "note")["outcome"] == "no_reason"  # a plan already spoken to is not news again
+    assert len(fake.world.notifier.queued) == 1
+    kept = workspace(fake.world, FAKE_USER)
+    assert kept.replay_digest() == kept.digest()
 
 
 def test_a_prediction_made_on_night_one_is_resolved_by_a_later_nights_evidence(tmp_path: Path) -> None:
@@ -297,7 +325,9 @@ def test_a_shared_result_lapses_with_its_anchor(tmp_path: Path) -> None:
     world, mind = _suspected(tmp_path)
     due = NIGHT + timedelta(days=4)  # the commitment's date has passed by this night's end
     lapsed = mind_call(world, UID, due, datetime.combine(due + timedelta(days=1), time.min, tzinfo=timezone.utc))
-    assert mind.results(lapsed) == () and mind.facts(lapsed, f"{UID}-c1") == []  # it rides along on no later note
+    assert mind.results(lapsed) == ()  # the result lapses with its anchor
+    # Her own finding on the plan is still hers to say: her own note needs no anchor (Task 18).
+    assert [f.text for f in mind.facts(lapsed, f"{UID}-c1")] == [STATEMENT]
 
 
 # ── Findings without a source never train ────────────────────────────────────
