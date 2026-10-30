@@ -42,6 +42,30 @@ def test_selection_uses_same_prompt_and_settings(monkeypatch):
     assert all("retries" in c[4] for c in calls)
 
 
+def test_the_deepseek_judge_sends_a_lost_reply_again(monkeypatch):
+    """A reply that never came whole failed a whole morning on 2026-10-30; the muse judge is untouched."""
+    calls = []
+
+    def chat(model, messages, tools, timeout, **kwargs):
+        calls.append((model, kwargs))
+        return ChatResult('{"verdict":"tie"}', (), model, 3000, 500, "stop")
+
+    monkeypatch.setattr(meta_api, "chat", chat)
+    monkeypatch.setattr(fireworks_api, "chat", chat)
+    monkeypatch.setattr(app, "judge_brief", lambda persona: "brief")
+    monkeypatch.setenv(app.JUDGE_ENV, "deepseek")
+    judge_orders(app.make_judge("film", JudgeTokens(), app._Resent()), probe(), "one", "two")
+
+    (_, deepseek), *_ = calls
+    retries = deepseek["retries"]
+    assert (retries.connect_attempts, retries.reply_attempts) == (3, 2)
+
+    monkeypatch.delenv(app.JUDGE_ENV)
+    calls.clear()
+    judge_orders(app.make_judge("film", JudgeTokens(), app._Resent()), probe(), "one", "two")
+    assert calls[0][1]["retries"].reply_attempts == Retries().reply_attempts == 1
+
+
 @pytest.mark.parametrize("model", [baseten_api.SPARK_OPEN, fireworks_api.SPARK_OPEN, "muse-spark-open"])
 def test_spark_open_refused(model, monkeypatch):
     with pytest.raises(ValueError, match="Spark Open"):

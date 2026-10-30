@@ -5,12 +5,14 @@ and runs the simulator, so every training ancestor is licence-cleared (§3). It'
 Baseten's OpenAI-compatible Model API. The key comes from ``ANJO_BASETEN_API_KEY``, read at call
 time.
 
-**One switch.** ``ANJO_SLEEP_SPARK`` selects the provider (``spark_provider``); when it selects the
-other one, a call asking for ``SPARK_OPEN`` is sent to ``fireworks_api`` instead, with the same
-messages, tools, temperature, cap and seed, and its reply names that provider's id. The other
-provider's own retry policy goes with it (Fireworks sends a dropped connection again; Baseten
-passes none, so its calls are exactly as before). Unset or ``baseten`` calls Baseten exactly as
-before, so ``chat`` is the one place Sleep's Spark Open traffic turns.
+**One retry policy.** ``ANJO_SLEEP_SPARK`` selects the provider (``spark_provider``); when it
+selects the other one, a call asking for ``SPARK_OPEN`` is sent to ``fireworks_api`` instead, with
+the same messages, tools, temperature, cap and seed, and its reply names that provider's id. The
+other provider's own retry policy goes with it (Fireworks sends a dropped connection again; Baseten
+passes none, so its calls are exactly as before), unless the caller passes ``retries``: that
+replaces it, so extraction can send a reply that never came whole again without changing the brief's
+or practice's calls. Unset or ``baseten`` calls Baseten exactly as before, so ``chat`` is the one
+place Sleep's Spark Open traffic turns.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from typing import Any, Final, Literal
 
 import httpx
 
-from anjo.sleep.model_api import ChatResult, post_chat
+from anjo.sleep.model_api import ChatResult, Retries, post_chat
 
 KEY_ENV = "ANJO_BASETEN_API_KEY"
 URL = "https://inference.baseten.co/v1/chat/completions"
@@ -37,15 +39,19 @@ def chat(
     transport: httpx.BaseTransport | None = None,
     max_tokens: int | None = None,
     seed: int | None = None,
+    retries: Retries | None = None,
 ) -> ChatResult:
     """One chat completion on Spark Open, its reply capped at ``max_tokens`` when given (full
     practice caps each role, the brief its folds), sampled under ``seed`` when given (the brief's
     retry). ``transport`` is for tests (``httpx.MockTransport``). When ``ANJO_SLEEP_SPARK`` selects
-    the other provider, a call for ``SPARK_OPEN`` goes to ``fireworks_api`` instead."""
+    the other provider, a call for ``SPARK_OPEN`` goes to ``fireworks_api`` instead; ``retries``
+    then replaces that provider's own policy on either path, so a caller whose one failure costs a
+    whole night (extraction) can send a lost reply again without changing everyone else's calls."""
     if model == SPARK_OPEN:
         from anjo.sleep import spark_provider  # imported here: spark_provider imports this module
 
         selected = spark_provider.current()
+        policy = selected.retries if retries is None else retries
         if selected.model != SPARK_OPEN:
             # A capped reply waits what its cap needs at a slow but healthy decode speed on the
             # serverless provider (a practice scene capped at thousands of tokens is not cut at 180 s).
@@ -54,7 +60,7 @@ def chat(
 
                 timeout_s = max(timeout_s, reply_timeout_s(max_tokens))
             return selected.chat(selected.model, messages, tools, timeout_s, temperature=temperature,
-                                 max_tokens=max_tokens, transport=transport, seed=seed, retries=selected.retries)
+                                 max_tokens=max_tokens, transport=transport, seed=seed, retries=policy)
     return post_chat(
         provider="Baseten",
         url=URL,
@@ -66,5 +72,6 @@ def chat(
         temperature=temperature,
         transport=transport,
         max_tokens=max_tokens,
+        retries=retries,
         extra=None if seed is None else {"seed": seed},
     )

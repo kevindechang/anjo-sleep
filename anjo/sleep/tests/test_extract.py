@@ -109,14 +109,19 @@ def test_the_extraction_call_is_spark_open_at_temperature_zero(monkeypatch: pyte
     seen: dict[str, Any] = {}
 
     def fake_chat(model: str, messages: list[dict[str, Any]], tools: Any, timeout_s: float, *,
-                  temperature: float | None = None) -> ChatResult:
-        seen.update(model=model, tools=tools, temperature=temperature)
+                  temperature: float | None = None, retries: Any = None) -> ChatResult:
+        seen.update(model=model, tools=tools, temperature=temperature, timeout_s=timeout_s, retries=retries)
         return ChatResult(text='{"items": []}', tool_calls=(), model=model, input_tokens=1,
                           output_tokens=1, finish_reason="stop")
 
     monkeypatch.setattr(baseten_api, "chat", fake_chat)
     extract_module.spark_open([{"role": "user", "content": "x"}])
-    assert seen == {"model": SPARK_OPEN, "tools": None, "temperature": 0.0}
+    retries = seen.pop("retries")
+    assert seen == {"model": SPARK_OPEN, "tools": None, "temperature": 0.0, "timeout_s": 300.0}
+    # One lost reply there fails the whole night (2026-10-30), so it is sent once more.
+    assert retries is extract_module.EXTRACT_RETRIES
+    assert extract_module.TIMEOUT_S == 300.0
+    assert (retries.connect_attempts, retries.reply_attempts) == (3, 2)
 
 
 def test_evidence_records_producing_model() -> None:

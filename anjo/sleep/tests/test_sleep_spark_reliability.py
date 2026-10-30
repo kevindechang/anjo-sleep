@@ -3,9 +3,10 @@
 """Sleep's Spark Open on Fireworks survives a dropped connection and a long practice reply.
 
 A connection that never opened was charged nothing, so the delegated Spark Open call sends it again
-a bounded number of times; a read timeout is never sent again, because the request was sent and may
-have been charged. A capped reply's wait is scaled to its cap, so a practice scene isn't cut at
-180 s. Fakes only: ``httpx.MockTransport`` and a fake ``post_chat``, no network."""
+a bounded number of times. A reply that never came whole is sent again only when the caller's policy
+asks for it (extraction and the morning judge do: one lost reply there costs a whole run), because a
+resend may have been charged twice. A capped reply's wait is scaled to its cap, so a practice scene
+isn't cut at 180 s. Fakes only: ``httpx.MockTransport`` and a fake ``post_chat``, no network."""
 from __future__ import annotations
 
 from typing import Any, Final
@@ -67,6 +68,20 @@ def test_a_connection_that_never_opens_is_sent_a_bounded_number_of_times() -> No
     assert len(seen) == 3 and slept == list(BACKOFF_S)  # no fourth try, no wait after the last
 
 
+def test_a_lost_reply_policy_never_lengthens_the_connections_tries() -> None:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    retries = Retries(connect_attempts=2, reply_attempts=2, sleep=slept.append)
+    with pytest.raises(ConnectFailed, match="ConnectError"):
+        _chat(httpx.MockTransport(handler), retries=retries)
+    assert len(seen) == 2 and slept == [BACKOFF_S[0]]
+
+
 def test_without_a_policy_a_dropped_connection_fails_at_once() -> None:
     seen: list[httpx.Request] = []
 
@@ -87,13 +102,89 @@ def test_a_read_timeout_is_never_sent_again_even_with_a_policy() -> None:
         seen.append(request)
         raise httpx.ReadTimeout("slow reply", request=request)
 
-    with pytest.raises(ModelApiError, match="timed out"):
+    with pytest.raises(ModelApiError, match="timed out after 180s"):
         _chat(httpx.MockTransport(handler), retries=Retries(connect_attempts=3, sleep=lambda _s: None))
     assert len(seen) == 1
 
 
+def test_a_policy_that_asks_for_it_sends_a_timed_out_reply_once_more() -> None:
+    """Extraction and the morning judge opt in: one lost reply there costs a whole run (2026-10-30)."""
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    counted: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.ReadTimeout("slow reply", request=request)
+        return httpx.Response(200, json=_ok(fireworks_api.SPARK_OPEN))
+
+    retries = Retries(reply_attempts=2, sleep=slept.append, counted=lambda: counted.append(1))
+    result = _chat(httpx.MockTransport(handler), retries=retries)
+
+    assert result.text == "ok" and len(seen) == 2
+    assert slept == [BACKOFF_S[0]] and counted == [1]  # one resend, counted, after the first backoff
+
+
+def test_two_lost_replies_raise_todays_transport_error_after_the_last_one() -> None:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    counted: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ReadError("connection reset", request=request)
+
+    retries = Retries(reply_attempts=2, sleep=slept.append, counted=lambda: counted.append(1))
+    with pytest.raises(ModelApiError, match=r"failed in transport \(ReadError\)"):
+        _chat(httpx.MockTransport(handler), retries=retries)
+
+    assert len(seen) == 2 and slept == [BACKOFF_S[0]] and counted == [1]
+
+
 def test_sleeps_delegated_policy_sends_a_dropped_connection_again() -> None:
     assert fireworks_api.SLEEP_RETRIES.connect_attempts == fireworks_api.CONNECT_RETRIES + 1 > 1
+
+
+def test_a_callers_policy_replaces_the_selected_providers_and_reaches_fireworks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``baseten_api.chat``'s own ``retries`` wins over the provider's default on the Fireworks path."""
+    from anjo.sleep import baseten_api
+
+    served: list[dict[str, Any]] = []
+
+    def fake_chat(model: str, *a: Any, **kw: Any) -> ChatResult:
+        served.append({"model": model, **kw})
+        return ChatResult("ok", (), model, 5, 1, "stop")
+
+    monkeypatch.setenv("ANJO_SLEEP_SPARK", "fireworks")
+    monkeypatch.setattr(fireworks_api, "chat", fake_chat)
+
+    baseten_api.chat(baseten_api.SPARK_OPEN, MESSAGES, None, 300.0)
+    mine = Retries(connect_attempts=3, reply_attempts=2)
+    baseten_api.chat(baseten_api.SPARK_OPEN, MESSAGES, None, 300.0, retries=mine)
+
+    assert served[0]["retries"] is fireworks_api.SLEEP_RETRIES  # unchanged without one
+    assert served[1]["retries"] is mine
+
+
+def test_a_callers_policy_reaches_the_baseten_path_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep import baseten_api
+
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.ReadTimeout("slow reply", request=request)
+        return httpx.Response(200, json=_ok(baseten_api.SPARK_OPEN))
+
+    monkeypatch.setenv("ANJO_SLEEP_SPARK", "baseten")
+    monkeypatch.setenv(baseten_api.KEY_ENV, "baseten-fake")
+    retries = Retries(reply_attempts=2, sleep=slept.append)
+    result = baseten_api.chat(baseten_api.SPARK_OPEN, MESSAGES, None, 300.0, transport=httpx.MockTransport(handler),
+                              retries=retries)
+    assert result.text == "ok" and len(seen) == 2 and slept == [BACKOFF_S[0]]
 
 
 def _recording_post(served: list[dict[str, Any]]):

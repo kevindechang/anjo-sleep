@@ -47,11 +47,16 @@ from anjo.sleep.evidence.targets import (
     Mention,
     target_id_for,
 )
-from anjo.sleep.model_api import ChatResult
+from anjo.sleep.model_api import ChatResult, Retries
 from anjo.sleep.types import Evidence, EvidenceKind, Target, TargetKind
 
 PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "extract_v1.md"
-TIMEOUT_S: Final = 120.0
+# 300 s, not 120: on 2026-10-30 a slow first reply on Fireworks timed out at 120 s on 2 of 6 first
+# nights, and that night then failed here, before anything was extracted.
+TIMEOUT_S: Final = 300.0
+# A lost reply is sent once more, though the resend may be charged twice: one failure here fails a
+# whole night. The night's hold already covers the day's two calls (``run.EXTRACT_MAX_CALLS``).
+EXTRACT_RETRIES: Final = Retries(connect_attempts=3, reply_attempts=2)
 _TARGET_KINDS = frozenset(get_args(TargetKind))
 
 
@@ -63,8 +68,9 @@ ChatFn = Callable[[list[dict[str, Any]]], ChatResult]
 
 def spark_open(messages: list[dict[str, Any]]) -> ChatResult:
     """The extraction call: Spark Open at temperature 0, no tools, through ``baseten_api.chat``'s
-    provider switch."""
-    return baseten_api.chat(SPARK_OPEN, messages, None, TIMEOUT_S, temperature=0.0)
+    provider switch. ``EXTRACT_RETRIES`` sends a reply that never came whole once more: one failure
+    here fails the whole night."""
+    return baseten_api.chat(SPARK_OPEN, messages, None, TIMEOUT_S, temperature=0.0, retries=EXTRACT_RETRIES)
 
 
 def _accepted_models(configured: str) -> frozenset[str]:
