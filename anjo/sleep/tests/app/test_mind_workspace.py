@@ -65,6 +65,28 @@ def test_workspace_is_encrypted_and_replays_to_its_digest() -> None:
     assert reread.digest() == reread.replay_digest() == _events()[-1].after
 
 
+def test_mind_notes_folds_only_through_the_night_being_scored() -> None:
+    """A backfill of an older night serves what MIND held then: the next night's wipe and its
+    findings are later information, and the live log would have folded to them."""
+    from anjo.sleep.app.morning import mind_notes
+    from anjo.sleep.app.storage import workspace_log
+    from anjo.sleep.tests.inquiry_fakes import Ws, ev, notice_op
+
+    user_id = "synthetic-film-student"
+    older, later = ev("e-27", "the older night's evidence", n=27), ev("e-28", "the later night's evidence", n=28)
+    log = Ws()
+    log.start(27, wipe=True)
+    log.arrive(older)
+    log.ok(notice_op([older.id], kind="gap", subject="the older night's question"))
+    log.start(28, wipe=True)
+    log.arrive(later)
+    log.ok(notice_op([later.id], kind="gap", subject="the later night's question"))
+    workspace_log(user_id).extend(log.events)
+
+    assert mind_notes(user_id, date(2026, 10, 28)) == ("- [q1] (noticed) the older night's question",)
+    assert mind_notes(user_id, date(2026, 10, 29)) == ("- [q2] (noticed) the later night's question",)
+
+
 def test_workspace_exported_and_erased(auth_client: Any) -> None:
     from anjo.core.erasure import factory_reset_user
     from anjo.core.export_manifest import check_inventory

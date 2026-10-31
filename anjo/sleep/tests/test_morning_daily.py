@@ -13,8 +13,17 @@ from typing import Any
 import pytest
 
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.probes.arms import ARMS, ArmDeps
-from anjo.sleep.probes.morning import DAILY, Morning, MorningError, PAIRS, ProbeSubset, run_morning, subset_probes
+from anjo.sleep.probes.arms import ArmDeps
+from anjo.sleep.probes.morning import (
+    COMMITTED_ARMS,
+    DAILY,
+    PAIRS,
+    Morning,
+    MorningError,
+    ProbeSubset,
+    run_morning,
+    subset_probes,
+)
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, FakeRegistry, StoreSpy, ckpt, probe, taste
 from anjo.sleep.types import ProbeKind
@@ -24,6 +33,8 @@ PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5,
 COUNTS: dict[ProbeKind, int] = {"new_work": 25, "vocab": 15, "tone_hold": 15, "taste_ab": 15, "pushback": 10}  # a life's registered probes
 FULL_KEYS = {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable", "outcomes",
              "seconds", "judge_model", "judge"}
+# The pairs a full run without ANJO_SLEEP_ARMS_EXTRA can answer: the new arms aren't asked.
+COMMITTED_PAIRS = {name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS}
 
 
 def sealed() -> list[Any]:
@@ -85,8 +96,8 @@ def test_daily_morning_subset_is_fixed_and_full_run_unchanged(tmp_path: Path) ->
     # The full run is the run as it was: every arm, every probe, the same file.
     morning, model = _morning(tmp_path / "full", probes, Judge())
     full = json.loads(run_morning("p1", NIGHT, ckpt("p1", 1), morning=morning, label="final").path.read_text(encoding="utf-8"))
-    assert set(full) == FULL_KEYS and full["probes"] == 80 and set(full["arms"]) == set(ARMS)
-    assert set(full["pairs"]) == set(PAIRS)
+    assert set(full) == FULL_KEYS and full["probes"] == 80 and set(full["arms"]) == set(COMMITTED_ARMS)
+    assert set(full["pairs"]) == COMMITTED_PAIRS
     assert {p.prompt for p in probes if p.kind != "taste_ab"} <= _asked(model)
 
     final, _ = _morning(tmp_path / "final", probes, Judge())

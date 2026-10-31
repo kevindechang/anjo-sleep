@@ -59,6 +59,7 @@ import argparse
 import importlib
 import json
 import math
+import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -88,6 +89,7 @@ from anjo.sleep.probes.morning import (
     TooManyNoVerdicts,
     _next_file,  # the morning's own rules: the next score file, refusing a night already scored
     _worst_judge_calls,  # and the judge calls its hold counts
+    full_arms,
     run_morning,
     subset_probes,
 )
@@ -245,7 +247,7 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
         raise Refused(f"{target} already exists: a rescore writes the results tree's name once, into its own folder")
     probes = list(morning.sealed(user))
     probes = probes if asked is None else subset_probes(probes, asked)
-    arms = ARM_ORDER if asked is None else tuple(a for a in ARM_ORDER if a in asked.arms)
+    arms = full_arms(os.environ) if asked is None else tuple(a for a in ARM_ORDER if a in asked.arms)
     judge_calls = _worst_judge_calls(probes, arms)
     replies = len(probes) * len(arms)
     units, daily_replies = Units(), sum(DAILY.per_kind.values()) * len(DAILY.arms)

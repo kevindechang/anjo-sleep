@@ -5,9 +5,9 @@ that is serving after the night.
 each arm against arm 1 in both orders (``score.score``; ``taste_ab`` by log-probability, no judge),
 and writes ``scores/night-NN.json`` in the layout ``reports.results`` reads: per arm and dimension,
 the tie-inclusive score against arm 1 (arm 1 is 0.5 against itself by definition), plus the headline
-pairs (3 against 3x, 4 against 2C, 4 against 2F). The file holds numbers, the night, the label, the judge
-(``muse`` or ``deepseek``) and the checkpoint id, never a reply or a probe, and nothing is written to history,
-evidence or memory (RF5).
+pairs (3 against 3x, 4 against 2C, 4 against 2F, 4M against 2A and 4). The file holds numbers, the night,
+the label, the judge (``muse`` or ``deepseek``) and the checkpoint id, never a reply or a probe, and nothing is
+written to history, evidence or memory (RF5).
 
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
   before any call, and the score file records ``wake_seconds``.
@@ -33,7 +33,9 @@ evidence or memory (RF5).
   fewer arms, and a fixed number of each kind of probe, picked by id alone (``subset_probes``), so
   every daily morning asks the same probes whatever came back before. Its file says ``subset`` and
   leaves out the comparisons whose arms didn't answer; the holds scale to what it asks. A final run
-  never takes a subset (refused before any call), and a run without one is the full run, unchanged.
+  never takes a subset (refused before any call), and a run without one is the full run: the six
+  arms a full run asked before 2A and 4M existed, and those two only with
+  ``ANJO_SLEEP_ARMS_EXTRA=1`` (``full_arms``), so an earlier full score is the same run.
 - A judge answer that can't be read is asked once more with more room (``MuseJudge.again``), at most
   ``JUDGE_RETRY_SHARE`` of the run's judge calls, which the judge's hold covers. A probe still without a
   verdict is ``no verdict``: left out of its comparison's score, given an outcome row ``no_verdict``,
@@ -90,9 +92,21 @@ from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady, WakeResult
 from anjo.sleep.types import CheckpointRef, Probe
 
-ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2F", "3", "3x", "4")
+ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2A", "2F", "3", "3x", "4", "4M")
+# The arms a full morning asked before 2A (the agent's notes) and 4M (MIND) existed: the committed
+# comparison's six. A full run asks them alone unless ANJO_SLEEP_ARMS_EXTRA=1, so a score file from
+# before the new arms is the same run, and daily-v1's subset stays comparable.
+EXTRA_ARMS: Final[tuple[Arm, ...]] = ("2A", "4M")
+ARMS_EXTRA_ENV: Final = "ANJO_SLEEP_ARMS_EXTRA"
+COMMITTED_ARMS: Final[tuple[Arm, ...]] = tuple(a for a in ARM_ORDER if a not in EXTRA_ARMS)
 BASELINE: Final[Arm] = "1"
-PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C"), "4_vs_2F": ("4", "2F")}
+PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {
+    "3_vs_3x": ("3", "3x"),
+    "4_vs_2C": ("4", "2C"),
+    "4_vs_2F": ("4", "2F"),
+    "4M_vs_2A": ("4M", "2A"),
+    "4M_vs_4": ("4M", "4"),
+}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 # The judge's hold a call, and what a call that reported no usage (or failed) settles at, marked estimated.
 JUDGE_USD_PER_CALL: Final = 0.02
@@ -141,7 +155,7 @@ class ProbeSubset:
 
     def __post_init__(self) -> None:
         if BASELINE not in self.arms or len(self.arms) < 2 or not set(self.arms) <= set(ARM_ORDER):
-            raise ValueError("a subset keeps arm 1 and at least one more of the six arms")
+            raise ValueError("a subset keeps arm 1 and at least one more of the arms")
         if any(n < 0 for n in self.per_kind.values()):
             raise ValueError("a subset asks no negative count of a kind")
 
@@ -167,6 +181,13 @@ def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
     if name and name not in SUBSETS:
         raise ValueError(f"{MORNING_SUBSET_ENV} is unset (the full morning) or {', '.join(SUBSETS)}, got {name!r}")
     return SUBSETS[name] if name else None
+
+
+def full_arms(environ: Mapping[str, str]) -> tuple[Arm, ...]:
+    """The arms a full morning asks: the committed six, and 2A and 4M only when
+    ``ANJO_SLEEP_ARMS_EXTRA=1``, so the default full run is the one scored before them and a
+    subset names any of the newer arms explicitly."""
+    return ARM_ORDER if environ.get(ARMS_EXTRA_ENV, "").strip() == "1" else COMMITTED_ARMS
 
 
 def _rank(subset: ProbeSubset, probe: Probe) -> str:
@@ -380,7 +401,7 @@ def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome | Non
 
 
 def _answer(
-    user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls, arms: Sequence[Arm] = ARM_ORDER,
+    user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls, arms: Sequence[Arm] = COMMITTED_ARMS,
 ) -> tuple[dict[Arm, list[ArmReply]], dict[str, str]]:
     """Every arm's questions prepared here, in arm and probe order, then asked side by side."""
     questions: dict[Arm, list[Question]] = {}
@@ -422,7 +443,7 @@ def _judged(
     return [(name, a, b, found[n * size:(n + 1) * size]) for n, (name, a, b) in enumerate(comparisons)]
 
 
-def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER) -> int:
+def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = COMMITTED_ARMS) -> int:
     judged = sum(1 for p in probes if p.kind != "taste_ab")
     pairs = sum(1 for a, b in PAIRS.values() if a in arms and b in arms)
     return (len(arms) - 1 + pairs) * judged * 2
@@ -469,7 +490,7 @@ def _run_morning(
     probes = list(morning.sealed(user_id))
     if subset is not None:
         probes = subset_probes(probes, subset)
-    arms = ARM_ORDER if subset is None else tuple(a for a in ARM_ORDER if a in subset.arms)
+    arms = full_arms(os.environ) if subset is None else tuple(a for a in ARM_ORDER if a in subset.arms)
     if not probes:
         raise MorningError(f"{user_id} has no sealed probes")
     if any(p.person_id != user_id for p in probes):

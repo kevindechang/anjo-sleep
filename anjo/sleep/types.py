@@ -21,7 +21,8 @@ from types import MappingProxyType
 from typing import Literal
 
 EvidenceKind = Literal[
-    "lesson", "correction", "preference", "tone_request", "homework", "practice", "agent_note",
+    "lesson", "correction", "preference", "tone_request", "homework", "practice",
+    "agent_note",  # the scheduled agent's notes, served to arm 2A alone (``probes.arms``)
 ]
 ProbeKind = Literal["tone_hold", "taste_ab", "vocab", "pushback", "new_work"]
 GateName = Literal["general", "collapse", "safety"]
