@@ -121,6 +121,22 @@ def test_export_includes_evidence(auth_client: Any) -> None:
     assert ("sleep/**",) in excluded
 
 
+def test_the_strategy_list_exports_only_when_it_exists(auth_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.app.export import export_sleep
+    from anjo.sleep.app.storage import strategy_store
+    from anjo.sleep.harness.store import StrategyEdit
+
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    user_id = _uid()
+    _seed(user_id)
+    assert "strategies" not in export_sleep(user_id)  # switch off, no list ever promoted: today's section
+
+    strategy_store(user_id).promote(DAY, StrategyEdit("add", line="Ask for the outline before a draft."),
+                                    wins=5, ties=0, losses=0, ancestry=None, at=NOW)
+    exported = export_sleep(user_id)
+    assert exported["strategies"][0]["edit"]["line"] == "Ask for the outline before a draft."
+
+
 def test_targets_exported_and_erased(auth_client: Any) -> None:
     from anjo.core.erasure import factory_reset_user
     from anjo.sleep.app.storage import target_store

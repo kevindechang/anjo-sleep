@@ -120,23 +120,43 @@ def _seed(base: int, *parts: object) -> int:
     return int(hashlib.sha256(":".join(map(str, (base, *parts))).encode()).hexdigest()[:8], 16)
 
 
+def _her_reply(transcript: PracticeTranscript) -> str:
+    """The reply of hers a teacher-target scene kept as the critic's rejected one; her own reply
+    otherwise. A teacher-target scene whose rejected reply is the teacher's shows nothing of hers."""
+    if transcript.target == "teacher":
+        assert transcript.rejected is not None and transcript.rejected_from == "glimmer"
+        return transcript.rejected
+    return transcript.reply
+
+
 def _why(transcript: PracticeTranscript) -> str:
     """Why this scene's reply lost or was flagged, from the transcript's own record. Practice keeps
     no free-text critic reason, so the loop names the record that lost."""
+    if transcript.target == "teacher":
+        return "the critic kept the teacher's reply over hers"
     if transcript.flagged:
         return "the critic listed her reply as missing a constraint"
     return "the critic scored the teacher's reply higher"
 
 
 def _lost(transcripts: Sequence[PracticeTranscript]) -> list[PracticeTranscript]:
-    """Tonight's replies that lost to the teacher or that the critic flagged, in scene order."""
-    return [transcript for transcript in transcripts if transcript.target == "teacher" or transcript.flagged]
+    """Tonight's replies of hers that lost or that the critic flagged, in scene order. A scene the
+    teacher won carries her reply only as the critic's rejected candidate, and only when it is hers."""
+    found: list[PracticeTranscript] = []
+    for transcript in transcripts:
+        if transcript.target == "teacher":
+            if transcript.rejected is not None and transcript.rejected_from == "glimmer":
+                found.append(transcript)
+        elif transcript.flagged:
+            found.append(transcript)
+    return found
 
 
 def _scene_text(scenes: Sequence[PracticeTranscript]) -> str:
     return "\n\n".join(
         f"Scene {scene.scene + 1}:\nThey asked: {scene.message}\n"
-        f"Her reply: {scene.reply}\nWhy it lost: {_why(scene)}"
+        f"{'Her reply (the critic rejected it)' if scene.target == 'teacher' else 'Her reply'}: "
+        f"{_her_reply(scene)}\nWhy it lost: {_why(scene)}"
         for scene in scenes
     )
 
@@ -194,17 +214,19 @@ def _proposal(text: str, lines: Sequence[str]) -> tuple[StrategyEdit | None, str
             edit = StrategyEdit(action, line=line, target=target)
         except ValueError as error:
             return None, str(error)
-        if action == "replace" and edit.line in lines and edit.line != target:
+        if action == "replace" and edit.line == target:
+            return None, "the replacement is the line itself"
+        if action == "replace" and edit.line in lines:
             return None, "the line is already in the list"
         return edit, None
     return None, "the proposal was not an add, replace or remove"
 
 
 def _guard(edit: StrategyEdit) -> str | None:
-    """The code's own veto: safety, crisis, age, privacy and disclosure are never strategies."""
-    for text in (edit.line, edit.target):
-        if text is not None and (found := SAFETY_TERMS.search(text)):
-            return f"{found.group(0)!r} is outside the strategy list"
+    """The code's own veto: safety, crisis, age, privacy and disclosure are never strategies. Only
+    the new text is scanned, so a line that already names one can still be removed or replaced."""
+    if edit.line is not None and (found := SAFETY_TERMS.search(edit.line)):
+        return f"{found.group(0)!r} is outside the strategy list"
     return None
 
 
@@ -319,9 +341,19 @@ def _receipt(
 
 
 def run_harness(call: HarnessCall) -> dict[str, Any]:
-    """One night's propose, vet, probe and promotion; a receipt even when it changes nothing."""
-    current = call.store.lines()
-    versions = call.store.versions()
+    """One night's propose, vet, probe and promotion; a receipt even when it changes nothing. The
+    list and its versions are read through ``call.night``, so a rerun or a backfill sees the list as
+    that night left it, never a later night's; one edit a night is the budget."""
+    all_versions = call.store.versions()
+    current = call.store.lines(until=call.night)
+    if any(version.night == call.night for version in all_versions):
+        return _receipt(current=current, proposed=None, vetted=None, vetoed=None,
+                        why="the list was already edited tonight")
+    newest = max((version.night for version in all_versions), default=None)
+    if newest is not None and call.night < newest:
+        return _receipt(current=current, proposed=None, vetted=None, vetoed=None,
+                        why=f"a later night ({newest.isoformat()}) already edited the list")
+    versions = tuple(version for version in all_versions if version.night <= call.night)
     if call.cancelled():
         return _receipt(current=current, proposed=None, vetted=None, vetoed=None, why="the night was cancelled")
     lost = _lost(call.transcripts)
@@ -355,15 +387,15 @@ def run_harness(call: HarnessCall) -> dict[str, Any]:
         return _receipt(current=current, proposed=proposed, vetted=True, vetoed=None, why=str(error),
                         calls=counted.calls)
     wins, ties, losses, compared = _probe(call, counted, current, edited)
-    promote = compared > 0 and wins >= HARNESS_MIN_WINS and wins - losses >= HARNESS_MIN_MARGIN
+    promote = compared == HARNESS_SCENES and wins >= HARNESS_MIN_WINS and wins - losses >= HARNESS_MIN_MARGIN
     learned: str | None = None
     if promote and not call.cancelled():
         line = call.store.promote(
             call.night, edit, wins=wins, ties=ties, losses=losses,
             ancestry=_ancestry(call, versions), at=call.at,
         )
-        current = call.store.lines()
-        learned = edit.line if edit.line is not None else edit.target
+        current = call.store.lines(until=call.night)
+        learned = edit.line if edit.line is not None else f"removed: {edit.target}"
         logger.info("harness: strategy v%d promoted for %s (%d-%d-%d)", line.version, call.user_id,
                     wins, ties, losses)
     elif promote:

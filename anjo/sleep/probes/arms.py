@@ -30,6 +30,7 @@ question on one thread and ask them side by side.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -58,6 +59,7 @@ AGENT_NOTE_PREFIX: Final = "agent-"
 MIND_HOMEWORK_PREFIX: Final = "mind-"  # MIND's homework artifacts: one of 4M's differences from 4
 AGENT_NOTES_HEADING: Final = "## The night's agent notes"
 MIND_NOTES_HEADING: Final = "## What MIND found"
+logger = logging.getLogger(__name__)
 
 
 class DonorError(RuntimeError):
@@ -107,8 +109,9 @@ class ArmDeps:
     window_tokens: int = GLIMMER_WINDOW_TOKENS
     temperature: float = REPLY_TEMPERATURE
     run_seed: int = 0
-    # The person's current strategy list (``harness.store``); empty off, and then 2H is 2C exactly.
-    strategies: Callable[[str], Sequence[str]] = lambda user_id: ()
+    # The person's strategy list as of a night (``harness.store``); empty off, and then 2H is 2C
+    # exactly.
+    strategies: Callable[[str, date | None], Sequence[str]] = lambda user_id, until: ()
     context_cache: dict[tuple[str, str], str] = field(default_factory=dict, compare=False, repr=False)
     mind_notes: Callable[[str, date], Sequence[str]] | None = None
     mind_cache: dict[str, tuple[str, ...]] = field(default_factory=dict, compare=False, repr=False)
@@ -216,6 +219,17 @@ def _with_mind_notes(context: str, user_id: str, deps: ArmDeps) -> str:
     return _notes_section(context, MIND_NOTES_HEADING, lines)
 
 
+def _strategy_lines(user_id: str, deps: ArmDeps) -> tuple[str, ...]:
+    """The person's list as of ``deps.until``, read tolerantly: a corrupt or unreadable log gives
+    the empty list and is logged, so the reported-only arm asks exactly what 2C asks, never failing
+    the morning that carries every other arm."""
+    try:
+        return tuple(deps.strategies(user_id, deps.until))
+    except (OSError, ValueError) as error:
+        logger.warning("2H: the strategy list can't be read (%s); it asks as 2C", type(error).__name__)
+        return ()
+
+
 def _question_text(probe: Probe) -> str:
     if probe.options is None:
         return probe.prompt
@@ -253,7 +267,7 @@ def prepare(
         elif arm == "4M":
             context = _with_mind_notes(context, user_id, deps)
         elif arm == HARNESS_ARM:
-            context = strategy_block(context, deps.strategies(user_id))
+            context = strategy_block(context, _strategy_lines(user_id, deps))
     return Question(arm, probe, adapter, context, dropped)
 
 

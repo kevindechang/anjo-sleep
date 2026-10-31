@@ -180,8 +180,12 @@ STUDY_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, LookupError)
 # degrades to today's practice and the night trains; a cancel or a budget stop still reaches it.
 LOOP_FAILURES: Final = (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError)
 # What ends the harness step, not the night: the proposal, the vet or a probe call failed, or its
-# log couldn't be read. The night keeps the list it had and goes on to train.
-HARNESS_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, KeyError, TypeError, OSError, RuntimeError)
+# log couldn't be read or its code broke. The night keeps the list it had and goes on to train; a
+# cancel still stops it (``Cancelled`` is caught before this, never read as a harness failure).
+HARNESS_FAILURES: Final = (
+    ModelApiError, BudgetStop, ValueError, KeyError, TypeError, OSError, RuntimeError,
+    AttributeError, ImportError, LookupError, AssertionError,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -870,28 +874,38 @@ class NightRunner(CoreSteps):
         started = self._timer(), self.deps.retries()
         p.spend.part = "practice"
         store = None
+        calls = 0
+        metered = p.spend.wrap_chat(self.deps.spark_chat)
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            return metered(*args, **kwargs)
+
         try:
             store = strategies(p.uid)
             call = HarnessCall(
                 user_id=p.uid, night=p.night, seed=self.deps.settings.seed, at=p.stamp, store=store,
                 transcripts=self.deps.transcripts(p.uid).for_night(p.night), glimmer=glimmer,
-                chat=p.spend.wrap_chat(self.deps.spark_chat),
-                adapter=self.deps.registry.last_promoted(p.uid), cancelled=lambda: self.deps.cancel(p.uid),
+                chat=counted, adapter=self.deps.registry.last_promoted(p.uid),
+                cancelled=lambda: self.deps.cancel(p.uid),
             )
             with self._metered(p, "practice", "harness", HARNESS_MAX_CALLS):
                 done = run_harness(call)
+        except Cancelled:  # a cancelled night stops; only a harness failure is swallowed
+            raise
         except HARNESS_FAILURES as error:  # the harness failed, not the night: the list stays
             logger.warning("harness: the loop didn't finish (%s); the list stays", type(error).__name__)
             size = 0
             if store is not None:
                 try:
-                    size = len(store.lines())
+                    size = len(store.lines(until=p.night))
                 except HARNESS_FAILURES:
                     pass  # the log can't be read either: the receipt still says no edit
             served = self._serving(p, "practice", started)
             return {
                 "error": safe_error(error), "why": "the harness failed; the list stays",
-                "promoted": False, "list_size": size, "calls": 0,
+                "promoted": False, "list_size": size, "calls": calls,
                 "usd": round(p.spend.parts().get("practice", 0.0) - before, 6), **served,
             }
         served = self._serving(p, "practice", started)

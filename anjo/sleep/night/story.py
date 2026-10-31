@@ -415,7 +415,10 @@ def _record(cls: type, raw: Any, where: str) -> Any:
     names, at = [f.name for f in fields(cls)], where or "story"
     if not isinstance(raw, dict):
         raise StoryError(f"{at}: not a record")
-    optional = {f.name for f in fields(cls) if f.default is not MISSING or f.default_factory is not MISSING}
+    # Only the harness's one new field is optional: a story from before it has no ``learned`` key,
+    # and every other defaulted field is still required like the rest of its record.
+    optional = {f.name for f in fields(cls) if f.name == "learned"
+                and (f.default is not MISSING or f.default_factory is not MISSING)}
     if missing := [name for name in names if name not in raw and name not in optional]:
         raise StoryError(f"{at}: no {', '.join(missing)}")
     if extra := sorted(set(raw) - set(names)):

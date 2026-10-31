@@ -197,11 +197,11 @@ def strategy_block(context: str | None, lines: Sequence[str]) -> str | None:
 class StrategyStore(Protocol):
     """One person's strategy list and its versions."""
 
-    def lines(self) -> tuple[str, ...]:
-        """The current list, in order."""
+    def lines(self, until: date | None = None) -> tuple[str, ...]:
+        """The list as it stood after ``until`` (every version when None), in order."""
 
-    def versions(self) -> tuple[StrategyVersion, ...]:
-        """Every promotion, oldest first."""
+    def versions(self, until: date | None = None) -> tuple[StrategyVersion, ...]:
+        """Every promotion through ``until`` (all of them when None), oldest first."""
 
     def promote(
         self, night: date, edit: StrategyEdit, *, wins: int, ties: int, losses: int,
@@ -219,11 +219,12 @@ class JsonlStrategyStore:
         self._codec = codec
         self._guard = guard
 
-    def versions(self) -> tuple[StrategyVersion, ...]:
-        return tuple(version_from_record(record) for record in read_records(self.path, self._codec))
+    def versions(self, until: date | None = None) -> tuple[StrategyVersion, ...]:
+        read = tuple(version_from_record(record) for record in read_records(self.path, self._codec))
+        return read if until is None else tuple(version for version in read if version.night <= until)
 
-    def lines(self) -> tuple[str, ...]:
-        return folded(self.versions())
+    def lines(self, until: date | None = None) -> tuple[str, ...]:
+        return folded(self.versions(until))
 
     def promote(
         self, night: date, edit: StrategyEdit, *, wins: int, ties: int, losses: int,

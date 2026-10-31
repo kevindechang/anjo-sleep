@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,14 +32,17 @@ from anjo.sleep.harness.store import (
     StrategyError,
     strategy_block,
 )
+from anjo.sleep.night import story as story_module
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.run import run_night_batch_with
-from anjo.sleep.night.story import story_from
+from anjo.sleep.night.story import StoryError, story_from
 from anjo.sleep.practice.transcripts import PracticeTranscript
 from anjo.sleep.probes.arms import ArmDeps, reply
 from anjo.sleep.probes.morning import COMMITTED_ARMS, HARNESS_PAIR, PAIRS, Morning, run_morning
+from anjo.sleep.probes.score import JudgeError
 from anjo.sleep.reports import results
+from anjo.sleep.stops import Cancelled
 from anjo.sleep.tests.night_fakes import NIGHT, SparkChat, Trainer, World, step, steps
 from anjo.sleep.tests.sleep_fakes import (
     FakeContexts,
@@ -64,22 +67,28 @@ def result(text: str) -> ChatResult:
                       finish_reason="stop")
 
 
-def _store(tmp_path: Path, lines: tuple[str, ...] = ()) -> JsonlStrategyStore:
+def _store(tmp_path: Path, lines: tuple[str, ...] = (), *, night: date = NIGHT - timedelta(days=1)) -> JsonlStrategyStore:
+    """A store whose existing lines were promoted on an earlier night, so tonight may edit once."""
     store = JsonlStrategyStore(tmp_path / "strategies.jsonl", "p1", codec=PLAIN, guard=NO_GUARD)
     for line in lines:
-        store.promote(NIGHT, StrategyEdit("add", line=line), wins=5, ties=1, losses=2,
+        store.promote(night, StrategyEdit("add", line=line), wins=5, ties=1, losses=2,
                       ancestry=frozenset({SPARK_OPEN}), at=AT)
     return store
 
 
 def transcripts(count: int = 8, *, lost: bool = True) -> tuple[PracticeTranscript, ...]:
-    """The night's practice: short scenes, each one a reply that lost to the teacher unless told not."""
+    """The night's practice: short scenes, each one a reply that lost to the teacher unless told not.
+    A teacher-target scene carries her losing reply as the critic's rejected candidate, as practice
+    records it; the teacher's winning reply is never hers."""
     return tuple(
         PracticeTranscript(
             id=f"pr-{n}", person_id="p1", night=NIGHT, scene=n, message=f"Message {n}: a new brief.",
-            reply=f"Reply {n}.", context=f"C for {n}.", f_ids=("e1",),
+            reply=f"Teacher reply {n}." if lost else f"Reply {n}.",
+            context=f"C for {n}.", f_ids=("e1",),
             ancestry=frozenset({SPARK_OPEN}), created_at=AT + timedelta(seconds=n),
             target="teacher" if lost else "glimmer",
+            rejected=f"Reply {n}." if lost else None,
+            rejected_from="glimmer" if lost else None,
         )
         for n in range(count)
     )
@@ -167,6 +176,17 @@ def test_a_strategy_line_is_at_most_forty_words(tmp_path: Path) -> None:
     assert store.lines() == ()
 
 
+def test_the_list_and_its_versions_fold_only_through_the_night_asked(tmp_path: Path) -> None:
+    store = _store(tmp_path, (LINE,), night=NIGHT)
+    later = NIGHT + timedelta(days=1)
+    store.promote(later, StrategyEdit("add", line="A later way."), wins=5, ties=0, losses=0,
+                  ancestry=None, at=AT)
+    assert store.lines(until=NIGHT) == (LINE,)
+    assert store.lines(until=later) == (LINE, "A later way.")
+    assert store.lines() == (LINE, "A later way.")  # a caller that names no night reads the present
+    assert [version.night for version in store.versions(until=NIGHT)] == [NIGHT]
+
+
 def test_an_add_on_a_full_list_is_refused_and_a_replace_prunes_it(tmp_path: Path) -> None:
     lines = tuple(f"Line {n}." for n in range(STRATEGY_MAX))
     store = _store(tmp_path, lines)
@@ -202,6 +222,27 @@ def test_the_promotion_bar_edges(tmp_path: Path, outcomes: tuple[str, ...], prom
     assert HARNESS_MIN_WINS == 5 and HARNESS_MIN_MARGIN == 3
 
 
+def test_a_reduced_probe_set_never_promotes_even_at_five_wins(tmp_path: Path) -> None:
+    chat = Chat('{"action": "add", "line": "' + LINE + '"}',
+                outcomes=("edited",) * 5 + ("tie",))
+    done, store, _ = harness(tmp_path, chat, count=6)
+    assert done["compared"] == 6 and done["wins"] == 5 and done["promoted"] is False
+    assert store.lines() == () and "learned" not in done
+
+
+def test_a_line_naming_safety_can_be_removed_or_replaced(tmp_path: Path) -> None:
+    safe = "Keep the safe word."
+    remove = Chat('{"action": "remove", "target": "' + safe + '"}', outcomes=("edited",) * 8)
+    done, store, _ = harness(tmp_path / "remove", remove, lines=(safe,))
+    assert done["vetted"] is True and done["promoted"] is True and store.lines() == ()
+    assert done["learned"] == f"removed: {safe}"
+
+    replace_chat = Chat('{"action": "replace", "target": "' + safe + '", "line": "' + LINE + '"}',
+                        outcomes=("edited",) * 8)
+    done, store, _ = harness(tmp_path / "replace", replace_chat, lines=(safe,))
+    assert done["promoted"] is True and store.lines() == (LINE,)
+
+
 def test_the_loop_never_proposes_without_a_lost_or_flagged_reply(tmp_path: Path) -> None:
     chat = Chat('{"action": "add", "line": "Ask for the outline."}')
     done, store, glimmer = harness(tmp_path, chat, lost=False)
@@ -221,6 +262,14 @@ def test_a_proposal_that_is_not_one_valid_edit_is_no_edit(tmp_path: Path, propos
     done, store, glimmer = harness(tmp_path, chat)
     assert done["proposed"] is None and done["promoted"] is False
     assert done["calls"] == 1 and chat.vet_calls == 0 and glimmer.calls == [] and store.lines() == ()
+
+
+def test_a_replace_with_the_same_line_is_no_edit(tmp_path: Path) -> None:
+    chat = Chat('{"action": "replace", "target": "Line 0.", "line": "Line 0."}')
+    done, store, glimmer = harness(tmp_path, chat, lines=("Line 0.",))
+    assert done["proposed"] is None and "itself" in done["why"]
+    assert done["calls"] == 1 and chat.vet_calls == 0 and glimmer.calls == []
+    assert store.lines() == ("Line 0.",)
 
 
 def test_the_keyword_guard_refuses_safety_before_the_critic(tmp_path: Path) -> None:
@@ -262,22 +311,82 @@ def test_a_failing_spark_call_is_an_error_not_an_edit(tmp_path: Path) -> None:
     assert len(chat.prompts) == 1 and chat.vet_calls == 0 and chat.compares == 0
 
 
+def test_one_edit_a_night_holds_on_a_rerun_and_a_backfill(tmp_path: Path) -> None:
+    done, store, _ = harness(tmp_path, Chat('{"action": "add", "line": "' + LINE + '"}',
+                                            outcomes=("edited",) * 8))
+    assert done["promoted"] is True and store.lines() == (LINE,)
+
+    again = Chat('{"action": "add", "line": "Another way."}', outcomes=("edited",) * 8)
+    same = run_harness(HarnessCall(
+        user_id="p1", night=NIGHT, seed=7, at=AT, store=store, transcripts=transcripts(),
+        glimmer=Glimmer(), chat=again, adapter=None))
+    assert same["promoted"] is False and same["why"] == "the list was already edited tonight"
+    assert again.prompts == [] and store.lines() == (LINE,)
+
+    older = Chat('{"action": "add", "line": "Another way."}', outcomes=("edited",) * 8)
+    backfill = run_harness(HarnessCall(
+        user_id="p1", night=NIGHT - timedelta(days=1), seed=7, at=AT, store=store,
+        transcripts=transcripts(), glimmer=Glimmer(), chat=older, adapter=None))
+    assert backfill["promoted"] is False and "later night" in backfill["why"]
+    assert backfill["list_size"] == 0 and older.prompts == [] and store.lines() == (LINE,)
+
+
+def test_the_proposer_sees_her_rejected_reply_never_the_teachers_winning_one(tmp_path: Path) -> None:
+    losing = transcripts(1)[0]  # the teacher won; practice kept her reply as the critic's rejected one
+    teacher_won = replace(losing, scene=1, reply="TEACHER WIN", rejected="A teacher reply.",
+                          rejected_from="teacher")
+    chat = Chat("not json")
+    done = run_harness(HarnessCall(
+        user_id="p1", night=NIGHT, seed=7, at=AT, store=_store(tmp_path), transcripts=(losing, teacher_won),
+        glimmer=Glimmer(), chat=chat, adapter=None))
+    assert done["proposed"] is None
+    assert "Her reply (the critic rejected it): Reply 0." in chat.prompts[0]
+    assert "TEACHER WIN" not in chat.prompts[0]
+
+    only_teacher = Chat("not json")
+    skipped = run_harness(HarnessCall(
+        user_id="p1", night=NIGHT, seed=7, at=AT, store=_store(tmp_path / "skip"), transcripts=(teacher_won,),
+        glimmer=Glimmer(), chat=only_teacher, adapter=None))
+    assert skipped["why"] == "no reply lost or was flagged tonight" and only_teacher.prompts == []
+
+
 def test_2h_is_2c_plus_the_marked_block_and_empty_is_2c_exactly() -> None:
     model = FakeModel()
     d = ArmDeps(model=model, adapters=FakeRegistry({"p1": ckpt("p1")}), contexts=FakeContexts(),
                 evidence=lambda uid: StoreSpy([]), logprobs=FakeLogprobs(lambda adapter, messages: "A"),
-                donors={}, until=NIGHT, strategies=lambda uid: (LINE,))
+                donors={}, until=NIGHT, strategies=lambda uid, until: (LINE,))
     reply("2C", "p1", probe(), deps=d)
     reply("2H", "p1", probe(), deps=d)
     two_c, two_h = model.calls[0]["messages"], model.calls[1]["messages"]
     assert two_h[0]["content"] == two_c[0]["content"] + "\n\nHow you work best with them:\n- " + LINE
     assert two_h[1]["content"] == two_c[1]["content"] and model.calls[1]["adapter"] is None
 
-    empty = replace(d, strategies=lambda uid: (), context_cache={})
+    empty = replace(d, strategies=lambda uid, until: (), context_cache={})
     model.calls.clear()
     reply("2C", "p1", probe(), deps=empty)
     reply("2H", "p1", probe(), deps=empty)
     assert model.calls[0]["messages"] == model.calls[1]["messages"]
+
+
+def test_2h_reads_the_list_through_the_night_it_is_scored_on(tmp_path: Path) -> None:
+    store = _store(tmp_path, (LINE,), night=NIGHT)
+    later = NIGHT + timedelta(days=1)
+    store.promote(later, StrategyEdit("add", line="A later way."), wins=5, ties=0, losses=0,
+                  ancestry=None, at=AT)
+    model = FakeModel()
+    deps = ArmDeps(model=model, adapters=FakeRegistry({"p1": ckpt("p1")}), contexts=FakeContexts(),
+                   evidence=lambda uid: StoreSpy([]), logprobs=FakeLogprobs(lambda adapter, messages: "A"),
+                   donors={}, until=NIGHT, strategies=lambda uid, until: store.lines(until=until))
+    reply("2C", "p1", probe(), deps=deps)
+    reply("2H", "p1", probe(), deps=deps)
+    assert model.calls[1]["messages"][0]["content"] == model.calls[0]["messages"][0]["content"] + (
+        "\n\nHow you work best with them:\n- " + LINE)
+
+    newer = replace(deps, until=later, context_cache={})
+    model.calls.clear()
+    reply("2C", "p1", probe(), deps=newer)
+    reply("2H", "p1", probe(), deps=newer)
+    assert "A later way." in model.calls[1]["messages"][0]["content"]
 
 
 def test_the_strategy_block_is_empty_text_for_an_empty_list() -> None:
@@ -300,19 +409,73 @@ class Judge:
         return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
 
 
+class RoomyFailingJudge(Judge):
+    """The judge fails on the first ``failures`` verdicts of one scene's personal arms, then its
+    retry can answer; the next failure has no retry, so the retry pool's size decides the outcome."""
+
+    def __init__(self, failures: int = 8) -> None:
+        super().__init__()
+        self.failures = failures
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if self.failures and p.id == "q3" and {first, second} == {"reply from p1-n1", "reply from base"}:
+            self.failures -= 1
+            raise JudgeError("unreadable")
+        return "A"
+
+    def again(self, p: Any, first: str, second: str) -> str:
+        return "tie"
+
+
+class Failing2H(FakeModel):
+    """Glimmer answers every registered arm; a prompt carrying the strategy block (2H) fails."""
+
+    def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float,
+                 seed: int | None = None) -> ChatResult:
+        if any("How you work best with them:" in message["content"] for message in messages):
+            raise ModelApiError("2H is down")
+        return super().complete(adapter, messages, temperature=temperature, seed=seed)
+
+
+class Distinct2H(FakeModel):
+    """Glimmer answers 2H with a text only 2H says, so a judge can fail only its comparisons."""
+
+    def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float,
+                 seed: int | None = None) -> ChatResult:
+        if any("How you work best with them:" in message["content"] for message in messages):
+            self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature, "seed": seed})
+            return ChatResult("2H reply", (), "base", 10, 3, "stop")
+        return super().complete(adapter, messages, temperature=temperature, seed=seed)
+
+
+class TwoHOnlyJudge(Judge):
+    """An unreadable answer only where one reply is 2H's, so registered comparisons still read."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if "2H reply" in (first, second):
+            raise JudgeError("unreadable")
+        return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
+
+
 class MorningRig:
-    def __init__(self, tmp_path: Path) -> None:
-        self.model, self.judge, self.store = FakeModel(), Judge(), StoreSpy([])
+    def __init__(self, tmp_path: Path, *, model: Any = None, judge: Any = None,
+                 strategies: Any = None) -> None:
+        self.model = model or FakeModel()
+        self.judge = judge or Judge()
+        self.store = StoreSpy([])
         self.registry = FakeRegistry({"p1": ckpt("p1", 1), "donor": ckpt("donor", 1)})
         self.probes = [probe("q1", "new_work"), probe("q2", "vocab"), probe("q3", "tone_hold"), taste("t1")]
         deps = ArmDeps(model=self.model, adapters=self.registry, contexts=FakeContexts(),
                        evidence=lambda uid: self.store, logprobs=FakeLogprobs(lambda adapter, messages: "A"),
-                       donors={"p1": "donor"}, until=NIGHT, strategies=lambda uid: ())
+                       donors={"p1": "donor"}, until=NIGHT,
+                       strategies=strategies or (lambda uid, until: ()))
         self.morning = Morning(arms=deps, sealed=lambda uid: self.probes, judge=self.judge, prices=PRICES,
                                root=tmp_path / "results", timer=lambda: 0.0)
 
-    def run(self) -> Any:
-        return run_morning("p1", NIGHT, self.registry.adapters["p1"], morning=self.morning,
+    def run(self, night: date = NIGHT) -> Any:
+        return run_morning("p1", night, self.registry.adapters["p1"], morning=self.morning,
                            label="development", promoted=True)
 
     @property
@@ -354,6 +517,111 @@ def test_morning_on_adds_2h_and_its_pair_but_not_a_registered_arm(tmp_path: Path
     assert on.model.calls[:len(off_calls)] == off_calls
 
 
+def test_the_morning_hands_2h_the_night_it_scores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    seen: list[date] = []
+    rig = MorningRig(tmp_path, strategies=lambda uid, until: seen.append(until) or ())
+    night = NIGHT - timedelta(days=4)
+    rig.run(night=night)
+    assert seen and set(seen) == {night}  # the backfilled night, never the wall's or a later one
+
+
+def test_a_corrupt_strategy_log_leaves_2h_as_2c_and_the_morning_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    path = tmp_path / "strategies.jsonl"
+    path.write_text("this is not a strategy\n", encoding="utf-8")
+    broken = JsonlStrategyStore(path, "p1", codec=PLAIN, guard=NO_GUARD)
+    rig = MorningRig(tmp_path, strategies=lambda uid, until: broken.lines(until=until))
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    assert record["unavailable"] == {} and HARNESS_PAIR in record["pairs"]
+    per_arm = sum(1 for p in rig.probes if p.kind != "taste_ab")  # taste_ab asks no model
+    two_c = [call["messages"] for call in rig.model.calls[per_arm:2 * per_arm]]
+    two_h = [call["messages"] for call in rig.model.calls[-per_arm:]]
+    assert two_h == two_c  # a list that can't be read is no list: 2H is 2C exactly
+
+
+def test_a_failing_2h_reply_leaves_every_registered_byte_and_the_morning_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off")
+    off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    on = MorningRig(tmp_path / "on", model=Failing2H(), strategies=lambda uid, until: (LINE,))
+    on_record = json.loads(on.run().path.read_text(encoding="utf-8"))
+    assert on_record["unavailable"] == {"2H": "harness_unavailable"}
+    assert HARNESS_PAIR not in on_record["pairs"] and "2H" not in on_record["arms"]
+    assert on.model.calls == off.model.calls  # the registered arms asked exactly the switch-off run
+    for arm in COMMITTED_ARMS:
+        if arm != "1":
+            assert on_record["arms"][arm] == off_record["arms"][arm]
+    for pair in REGISTERED_PAIRS:
+        assert on_record["pairs"][pair] == off_record["pairs"][pair]
+
+
+def test_a_failing_2h_prepare_leaves_it_unavailable_not_the_morning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+
+    def broken(uid: str, until: date | None) -> tuple[str, ...]:
+        raise RuntimeError("the list's reader broke")
+
+    rig = MorningRig(tmp_path, strategies=broken)
+    done = rig.run()
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert record["unavailable"] == {"2H": "harness_unavailable"}
+    assert HARNESS_PAIR not in record["pairs"] and set(record["arms"]) == set(COMMITTED_ARMS)
+    assert all(record["arms"][arm]["overall"]["n"] == len(rig.probes) for arm in COMMITTED_ARMS if arm != "1")
+
+
+def test_a_judge_that_cannot_read_2h_drops_it_not_the_morning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off")
+    off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    on = MorningRig(tmp_path / "on", model=Distinct2H(), judge=TwoHOnlyJudge(),
+                    strategies=lambda uid, until: (LINE,))
+    done = on.run()
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert record["unavailable"] == {"2H": "harness_unavailable"}
+    assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
+    assert all(row["pair"] != "2H_vs_1" for row in record["outcomes"])
+    for arm in COMMITTED_ARMS:
+        if arm != "1":
+            assert record["arms"][arm] == off_record["arms"][arm]
+    for pair in REGISTERED_PAIRS:
+        assert record["pairs"][pair] == off_record["pairs"][pair]
+
+
+def test_a_registered_pairs_retries_are_the_same_with_the_switch_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off", judge=RoomyFailingJudge())
+    off.probes.append(probe("q4", "new_work"))  # four judged probes: one no-verdict is not over a quarter
+    off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    on = MorningRig(tmp_path / "on", judge=RoomyFailingJudge())
+    on.probes.append(probe("q4", "new_work"))
+    on_record = json.loads(on.run().path.read_text(encoding="utf-8"))
+    # Eight failures exhaust a seven-retry registered pool: the last pair's scene has no verdict. A
+    # shared pool sized over 2H would give it an eighth retry and change the registered score.
+    assert off_record["no_verdict"]["4_vs_2F"] == on_record["no_verdict"]["4_vs_2F"] == 1
+    for arm in COMMITTED_ARMS:
+        if arm != "1":
+            assert on_record["arms"][arm] == off_record["arms"][arm]
+    for pair in REGISTERED_PAIRS:
+        assert on_record["pairs"][pair] == off_record["pairs"][pair]
+
+
 def test_the_results_table_carries_the_harness_pair_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
     rig = MorningRig(tmp_path)
@@ -385,9 +653,10 @@ class CapturingTrainer(Trainer):
 class HarnessSpark(SparkChat):
     """Practice's Spark Open, and the harness's proposal, vet and comparison."""
 
-    def __init__(self, *, proposal: str | None, fail: bool = False, wins: int = 8) -> None:
+    def __init__(self, *, proposal: str | None, fail: bool = False, wins: int = 8,
+                 fail_at: str | None = None) -> None:
         super().__init__()
-        self.proposal, self.fail, self.wins = proposal, fail, wins
+        self.proposal, self.fail, self.wins, self.fail_at = proposal, fail, wins, fail_at
         self.comparisons = 0
         self.practice_prompts: list[str] = []
 
@@ -396,11 +665,13 @@ class HarnessSpark(SparkChat):
                  seed: int | None = None) -> ChatResult:
         content = messages[-1]["content"]
         if content.startswith("# harness_propose_v1"):
-            if self.fail:
+            if self.fail or self.fail_at == "propose":
                 raise ModelApiError("down")
             assert self.proposal is not None
             return result(self.proposal)
         if content.startswith("# harness_vet_v1"):
+            if self.fail_at == "vet":
+                raise ModelApiError("down")
             return result('{"allow": true}')
         if content.startswith("# harness_compare_v1"):
             outcome = "edited" if self.comparisons // 2 < self.wins else "current"
@@ -472,10 +743,52 @@ def test_a_failing_harness_call_still_trains_and_the_list_stays(tmp_path: Path, 
     world, result, _ = _night(tmp_path / "night", HarnessSpark(proposal=None, fail=True), strategies=store)
     receipt = step(result.log_path, "harness")
     assert receipt["error"].startswith("ModelApiError") and receipt["promoted"] is False
+    assert receipt["calls"] == 1  # the proposal call it made, not zero
     assert store.lines() == (LINE,)
     assert result.status == "promoted" and step(result.log_path, "train")["status"] == "ok"
     story = story_from(json.loads((result.log_path.parent / "story.json").read_text(encoding="utf-8")))
     assert story.learn.learned == ()
+
+
+def test_a_failed_vet_counts_the_proposal_and_vet_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    store = _store(tmp_path / "strategies", (LINE,))
+    world, result, _ = _night(tmp_path / "night", HarnessSpark(
+        proposal='{"action": "add", "line": "Ask for the outline."}', fail_at="vet"), strategies=store)
+    receipt = step(result.log_path, "harness")
+    assert receipt["error"].startswith("ModelApiError") and receipt["calls"] == 2
+    assert receipt["promoted"] is False and store.lines() == (LINE,)
+    assert result.status == "promoted"
+
+
+@pytest.mark.parametrize("error", [
+    AttributeError("broken"), ImportError("broken"), LookupError("broken"), AssertionError("broken"),
+])
+def test_a_harness_error_the_night_can_survive_never_fails_the_night(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception,
+) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+
+    def broken(call: HarnessCall) -> dict[str, Any]:
+        raise error
+
+    monkeypatch.setattr("anjo.sleep.night.run.run_harness", broken)
+    world, result, _ = _night(tmp_path, HarnessSpark(proposal=None))
+    assert result.status == "promoted"  # the switch-off night's status
+    receipt = step(result.log_path, "harness")
+    assert receipt["promoted"] is False and type(error).__name__ in receipt["error"]
+
+
+def test_a_cancelled_night_stops_at_the_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+
+    def cancelled(call: HarnessCall) -> dict[str, Any]:
+        raise Cancelled("the night was cancelled")
+
+    monkeypatch.setattr("anjo.sleep.night.run.run_harness", cancelled)
+    world, result, _ = _night(tmp_path, HarnessSpark(proposal=None))
+    assert result.status == "failed" and result.failed_at == "harness"
+    assert step(result.log_path, "harness")["error"].startswith("Cancelled")
 
 
 def test_the_strategy_never_reaches_practice_rows_seeds_or_dreams(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -491,6 +804,16 @@ def test_the_strategy_never_reaches_practice_rows_seeds_or_dreams(tmp_path: Path
     assert secret not in (world.root / "p1" / "evidence.jsonl").read_text(encoding="utf-8")
     assert secret not in (world.root / "p1" / "briefs.jsonl").read_text(encoding="utf-8")
     assert all(secret not in prompt for prompt in world.spark.practice_prompts)
+
+
+def test_only_the_harnesss_learned_field_is_optional_in_a_story() -> None:
+    @dataclass(frozen=True)
+    class Defaulted:
+        required: int
+        extra: int = 0
+
+    with pytest.raises(StoryError, match="extra"):  # a defaulted field is required like every other
+        story_module._record(Defaulted, {"required": 1}, "story")
 
 
 def test_the_harness_imports_no_probes_or_reports() -> None:

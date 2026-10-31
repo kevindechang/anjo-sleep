@@ -35,6 +35,7 @@ from anjo.sleep.app.storage import (
     transcript_store,
     workspace_log,
 )
+from anjo.sleep.harness import harness_on
 
 KNOWN_FILES = frozenset({
     EVIDENCE_FILE, TARGETS_FILE, EXTRACTIONS_FILE, CLEARED_FILE, ANCESTRY_FILE, BRIEFS_FILE, PRACTICE_FILE,
@@ -61,13 +62,16 @@ def _check_folder(folder: Path) -> None:
 def export_sleep(user_id: str) -> dict[str, Any]:
     require_sleep_host()
     _check_folder(sleep_dir(user_id))
+    strategies = strategy_store(user_id)
     return {
         **evidence_store(user_id).export(),
         **target_store(user_id).export(),
         **extraction_log(user_id).export(),
         **brief_store(user_id).export(),
         **transcript_store(user_id).export(),
-        **strategy_store(user_id).export(),
+        # Off with no list ever promoted: the section is today's, without an empty key. A list that
+        # exists is the person's and exports even when the switch is off.
+        **({} if not harness_on() and not strategies.path.exists() else strategies.export()),
         **workspace_log(user_id).export(),
         "cleared_sessions": export_sessions(user_id),
         "reply_ancestry": export_ancestry(user_id),
