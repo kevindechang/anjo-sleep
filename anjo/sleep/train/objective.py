@@ -6,12 +6,17 @@ night command, the accelerated runs and the synthetic example build their recipe
 
 A night whose practice kept no usable pair trains ``sft`` for that night (``lora.objective_used``).
 
-Two more switches ride on ``sft_dpo_seed`` and are refused with any other objective:
+More switches ride on ``sft_dpo_seed`` and are refused with any other objective:
 
 - ``ANJO_SLEEP_ADAPTER_FOLD=1``: each night trains a fresh slot beside the person's frozen long-term
   adapter, then folds both into one plain LoRA of rank ``FOLD_RANK`` (the server's cap), so capacity
   stays bounded across nights;
-- ``ANJO_SLEEP_DREAMS=1``: the night adds Glimmer's dreams from MIND's dream states (``night/dreams.py``).
+- ``ANJO_SLEEP_DREAMS=1``: the night adds Glimmer's dreams from MIND's dream states (``night/dreams.py``);
+- ``ANJO_SLEEP_DAY_DREAMS=1``: the night adds earlier practice rows (at most ``SEED_REPLAY_MAX``), and
+  her Glimmer's own day dreams from the consolidated day: the messages the person might send next and
+  her replies to them (``night/day_dreams.py``). The training job keeps a dream group only if it lowers
+  the held-out seeding KL without dropping the anchor score (``sleep_loss.py``). Allowed with capacity,
+  which is where their volume pays.
 
 ``ANJO_SLEEP_PROTECT`` (``anchors``, ``random`` or ``off``) rides on the fold too, and is refused without it:
 tonight's slot trains off the forgetting anchors' activation basis, or a random basis of the same shape
@@ -32,6 +37,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
+from anjo.sleep.night.day_dreams import SWITCH_ENV
 from anjo.sleep.night.dreams import Terms
 from anjo.sleep.serving.config import MAX_LORA_RANK
 from anjo.sleep.train.lora import PROTECTIONS, LoraCfg, LoraCfgError, Objective, Protection
@@ -39,6 +45,7 @@ from anjo.sleep.train.lora import PROTECTIONS, LoraCfg, LoraCfgError, Objective,
 OBJECTIVE_ENV: Final = "ANJO_SLEEP_OBJECTIVE"
 FOLD_ENV: Final = "ANJO_SLEEP_ADAPTER_FOLD"
 DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
+DAY_DREAMS_ENV: Final = SWITCH_ENV  # the app wires her day dreams by the same name (``night/day_dreams``)
 PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
 CAPACITY_ENV: Final = "ANJO_SLEEP_CAPACITY"
 CAPACITY_PASSES: Final = 3
@@ -78,9 +85,11 @@ def _protection(environ: Mapping[str, str]) -> Protection:
 def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     """The nights' recipe: the default one with the settings' objective and switches."""
     chosen = objective_name(environ)
-    fold, dreams, protect = _on(environ, FOLD_ENV), _on(environ, DREAMS_ENV), _protection(environ)
-    if (fold or dreams) and chosen != SEED_OBJECTIVE:
-        raise ObjectiveError(f"{FOLD_ENV} and {DREAMS_ENV} run only with {OBJECTIVE_ENV}={SEED_OBJECTIVE}")
+    fold, dreams = _on(environ, FOLD_ENV), _on(environ, DREAMS_ENV)
+    day_dreams, protect = _on(environ, DAY_DREAMS_ENV), _protection(environ)
+    if (fold or dreams or day_dreams) and chosen != SEED_OBJECTIVE:
+        raise ObjectiveError(f"{FOLD_ENV}, {DREAMS_ENV} and {DAY_DREAMS_ENV} run only with "
+                             f"{OBJECTIVE_ENV}={SEED_OBJECTIVE}")
     if protect != "off" and not fold:
         raise ObjectiveError(f"{PROTECT_ENV} runs only with {OBJECTIVE_ENV}={SEED_OBJECTIVE} and {FOLD_ENV}=1: "
                              "the fold keeps tonight's slot apart from the long-term adapter")
@@ -88,7 +97,8 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     if capacity and fold:
         raise ObjectiveError(f"{CAPACITY_ENV} runs without {FOLD_ENV}: the fold's adapter is at the server's rank already")
     try:
-        cfg = LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, protect=protect)
+        cfg = LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, day_dreams=day_dreams,
+                      protect=protect)
         return replace(cfg, r=MAX_LORA_RANK, passes=CAPACITY_PASSES) if capacity else cfg
     except LoraCfgError as error:
         raise ObjectiveError(str(error)) from None
@@ -97,4 +107,5 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
 def night_terms(environ: Mapping[str, str]) -> Terms:
     """Which extra rows the night builds for the recipe ``environ`` names: none unless ``sft_dpo_seed``."""
     cfg = night_cfg(environ)
-    return Terms(seed=cfg.objective == SEED_OBJECTIVE, dreams=cfg.dreams, protect=cfg.protect != "off")
+    return Terms(seed=cfg.objective == SEED_OBJECTIVE, dreams=cfg.dreams, protect=cfg.protect != "off",
+                 day_dreams=cfg.day_dreams)

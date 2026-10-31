@@ -499,3 +499,25 @@ def test_the_sleep_objectives_dreams_come_from_minds_core_only_when_it_runs(
     monkeypatch.setenv(night.CHANNEL_PROJECTOR_ENV, str(shared))
     through: Any = night.build(NoTrainer(), options).dreams
     assert isinstance(through, GlimmerDreams) and through._channel is not None
+
+
+def test_her_day_dreams_are_wired_only_with_their_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.app.cleared_sessions import register_synthetic
+    from anjo.sleep.night.day_dreams import GlimmerDayDreams, NoDayDreams
+    from anjo.sleep.night.deps import NightOptions
+    from anjo.sleep.train import objective
+
+    _night_env(monkeypatch, tmp_path)
+    register_synthetic("synthetic-founder", at=NOW)
+    options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
+    assert isinstance(night.build(NoTrainer(), options).day_dreams, NoDayDreams)  # off: no source built
+
+    monkeypatch.setenv(objective.OBJECTIVE_ENV, objective.SEED_OBJECTIVE)
+    monkeypatch.setenv(objective.DAY_DREAMS_ENV, "1")
+    deps = night.build(NoTrainer(), options)
+    assert isinstance(deps.day_dreams, GlimmerDayDreams)  # on: her Glimmer at night's client
+    source: Any = deps.day_dreams
+    assert source._client is deps.note_writer._client  # type: ignore[attr-defined]
