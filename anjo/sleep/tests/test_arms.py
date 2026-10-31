@@ -1,9 +1,11 @@
 # mypy: disallow-untyped-decorators=False, disallow-untyped-defs=False, disallow-incomplete-defs=False, disallow-untyped-calls=False, disallow-any-generics=False, warn-return-any=False
-"""The six arms (Task 2, spec 5.1): who gets which weights and which context."""
+"""The arms (Task 2, spec 5.1): who gets which weights and which context, and the two that add
+only what another system left (the agent's notes for 2A, MIND's records for 4M)."""
 from __future__ import annotations
 
 import ast
 import inspect
+from datetime import date
 from typing import Any, cast
 from pathlib import Path
 
@@ -21,7 +23,8 @@ from anjo.sleep.context.builder import ComposedContextBuilder, RecallSettings
 DONORS = {"p1": "p2", "p2": "p1"}
 
 
-def deps(*, store=None, contexts=None, model=None, registry=None, logprobs=None, window=131_072):
+def deps(*, store=None, contexts=None, model=None, registry=None, logprobs=None, window=131_072,
+         mind_notes=None):
     store = store or StoreSpy([ev("e1", "first lesson", minutes=1), ev("e2", "second lesson", minutes=2),
                                ev("hw", "homework found X", kind="homework", minutes=3)])
     return ArmDeps(
@@ -30,7 +33,7 @@ def deps(*, store=None, contexts=None, model=None, registry=None, logprobs=None,
         contexts=contexts or FakeContexts(),
         evidence=lambda user_id: store,
         logprobs=logprobs or FakeLogprobs(lambda adapter, messages: "A"),
-        donors=DONORS, until=DAY, window_tokens=window,
+        donors=DONORS, until=DAY, window_tokens=window, mind_notes=mind_notes,
     )
 
 
@@ -44,7 +47,7 @@ def lp_calls(d: ArmDeps) -> list[dict[str, Any]]:
     return d.logprobs.calls
 
 
-ALL_ARMS: tuple[Arm, ...] = ("1", "2C", "2F", "3", "3x", "4")
+ALL_ARMS: tuple[Arm, ...] = ("1", "2C", "2A", "2F", "3", "3x", "4", "4M")
 
 
 def test_arm1_is_base_with_no_context():
@@ -79,6 +82,79 @@ def test_arm2c_and_arm4_context_identical():
     assert contexts.builds == 1
     adapters = [c["adapter"] for c in calls(d)]
     assert adapters[0] is None and adapters[1].id == "p1-n1"
+
+
+def test_arm2a_is_base_with_c_plus_only_the_nights_agent_notes():
+    # LeakyStore returns held-out items, so the exact text below proves 2A drops them itself.
+    store = LeakyStore([
+        ev("e1", "first lesson", minutes=1),
+        ev("agent-n1", "the agent saw the ferry cut twice", kind="agent_note", minutes=2),
+        ev("agent-old", "AN OLDER NIGHT'S NOTE", kind="agent_note", minutes=3, day=DAY.replace(day=27)),
+        ev("agent-held", "HELD OUT AGENT NOTE", kind="agent_note", held_out=True, minutes=3),
+        ev("hw", "homework found X", kind="homework", minutes=4),
+    ])
+    contexts = FakeContexts()
+    d = deps(store=store, contexts=contexts)
+    reply("2C", "p1", probe(), deps=d)
+    out = reply("2A", "p1", probe(), deps=d)
+    c_ctx = calls(d)[0]["messages"][0]["content"]
+    a_ctx = calls(d)[1]["messages"][0]["content"]
+    assert a_ctx == (
+        f"{c_ctx}\n\n## The night's agent notes\n"
+        "- [agent-n1] (agent_note, 2026-10-28) the agent saw the ferry cut twice"
+    )
+    assert calls(d)[1]["adapter"] is None and out.dropped_ids == ()
+    assert contexts.builds == 1  # 2A starts from 2C's very C
+
+
+def test_arm2a_without_notes_asks_exactly_what_2c_asks():
+    d = deps()
+    reply("2C", "p1", probe(), deps=d)
+    reply("2A", "p1", probe(), deps=d)
+    first, second = (c["messages"] for c in calls(d))
+    assert first == second
+
+
+def test_arm4m_is_her_adapter_with_c_plus_mind_homework_and_records():
+    # LeakyStore returns held-out items, so the exact text below proves 4M drops them itself.
+    store = LeakyStore([
+        ev("e1", "first lesson", minutes=1),
+        ev("mind-f1", "MIND found the lens plan collides", kind="homework", minutes=2),
+        ev("hw", "another fold's homework", kind="homework", minutes=3),
+        ev("mind-held", "HELD OUT MIND NOTE", kind="homework", held_out=True, minutes=4),
+    ])
+    d = deps(store=store, mind_notes=lambda uid, night: ("- [f7] (resolution) MIND's record conclusion",))
+    reply("4", "p1", probe(), deps=d)
+    reply("4M", "p1", probe(), deps=d)
+    four_ctx = calls(d)[0]["messages"][0]["content"]
+    m_ctx = calls(d)[1]["messages"][0]["content"]
+    assert calls(d)[1]["adapter"].id == "p1-n1"
+    assert m_ctx == (
+        f"{four_ctx}\n\n## What MIND found\n"
+        "- [mind-f1] (homework, 2026-10-28) MIND found the lens plan collides\n"
+        "- [f7] (resolution) MIND's record conclusion"
+    )
+
+
+def test_arm4m_reads_mind_records_once_per_person_not_per_probe():
+    read: list[tuple[str, date]] = []
+
+    def notes(user_id: str, night: date) -> tuple[str, ...]:
+        read.append((user_id, night))
+        return ("- [f1] (resolution) a record",)
+
+    d = deps(mind_notes=notes)
+    reply("4M", "p1", probe("q1"), deps=d)
+    reply("4M", "p1", probe("q2"), deps=d)
+    assert read == [("p1", DAY)]
+
+
+def test_arm4m_without_mind_items_asks_exactly_what_4_asks():
+    d = deps()
+    reply("4", "p1", probe(), deps=d)
+    reply("4M", "p1", probe(), deps=d)
+    first, second = (c["messages"] for c in calls(d))
+    assert first == second
 
 
 def test_recall_identical_for_2c_and_4():

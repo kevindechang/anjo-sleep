@@ -4,7 +4,8 @@ stores for one synthetic person.
     python -m anjo.sleep.sim.accelerated --morning anjo.sleep.app.morning:build ...
 
 - arms: Glimmer's vLLM server (``VllmClient``, which answers replies and log-probabilities; SageMaker or Modal),
-  context C from Anjo's own builder over the served briefs, 2F over the person's evidence store;
+  context C from Anjo's own builder over the served briefs, 2F over the person's evidence store, 2A and 4M
+  with the agent's notes and MIND's records (``full_arms`` adds them to a run with ``ANJO_SLEEP_ARMS_EXTRA=1``);
 - adapters: the checkpoint registry (the last promoted checkpoint serves), donors from
   ``$ANJO_SLEEP_DONORS`` (``user=donor,user=donor``: the registered donor account of each life);
 - probes: the person's sealed file, ``$ANJO_SLEEP_SEALED_DIR/<persona>.jsonl``, re-keyed to the
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 from datetime import date
@@ -29,10 +31,20 @@ from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.night import SEALED_ENV, prices
-from anjo.sleep.app.storage import SLEEP_DIR, brief_store, checkpoint_registry, data_root, evidence_store
+from anjo.sleep.app.storage import (
+    SLEEP_DIR,
+    brief_store,
+    checkpoint_registry,
+    data_root,
+    evidence_store,
+    workspace_log,
+)
 from anjo.sleep.budget import LEDGER_NAME, Ledger
 from anjo.sleep.model_api import Retries
 from anjo.sleep.context.brief_store import ServedBriefs
+from anjo.sleep.mind import records
+from anjo.sleep.mind.inquiry import kernel
+from anjo.sleep.mind.inquiry.types import RunStart, WorkspaceEvent
 from anjo.sleep.probes.arms import ArmDeps
 from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.judge_brief import judge_brief
@@ -69,6 +81,21 @@ def donors() -> dict[str, str]:
     return {user.strip(): donor.strip() for user, donor in pairs}
 
 
+def _through_night(events: Sequence[WorkspaceEvent], night: date) -> tuple[WorkspaceEvent, ...]:
+    """The log through the night's last step. A later night's ``RunStart`` may wipe the workspace
+    (M-persist), so folding the live log would serve a backfill of an older night later findings;
+    cutting at the first start of a later night keeps the workspace that night left."""
+    return events[:next((n for n, event in enumerate(events)
+                         if isinstance(event.step.entry, RunStart) and event.step.entry.night > night), len(events))]
+
+
+def mind_notes(user_id: str, night: date) -> tuple[str, ...]:
+    """Arm 4M's records through ``night``: MIND's findings and the questions it noticed, from the
+    person's own workspace log as that night left it. An account without one has no records, so 4M
+    asks exactly what arm 4 asks; a backfill of an older night never sees a later night's."""
+    return records.notes(kernel.fold(_through_night(workspace_log(user_id).events(), night)))
+
+
 class _Resent:
     """The judge's calls sent again, counted across its threads."""
 
@@ -95,7 +122,7 @@ def build(user_id: str, persona: str, night: date) -> Morning:
     arms = ArmDeps(
         model=client, adapters=checkpoint_registry(), contexts=anjo_context_builder(
             ServedBriefs(brief_store), until=night, settings=RECALL),
-        evidence=evidence_store, logprobs=client, donors=donors(), until=night)
+        evidence=evidence_store, logprobs=client, donors=donors(), until=night, mind_notes=mind_notes)
     resent = _Resent()
     tokens = JudgeTokens()  # the judge settles at its tokens, priced at ANJO_SLEEP_PRICES' Spark lines
     judge = make_judge(persona, tokens, resent)

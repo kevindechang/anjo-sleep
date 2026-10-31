@@ -17,8 +17,8 @@ import pytest
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import Prices
-from anjo.sleep.probes.arms import ARMS, ArmDeps
-from anjo.sleep.probes.morning import Morning, MorningError, PAIRS, _rows, run_morning
+from anjo.sleep.probes.arms import ArmDeps
+from anjo.sleep.probes.morning import COMMITTED_ARMS, Morning, MorningError, PAIRS, _rows, run_morning
 from anjo.sleep.probes.score import ProbeOutcome, Verdict
 from anjo.sleep.reports import results
 from anjo.sleep.stops import BudgetStop
@@ -35,6 +35,8 @@ from anjo.sleep.tests.sleep_fakes import (
 
 NIGHT = date(2026, 11, 3)
 PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.95)
+# A full run without ANJO_SLEEP_ARMS_EXTRA asks the six committed arms, so only their pairs answer.
+COMMITTED_PAIRS = frozenset(name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS)
 
 
 class Judge:
@@ -112,11 +114,11 @@ def test_every_arm_is_scored_on_both_dimensions(tmp_path: Path) -> None:
     rig = Rig(tmp_path)
     record = json.loads(rig.run(label="final").path.read_text(encoding="utf-8"))
     assert record["label"] == "final" and record["night"] == NIGHT.isoformat() and record["probes"] == 4
-    assert set(record["arms"]) == set(ARMS)
+    assert set(record["arms"]) == set(COMMITTED_ARMS)  # 2A and 4M need ANJO_SLEEP_ARMS_EXTRA=1
     assert {d: v["score"] for d, v in record["arms"]["1"].items()} == {"knowledge": 0.5, "interaction": 0.5, "overall": 0.5}
-    for arm in ARMS - {"1"}:
+    for arm in set(COMMITTED_ARMS) - {"1"}:
         assert set(record["arms"][arm]) == {"knowledge", "interaction", "overall"}
-    assert set(record["pairs"]) == set(PAIRS)
+    assert set(record["pairs"]) == COMMITTED_PAIRS
     assert rig.judge.calls > 0 and record["unavailable"] == {} and record["checkpoint_basis"] == "promoted"
 
 
@@ -170,7 +172,7 @@ STAT_KEYS = {"n", "wins", "ties", "losses", "score", "decisive_share", "ci"}
 def test_score_files_carry_the_statistics_the_claim_rules_need(tmp_path: Path) -> None:
     rig = Rig(tmp_path)
     record = json.loads(rig.run().path.read_text(encoding="utf-8"))
-    for name, stats in [*((f"{a}_vs_1", record["arms"][a]) for a in ARMS - {"1"}), *record["pairs"].items()]:
+    for name, stats in [*((f"{a}_vs_1", record["arms"][a]) for a in set(COMMITTED_ARMS) - {"1"}), *record["pairs"].items()]:
         assert set(stats) == {"knowledge", "interaction", "overall"}, name
         for stat in stats.values():
             assert set(stat) == STAT_KEYS and stat["n"] == stat["wins"] + stat["ties"] + stat["losses"]
@@ -190,7 +192,7 @@ def test_per_probe_outcomes_recompute_the_counts(tmp_path: Path) -> None:
     taste_rows = [row for row in record["outcomes"] if row["kind"] == "taste_ab"]
     assert taste_rows and all(isinstance(row["margin_a"], float) and isinstance(row["margin_b"], float)
                               for row in taste_rows)
-    assert {row["pair"] for row in record["outcomes"]} == {f"{a}_vs_1" for a in ARMS - {"1"}} | set(record["pairs"])
+    assert {row["pair"] for row in record["outcomes"]} == {f"{a}_vs_1" for a in set(COMMITTED_ARMS) - {"1"}} | set(record["pairs"])
     mine = [r for r in record["outcomes"] if r["pair"] == "4_vs_2C" and r["kind"] != "pushback"]
     stat = record["pairs"]["4_vs_2C"]["overall"]
     assert [sum(r["outcome"] == o for r in mine) for o in ("win", "tie", "loss")] == [stat["wins"], stat["ties"], stat["losses"]]
@@ -267,7 +269,7 @@ def test_judge_non_json_retries_then_records_no_verdict(tmp_path: Path) -> None:
     rig.morning = replace(rig.morning, judge=MuseJudge(chat=chat, brief_for=lambda pid: "brief"))
     done = rig.run()  # the run ends and writes its file: an unreadable verdict never crashes the morning
     record = json.loads(done.path.read_text(encoding="utf-8"))
-    comparisons = {f"{a}_vs_1" for a in ARMS - {"1"}} | set(PAIRS)
+    comparisons = {f"{a}_vs_1" for a in set(COMMITTED_ARMS) - {"1"}} | COMMITTED_PAIRS
     # q1's first answer was unreadable, and its one retry, with more room, gave the verdict.
     assert chat.caps[:2] == [("ONCE", None), ("ONCE", JUDGE_RETRY_MAX_TOKENS)]
     assert {r["outcome"] for r in record["outcomes"] if r["probe"] == "q1"} <= {"win", "tie", "loss"}
