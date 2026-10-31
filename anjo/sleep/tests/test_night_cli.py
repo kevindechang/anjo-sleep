@@ -159,17 +159,25 @@ def test_a_modal_night_leaves_colab_alone_where_its_cli_isnt_installed(
 
 
 def test_a_simulated_day_runs_its_night_on_the_virtual_clock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dataclasses import dataclass
     from datetime import date, datetime, timezone
     from typing import Any
 
     from anjo.sleep.night import __main__ as command
+    from anjo.sleep.night.dreams import Terms
     from anjo.sleep.night.run import day_window
     from anjo.sleep.sim.day import DayRun
+
+    @dataclass(frozen=True)
+    class Deps:
+        """The night's wiring stand-in: the command replaces its terms with the default recipe's."""
+
+        terms: Terms = Terms()
 
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
     wall = (datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc), datetime(2026, 10, 28, 9, 5, tzinfo=timezone.utc))
     seen: dict[str, Any] = {}
-    monkeypatch.setattr(command, "_wiring", lambda path: lambda trainer, options: "deps")
+    monkeypatch.setattr(command, "_wiring", lambda path: lambda trainer, options: Deps())
     monkeypatch.setattr(command, "_named", lambda path: lambda *args: DayRun(wall, 3, 0, ()))
     monkeypatch.setattr(command, "run_night_batch_with", lambda deps, nights, **kw: seen.update(kw) or {})
     night = date(2026, 11, 20)

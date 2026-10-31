@@ -249,12 +249,12 @@ python -m anjo.sleep.tools.serve_probe --adapter p-<hash>-n<night> --go   # then
 command, the accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
 17b: replay's thinker and the APD runner) stays on Colab and never reads it.
 
-Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
+Every night trains `sft_dpo_seed` (the sleep paradigm's one loss, `train/sleep_loss.py`) unless `ANJO_SLEEP_OBJECTIVE` names `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) or `sft`; an `sft_dpo` night whose practice kept no usable pair trains `sft` instead. Its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
 
 | Setting | Value |
 |---|---|
 | `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
-| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default), `sft`, or `sft_dpo_seed` (the sleep paradigm's one loss, `train/sleep_loss.py`; Modal only); any other value stops the night, the accelerated run and the example before they start |
+| `ANJO_SLEEP_OBJECTIVE` | `sft_dpo_seed` (the default since 2026-11-01; the sleep paradigm's one loss, `train/sleep_loss.py`; Modal only), `sft_dpo`, or `sft`; any other value stops the night, the accelerated run and the example before they start |
 | `ANJO_SLEEP_ADAPTER_FOLD`, `ANJO_SLEEP_DREAMS` | `1` turns on the nightly fold into one rank-32 adapter, or dreams from MIND's dream seeds; only with `sft_dpo_seed`, unset or `0` is off |
 | `ANJO_SLEEP_PROTECT` | `anchors` trains tonight's slot off the forgetting anchors' activation basis (`train/sleep_protect.py`), `random` off a random basis of the same shape (the ablation); only with `sft_dpo_seed` and the fold, unset or `off` is off |
 | `ANJO_SLEEP_HARNESS` | unset or `1` lets a night add, replace or remove one line of the person's strategy list after a contrastive probe (`harness/loop.py`), and the morning asks the reported-only `2H` arm; `0` turns both off, so every file the night and the morning write is today's |

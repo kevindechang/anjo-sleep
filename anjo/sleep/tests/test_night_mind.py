@@ -95,8 +95,10 @@ class Capturing:
 # ── Flag off: the trunk's night ──────────────────────────────────────────────
 
 
-def _off_scenario(root: Path, ported: bool) -> dict[str, Any]:
+def _off_scenario(root: Path, ported: bool, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Three nights: a thread revisited, then a commitment prepared, then nothing (the frozen run)."""
+    monkeypatch.setenv("ANJO_SLEEP_OBJECTIVE", "sft_dpo")  # the trunk's objective, explicitly
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")  # and no harness step: the trunk's night, byte for byte
     world = World(root)
     world.targets(UID).upsert(thread(UID))
     thinker = LifeThinker(targets=(f"{UID}-t1",))
@@ -125,8 +127,8 @@ def _off_scenario(root: Path, ported: bool) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("ported", [False, True], ids=["no-op ports", "mind ports, flag off"])
-def test_flag_off_night_is_unchanged(tmp_path: Path, ported: bool) -> None:
-    assert _off_scenario(tmp_path, ported) == json.loads(FROZEN.read_text(encoding="utf-8"))
+def test_flag_off_night_is_unchanged(tmp_path: Path, ported: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _off_scenario(tmp_path, ported, monkeypatch) == json.loads(FROZEN.read_text(encoding="utf-8"))
 
 
 # ── A life through the accelerated rig ───────────────────────────────────────

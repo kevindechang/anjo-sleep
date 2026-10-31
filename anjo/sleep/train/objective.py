@@ -1,8 +1,8 @@
-"""Which objective the nights train (Kevin, 2026-10-28): ``ANJO_SLEEP_OBJECTIVE`` is ``sft_dpo`` (the
-default: SFT, then a DPO pass on the night's (best, worst) practice pairs), ``sft``, or ``sft_dpo_seed``
-(2026-10-29: the sleep paradigm's one loss, ``sleep_loss.py``). Anything else is refused at start. The
-night command, the accelerated runs and the synthetic example build their recipe here. MIND's thinker
-(``thinker.py``, Task 17b) never reads it and keeps ``LoraCfg()``'s own ``sft``.
+"""Which objective the nights train (Kevin, 2026-10-28): ``ANJO_SLEEP_OBJECTIVE`` is ``sft_dpo_seed``
+(the default since 2026-11-01: the sleep paradigm's one loss, ``sleep_loss.py``), ``sft_dpo`` (SFT,
+then a DPO pass on the night's (best, worst) practice pairs) or ``sft``. Anything else is refused at
+start. The night command, the accelerated runs and the synthetic example build their recipe here.
+MIND's thinker (``thinker.py``, Task 17b) never reads it and keeps ``LoraCfg()``'s own ``sft``.
 
 A night whose practice kept no usable pair trains ``sft`` for that night (``lora.objective_used``).
 
@@ -28,8 +28,11 @@ row a step, in place of the step plan; the rates, rows and DPO pass stay the rec
 (``sft_dpo_seed`` carries it to the loss as ``terms.passes``; the others in the host's step plan), never
 with the fold, whose long-term adapter is at that rank already.
 
-Each switch off (unset, blank or ``0``) is today's night. The live comparison's matched control is no
-switch: it is set per run (``sim.accelerated --match-file``), so no host setting can pad a real night.
+Each of the fold, dreams, capacity and day dreams switches off (unset, blank or ``0``) leaves the
+night without that part. The live comparison's matched control is ``ANJO_SLEEP_OBJECTIVE=sft_dpo``
+(today's objective before 2026-11-01); its arms set their switches per run
+(``tools/sleep_objective_live.py``), and its clock match is a per-run ``--match-file`` to
+``sim.accelerated``, so no host setting can pad a real night.
 """
 from __future__ import annotations
 
@@ -50,7 +53,7 @@ PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
 CAPACITY_ENV: Final = "ANJO_SLEEP_CAPACITY"
 CAPACITY_PASSES: Final = 3
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft_dpo", "sft", "sft_dpo_seed")
-DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo"
+DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo_seed"
 SEED_OBJECTIVE: Final[Objective] = "sft_dpo_seed"
 FOLD_RANK: Final = MAX_LORA_RANK  # the long-term adapter: the most the server takes
 
@@ -60,7 +63,7 @@ class ObjectiveError(ValueError):
 
 
 def objective_name(environ: Mapping[str, str]) -> Objective:
-    """The objective ``environ`` names: ``sft_dpo`` when unset or blank."""
+    """The objective ``environ`` names: ``sft_dpo_seed`` when unset or blank."""
     chosen = environ.get(OBJECTIVE_ENV, "").strip() or DEFAULT_OBJECTIVE
     if chosen not in OBJECTIVES:
         raise ObjectiveError(f"{OBJECTIVE_ENV} is {' or '.join(OBJECTIVES)}")
