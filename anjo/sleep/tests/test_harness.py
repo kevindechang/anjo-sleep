@@ -480,6 +480,35 @@ class TwoHBudgetStop(Judge):
         return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
 
 
+class TwoHAndContext(FakeModel):
+    """2H and 2C (and every context arm) each say a text of their own, so a judge can tell 2H's two
+    comparisons apart: against arm 1, and against 2C."""
+
+    def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float,
+                 seed: int | None = None) -> ChatResult:
+        if any("How you work best with them:" in message["content"] for message in messages):
+            self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature, "seed": seed})
+            return ChatResult("2H reply", (), "base", 10, 3, "stop")
+        if any("CTX" in message["content"] for message in messages):
+            self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature, "seed": seed})
+            return ChatResult("reply with context", (), "base", 10, 3, "stop")
+        return super().complete(adapter, messages, temperature=temperature, seed=seed)
+
+
+class OneUnderTwoOver(Judge):
+    """Unreadable on one 2H probe against 1 (under a quarter of four), and on two against 2C (over
+    it): the first count is written, then the second drops the arm."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if "2H reply" in (first, second):
+            other = second if first == "2H reply" else first
+            if (other == "reply from base" and p.id == "q1") or (
+                    other == "reply with context" and p.id in {"q2", "q3"}):
+                raise JudgeError("unreadable")
+        return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
+
+
 class TwoHCancelled(Judge):
     """A cancelled night reaches the judge on a 2H call: it must stop the morning, never be swallowed."""
 
@@ -680,6 +709,33 @@ def test_a_2h_judge_budget_stop_drops_2h_and_writes_the_registered_scores(
     assert record["unavailable"] == {"2H": "harness_unavailable"}
     assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
     assert all(row["pair"] not in {"2H_vs_1", HARNESS_PAIR} for row in record["outcomes"])
+    _same_registered_scores(record, off_record)
+
+
+def test_a_dropped_2h_leaves_no_2h_no_verdict_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off", model=TwoHAndContext(), judge=OneUnderTwoOver())
+    off.probes = [probe("q1"), probe("q2"), probe("q3"), probe("q4")]  # four judged: one is not over a quarter
+    off_done = off.run()
+    off_record = json.loads(off_done.path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    on = MorningRig(tmp_path / "on", model=TwoHAndContext(), judge=OneUnderTwoOver(),
+                    strategies=lambda uid, until: (LINE,))
+    on.probes = [probe("q1"), probe("q2"), probe("q3"), probe("q4")]
+    done = on.run()
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    # 2H has one unread on 2H_vs_1, under the cap, then two on 2H_vs_2C, over it: the arm is dropped.
+    assert record["unavailable"] == {"2H": "harness_unavailable"}
+    assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
+    assert all(row["pair"] not in {"2H_vs_1", HARNESS_PAIR} for row in record["outcomes"])
+    # Neither 2H count is written, and only the registered sum is reported.
+    assert "no_verdict" not in record and done.no_verdict == off_done.no_verdict == 0
+    # The file is the switch-off run's but for the code, byte for byte.
+    assert (json.dumps({**record, "unavailable": {}}, sort_keys=True, indent=1)
+            == off_done.path.read_text(encoding="utf-8"))
     _same_registered_scores(record, off_record)
 
 

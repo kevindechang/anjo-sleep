@@ -607,7 +607,7 @@ def _run_morning(
             # raised in this pass is caught, and what it settled stays settled.
             harness_found = []
             unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
-        harness_names = {f"{HARNESS_ARM}_vs_1", HARNESS_PAIR}
+        harness_names = {name for name, first, second in comparisons if HARNESS_ARM in (first, second)}
         harness_dropped = False
         for name, first, second, found in (*registered_found, *harness_found):
             if harness_dropped and HARNESS_ARM in (first, second):
@@ -620,10 +620,6 @@ def _run_morning(
                     # the morning, and leaves the registered comparisons untouched.
                     unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
                     harness_dropped = True
-                    no_verdict.pop(name, None)
-                    stats.pop(HARNESS_ARM, None)
-                    pairs.pop(HARNESS_PAIR, None)
-                    rows[:] = [row for row in rows if row["pair"] not in harness_names]
                     continue
                 no_verdict[name] = missing
                 if missing > NO_VERDICT_MAX_SHARE * judged:
@@ -639,6 +635,14 @@ def _run_morning(
             else:
                 pairs[name] = scored
             rows.extend(_rows(name, probes, found))
+    if HARNESS_ARM in unavailable:
+        # However 2H was dropped, no 2H comparison's count, stat, pair or row stands: the file is the
+        # switch-off run's but for its code in ``unavailable``, and only the registered sum is reported.
+        for harness_name in harness_names:
+            no_verdict.pop(harness_name, None)
+        stats.pop(HARNESS_ARM, None)
+        pairs.pop(HARNESS_PAIR, None)
+        rows[:] = [row for row in rows if row["pair"] not in harness_names]
     if stats:  # arm 1 against itself takes the shape of an arm that was scored
         stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
