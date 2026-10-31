@@ -22,17 +22,18 @@ More switches ride on ``sft_dpo_seed`` and are refused with any other objective:
 tonight's slot trains off the forgetting anchors' activation basis, or a random basis of the same shape
 (the ablation), and the fold keeps the projection (``sleep_protect.py``). The night ships the anchor rows.
 
-``ANJO_SLEEP_CAPACITY=1`` (2026-10-29, the knowledge ceiling's capacity point on a night) trains at the
-most rank the server takes (``MAX_LORA_RANK``) and ``CAPACITY_PASSES`` passes over the night's rows, one
-row a step, in place of the step plan; the rates, rows and DPO pass stay the recipe's. With any objective
-(``sft_dpo_seed`` carries it to the loss as ``terms.passes``; the others in the host's step plan), never
-with the fold, whose long-term adapter is at that rank already.
+``ANJO_SLEEP_CAPACITY`` (on since 2026-11-01; the knowledge ceiling's capacity point on a night) trains
+at the most rank the server takes (``MAX_LORA_RANK``) and ``CAPACITY_PASSES`` passes over the night's
+rows, one row a step, in place of the step plan; the rates, rows and DPO pass stay the recipe's.
+``ANJO_SLEEP_CAPACITY=0`` is today's step plan. With any objective (``sft_dpo_seed`` carries it to the
+loss as ``terms.passes``; the others in the host's step plan), never with the fold, whose long-term
+adapter is at that rank already.
 
-Each of the fold, dreams, capacity and day dreams switches off (unset, blank or ``0``) leaves the
-night without that part. The live comparison's matched control is ``ANJO_SLEEP_OBJECTIVE=sft_dpo``
-(today's objective before 2026-11-01); its arms set their switches per run
-(``tools/sleep_objective_live.py``), and its clock match is a per-run ``--match-file`` to
-``sim.accelerated``, so no host setting can pad a real night.
+Each of the fold and dreams switches off (unset, blank or ``0``) leaves the night without that part;
+``ANJO_SLEEP_CAPACITY=0`` turns capacity off; day dreams keep their own rule below. The live
+comparison's matched control is ``ANJO_SLEEP_OBJECTIVE=sft_dpo`` (today's objective before
+2026-11-01); its arms set their switches per run (``tools/sleep_objective_live.py``), and its clock
+match is a per-run ``--match-file`` to ``sim.accelerated``, so no host setting can pad a real night.
 """
 from __future__ import annotations
 
@@ -70,11 +71,16 @@ def objective_name(environ: Mapping[str, str]) -> Objective:
     return chosen
 
 
-def _on(environ: Mapping[str, str], name: str) -> bool:
+def _switch(environ: Mapping[str, str], name: str, *, default: bool) -> bool:
+    """The switch's value: ``default`` when unset or blank; any word but ``0`` or ``1`` is refused."""
     value = environ.get(name, "").strip()
     if value not in ("", "0", "1"):
         raise ObjectiveError(f"{name} is 1 (on) or 0 (off)")
-    return value == "1"
+    return default if not value else value == "1"
+
+
+def _on(environ: Mapping[str, str], name: str) -> bool:
+    return _switch(environ, name, default=False)
 
 
 def _protection(environ: Mapping[str, str]) -> Protection:
@@ -96,7 +102,7 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     if protect != "off" and not fold:
         raise ObjectiveError(f"{PROTECT_ENV} runs only with {OBJECTIVE_ENV}={SEED_OBJECTIVE} and {FOLD_ENV}=1: "
                              "the fold keeps tonight's slot apart from the long-term adapter")
-    capacity = _on(environ, CAPACITY_ENV)
+    capacity = _switch(environ, CAPACITY_ENV, default=True)
     if capacity and fold:
         raise ObjectiveError(f"{CAPACITY_ENV} runs without {FOLD_ENV}: the fold's adapter is at the server's rank already")
     try:

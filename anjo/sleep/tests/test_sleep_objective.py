@@ -156,7 +156,7 @@ class _NoLeak:
 
 
 def test_switches_off_are_todays_night(tmp_path: Path) -> None:
-    today = {objective.OBJECTIVE_ENV: "sft_dpo"}
+    today = {objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "0"}
     for env in (today, {**today, objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0"},
                 {**today, "ANJO_SLEEP_MATCH_MINUTES": "6.5"}):
         cfg = objective.night_cfg(env)
@@ -213,7 +213,8 @@ def test_the_night_command_sets_the_terms_only_when_a_switch_is_on(tmp_path: Pat
 
 
 def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night() -> None:
-    on = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.DREAMS_ENV: "1"}
+    on = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.DREAMS_ENV: "1",
+          objective.CAPACITY_ENV: "0"}
     cfg = objective.night_cfg(on)
     assert (cfg.objective, cfg.fold_rank, cfg.dreams) == ("sft_dpo_seed", config.MAX_LORA_RANK, True)
     assert objective.night_terms(on) == Terms(seed=True, dreams=True)
@@ -230,11 +231,12 @@ def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night()
 
 def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> None:
     seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
-    cfg = objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"})
+    cfg = objective.night_cfg(seed)  # unset is on
     assert (cfg.objective, cfg.r, cfg.passes, cfg.fold_rank) == ("sft_dpo_seed", config.MAX_LORA_RANK, 3, None)
+    assert objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"}) == cfg
     assert objective.night_terms({**seed, objective.CAPACITY_ENV: "1"}) == Terms(seed=True)  # the same rows
     off = objective.night_cfg({**seed, objective.CAPACITY_ENV: "0"})
-    assert off == objective.night_cfg(seed) == LoraCfg(objective="sft_dpo_seed") and off.passes is None
+    assert off == LoraCfg(objective="sft_dpo_seed") and off.passes is None
     assert plan_steps(40, cfg) == StepPlan(accumulation=1, epochs=3, steps_per_epoch=40)
     sent = training_config(cfg, 12, warm=True, revision="a" * 40, night=NIGHT)
     assert sent["terms"] == {"fold_rank": None, "dreams": False, "passes": 3} and (sent["r"], sent["alpha"]) == (32, 64)
@@ -244,7 +246,8 @@ def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> 
         with pytest.raises(ValueError):
             colab_train.load_config(json.dumps({**sent, "terms": {**sent["terms"], "passes": bad}}))
     assert training_config(off, 12, warm=True, revision="a" * 40, night=NIGHT)["terms"] == {"fold_rank": None, "dreams": False}
-    plain = objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "1"})  # today's objective: the host's step plan carries it
+    plain = objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo"})  # today's objective, capacity on like any night
+    assert plain.passes == 3 and plain.r == config.MAX_LORA_RANK
     sent_plain = training_config(plain, 12, warm=False, revision="a" * 40, night=NIGHT)
     assert (plain.objective, sent_plain["r"], sent_plain["accumulation"], sent_plain["epochs"]) == ("sft_dpo", 32, 1, 3)
     assert "terms" not in sent_plain and colab_train.load_config(json.dumps(sent_plain))["epochs"] == 3

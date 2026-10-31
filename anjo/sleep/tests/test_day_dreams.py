@@ -85,7 +85,7 @@ def _replay(i: int, *, created_at: Any = AT, target: str = "glimmer") -> Any:
 
 
 def test_the_switch_off_sends_todays_payload_and_builds_todays_rows(tmp_path: Path) -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.CAPACITY_ENV: "0"}
     off = objective.night_cfg(seed)
     assert off == objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "0"}) and not off.day_dreams
     assert objective.night_terms(seed) == Terms(seed=True) == objective.night_terms({**seed, objective.DAY_DREAMS_ENV: "0"})
@@ -104,7 +104,7 @@ def test_the_switch_off_sends_todays_payload_and_builds_todays_rows(tmp_path: Pa
 
 
 def test_the_switch_is_seeded_only_and_rides_with_capacity() -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.CAPACITY_ENV: "0"}
     on = objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "1"})
     assert on.day_dreams and on.objective == "sft_dpo_seed"
     assert objective.night_terms({**seed, objective.DAY_DREAMS_ENV: "1"}) == Terms(seed=True, day_dreams=True)
