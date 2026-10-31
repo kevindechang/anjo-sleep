@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -35,11 +36,13 @@ def _write_score(
     persona: str | None = None,
     sealed_dir: Path | None = None,
     checkpoint_basis: str = "promoted",
+    label: str = "development",
 ) -> None:
     folder = root / account / "scores"
     folder.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "night": night,
+        "label": label,
         "checkpoint": f"ckpt-{account}-{number}",
         "checkpoint_basis": checkpoint_basis,
         "probes": len({row["probe"] for row in outcomes}),
@@ -346,3 +349,28 @@ def test_development_reports_each_life_score(tmp_path: Path) -> None:
     assert founder_know["n"] == 2 and founder_know["wins"] == 1 and founder_know["losses"] == 1
     assert founder_know["score"] == 0.5
     assert any(line["line"] == "comparison" for line in lines)
+
+
+def test_development_reads_a_scores_only_root_as_the_full_tree(tmp_path: Path) -> None:
+    """A rerun's folder: ``<account>/scores`` alone, no ``nights/``, each score file carrying its label."""
+    sealed = tmp_path / SEALED
+    full, scores_only = tmp_path / "results", tmp_path / "rescore"
+    for persona, account in POOLED.items():
+        outcomes: list[dict[str, Any]] = []
+        for pair in dev.HEADLINE:
+            outcomes += [
+                _row(f"{persona}-{pair}-nw", pair, "new_work", "win", source=f"{persona}-{pair}-src"),
+                _row(f"{persona}-{pair}-vo", pair, "vocab", "tie"),
+                _row(f"{persona}-{pair}-th", pair, "tone_hold", "loss"),
+            ]
+        _write_score(full, account, 1, "2026-10-31", outcomes, persona=persona, sealed_dir=sealed)
+        night = full / account / "nights" / "2026-10-31"
+        night.mkdir(parents=True)
+        (night / "summary.json").write_text(
+            json.dumps({"night": "2026-10-31", "label": "development", "status": "promoted"}), encoding="utf-8"
+        )
+        shutil.copytree(full / account / "scores", scores_only / account / "scores")  # the scores, never the nights
+    assert not any((scores_only / account / "nights").exists() for account in POOLED.values())
+    assert dev.read(scores_only, POOLED, bootstrap=CFG, probes_root=sealed) == dev.read(
+        full, POOLED, bootstrap=CFG, probes_root=sealed
+    )

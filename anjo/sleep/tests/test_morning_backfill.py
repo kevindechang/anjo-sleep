@@ -6,6 +6,7 @@ night's log and read by the live comparison's report. Fakes only: no model, judg
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 from dataclasses import replace
 from datetime import date
@@ -14,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry, ref_record
 from anjo.sleep.night.holds import usd
@@ -307,3 +309,112 @@ def test_a_backfill_holds_under_its_own_key_so_the_failed_mornings_spend_still_c
     spent = her_spend(world.ledger.settlements(), USER, NIGHTS[0])
     assert spent[f"morning:{night}:{USER}:judge"] == pytest.approx(0.04)  # still hers, beside the backfill's
     assert spent[f"morning:{night}:{USER}:backfill-full:judge"] > 0 and not world.ledger.open_holds()
+
+
+def _tree(root: Path) -> dict[str, str]:
+    """Every file under ``root`` and its digest: a rescore leaves the results tree exactly as it was."""
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def test_a_rescore_plans_the_same_morning_again_into_its_own_folder(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go")[0] == 0  # the morning the lives were judged on
+    folder = tmp_path / "deepseek"
+    called = (len(world.model.calls), world.judge.calls)
+    code, said = world.run(NIGHTS[0], "--score-root", str(folder))
+    text = "\n".join(said)
+    assert code == 0 and said[0].startswith("morning backfill: rescore, plan only")
+    assert str(folder / USER / "scores" / "night-01.json") in text  # the name the results tree gave it
+    assert "the judge: muse" in text
+    assert (len(world.model.calls), world.judge.calls) == called and not folder.exists()
+
+
+def test_a_rescore_writes_only_its_own_file_and_leaves_the_results_tree_byte_identical(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go")[0] == 0
+    folder = tmp_path / "deepseek"
+    before, steps = _tree(world.root), world.steps(NIGHTS[0])
+    code, said = world.run(NIGHTS[0], "--score-root", str(folder), "--go")
+    own = folder / USER / "scores" / "night-01.json"
+    assert code == 0, said
+    assert said[-1].startswith(f"scored: {own} ")
+    assert _tree(world.root) == before  # not one byte of the results tree moved
+    assert world.steps(NIGHTS[0]) == steps  # no morning step, no story told again
+    record = json.loads(own.read_text(encoding="utf-8"))
+    assert (record["night"], record["label"], record["checkpoint"], record["pinned"], record["judge"]) == (
+        "2026-10-24", "development", "p-abc-n1", True, "muse")
+    assert own.name == (world.root / USER / "scores" / "night-01.json").name  # the results tree's name, in its own
+
+
+def test_a_rescore_records_the_judge_that_scored_it(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go")[0] == 0
+    ports = replace(world.ports, morning=lambda user, persona, on: replace(
+        world.morning(user, persona, on), judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH))
+    folder, said = tmp_path / "deepseek", []
+    assert backfill_tool.main(["--user", USER, "--persona", "film_founder", "--night", NIGHTS[0].isoformat(),
+                               "--score-root", str(folder), "--go"], ports=ports, out=said.append) == 0
+    assert "the judge: deepseek" in "\n".join(said)
+    rescored = json.loads((folder / USER / "scores" / "night-01.json").read_text(encoding="utf-8"))
+    original = json.loads((world.root / USER / "scores" / "night-01.json").read_text(encoding="utf-8"))
+    assert (rescored["judge"], rescored["judge_model"]) == ("deepseek", fireworks_api.DEEPSEEK_V4P1_FLASH)
+    assert (original["judge"], original["judge_model"]) == ("muse", "unknown")
+
+
+def test_a_rescore_holds_under_a_key_of_its_own(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go")[0] == 0  # the morning's own spend, under its key
+    ports = replace(world.ports, morning=lambda user, persona, on: replace(
+        world.morning(user, persona, on), ledger=world.ledger))
+    folder, said = tmp_path / "deepseek", []
+    assert backfill_tool.main(["--user", USER, "--persona", "film_founder", "--night", NIGHTS[0].isoformat(),
+                               "--score-root", str(folder), "--go"], ports=ports, out=said.append) == 0
+    spent = her_spend(world.ledger.settlements(), USER, NIGHTS[0])
+    assert spent[f"morning:{NIGHTS[0].isoformat()}:{USER}:rescore-full-muse:judge"] > 0
+    assert not world.ledger.open_holds()
+
+
+def test_a_rescore_that_fails_writes_neither_a_file_nor_a_step(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    assert world.run(NIGHTS[0], "--go")[0] == 0
+    world.judge.fail = RuntimeError("the judge is down")  # a rescore's failure is not the night's to log
+    folder = tmp_path / "deepseek"
+    before = _tree(world.root)
+    chosen = backfill_tool.plan(USER, "film_founder", NIGHTS[0], world.ports, score_root=folder)
+    with pytest.raises(RuntimeError, match="judge is down"):
+        backfill_tool.backfill(chosen, world.ports)
+    assert _tree(world.root) == before and not (folder / USER / "scores").exists()
+
+
+@pytest.mark.parametrize(("rule", "expected"), [
+    ("dir_file", "already exists"),
+    ("inside_results", "inside the sleep results tree"),
+    ("not_promoted", "wasn't promoted"),
+    ("not_in_history", "isn't in the person's promoted history"),
+    ("not_synthetic", "isn't registered synthetic"),
+    ("lock_held", "night lock is held"),
+])
+def test_a_rescore_is_refused_before_any_call_or_write(tmp_path: Path, rule: str, expected: str) -> None:
+    world = World(tmp_path, synthetic=rule != "not_synthetic")
+    night = NIGHTS[0]
+    folder = tmp_path / "deepseek"
+    if rule == "not_promoted":
+        world.night(night, {"status": "rejected", "checkpoint": None, "accelerated": True})
+    elif rule == "not_in_history":
+        unknown = CheckpointRef("p-abc-n9", USER, night, "uri://9", None)
+        world.night(night, {"status": "promoted", "checkpoint": ref_record(unknown), "accelerated": True})
+    elif rule == "dir_file":
+        (folder / USER / "scores").mkdir(parents=True)
+        (folder / USER / "scores" / "night-01.json").write_text(json.dumps({"night": night.isoformat()}),
+                                                                encoding="utf-8")
+    elif rule == "inside_results":
+        folder = world.root / "deepseek"
+    before = _tree(world.root)
+    with open(tmp_path / "night.lock", "a+b") as other:  # another run's lock, when the rule says so
+        if rule == "lock_held":
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, said = world.run(night, "--score-root", str(folder), "--go")
+    assert code == 1 and said[-1].startswith("refused: ") and expected in said[-1]
+    assert world.model.calls == [] and world.judge.calls == 0
+    assert _tree(world.root) == before and not (folder / USER / "scores" / "night-02.json").exists()
