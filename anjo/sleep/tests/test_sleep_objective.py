@@ -272,15 +272,17 @@ def test_the_seed_recipe_reaches_the_script_and_a_folded_night_starts_a_fresh_sl
         colab_train.load_config(json.dumps({**sent, "terms": {"fold_rank": 64, "dreams": True}}))
 
 
-def test_colab_refuses_the_seed_objective_whose_loss_ships_only_in_modals_image(tmp_path: Path) -> None:
+def test_colab_ships_the_seed_objectives_loss_files_at_modals_paths(tmp_path: Path) -> None:
+    from anjo.sleep.train import modal_job
     from anjo.sleep.train.runners import colab
 
     dataset = tmp_path / "dataset.jsonl"
     dataset.write_text("")
     inputs = {"workdir": str(tmp_path), "dataset_path": str(dataset), "config": {"objective": "sft_dpo_seed"}}
-    with pytest.raises(colab.ColabError, match="Modal"):
-        colab._uploads(inputs)
-    assert colab._uploads({**inputs, "config": {"objective": "sft_dpo"}})
+    assert colab._uploads(inputs) == [
+        (dataset, f"{colab.REMOTE_DIR}/{dataset.name}"), *modal_job.TRAIN_FILES]
+    assert colab._uploads({**inputs, "config": {"objective": "sft_dpo"}}) == [
+        (dataset, f"{colab.REMOTE_DIR}/{dataset.name}")]
 
 
 class _Tokens:

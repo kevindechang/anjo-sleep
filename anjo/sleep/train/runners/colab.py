@@ -12,7 +12,9 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 3. ``new`` an A100 session, ``install`` the pinned training packages, ``upload`` the night's
    dataset (and, for a warm start, the previous adapter's two files), ``exec`` the training script
    (``colab_train.py``) with the recipe in its environment, and ``download`` the adapter and its
-   receipt;
+   receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries, at
+   Modal's paths, and runs the uploaded script there, so its loss, fold and protect files load
+   beside it;
 4. ``stop`` the session in a ``finally``, on success, failure or cancel, then settle what the VM
    ran for. A stop that fails settles the whole hold and raises, so a VM that may still run is
    never silent.
@@ -52,7 +54,7 @@ from typing import Final, Literal
 from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
-from anjo.sleep.train import colab_train
+from anjo.sleep.train import colab_train, modal_job
 # The pins live with the training script (one source for every runner); torch comes with Colab's image.
 from anjo.sleep.train.colab_train import TRAIN_PACKAGES as TRAIN_PACKAGES
 from anjo.sleep.train.lora import DATASET_FILE, JOB
@@ -66,6 +68,10 @@ A100_CU_PER_HOUR: Final = 7.5
 POOL: Final = "colab_cu"
 REMOTE_DIR: Final = "/content/anjo"
 SCRIPT: Final = Path(colab_train.__file__)
+# A seeded night ships Modal's file list and runs it where Modal runs it, so its siblings load by
+# path; the three hours cover their uploads (at each call's hard timeout) plus a 27-minute night.
+SEED_TIMEOUT_S: Final = 3 * 3600.0
+SEED_ENTRY: Final = f"import runpy\nrunpy.run_path({modal_job.REMOTE_SCRIPT!r}, run_name='__main__')\n"
 # An accelerated life's VM is kept between nights only when the simulated day before was this short;
 # otherwise idling costs more than downloading the base weights again. Revisited after the Oct 30 timing.
 MAX_IDLE_BETWEEN_NIGHTS_S: Final = 600.0
@@ -170,16 +176,27 @@ def stop_person_sessions(cli: ColabCli, person_id: str, adapters: Iterable[str])
     return len(mine)
 
 
+def _seeded(inputs: Mapping[str, object]) -> bool:
+    """Whether the recipe is ``sft_dpo_seed``: the one objective that loads the files beside the script."""
+    recipe = inputs.get("config")
+    return isinstance(recipe, Mapping) and recipe.get("objective") == colab_train.SEED_OBJECTIVE
+
+
+def _job_timeout(inputs: Mapping[str, object], timeout_s: float) -> float:
+    """A seeded night's hard timeout: its files' uploads and download leave too little of two hours."""
+    return max(timeout_s, SEED_TIMEOUT_S) if _seeded(inputs) else timeout_s
+
+
 def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
-    """The dataset, and a warm start's two adapter files: nothing else is ever uploaded."""
+    """The dataset, a seeded night's shared training files, and a warm start's two adapter files:
+    nothing else is ever uploaded."""
     workdir = Path(str(inputs["workdir"]))
     dataset = Path(str(inputs["dataset_path"]))
     if dataset.name != DATASET_FILE or dataset.parent != workdir:
         raise ColabError("only the night's dataset file is uploaded")
-    recipe = inputs.get("config")
-    if isinstance(recipe, Mapping) and recipe.get("objective") == "sft_dpo_seed":  # before any hold or VM
-        raise ColabError("sft_dpo_seed trains on Modal only: its loss file ships in Modal's image, and Colab runs one file")
     files = [(dataset, f"{REMOTE_DIR}/{DATASET_FILE}")]
+    if _seeded(inputs):  # before any hold or VM: the same files, at the same paths, as Modal's image
+        files += list(modal_job.TRAIN_FILES)
     prev = inputs.get("prev_adapter_dir")
     if prev is not None:
         files += [(Path(str(prev)) / name, f"{REMOTE_DIR}/prev/{name}") for name in config.ADAPTER_FILES]
@@ -189,6 +206,16 @@ def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
 def _setup_s(uploads: int) -> float:
     return (NEW_TIMEOUT_S + INSTALL_TIMEOUT_S + uploads * UPLOAD_TIMEOUT_S
             + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S + EXEC_MARGIN_S)
+
+
+def _exec_script(workdir: Path, seed: bool) -> Path:
+    """The file ``colab exec -f`` reads: the script itself, or a seeded night's entry that runs the
+    uploaded script at its remote path, so ``__file__`` and its siblings' paths are the VM's."""
+    if not seed:
+        return SCRIPT
+    path = workdir / ".seed-entry.py"
+    path.write_text(SEED_ENTRY, encoding="utf-8")
+    return path
 
 
 def _receipt(path: Path) -> dict[str, object]:
@@ -230,6 +257,7 @@ class ColabRunner:
         recipe = inputs.get("config")
         if isinstance(recipe, Mapping) and recipe.get("channel") is not None:
             raise ColabError("the thought channel trains on Modal only: Colab runs the training script alone")
+        timeout_s = _job_timeout(inputs, timeout_s)
         name = config.check_adapter_name(str(inputs["adapter_name"]))
         uploads = _uploads(inputs)
         exec_s = timeout_s - _setup_s(len(uploads))
@@ -285,8 +313,14 @@ class ColabRunner:
             **({"ANJO_TRAIN_PREV": f"{REMOTE_DIR}/prev"} if warm else {}),
         }
         flags = [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
-        cli.call("exec", "-s", session, "-f", str(SCRIPT), "--timeout", str(exec_s), *flags,
-                 timeout_s=exec_s + EXEC_MARGIN_S)
+        seed = _seeded(inputs)
+        entry = _exec_script(Path(str(inputs["workdir"])), seed)
+        try:
+            cli.call("exec", "-s", session, "-f", str(entry), "--timeout", str(exec_s), *flags,
+                     timeout_s=exec_s + EXEC_MARGIN_S)
+        finally:
+            if seed:
+                entry.unlink(missing_ok=True)
         out.mkdir(parents=True, exist_ok=True)
         for name in _OUTPUT_FILES:
             cli.call("download", "-s", session, f"{REMOTE_DIR}/out/{name}", str(out / name),
@@ -388,6 +422,7 @@ class ColabLives:
         person = str(inputs["person_id"])
         if not runner._allow_real and not runner._is_synthetic(person):
             raise RealPersonRefused("Colab trains synthetic people only, unless allow_real is set")
+        timeout_s = _job_timeout(inputs, timeout_s)
         name = config.check_adapter_name(str(inputs["adapter_name"]))
         uploads = _uploads(inputs)
         life = self._lives.get(person)

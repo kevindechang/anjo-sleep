@@ -5,7 +5,7 @@ projector in the same loop (``channel_train.py``): one loss, one budget, one job
 ``colab_train.main`` hands a seeded recipe here (``main(ct, cfg)``, ``ct`` the training script's module,
 as ``channel_train.main`` takes it). Standalone like the script: the standard library at the top, the
 training stack inside the functions, its siblings loaded by path (``ct.sibling``). Modal's image carries
-it; the Colab runner refuses the objective.
+it, and the Colab runner uploads it beside the script at the same paths.
 
 **With the channel** each row that carries ``core`` (the state its reply was made under) reads that
 state as K soft tokens, spliced as the server splices them, and the projector trains with the LoRA:
@@ -278,6 +278,7 @@ def main(ct: Any, cfg: dict[str, Any]) -> int:  # pragma: no cover - runs only o
     receipt = {
         **done, "epochs": done["terms"]["epochs"], "train_minutes": minutes, "examples": len(kept),
         "dropped_truncated": len(rows) - len(kept), "gpu": torch.cuda.get_device_name(0) if smoke is None else "cpu",
+        "gpu_memory_mb": (torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)) if smoke is None else 0,
         "objective": cfg["objective"], "dpo_steps": 0, "pairs_dropped_truncated": len(pair_rows) - len(pairs),
         "dpo_reference": "adapter_off+projector_start" if "channel" in done else "adapter_off",
         "rendering": cfg["rendering"], **({"surprise_weights": surprise} if surprise else {}),

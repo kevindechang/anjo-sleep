@@ -39,8 +39,8 @@ with the adapter switched off; the receipt's ``dpo_reference`` says which refere
 Pairs longer than ``max_seq_length`` on either side are dropped and counted.
 
 The ``sft_dpo_seed`` objective (2026-10-29) trains no TRL pass: ``sleep_job.py``, which ships beside
-this file with ``sleep_loss.py``, ``sleep_fold.py`` and ``sleep_protect.py`` (Modal's image only; the Colab runner refuses the
-objective), runs the one weighted loss over the SFT rows, the pairs and the dataset's ``kind`` rows
+this file with ``sleep_loss.py``, ``sleep_fold.py`` and ``sleep_protect.py`` (Modal's image and the
+Colab runner's uploads), runs the one weighted loss over the SFT rows, the pairs and the dataset's ``kind`` rows
 (seeding, dreams, anchors), each tokenized as the server renders it (``served_ids``), and with a
 ``channel`` block trains the thought channel's projector in the same loop. Its recipe carries ``terms``:
 ``fold_rank`` (fold the night into the long-term adapter, ``ANJO_TRAIN_PREV``, at that rank),

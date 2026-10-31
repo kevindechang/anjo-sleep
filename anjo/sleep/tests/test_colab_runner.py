@@ -18,10 +18,12 @@ from anjo.sleep.budget import CAPS, Bound, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.serving import config
 from anjo.sleep.stops import BudgetStop
+from anjo.sleep.train import modal_job
 from anjo.sleep.train.lora import DATASET_FILE, JOB, adapter_name
 from anjo.sleep.train.runners import colab
 from anjo.sleep.train.runners.colab import (
     A100_CU_PER_HOUR,
+    SEED_TIMEOUT_S,
     ColabCli,
     ColabError,
     ColabRunner,
@@ -42,11 +44,14 @@ class FakeColab:
         self.calls: list[tuple[list[str], float]] = []
         self.fail = fail
         self.timeout = timeout
+        self.executed = ""
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
         args = list(args)
         self.calls.append((args, timeout_s))
         command = args[3]
+        if command == "exec":
+            self.executed = Path(args[args.index("-f") + 1]).read_text(encoding="utf-8")
         if command == self.fail:
             if self.timeout:
                 raise subprocess.TimeoutExpired(args, timeout_s)
@@ -55,7 +60,8 @@ class FakeColab:
             local = Path(args[-1])
             if local.name == "receipt.json":
                 local.write_text(json.dumps({"steps": 9, "epochs": 3, "train_minutes": 4.0, "examples": 3,
-                                             "dropped_truncated": 0, "gpu": "A100-SXM4-80GB"}))
+                                             "dropped_truncated": 0, "gpu": "A100-SXM4-80GB",
+                                             "gpu_memory_mb": 81920}))
             else:
                 local.write_bytes(b"{}")
         return subprocess.CompletedProcess(args, 0, "", "")
@@ -314,6 +320,62 @@ def test_sleeps_sweep_and_minds_sweep_leave_each_others_sessions_alone() -> None
         ["stop", "-s", "anjo-mind-apd-1a2b3c4d"], ["stop", "-s", "anjo-mind-p-bbbbbbbbbbbb-n0"]]
     assert not colab.MIND_SESSION_PREFIX.startswith(colab.SESSION_PREFIX)
     assert not colab.SESSION_PREFIX.startswith(colab.MIND_SESSION_PREFIX)
+
+
+def _seeded_inputs(tmp_path: Path, *, prev: Path | None = None, objective: str = "sft_dpo_seed") -> dict[str, Any]:
+    inputs = _inputs(tmp_path, prev=prev)
+    inputs["config"] = {"r": 16, "objective": objective}
+    return inputs
+
+
+def _env(executed: list[str]) -> dict[str, str]:
+    pairs = [executed[i + 1] for i, part in enumerate(executed) if part == "--env"]
+    return {key: value for key, value in (pair.split("=", 1) for pair in pairs)}
+
+
+@pytest.mark.parametrize("warm", [False, True])
+def test_a_seeded_night_ships_the_shared_files_and_runs_modal_entry(tmp_path: Path, warm: bool) -> None:
+    prev = None
+    if warm:
+        prev = tmp_path / "prev"
+        prev.mkdir()
+        for file in config.ADAPTER_FILES:
+            (prev / file).write_text("{}")
+    inputs = _seeded_inputs(tmp_path, prev=prev)
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    outputs = _runner(fake, ledger).run(JOB, inputs, timeout_s=TIMEOUT_S)
+
+    uploads = [(Path(args[-2]), args[-1]) for args, _ in fake.calls if args[3] == "upload"]
+    assert uploads == [
+        (tmp_path / "work" / DATASET_FILE, f"{colab.REMOTE_DIR}/{DATASET_FILE}"),
+        *modal_job.TRAIN_FILES,
+        *([] if prev is None else [(prev / file, f"{colab.REMOTE_DIR}/prev/{file}") for file in config.ADAPTER_FILES]),
+    ]
+    assert fake.executed == colab.SEED_ENTRY and modal_job.REMOTE_SCRIPT in fake.executed
+    executed = next(args for args, _ in fake.calls if args[3] == "exec")
+    env = _env(executed)
+    assert env == {
+        "ANJO_TRAIN_CONFIG": json.dumps(inputs["config"], sort_keys=True),
+        "ANJO_TRAIN_DATASET": f"{colab.REMOTE_DIR}/{DATASET_FILE}",
+        "ANJO_TRAIN_OUT": f"{colab.REMOTE_DIR}/out",
+        **({"ANJO_TRAIN_PREV": f"{colab.REMOTE_DIR}/prev"} if warm else {}),
+    }
+    reserve, _ = _events(ledger)
+    assert reserve["timeout_s"] == SEED_TIMEOUT_S
+    assert sum(timeout for _, timeout in fake.calls) <= SEED_TIMEOUT_S
+    assert outputs["gpu"] == "A100-SXM4-80GB" and outputs["gpu_memory_mb"] == 81920
+
+
+@pytest.mark.parametrize("objective", ["sft", "sft_dpo"])
+def test_the_other_objectives_upload_and_exec_exactly_as_before(tmp_path: Path, objective: str) -> None:
+    inputs = _seeded_inputs(tmp_path, objective=objective)
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    _runner(fake, ledger).run(JOB, inputs, timeout_s=TIMEOUT_S)
+    uploads = [Path(args[-2]) for args, _ in fake.calls if args[3] == "upload"]
+    assert uploads == [tmp_path / "work" / DATASET_FILE]
+    assert fake.executed == colab.SCRIPT.read_text(encoding="utf-8")
+    reserve, _ = _events(ledger)
+    assert reserve["timeout_s"] == TIMEOUT_S  # two hours, as today
 
 
 def test_a_runner_names_its_sessions_with_its_own_prefix(tmp_path: Path) -> None:
