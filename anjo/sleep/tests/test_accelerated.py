@@ -24,7 +24,7 @@ from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
-from anjo.sleep.probes.morning import MorningError, PAIRS, TooManyNoVerdicts
+from anjo.sleep.probes.morning import COMMITTED_ARMS, MorningError, PAIRS, TooManyNoVerdicts
 from anjo.sleep.sim.day import DayRun, run_day
 from anjo.sleep.types import CheckpointRef, NightResult
 from anjo.sleep.tests import accelerated_rig
@@ -368,7 +368,8 @@ def test_fake_gate_includes_scoring(capsys: pytest.CaptureFixture[str]) -> None:
     assert report["scored_nights"] == 2
     for scored in report["scores"]:
         assert set(scored["arms"]) == {"1", "2C", "2F", "3", "3x", "4"} and scored["unavailable"] == {}
-        assert set(scored["pairs"]) == set(PAIRS)
+        # A full run without ANJO_SLEEP_ARMS_EXTRA asks the committed arms, so their pairs alone answer.
+        assert set(scored["pairs"]) == {n for n, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS}
     assert report["scores"][0]["night"] != report["scores"][1]["night"]
 
 

@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 BACKOFF_S: Final = (2.0, 4.0)  # before the second attempt, and the third, without a Retry-After
 RETRY_AFTER_MAX_S: Final = 30.0  # the longest a provider's Retry-After is waited for
+CONNECT_TIMEOUT_S: Final = 30.0  # the most a connection attempt waits, however long the reply may take
 
 
 class ModelApiError(RuntimeError):
@@ -165,7 +166,8 @@ def post_chat(
     headers = {"Authorization": f"Bearer {read_key(key_env)}"}
     where = f"{provider} chat with {model}"
     try:
-        with httpx.Client(timeout=timeout_s, transport=transport) as client:
+        with httpx.Client(timeout=httpx.Timeout(timeout_s, connect=min(CONNECT_TIMEOUT_S, timeout_s)),
+                          transport=transport) as client:
             response = _send(client, url, body, headers, where=where, retries=retries)
             attempt = 0
             while retries is not None and (pause := retries.pause(attempt, response)) is not None:

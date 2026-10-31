@@ -16,7 +16,15 @@ import httpx
 import pytest
 
 from anjo.sleep import baseten_api, meta_api
-from anjo.sleep.model_api import BACKOFF_S, RETRY_AFTER_MAX_S, ChatResult, MissingApiKey, ModelApiError, Retries
+from anjo.sleep.model_api import (
+    BACKOFF_S,
+    CONNECT_TIMEOUT_S,
+    RETRY_AFTER_MAX_S,
+    ChatResult,
+    MissingApiKey,
+    ModelApiError,
+    Retries,
+)
 
 FAKE_KEY = "sk-fake-0123456789abcdef-never-leaks"
 META_BASE = "https://meta.example.test/v1"
@@ -220,6 +228,26 @@ def test_error_status_is_reported_without_the_body() -> None:
 def test_timeout_names_the_limit() -> None:
     with pytest.raises(ModelApiError, match="timed out after 30s"):
         _baseten(httpx.MockTransport(_fail_with_timeout))
+
+
+def test_a_slow_connect_is_bounded_while_the_reply_keeps_its_own_timeout() -> None:
+    seen: list[httpx.Request] = []
+    meta_api.chat("muse-spark", MESSAGES, None, 300.0, temperature=0.0,
+                  transport=_recording(seen, lambda r: httpx.Response(200, json=_ok("muse-spark"))))
+
+    (request,) = seen
+    timeout = request.extensions["timeout"]
+    assert timeout["connect"] == CONNECT_TIMEOUT_S  # a hung connection waits its own bound, not 300 s
+    assert timeout["read"] == 300.0  # the reply still gets the caller's whole limit
+
+
+def test_a_short_timeout_bounds_the_connect_too() -> None:
+    seen: list[httpx.Request] = []
+    baseten_api.chat(baseten_api.SPARK_OPEN, MESSAGES, None, 5.0,
+                     transport=_recording(seen, lambda r: httpx.Response(200, json=_ok(baseten_api.SPARK_OPEN))))
+
+    (request,) = seen
+    assert request.extensions["timeout"]["connect"] == 5.0  # never longer than the call's own limit
 
 
 def test_reply_without_usage_is_refused_so_spend_is_never_undercounted() -> None:

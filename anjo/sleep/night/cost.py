@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -84,7 +85,7 @@ from anjo.sleep.practice.critics import DEEPSEEK_IN_PER_M, DEEPSEEK_OUT_PER_M
 from anjo.sleep.practice.full import SPARK_CAPS
 from anjo.sleep.practice.roles import Roles
 from anjo.sleep.probes.generate import COUNTS
-from anjo.sleep.probes.morning import ARM_ORDER, DAILY, JUDGE_USD_PER_CALL, PAIRS, ProbeSubset
+from anjo.sleep.probes.morning import DAILY, HARNESS_PAIRS, JUDGE_USD_PER_CALL, PAIRS, ProbeSubset, full_arms
 from anjo.sleep.serving import gpus
 from anjo.sleep.serving.config import CONCURRENT_REQUESTS, DEFAULT_MAX_INPUTS, SCALEDOWN_S
 
@@ -349,9 +350,9 @@ def _morning_calls(subset: ProbeSubset | None) -> tuple[int, int]:
     """Replies and judge calls of one morning: every probe by every arm, each arm against arm 1 and
     the headline pairs both ways (``taste_ab`` by log-probability)."""
     counts = dict(COUNTS) if subset is None else dict(subset.per_kind)
-    arms = ARM_ORDER if subset is None else subset.arms
+    arms = full_arms(os.environ) if subset is None else subset.arms
     judged = sum(n for kind, n in counts.items() if kind != "taste_ab")
-    comparisons = len(arms) - 1 + sum(1 for a, b in PAIRS.values() if a in arms and b in arms)
+    comparisons = len(arms) - 1 + sum(1 for a, b in {**PAIRS, **HARNESS_PAIRS}.values() if a in arms and b in arms)
     return sum(counts.values()) * len(arms), comparisons * judged * 2
 
 

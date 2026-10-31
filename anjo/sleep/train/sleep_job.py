@@ -30,6 +30,13 @@ save, and the fold keeps it. Its receipt is ``terms.protect``: the basis, its ra
 
 Contrast rows (the shared pretraining's) train in the channel's own run (``channel_train.main``); a seeded
 recipe refuses them. The channel's ``max_minutes`` stops the loop as it stops the channel run.
+
+**Day dreams** (``ANJO_SLEEP_DAY_DREAMS``): the dataset's seeding rows may carry a ``group``
+(``sleep_loss.SeedSeq.group``): ``"replay"`` for earlier practice, ``"dream"`` for one of the day's
+dreams. The job hands the group to the one loss, which holds out four dream rows, tries each group of
+four in the loaded model, and trains only the groups that lower the held-out seeding KL without
+dropping the anchors (``sleep_loss._dream_trials``). One job, one loaded model: the trials need no
+second adapter and no second boot.
 """
 from __future__ import annotations
 
@@ -65,6 +72,9 @@ def term_rows(ct: Any, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, A
             ct.check_clean(row)
             if row["kind"] == "seed":
                 ct.check_clean({**row, "prompt": row.get("teacher")})
+                group = row.get("group")
+                if group is not None and not isinstance(group, str):
+                    raise ValueError(f"seed {row.get('id')}'s group is text, or absent")
         found[row["kind"]].append(row)
     return found
 
@@ -95,7 +105,8 @@ def seed_batch(ct: Any, loss: Any, tokenizer: Any, kept: Kept, pairs: Kept, term
         return tuple(ct.reply_ids(tokenizer, ct._reply(row[side])))
 
     limit = cfg["max_seq_length"] - (cfg["channel"]["k"] if cfg.get("channel") else 0)
-    seeds = [loss.SeedSeq(prompt(row), prompt(row, "teacher"), reply(row), state_key(row)) for row in terms["seed"]]
+    seeds = [loss.SeedSeq(prompt(row), prompt(row, "teacher"), reply(row), state_key(row), row.get("group"))
+             for row in terms["seed"]]
     dreams = ([(loss.Seq(prompt(row), reply(row), state=state_key(row)), str(row.get("seed_kind", "")))
                for row in terms["dream"]] if cfg["terms"]["dreams"] else [])  # dream rows train only when asked for
     fit = [(seq, kind) for seq, kind in dreams if len(seq.prompt) + len(seq.reply) <= limit]
@@ -186,7 +197,8 @@ def seed_plan(loss: Any, cfg: Mapping[str, Any], *, eot: int, pad: int, long_ter
                      seed=cfg["seed"], eot=eot, pad=pad, dpo_lr=cfg["dpo_learning_rate"], long_term_rank=long_term_rank,
                      dreams=cfg["terms"]["dreams"], stretch_s=cfg.get("match_minutes", 0.0) * 60.0,
                      deadline=begun + 60.0 * ch["max_minutes"] if ch else float("inf"),
-                     passes=cfg["terms"].get("passes", 0))
+                     passes=cfg["terms"].get("passes", 0),
+                     day_dreams=bool(cfg["terms"].get("day_dreams", False)))
 
 
 def train(ct: Any, cfg: dict[str, Any], settings: dict[str, Any], tokenizer: Any, template: dict[str, str], kept: Kept,

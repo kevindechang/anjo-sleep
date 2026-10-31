@@ -119,7 +119,8 @@ class Pair:
 @dataclass(frozen=True)
 class SeedRow:
     """One knowledge-seeding row: the teacher reads ``context`` (the consolidated day) before the
-    message, the student the message alone, and both score ``reply``, her own practice reply."""
+    message, the student the message alone, and both score ``reply``, her own practice reply.
+    ``group`` marks one of her day dreams (``dream``); None is every other row, replay included."""
 
     id: str
     context: str
@@ -127,6 +128,7 @@ class SeedRow:
     reply: str
     tokens: int
     core: str | None = None  # its example's core state (JSON), channel on: student and teacher both read it
+    group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,7 +225,8 @@ class Dataset:
 
     def _term_rows(self) -> list[dict[str, object]]:
         seeds: list[dict[str, object]] = [{"id": row.id, "kind": "seed", "teacher": _messages((("system", row.context), ("user", row.message))),
-                  "prompt": _messages((("user", row.message),)), "completion": _reply(row.reply), **_core(row.core)}
+                  "prompt": _messages((("user", row.message),)), "completion": _reply(row.reply),
+                  **({} if row.group is None else {"group": row.group}), **_core(row.core)}
                   for row in self.seeds]
         dreams: list[dict[str, object]] = [{"id": row.id, "kind": "dream", "seed_kind": row.kind,
                    "prompt": _messages((("system", row.thread), ("user", row.message))),

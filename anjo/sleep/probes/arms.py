@@ -1,4 +1,4 @@
-"""The six arms of the proof (Task 2, spec 5.1): who answers, with which weights and context.
+"""The arms of the proof (Task 2, spec 5.1): who answers, with which weights and context.
 
 | Arm | Weights | Context |
 |---|---|---|
@@ -6,9 +6,16 @@
 | 3 | the person's adapter (base if no night was promoted) | none |
 | 3x | the registered donor's adapter | none |
 | 2C | base | C |
+| 2A | base | C, plus the night's agent notes |
 | 2F | base | C, plus every stored evidence item raw |
 | 4 | the person's adapter | C, byte-identical to 2C |
+| 4M | the person's adapter | C, plus MIND's homework and records |
 | 2H | base | C, then the person's strategy list in its marked block (reported only) |
+
+2A differs from 2C only by the evidence items the scheduled agent wrote (``kind``
+``agent_note``, ids ``agent-``), and 4M differs from 4 only by what MIND produced (its
+``mind-`` homework and its records' findings and notices). Both read their extra items
+tolerantly: with none stored, the arm's context is C itself, byte for byte.
 
 ``2H`` is the harness arm: with an empty list its prompt is 2C's exactly, so it measures the list
 and nothing else. It is asked only when ``ANJO_SLEEP_HARNESS=1`` (``probes.morning``), never in
@@ -26,7 +33,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 from anjo.sleep.context.recall_common import estimate_tokens
 from anjo.sleep.harness.store import strategy_block
@@ -35,17 +42,22 @@ from anjo.sleep.probes.clients import AdapterRegistry, ModelClient, TokenLogprob
 from anjo.sleep.probes.logprob import TasteChoice, forced_choice, present
 from anjo.sleep.types import CheckpointRef, Evidence, Probe
 
-Arm = Literal["1", "2C", "2F", "3", "3x", "4", "2H"]
-# The six registered arms, and the reported-only harness arm beside them.
-ARMS: Final = frozenset({"1", "2C", "2F", "3", "3x", "4"})
+Arm = Literal["1", "2C", "2A", "2F", "3", "3x", "4", "4M", "2H"]
+# Every arm a morning can ask: the six registered ones, the reported-only 2A and 4M
+# (ANJO_SLEEP_ARMS_EXTRA) and the reported-only harness arm 2H (ANJO_SLEEP_HARNESS).
+ARMS: Final = frozenset(get_args(Arm))
 HARNESS_ARM: Final = "2H"
-KNOWN: Final = ARMS | {HARNESS_ARM}
-WITH_CONTEXT: Final = frozenset({"2C", "2F", "4", "2H"})
-PERSONAL: Final = frozenset({"3", "4"})
+WITH_CONTEXT: Final = frozenset({"2C", "2A", "2F", "4", "4M", "2H"})
+PERSONAL: Final = frozenset({"3", "4", "4M"})
 REPLY_TEMPERATURE: Final = 0.7  # replies are sampled (spec 5.1); only taste_ab is deterministic
 GLIMMER_WINDOW_TOKENS: Final = 131_072
 REPLY_RESERVE_TOKENS: Final = 2_048  # room left for the reply itself
 EVIDENCE_HEADING: Final = "## Every stored evidence item"
+AGENT_NOTE_KIND: Final = "agent_note"  # the scheduled agent's notes: 2A's only difference from 2C
+AGENT_NOTE_PREFIX: Final = "agent-"
+MIND_HOMEWORK_PREFIX: Final = "mind-"  # MIND's homework artifacts: one of 4M's differences from 4
+AGENT_NOTES_HEADING: Final = "## The night's agent notes"
+MIND_NOTES_HEADING: Final = "## What MIND found"
 
 
 class DonorError(RuntimeError):
@@ -78,8 +90,12 @@ class Question:
 class ArmDeps:
     """Everything ``reply`` reaches outside through. ``donors`` maps a person to the donor
     registered for them (the persona registration, or the draw log). ``until`` is the night's
-    date: 2F holds the evidence stored through it. ``context_cache`` keeps one built context
-    per (person, probe) so 2C and 4 get the very same text."""
+    date: 2F, 2A and 4M hold the evidence stored through it. ``context_cache`` keeps one built
+    context per (person, probe) so 2C, 2A, 4 and 4M start from the very same text.
+    ``mind_notes`` reads MIND's records through the night for 4M (its findings and the questions
+    it noticed); ``None`` means the person has no records to serve, so 4M asks exactly what 4
+    asks. ``mind_cache`` keeps one read per person, so a morning folds the records once, not per
+    probe."""
 
     model: ModelClient
     adapters: AdapterRegistry
@@ -94,6 +110,8 @@ class ArmDeps:
     # The person's current strategy list (``harness.store``); empty off, and then 2H is 2C exactly.
     strategies: Callable[[str], Sequence[str]] = lambda user_id: ()
     context_cache: dict[tuple[str, str], str] = field(default_factory=dict, compare=False, repr=False)
+    mind_notes: Callable[[str, date], Sequence[str]] | None = None
+    mind_cache: dict[str, tuple[str, ...]] = field(default_factory=dict, compare=False, repr=False)
 
 
 def _adapter(arm: Arm, user_id: str, deps: ArmDeps, donor: str | None) -> CheckpointRef | None:
@@ -154,6 +172,50 @@ def _with_all_evidence(context: str, probe: Probe, user_id: str, deps: ArmDeps) 
     return f"{context}\n\n{EVIDENCE_HEADING}\n{lines or 'none'}", dropped
 
 
+def _noted_items(
+    user_id: str, deps: ArmDeps, *, kind: str, prefix: str, day: date | None = None,
+) -> list[Evidence]:
+    """The stored items of one kind whose id carries ``prefix``, oldest first; ``day`` keeps one
+    night's alone (the agent's notes). Held-out items never reach an arm, whatever a store's
+    ``stored`` hands back. A person with none stored (no agent ran, MIND produced nothing) gives
+    an empty list, never an error."""
+    found = (item for item in deps.evidence(user_id).stored(deps.until)
+             if item.kind == kind and item.id.startswith(prefix) and not item.held_out
+             and (day is None or item.day == day))
+    return sorted(found, key=lambda item: (item.created_at, item.id))
+
+
+def _notes_section(context: str, heading: str, lines: Sequence[str]) -> str:
+    """Context C plus one section of notes, or C itself when there are none: an arm whose extra
+    source is empty is asked the very same text as the arm it differs from (2C, or 4)."""
+    return f"{context}\n\n{heading}\n" + "\n".join(lines) if lines else context
+
+
+def _with_agent_notes(context: str, user_id: str, deps: ArmDeps) -> str:
+    """2A: C plus the night's agent notes, and nothing else: an older night's note is not tonight's."""
+    lines = [_line(item) for item in _noted_items(
+        user_id, deps, kind=AGENT_NOTE_KIND, prefix=AGENT_NOTE_PREFIX, day=deps.until)]
+    return _notes_section(context, AGENT_NOTES_HEADING, lines)
+
+
+def _mind_records(user_id: str, deps: ArmDeps) -> tuple[str, ...]:
+    """The person's MIND records through the night, read once per morning, not once per probe."""
+    if deps.mind_notes is None:
+        return ()
+    if user_id not in deps.mind_cache:
+        deps.mind_cache[user_id] = tuple(deps.mind_notes(user_id, deps.until))
+    return deps.mind_cache[user_id]
+
+
+def _with_mind_notes(context: str, user_id: str, deps: ArmDeps) -> str:
+    """4M: C plus what MIND produced: its homework items, then its records' lines unchanged (each
+    already carries its id, so prefixing another bullet would serve ``- - [id]``)."""
+    lines = [_line(item) for item in _noted_items(
+        user_id, deps, kind="homework", prefix=MIND_HOMEWORK_PREFIX)]
+    lines.extend(_mind_records(user_id, deps))
+    return _notes_section(context, MIND_NOTES_HEADING, lines)
+
+
 def _question_text(probe: Probe) -> str:
     if probe.options is None:
         return probe.prompt
@@ -175,7 +237,7 @@ def prepare(
     ``donor`` is for callers that name one (arm 3x): any donor other than the registered one is
     refused before a single adapter is asked for.
     """
-    if arm not in KNOWN:
+    if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}")
     if probe.person_id != user_id:
         raise ValueError(f"probe {probe.id} belongs to another person than {user_id}")
@@ -186,6 +248,10 @@ def prepare(
         context = _context(user_id, probe, deps)
         if arm == "2F":
             context, dropped = _with_all_evidence(context, probe, user_id, deps)
+        elif arm == "2A":
+            context = _with_agent_notes(context, user_id, deps)
+        elif arm == "4M":
+            context = _with_mind_notes(context, user_id, deps)
         elif arm == HARNESS_ARM:
             context = strategy_block(context, deps.strategies(user_id))
     return Question(arm, probe, adapter, context, dropped)

@@ -30,7 +30,7 @@ from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.meter import SpendMeter, WonderMeter
 from anjo.sleep.practice.full import FullPractice
 from anjo.sleep.probes.arms import ArmDeps, reply_seed
-from anjo.sleep.probes.morning import ARM_ORDER, Morning, run_morning
+from anjo.sleep.probes.morning import COMMITTED_ARMS, Morning, run_morning
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.serving.client import ServingError, VllmClient
 from anjo.sleep.serving import config
@@ -219,7 +219,7 @@ def test_morning_concurrent_matches_serial_scores(tmp_path: Path) -> None:
     assert serial_record.pop("seconds") == together_record.pop("seconds") == 42.0  # its wall time, recorded
     assert together_record == serial_record  # every score, row and CI
     assert (together.replies, together.judge_calls) == (serial.replies, serial.judge_calls) == (
-        len(ARM_ORDER) * 11, judge.calls)
+        len(COMMITTED_ARMS) * 11, judge.calls)
     assert sorted(map(repr, parallel_rec.log)) == sorted(map(repr, serial_rec.log))  # 2C and 4 share their contexts
     assert serial_rec.most == 1 and 1 < parallel_rec.most <= 8
 
@@ -239,7 +239,7 @@ def test_concurrency_one_is_serial(tmp_path: Path) -> None:
     _score(tmp_path, morning_rec, 1)
     assert morning_rec.threads == {threading.get_ident()} and morning_rec.most == 1
     seeds = [entry[2] for entry in morning_rec.log if entry[0] == "reply"]
-    assert seeds == [reply_seed(0, p.id, arm) for arm in ARM_ORDER for p in _probes() if p.kind != "taste_ab"]
+    assert seeds == [reply_seed(0, p.id, arm) for arm in COMMITTED_ARMS for p in _probes() if p.kind != "taste_ab"]
 
 
 def test_the_setting_defaults_to_eight_and_refuses_anything_else() -> None:
@@ -384,7 +384,7 @@ def test_failing_morning_run_drains_and_settles(tmp_path: Path) -> None:
     assert ":arms:" in settled  # the GPU time it used; the judge's hold, which spent nothing, was released
     assert judge.calls == 0 and not list((tmp_path / "results").rglob("*.json"))  # nothing judged, nothing written
     replies = [entry for entry in rec.log if entry[0] == "reply"]
-    assert len(replies) < len(ARM_ORDER) * 9  # arms not yet begun never start
+    assert len(replies) < len(COMMITTED_ARMS) * 9  # arms not yet begun never start
 
 
 def test_a_slow_load_never_blocks_a_loaded_adapter() -> None:

@@ -19,7 +19,19 @@ from anjo.sleep.night.daily import morning_receipt
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
 from anjo.sleep.personas.model import load_person_file
-from anjo.sleep.probes.morning import DAILY, MORNING_PROBES, MORNING_SUBSET_ENV, Morning, MorningResult, morning_subset
+from anjo.sleep.probes.morning import (
+    ARM_ORDER,
+    ARMS_EXTRA_ENV,
+    COMMITTED_ARMS,
+    DAILY,
+    MORNING_PROBES,
+    MORNING_SUBSET_ENV,
+    Morning,
+    MorningResult,
+    full_arms,
+    morning_subset,
+    run_morning,
+)
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.sim import accelerated
 from anjo.sleep.tests.accelerated_rig import FakeAccelerated
@@ -56,6 +68,21 @@ def test_the_setting_names_the_full_morning_or_the_daily_subset_and_nothing_else
     assert morning_subset({MORNING_SUBSET_ENV: "daily-v1"}) is DAILY
     with pytest.raises(ValueError, match=MORNING_SUBSET_ENV):
         morning_subset({MORNING_SUBSET_ENV: "daily"})
+
+
+def test_the_full_morning_asks_the_committed_arms_until_the_extra_setting_names_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A full score from before 2A and 4M stays the same run: the extra arms join only on the setting.
+    assert full_arms({}) == COMMITTED_ARMS and "2A" not in full_arms({}) and "4M" not in full_arms({})
+    assert full_arms({ARMS_EXTRA_ENV: "1"}) == ARM_ORDER and {"2A", "4M"} <= set(full_arms({ARMS_EXTRA_ENV: "1"}))
+    assert full_arms({ARMS_EXTRA_ENV: "0"}) == COMMITTED_ARMS
+    monkeypatch.setenv(ARMS_EXTRA_ENV, "1")
+    build, registry = _build(tmp_path)
+    done = run_morning("p1", NIGHT, registry.adapters["p1"], morning=build("p1", "film_founder", NIGHT))
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert set(record["arms"]) == {"1", "2C", "2A", "2F", "3", "4", "4M"}  # 3x has no donor here
+    assert {"4M_vs_2A", "4M_vs_4"} <= set(record["pairs"])
 
 
 @pytest.mark.parametrize(("value", "label"), [("daily-v2", "development"), ("daily-v1", "final")])

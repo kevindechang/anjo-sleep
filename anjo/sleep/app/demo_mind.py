@@ -291,13 +291,6 @@ def _built(user: str, sources: MindSources, held: HeldOutText) -> dict[str, Any]
             "return": return_payload(user, sources, held)}
 
 
-def mind_payload(user: str | None) -> dict[str, Any]:
-    """Her mind panel, filtered. Every section with free text is unavailable when the account isn't
-    synthetic or the held-out filter can't be built."""
-    held = None if user is None or not is_synthetic(user) else held_out(user)
-    return _closed() if user is None or held is None else _built(user, held)
-
-
 def _files(root: Path) -> Iterator[Path]:
     if root.is_file():
         yield root
@@ -322,7 +315,7 @@ def _fingerprint(user: str) -> Fingerprint:
 
 
 class PanelCache:
-    """``mind_payload`` for one account, kept until a file it reads changes or ``PANEL_TTL_S``
+    """The mind panel for one account, kept until a file it reads changes or ``PANEL_TTL_S``
     passes. One build at a time: requests that arrive during a build wait for it, then share it.
     The return moment travels in the same payload: it is read from the same records, and a visit
     asks for both."""

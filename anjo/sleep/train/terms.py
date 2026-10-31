@@ -25,6 +25,18 @@ each resting on at least one real event, cleared by its ancestry, its message an
 decontaminator's three rules and its thread (the student's input) to C's. **Anchors** (``anchor_rows``): the 32
 hand-written items of ``sets/anchors.jsonl``, which the training job scores before and after the dream block. No gate
 scores them: training must never see a gate item.
+
+**Day dreams** (``day_dream_rows``, ``ANJO_SLEEP_DAY_DREAMS=1``): her Glimmer writes the messages the
+person might send next from the same consolidated day the seed teacher reads, then answers each with
+that day in context (``night/day_dreams.py``). The rows are knowledge-seeding rows, so the teacher's
+context is the day and the student's the message alone; ``group="dream"`` marks them for the job's
+keep-if-improves trials. The day is the newest transcript whose context is non-empty and whose
+ancestry may train; a day that may not train, or that holds a sealed probe, asks nothing of her
+Glimmer and spends nothing (``attach_night_terms``). Replay rows are earlier practice examples: the
+same refusals as tonight's, newest first, at most ``SEED_REPLAY_MAX``, because the night's own kept
+replies are too few to fill the capacity point's steps; a refusal is counted only while that cap
+still leaves room, so rows past it never inflate the receipt. They stay ordinary seed rows; only the
+dreams carry a group.
 """
 from __future__ import annotations
 
@@ -36,11 +48,12 @@ from datetime import date
 from typing import Any, Final
 
 from anjo.sleep.context.recall_common import estimate_tokens
+from anjo.sleep.night.day_dreams import DAY_DREAM_GROUP, DayDream, DreamDay
 from anjo.sleep.night.deps import NightDeps
 from anjo.sleep.night.dreams import SEED_KINDS, Dream
 from anjo.sleep.night.meter import SpendMeter
 from anjo.sleep.ports import Decontaminator, EvidenceStore
-from anjo.sleep.practice.transcripts import TranscriptStore
+from anjo.sleep.practice.transcripts import PracticeTranscript, TranscriptStore
 from anjo.sleep.provenance import may_train, union
 from anjo.sleep.sets.loader import load_anchors
 from anjo.sleep.train.dataset import (
@@ -49,6 +62,7 @@ from anjo.sleep.train.dataset import (
     AnchorRow,
     Dataset,
     DreamRow,
+    Example,
     SeedRow,
     carries_verbatim,
 )
@@ -57,8 +71,11 @@ from anjo.sleep.types import Evidence, Probe
 DAY_KINDS: Final = ("lesson", "correction", "preference", "tone_request")  # what the person said today
 ANCHORS: Final = 32
 SEED_DROPS: Final = ("missing", "teacher_target", "no_context", "uncleared", "probe", "truncated")
+SEED_REPLAY_MAX: Final = 24  # an earlier-practice cap: enough rows for capacity, never the whole log
 DREAMS_NOT_WIRED: Final = "not wired"  # the dataset receipt's dreams while MIND's dream states are not
 DREAM_DROPS: Final = ("unanchored", "uncleared", "probe", "truncated")
+DAY_DREAMS_NOT_WIRED: Final = "not wired"  # the dataset receipt's day dreams without a serving client
+DAY_DREAM_DROPS: Final = ("no_context", "uncleared", "probe", "truncated")
 NOTES_HEAD: Final = "What you know about them, from your notes:"
 TODAY_HEAD: Final = "What they told you today:"
 
@@ -83,11 +100,34 @@ def _tokens(*texts: str) -> int:
     return sum(estimate_tokens(text) + ROLE_OVERHEAD_TOKENS for text in texts)
 
 
+def _seed_row(
+    example: Example, transcript: PracticeTranscript, items: Sequence[Evidence],
+    day_ancestry: frozenset[str] | None, sealed: Sequence[Probe], *, hosted_in_training: bool,
+    max_seq_tokens: int, group: str | None,
+) -> tuple[SeedRow | None, str | None]:
+    """One seeding row from ``example`` and its transcript, or the refusal's reason."""
+    context = consolidated_day(transcript.context, items)
+    tokens = _tokens(context, transcript.message, example.completion)
+    reason = (
+        "no_context" if not context
+        else "uncleared" if not may_train(union((transcript.ancestry, day_ancestry)),
+                                          hosted_in_training=hosted_in_training)
+        else "probe" if carries_verbatim(context, list(sealed))
+        else "truncated" if tokens > max_seq_tokens else None
+    )
+    if reason is not None:
+        return None, reason
+    return SeedRow(id=example.id, context=context, message=transcript.message, reply=example.completion,
+                   tokens=tokens, core=example.core, group=group), None
+
+
 def seed_rows(
     data: Dataset, transcripts: TranscriptStore, day: Sequence[Evidence], sealed: Sequence[Probe], *,
-    hosted_in_training: bool, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
+    hosted_in_training: bool, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS, replay: bool = False,
 ) -> tuple[tuple[SeedRow, ...], dict[str, int]]:
-    """Tonight's seeding rows, from the dataset's kept new examples, and the refusals by reason."""
+    """Tonight's seeding rows, from the dataset's kept new examples, and the refusals by reason. With
+    ``replay``, earlier practice rows join them under the same refusals, newest first, at most
+    ``SEED_REPLAY_MAX``: they are where a night's training volume comes from once its own rows run out."""
     dropped = dict.fromkeys(SEED_DROPS, 0)
     items = today_items(day)
     day_ancestry = union(item.ancestry for item in items)
@@ -102,20 +142,98 @@ def seed_rows(
         if transcript is None:
             dropped["missing"] += 1
             continue
-        context = consolidated_day(transcript.context, items)
-        tokens = _tokens(context, transcript.message, example.completion)
-        reason = (
-            "no_context" if not context
-            else "uncleared" if not may_train(union((transcript.ancestry, day_ancestry)),
-                                              hosted_in_training=hosted_in_training)
-            else "probe" if carries_verbatim(context, list(sealed))
-            else "truncated" if tokens > max_seq_tokens else None
-        )
+        row, reason = _seed_row(example, transcript, items, day_ancestry, sealed,
+                                hosted_in_training=hosted_in_training, max_seq_tokens=max_seq_tokens, group=None)
         if reason is not None:
             dropped[reason] += 1
             continue
-        rows.append(SeedRow(id=example.id, context=context, message=transcript.message, reply=example.completion,
-                            tokens=tokens, core=example.core))
+        rows.append(row)
+    if not replay:
+        return tuple(rows), dropped
+    earlier: list[tuple[Example, PracticeTranscript]] = []
+    undated: list[str] = []  # refusals with no transcript to date them by: considered after the dated rows
+    for example in data.examples:
+        if example.new:
+            continue
+        if example.teacher:
+            undated.append("teacher_target")
+            continue
+        transcript = transcripts.get(example.id)
+        if transcript is None:
+            undated.append("missing")
+            continue
+        earlier.append((example, transcript))
+    earlier.sort(key=lambda pair: (pair[1].created_at, pair[1].id), reverse=True)  # newest first
+    kept = 0
+    for example, transcript in earlier:
+        if kept >= SEED_REPLAY_MAX:
+            break
+        row, reason = _seed_row(example, transcript, items, day_ancestry, sealed,
+                                hosted_in_training=hosted_in_training, max_seq_tokens=max_seq_tokens, group=None)
+        if reason is not None:
+            dropped[reason] += 1
+            continue
+        rows.append(row)
+        kept += 1
+    for reason in undated:  # only while the cap leaves room: a refusal past the cap was never considered
+        if kept >= SEED_REPLAY_MAX:
+            break
+        dropped[reason] += 1
+    return tuple(rows), dropped
+
+
+def day_notes(
+    data: Dataset, transcripts: TranscriptStore, *, hosted_in_training: bool,
+) -> tuple[str | None, frozenset[str] | None]:
+    """The notes the night's practice read and their ancestry: the day dreams start from the same day
+    the seed teacher reads. It is the newest new example's transcript whose context is non-empty and
+    whose ancestry ``may_train`` clears, so an uncleared note never reaches Glimmer's context."""
+    made = sorted((transcript for example in data.examples if example.new
+                   and (transcript := transcripts.get(example.id)) is not None),
+                  key=lambda transcript: (transcript.created_at, transcript.id), reverse=True)
+    for transcript in made:
+        if (transcript.context and transcript.context.strip()
+                and may_train(transcript.ancestry, hosted_in_training=hosted_in_training)):
+            return transcript.context, transcript.ancestry
+    return None, frozenset()
+
+
+def day_dream_context(
+    data: Dataset, transcripts: TranscriptStore, day: Sequence[Evidence], *, hosted_in_training: bool,
+) -> DreamDay:
+    """What the day dreams read: the consolidated day and the ancestry of everything in it, her own
+    replies and the day's items, so one uncleared item excludes the dreams built on it."""
+    notes, notes_ancestry = day_notes(data, transcripts, hosted_in_training=hosted_in_training)
+    items = today_items(day)
+    return DreamDay(text=consolidated_day(notes, items),
+                    ancestry=union((notes_ancestry, *(item.ancestry for item in items))))
+
+
+def day_dream_rows(
+    dreams: Sequence[DayDream], day: DreamDay, sealed: Sequence[Probe], decontam: Decontaminator, *,
+    hosted_in_training: bool, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
+) -> tuple[tuple[SeedRow, ...], dict[str, int]]:
+    """The day dreams that may train, and the refusals by reason: the day's ancestry, then the
+    decontaminator's rules on the message and reply, the day's 13-gram probe rule and the length."""
+    dropped = dict.fromkeys(DAY_DREAM_DROPS, 0)
+    if not day.text.strip():
+        dropped["no_context"] = len(dreams)
+        return (), dropped
+    cleared = [dream for dream in dreams if may_train(dream.ancestry, hosted_in_training=hosted_in_training)]
+    dropped["uncleared"] = len(dreams) - len(cleared)
+    flags = decontam.check([f"{dream.message}\n{dream.reply}" for dream in cleared], list(sealed)) if cleared else ()
+    if len(flags) != len(cleared):
+        raise ValueError("the decontaminator must return one flag per text")
+    leaks = carries_verbatim(day.text, list(sealed))
+    rows: list[SeedRow] = []
+    for dream, flag in zip(cleared, flags, strict=True):
+        tokens = _tokens(day.text, dream.message, dream.reply)
+        reason = ("probe" if flag or leaks else "truncated" if tokens > max_seq_tokens else None)
+        if reason is not None:
+            dropped[reason] += 1
+            continue
+        rows.append(SeedRow(id=dream.id, context=day.text, message=dream.message, reply=dream.reply,
+                            tokens=tokens, group=DAY_DREAM_GROUP))
     return tuple(rows), dropped
 
 
@@ -163,8 +281,35 @@ def attach_night_terms(
     done: dict[str, Any] = {}
     if deps.terms.seed:
         seeds, dropped = seed_rows(data, deps.transcripts(uid), store.for_day(night), sealed,
-                                   hosted_in_training=deps.hosted_in_training)
+                                   hosted_in_training=deps.hosted_in_training, replay=deps.terms.day_dreams)
         done |= {"seeds": len(seeds), "seeds_dropped": dropped}
+        if deps.terms.day_dreams:
+            replay_ids = {example.id for example in data.examples if not example.new}
+            done["seed_replay"] = sum(row.id in replay_ids for row in seeds)
+    if deps.terms.day_dreams:
+        if not deps.day_dreams.available:
+            done["day_dreams"] = DAY_DREAMS_NOT_WIRED
+        else:
+            timer = deps.timer or time.monotonic
+            day = day_dream_context(data, deps.transcripts(uid), store.for_day(night),
+                                    hosted_in_training=deps.hosted_in_training)
+            # Before any call: a day that may not train, or that holds a sealed probe, asks nothing of her
+            # Glimmer and spends nothing; the dreams are zero and the receipt says why.
+            refused_by = ("uncleared" if not may_train(day.ancestry, hosted_in_training=deps.hosted_in_training)
+                          else "probe" if carries_verbatim(day.text, list(sealed)) else None)
+            if refused_by is not None:
+                done["day_dreams"] = {"generated": 0, "kept": 0, "dropped": dict.fromkeys(DAY_DREAM_DROPS, 0),
+                                      "skipped": refused_by, "seconds": 0.0}
+            else:
+                started = timer()
+                made = deps.day_dreams.dream(uid, night, deps.registry.last_promoted(uid), day)
+                seconds = max(0.0, timer() - started)
+                spend.add("practice", seconds / 3600.0 * deps.prices.serve_gpu_per_hour)  # her serving GPU's time
+                rows, refused = day_dream_rows(made, day, sealed, deps.decontam,
+                                               hosted_in_training=deps.hosted_in_training)
+                seeds = (*seeds, *rows)
+                done["day_dreams"] = {"generated": len(made), "kept": len(rows), "dropped": refused,
+                                      "seconds": round(seconds, 3)}
     dreams: tuple[DreamRow, ...] = ()
     if deps.terms.dreams and not deps.dreams.available:
         done["dreams"] = DREAMS_NOT_WIRED
@@ -181,6 +326,6 @@ def attach_night_terms(
                  "dream_seconds": round(seconds, 3)}
         if any(row.core is not None for row in dreams):  # dreamt through the thought channel
             done["dreams_in_channel"] = sum(row.core is not None for row in dreams)
-    anchors = anchor_rows(deps.settings.seed) if dreams or deps.terms.protect else ()  # the dream check, or the basis
+    anchors = (anchor_rows(deps.settings.seed) if dreams or deps.terms.protect or deps.terms.day_dreams else ())
     done["anchors"] = len(anchors)
     return replace(data, seeds=seeds, dreams=dreams, anchors=anchors), done

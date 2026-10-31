@@ -18,7 +18,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   the adapter switched off as the reference so no second model loads. The nights ask for ``sft_dpo``
   (``objective.py``, Kevin 2026-10-28); a night with no usable pair trains ``sft`` (``objective_used``);
   or ``sft_dpo_seed`` (2026-10-29): one weighted loss in one job over SFT, DPO, knowledge seeding, the
-  imitation term and, with ``dreams``, dreams (``sleep_loss.py``). ``fold_rank`` folds the night into the
+  imitation term and, with ``dreams``, dreams (``sleep_loss.py``). ``day_dreams`` adds earlier practice
+  rows and her own day dreams, and the job's keep-if-improves trials. ``fold_rank`` folds the night into the
   person's long-term adapter at that rank, a fresh slot training beside it at ``r`` and the fresh rate.
   ``protect`` (``anchors`` or ``random``, with the fold only) trains that slot off the forgetting anchors'
   activation basis, or a random one of its shape (``sleep_protect.py``); ``off`` sends the recipe unchanged.
@@ -101,6 +102,7 @@ class LoraCfg:
     dpo_lr: float = DPO_LR
     fold_rank: int | None = None  # sft_dpo_seed: fold the night into a long-term adapter of this rank
     dreams: bool = False  # sft_dpo_seed: train on the night's dream rows
+    day_dreams: bool = False  # sft_dpo_seed: earlier practice rows and her day dreams (replay + dream trials)
     protect: Protection = "off"  # sft_dpo_seed with the fold: tonight's slot off the anchors' basis (or a random one)
     # The live comparison's matched control only: each night's training budget in minutes (its reference
     # arm's, serving included), which the job fills by the clock; every real night leaves it empty.
@@ -131,8 +133,8 @@ class LoraCfg:
         if not 0 < self.dpo_beta <= 1 or not 0 < self.dpo_lr <= MAX_DPO_LR:
             raise LoraCfgError(f"DPO's beta is in (0, 1] and its learning rate in (0, {MAX_DPO_LR:g}]")
         seeded = self.objective == "sft_dpo_seed"
-        if (self.fold_rank is not None or self.dreams) and not seeded:
-            raise LoraCfgError("the fold and dreams train only under sft_dpo_seed")
+        if (self.fold_rank is not None or self.dreams or self.day_dreams) and not seeded:
+            raise LoraCfgError("the fold, dreams and day dreams train only under sft_dpo_seed")
         if self.protect not in PROTECTIONS:
             raise LoraCfgError(f"protect is one of {', '.join(PROTECTIONS)}")
         if self.protect != "off" and (not seeded or self.fold_rank is None):
@@ -140,9 +142,10 @@ class LoraCfg:
         if self.fold_rank is not None and (isinstance(self.fold_rank, bool) or not self.r <= self.fold_rank <= MAX_RANK):
             raise LoraCfgError(f"the long-term rank is from the night's rank {self.r} to {MAX_RANK}")
         nights = [night for night, _ in self.match_by_night]
-        if self.match_by_night and (self.dreams or len(set(nights)) != len(nights)
+        if self.match_by_night and (self.dreams or self.day_dreams or len(set(nights)) != len(nights)
                                     or not all(0 < minutes <= MAX_MATCH_MINUTES for _, minutes in self.match_by_night)):
-            raise LoraCfgError(f"a matched control has one budget a night, up to {MAX_MATCH_MINUTES:g} minutes, and no dreams")
+            raise LoraCfgError(f"a matched control has one budget a night, up to {MAX_MATCH_MINUTES:g} minutes, "
+                               "and no dreams or day dreams")
         if self.passes is not None and (isinstance(self.passes, bool) or not 1 <= self.passes <= self.max_epochs
                                         or self.match_by_night):
             raise LoraCfgError(f"passes are 1 to {self.max_epochs}, and never with a matched control's budget")
@@ -211,6 +214,7 @@ def training_config(
     fixed |= {} if channel is None else {"channel": dict(channel)}
     if cfg.objective == "sft_dpo_seed":
         fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams,
+                            **({} if not cfg.day_dreams else {"day_dreams": True}),
                             **({} if cfg.protect == "off" else {"protect": cfg.protect}),
                             **({} if cfg.passes is None else {"passes": cfg.passes})}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.

@@ -37,8 +37,8 @@ from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.night.story import story_from
 from anjo.sleep.practice.transcripts import PracticeTranscript
-from anjo.sleep.probes.arms import ARMS, ArmDeps, reply
-from anjo.sleep.probes.morning import ARM_ORDER, HARNESS_PAIR, PAIRS, Morning, run_morning
+from anjo.sleep.probes.arms import ArmDeps, reply
+from anjo.sleep.probes.morning import COMMITTED_ARMS, HARNESS_PAIR, PAIRS, Morning, run_morning
 from anjo.sleep.reports import results
 from anjo.sleep.tests.night_fakes import NIGHT, SparkChat, Trainer, World, step, steps
 from anjo.sleep.tests.sleep_fakes import (
@@ -51,6 +51,9 @@ from anjo.sleep.tests.sleep_fakes import (
     probe,
     taste,
 )
+
+# A default full morning: the six registered arms and the pairs between them (2A and 4M need ANJO_SLEEP_ARMS_EXTRA).
+REGISTERED_PAIRS = {name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS}
 
 AT = datetime.combine(NIGHT, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=22)
 LINE = "Ask for the outline before writing a draft."
@@ -324,7 +327,7 @@ def test_morning_off_is_the_six_arms_and_the_registered_pairs(tmp_path: Path, mo
     monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     second = again.run()
     record = json.loads(first.path.read_text(encoding="utf-8"))
-    assert set(record["arms"]) == set(ARM_ORDER) and set(record["pairs"]) == set(PAIRS)
+    assert set(record["arms"]) == set(COMMITTED_ARMS) and set(record["pairs"]) == REGISTERED_PAIRS
     assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
     assert first.path.read_bytes() == second.path.read_bytes()  # the same run, the same bytes
 
@@ -338,14 +341,14 @@ def test_morning_on_adds_2h_and_its_pair_but_not_a_registered_arm(tmp_path: Path
     on = MorningRig(tmp_path / "on")
     on_done = on.run()
     on_record = json.loads(on_done.path.read_text(encoding="utf-8"))
-    assert set(on_record["arms"]) == set(ARM_ORDER) | {"2H"}
-    assert set(on_record["pairs"]) == set(PAIRS) | {HARNESS_PAIR}
+    assert set(on_record["arms"]) == set(COMMITTED_ARMS) | {"2H"}
+    assert set(on_record["pairs"]) == REGISTERED_PAIRS | {HARNESS_PAIR}
     assert on_record["pairs"][HARNESS_PAIR]["overall"]["n"] == len(on.probes)
-    for arm in ARM_ORDER:
+    for arm in COMMITTED_ARMS:
         if arm == "1":
             continue
         assert on_record["arms"][arm] == off_record["arms"][arm]
-    for pair in PAIRS:
+    for pair in REGISTERED_PAIRS:
         assert on_record["pairs"][pair] == off_record["pairs"][pair]
     # The six registered arms' questions are the same before the harness arm is asked.
     assert on.model.calls[:len(off_calls)] == off_calls
@@ -361,7 +364,7 @@ def test_the_results_table_carries_the_harness_pair_when_present(tmp_path: Path,
                                                     "label": "development", "gates": {}, "cost_usd": 0.0}))
     text = results.table(["p1"], root=rig.morning.root)
     assert f"pair {HARNESS_PAIR}" in text
-    assert all(f"arm {arm}" in text for arm in ARMS) and "arm 2H" not in text
+    assert all(f"arm {arm}" in text for arm in COMMITTED_ARMS) and "arm 2H" not in text
 
 
 # ── the night ────────────────────────────────────────────────────────────────

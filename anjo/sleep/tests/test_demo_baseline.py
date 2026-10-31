@@ -8,7 +8,7 @@ from typing import Any
 
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import Arm, ArmDeps
-from anjo.sleep.probes.morning import ARM_ORDER, Morning, run_morning
+from anjo.sleep.probes.morning import COMMITTED_ARMS, Morning, run_morning
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.tests.sleep_fakes import (
     FakeContexts,
@@ -45,7 +45,7 @@ class ArmSizedModel:
     ) -> Any:
         from anjo.sleep.tests.sleep_fakes import ChatResult
 
-        arm = ARM_ORDER[self.calls // self.judged_probes]
+        arm = COMMITTED_ARMS[self.calls // self.judged_probes]
         self.calls += 1
         text = "x" * self.lengths[arm]
         words = sum(len(m["content"].split()) for m in messages)

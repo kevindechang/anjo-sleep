@@ -61,6 +61,15 @@ def default_mind_spark(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def default_extra_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A full morning asks the six committed arms, whatever this shell sets: a test that wants
+    2A and 4M in the full run sets ``ANJO_SLEEP_ARMS_EXTRA`` itself."""
+    from anjo.sleep.probes.morning import ARMS_EXTRA_ENV
+
+    monkeypatch.delenv(ARMS_EXTRA_ENV, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_colab_cli(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """No test finds this machine's Colab CLI, so a night's sweep never runs it; a test that wants an
     installed CLI points ``COLAB_BIN`` at a file of its own and fakes the CLI."""
