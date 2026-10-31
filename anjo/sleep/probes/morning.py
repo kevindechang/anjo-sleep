@@ -91,7 +91,7 @@ from anjo.sleep.probes.score import (
 from anjo.sleep.reports import results
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady, WakeResult
-from anjo.sleep.stops import BudgetStop
+from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.types import CheckpointRef, Probe
 
 ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2A", "2F", "3", "3x", "4", "4M")
@@ -593,10 +593,20 @@ def _run_morning(
         registered_comparisons = [c for c in comparisons if HARNESS_ARM not in (c[1], c[2])]
         registered_found = _judged(
             probes, replies, judge, calls, comparisons=registered_comparisons) if registered_comparisons else []
-        harness_found = _judged(
-            probes, replies, harness_judge if harness_judge is not None else judge,
-            harness_calls if harness_calls is not None else calls,
-            comparisons=harness_comparisons) if harness_comparisons else []
+        try:
+            harness_found = _judged(
+                probes, replies, harness_judge if harness_judge is not None else judge,
+                harness_calls if harness_calls is not None else calls,
+                comparisons=harness_comparisons) if harness_comparisons else []
+        except Cancelled:  # a cancelled night stops; only the harness's own failure is swallowed
+            raise
+        except HARNESS_FAILURES:
+            # 2H is reported only: a judge call that fails (a provider error, the per-call hold's
+            # BudgetStop, an unreadable answer past its retries) drops it with a code, never the
+            # morning. A BudgetStop from the registered pass above still stops the run: only one
+            # raised in this pass is caught, and what it settled stays settled.
+            harness_found = []
+            unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
         harness_names = {f"{HARNESS_ARM}_vs_1", HARNESS_PAIR}
         harness_dropped = False
         for name, first, second, found in (*registered_found, *harness_found):

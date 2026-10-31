@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.budget import Ledger
 from anjo.sleep.evidence.jsonl import NO_GUARD, PLAIN
 from anjo.sleep.harness.loop import (
     HARNESS_MIN_MARGIN,
@@ -42,7 +43,7 @@ from anjo.sleep.probes.arms import ArmDeps, reply
 from anjo.sleep.probes.morning import COMMITTED_ARMS, HARNESS_PAIR, PAIRS, Morning, run_morning
 from anjo.sleep.probes.score import JudgeError
 from anjo.sleep.reports import results
-from anjo.sleep.stops import Cancelled
+from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.tests.night_fakes import NIGHT, SparkChat, Trainer, World, step, steps
 from anjo.sleep.tests.sleep_fakes import (
     FakeContexts,
@@ -459,9 +460,47 @@ class TwoHOnlyJudge(Judge):
         return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
 
 
+class TwoHJudgeError(Judge):
+    """The judge fails at its provider only where one reply is 2H's."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if "2H reply" in (first, second):
+            raise ModelApiError("the judge is down")
+        return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
+
+
+class TwoHBudgetStop(Judge):
+    """A 2H judge call its per-call hold can't reserve, as DeepSeek's is when its pool is spent."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if "2H reply" in (first, second):
+            raise BudgetStop("fireworks_sleep_usd/judge_usd can't hold the worst case of a 2H call")
+        return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
+
+
+class TwoHCancelled(Judge):
+    """A cancelled night reaches the judge on a 2H call: it must stop the morning, never be swallowed."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        if "2H reply" in (first, second):
+            raise Cancelled("the night was cancelled")
+        return "A" if len(first) > len(second) else "B" if len(second) > len(first) else "tie"
+
+
+class RegisteredBudgetStop(Judge):
+    """Every registered comparison hits a pool with no room: the morning stops as it did with the switch off."""
+
+    def verdict(self, p: Any, first: str, second: str) -> str:
+        self.calls += 1
+        raise BudgetStop("meta_usd/judge_usd can't hold the worst case of the morning")
+
+
 class MorningRig:
     def __init__(self, tmp_path: Path, *, model: Any = None, judge: Any = None,
-                 strategies: Any = None) -> None:
+                 strategies: Any = None, ledger: Ledger | None = None) -> None:
         self.model = model or FakeModel()
         self.judge = judge or Judge()
         self.store = StoreSpy([])
@@ -472,7 +511,7 @@ class MorningRig:
                        donors={"p1": "donor"}, until=NIGHT,
                        strategies=strategies or (lambda uid, until: ()))
         self.morning = Morning(arms=deps, sealed=lambda uid: self.probes, judge=self.judge, prices=PRICES,
-                               root=tmp_path / "results", timer=lambda: 0.0)
+                               ledger=ledger, root=tmp_path / "results", timer=lambda: 0.0)
 
     def run(self, night: date = NIGHT) -> Any:
         return run_morning("p1", night, self.registry.adapters["p1"], morning=self.morning,
@@ -598,6 +637,71 @@ def test_a_judge_that_cannot_read_2h_drops_it_not_the_morning(
             assert record["arms"][arm] == off_record["arms"][arm]
     for pair in REGISTERED_PAIRS:
         assert record["pairs"][pair] == off_record["pairs"][pair]
+
+
+def _same_registered_scores(record: dict[str, Any], off_record: dict[str, Any]) -> None:
+    """The registered arms and pairs, byte for byte as the switch-off run wrote them."""
+    assert json.dumps(record["arms"], sort_keys=True) == json.dumps(off_record["arms"], sort_keys=True)
+    assert json.dumps(record["pairs"], sort_keys=True) == json.dumps(off_record["pairs"], sort_keys=True)
+
+
+def test_a_2h_judge_error_drops_2h_and_writes_the_registered_scores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off")
+    off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    on = MorningRig(tmp_path / "on", model=Distinct2H(), judge=TwoHJudgeError(), ledger=ledger,
+                    strategies=lambda uid, until: (LINE,))
+    done = on.run()
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert record["unavailable"] == {"2H": "harness_unavailable"}
+    assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
+    assert all(row["pair"] not in {"2H_vs_1", HARNESS_PAIR} for row in record["outcomes"])
+    assert "no_verdict" not in record
+    _same_registered_scores(record, off_record)
+    assert done.judge_usd > 0 and not ledger.open_holds()  # the 2H calls that did run settled
+
+
+def test_a_2h_judge_budget_stop_drops_2h_and_writes_the_registered_scores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    off = MorningRig(tmp_path / "off")
+    off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    on = MorningRig(tmp_path / "on", model=Distinct2H(), judge=TwoHBudgetStop(),
+                    strategies=lambda uid, until: (LINE,))
+    record = json.loads(on.run().path.read_text(encoding="utf-8"))
+    assert record["unavailable"] == {"2H": "harness_unavailable"}
+    assert "2H" not in record["arms"] and HARNESS_PAIR not in record["pairs"]
+    assert all(row["pair"] not in {"2H_vs_1", HARNESS_PAIR} for row in record["outcomes"])
+    _same_registered_scores(record, off_record)
+
+
+def test_a_registered_judge_budget_stop_still_stops_the_morning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    rig = MorningRig(tmp_path, judge=RegisteredBudgetStop(), strategies=lambda uid, until: (LINE,))
+    with pytest.raises(BudgetStop):
+        rig.run()
+    assert not rig.scores.exists()  # no score file, the switch-off run's stop
+
+
+def test_a_cancelled_2h_judge_call_still_stops_the_morning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    rig = MorningRig(tmp_path, model=Distinct2H(), judge=TwoHCancelled(),
+                     strategies=lambda uid, until: (LINE,))
+    with pytest.raises(Cancelled):
+        rig.run()
+    assert not rig.scores.exists()  # a cancelled night is never read as a harness failure
 
 
 def test_a_registered_pairs_retries_are_the_same_with_the_switch_on(
