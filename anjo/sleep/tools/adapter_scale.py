@@ -92,6 +92,7 @@ from anjo.sleep.probes.morning import (
 )
 from anjo.sleep.probes.score import (
     BootstrapConfig,
+    MuseJudge,
     NoVerdict,
     PairScore,
     probe_outcome,
@@ -351,7 +352,7 @@ def plan(
     if target.exists():
         raise Refused(f"{night.isoformat()} already has an adapter-scale read ({target.name})")
     calls = 2 * len(probes) * len(scales)
-    replies = len(probes) * len(scales) + (0 if stored is not None else len(probes))
+    replies_needed = len(probes) * len(scales) + (0 if stored is not None else len(probes))
     serve = morning.prices.serve_gpu_per_hour
     units = Units()
     return Plan(
@@ -360,10 +361,10 @@ def plan(
         reply_count=0 if stored is None else len(stored.texts),
         left_out=0 if stored is None else stored.outside + len(stored.texts) - len(probes),
         probes=probes, scales=tuple(scales), names=names, morning=morning, stored=stored,
-        replies=replies, judge_calls=calls,
+        replies=replies_needed, judge_calls=calls,
         judge_hold_usd=(calls + math.ceil(calls * JUDGE_RETRY_SHARE)) * morning.judge_call_usd,
-        arms_hold_usd=serve * replies * ARM_CALL_S / 3600.0,
-        gpu_s=units.wake_s + ARM_CALL_S * replies + config.SCALEDOWN_S, target=target,
+        arms_hold_usd=serve * replies_needed * ARM_CALL_S / 3600.0,
+        gpu_s=units.wake_s + ARM_CALL_S * replies_needed + config.SCALEDOWN_S, target=target,
     )
 
 
@@ -507,6 +508,8 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
     inner = chosen.morning.judge
     per_call = chosen.morning.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH and book is not None
     if per_call:
+        if not isinstance(inner, MuseJudge):
+            raise Refused("DeepSeek requires the configured MuseJudge")
         inner = replace(inner, chat=_HeldDeepseekChat(inner.chat, book, f"{key}:judge"))
         with held(book, f"{key}:judge:preflight", chosen.morning.judge_pools,
                   usd(chosen.morning.judge_call_usd), lambda: 0.0):
