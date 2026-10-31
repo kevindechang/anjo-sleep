@@ -8,6 +8,7 @@ written by the test, so the scaling is checked on bytes rather than on a mock.
 from __future__ import annotations
 
 import json
+import logging
 import struct
 from dataclasses import replace
 from datetime import date
@@ -17,8 +18,10 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 
+from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Bound, Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.sweep import _settle_stale as sweep_stale
 from anjo.sleep.probes.arms import ArmDeps, reply_seed
@@ -26,7 +29,7 @@ from anjo.sleep.probes.morning import Morning
 from anjo.sleep.probes.score import Verdict
 from anjo.sleep.serving import config
 from anjo.sleep.serving import scale
-from anjo.sleep.serving.client import WakeResult
+from anjo.sleep.serving.client import TransportFailed, WakeResult
 from anjo.sleep.tests.sleep_fakes import FakeContexts, FakeLogprobs, FakeModel, StoreSpy, probe
 from anjo.sleep.tools import adapter_scale as tool
 from anjo.sleep.types import CheckpointRef
@@ -155,6 +158,37 @@ class Judge:
         return "tie"
 
 
+class FlakyJudge(Judge):
+    """The first ``failures`` judge calls raise a ModelApiError; then it judges as ``Judge`` does."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+
+    def verdict(self, p: Any, first: str, second: str) -> Verdict:
+        if self.failures:
+            self.failures -= 1
+            raise ModelApiError("Fireworks chat with secret-model failed in transport (ReadError)")
+        return super().verdict(p, first, second)
+
+
+class FlakyModel(FakeModel):
+    """The first ``failures`` replies raise TransportFailed; then it replies as ``FakeModel`` does.
+    A failed attempt is recorded, so a test can see the resend carried the same seed."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+
+    def complete(self, adapter: Any, messages: list[dict[str, str]], *, temperature: float,
+                 seed: int | None = None) -> ChatResult:
+        if self.failures:
+            self.failures -= 1
+            self.calls.append({"adapter": adapter, "messages": messages, "temperature": temperature, "seed": seed})
+            raise TransportFailed("/v1/completions failed in transport (ReadError)")
+        return super().complete(adapter, messages, temperature=temperature, seed=seed)
+
+
 class World:
     """One synthetic account whose stored 2C replies cover two knowledge probes and one tone probe."""
 
@@ -173,6 +207,7 @@ class World:
                 *({"probe": probe_id, "arm": "2C", "text": text} for probe_id, text in self.texts.items())]
         self.replies.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
         self.model, self.judge = FakeModel(), Judge()
+        self.judge_model = "unknown"
         self.morning_probes = [probe("q1", "new_work", person=USER), probe("q2", "vocab", person=USER),
                                probe("q3", "tone_hold", person=USER)]
         self.ledger = Ledger(tmp_path / "budget.jsonl")
@@ -185,7 +220,7 @@ class World:
                        evidence=lambda uid: StoreSpy([]), logprobs=FakeLogprobs(lambda adapter, messages: "A"),
                        donors={}, until=night)
         return Morning(arms=deps, sealed=lambda uid: self.morning_probes, judge=self.judge, prices=PRICES,
-                       root=self.root / "results", wake=self.wake)
+                       root=self.root / "results", wake=self.wake, judge_model=self.judge_model)
 
     @property
     def ports(self) -> tool.Ports:
@@ -249,6 +284,105 @@ def test_go_generates_only_arm_four_and_judges_the_stored_two_c_replies(tmp_path
         assert stat["score"] == 1.0  # arm 4 is the first side; a swapped pair would score 0
     assert world.run("--scales", "0.25", "--go")[1] == [
         f"refused: {NIGHT.isoformat()} already has an adapter-scale read ({world.target.name})"]
+
+
+def test_a_judge_call_that_fails_after_its_retries_is_one_no_verdict_and_the_read_goes_on(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World(tmp_path)
+    world.morning_probes = [probe(f"q{n}", "new_work", person=USER) for n in range(1, 11)]
+    world.judge = FlakyJudge(failures=1)
+    chosen = tool.plan(USER, NIGHT, world.ports, scales=tool.check_scales("0.5"), persona="film_founder")
+    with caplog.at_level(logging.WARNING, logger=tool.__name__):
+        done = tool.read(chosen, world.ports)
+    assert done.no_verdict == 1  # one probe at 0.5, one judge call lost
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert record["no_verdict"] == 1
+    assert record["scales"]["0.5"]["n"] == 9 and record["scales"]["1"]["n"] == 10
+    assert "ModelApiError" in caplog.text
+    assert "ReadError" not in caplog.text and "secret-model" not in caplog.text  # the class only
+
+
+def test_judge_losses_above_the_share_stop_the_read_and_write_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World(tmp_path)
+    world.morning_probes = [probe(f"q{n}", "new_work", person=USER) for n in range(1, 11)]
+    world.judge = FlakyJudge(failures=100)
+    with caplog.at_level(logging.WARNING, logger=tool.__name__):
+        code, said = world.run("--persona", "film_founder", "--scales", "0.5", "--go", stored=False)
+    assert code == 1
+    assert said[-1].startswith("failed: no verdict on 2 of 10 probes at scale 0.5")
+    assert "more than 10%: nothing was scored" in said[-1]
+    assert not world.target.exists() and not world.target.parent.exists()
+    assert caplog.text.count("ModelApiError") == 2  # each lost call warns once, by class
+
+
+def test_reply_losses_above_the_share_stop_the_read_and_write_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World(tmp_path)
+    world.morning_probes = [probe(f"q{n}", "new_work", person=USER) for n in range(1, 11)]
+    world.model = FlakyModel(failures=10_000)
+    said: list[str] = []
+    with caplog.at_level(logging.WARNING, logger=tool.__name__):
+        code = tool.main(["--user", USER, "--night", NIGHT.isoformat(), "--persona", "film_founder",
+                          "--scales", "0.5", "--go"], ports=world.ports, out=said.append,
+                         sleep=lambda _seconds: None)
+    assert code == 1
+    assert said[-1].startswith("failed: no verdict on 2 of 10 probes at scale 0.5")
+    assert "more than 10%: nothing was scored" in said[-1]
+    assert not world.target.exists() and not world.target.parent.exists()
+    assert world.judge.calls == 0  # no lost reply was judged
+    assert caplog.text.count("TransportFailed") == 30  # one warning a lost reply, by class
+    assert "ReadError" not in caplog.text and "/v1/completions" not in caplog.text
+
+
+def test_a_reply_lost_once_in_transport_is_sent_again_with_the_same_seed(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.model = FlakyModel(failures=1)
+    said: list[str] = []
+    code = tool.main(["--user", USER, "--night", NIGHT.isoformat(), "--replies", str(world.replies),
+                      "--scales", "0.5", "--go"], ports=world.ports, out=said.append,
+                     sleep=lambda _seconds: None)
+    assert code == 0 and said[-1].startswith(f"read: {world.target} ")
+    assert len(world.model.calls) == 5  # four arm replies, the first sent twice
+    assert world.model.calls[0]["seed"] == world.model.calls[1]["seed"]  # the same request, same seed
+    record = json.loads(world.target.read_text(encoding="utf-8"))
+    assert "no_verdict" not in record and "no verdict" not in said[-1]
+    assert record["scales"]["0.5"]["n"] == record["scales"]["1"]["n"] == 2
+    assert world.judge.calls == 8
+
+
+def test_a_reply_that_keeps_failing_is_one_no_verdict_for_that_probe_and_scale(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World(tmp_path)
+    world.morning_probes = [probe(f"q{n}", "new_work", person=USER) for n in range(1, 11)]
+    world.model = FlakyModel(failures=tool.REPLY_RESENDS + 1)  # one reply's every attempt
+    chosen = tool.plan(USER, NIGHT, world.ports, scales=tool.check_scales("0.5"),
+                       persona="film_founder")
+    with caplog.at_level(logging.WARNING, logger=tool.__name__):
+        done = tool.read(chosen, world.ports, sleep=lambda _seconds: None)
+    assert done.no_verdict == 1
+    record = json.loads(done.path.read_text(encoding="utf-8"))
+    assert record["no_verdict"] == 1
+    assert record["scales"]["0.5"]["n"] == 9 and record["scales"]["1"]["n"] == 10
+    assert len(world.model.calls) == 32  # 30 replies; the first sent three times
+    assert [call["seed"] for call in world.model.calls[:3]] == [world.model.calls[0]["seed"]] * 3
+    assert "TransportFailed" in caplog.text
+    assert "ReadError" not in caplog.text and "/v1/completions" not in caplog.text  # the class only
+
+
+def test_the_expected_judge_cost_is_the_cost_models_estimate_not_the_worst_case(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    world.judge_model = fireworks_api.DEEPSEEK_V4P1_FLASH
+    code, said = world.run("--scales", "0.5")
+    text = "\n".join(said)
+    assert code == 0
+    assert ("expected: $0.74 (the judge $0.16 at $0.02 a call, the cost model's estimate, "
+            "settled at its tokens") in text
+    assert "holds: the judge $11.32 on fireworks_sleep_usd/judge_usd" in text  # the worst case stays here
 
 
 def test_missing_stored_replies_are_refused_before_anything(tmp_path: Path) -> None:

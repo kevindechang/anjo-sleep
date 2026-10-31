@@ -42,8 +42,9 @@ def test_selection_uses_same_prompt_and_settings(monkeypatch):
     assert all("retries" in c[4] for c in calls)
 
 
-def test_the_deepseek_judge_sends_a_lost_reply_again(monkeypatch):
-    """A reply that never came whole failed a whole morning on 2026-10-30; the muse judge is untouched."""
+def test_the_deepseek_judge_carries_four_reply_attempts_on_the_longer_schedule(monkeypatch):
+    """A reply that never came whole failed a morning on 2026-10-30 and a read on 2026-10-31: the
+    DeepSeek judge now sends one up to four times and waits the longer schedule; muse is untouched."""
     calls = []
 
     def chat(model, messages, tools, timeout, **kwargs):
@@ -58,12 +59,15 @@ def test_the_deepseek_judge_sends_a_lost_reply_again(monkeypatch):
 
     (_, deepseek), *_ = calls
     retries = deepseek["retries"]
-    assert (retries.connect_attempts, retries.reply_attempts) == (3, 2)
+    assert (retries.connect_attempts, retries.reply_attempts) == (3, app.DEEPSEEK_JUDGE_REPLY_ATTEMPTS)
+    assert retries.reply_attempts == 4
+    assert retries.backoff_s == fireworks_api.SPARK_BUSY_BACKOFF_S
 
     monkeypatch.delenv(app.JUDGE_ENV)
     calls.clear()
     judge_orders(app.make_judge("film", JudgeTokens(), app._Resent()), probe(), "one", "two")
     assert calls[0][1]["retries"].reply_attempts == Retries().reply_attempts == 1
+    assert calls[0][1]["retries"].backoff_s == Retries().backoff_s  # the muse judge keeps the shared schedule
 
 
 @pytest.mark.parametrize("model", [baseten_api.SPARK_OPEN, fireworks_api.SPARK_OPEN, "muse-spark-open"])
