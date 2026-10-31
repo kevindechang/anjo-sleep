@@ -16,6 +16,7 @@ import pytest
 
 from anjo.sleep.night.day_dreams import (
     DAY_DREAMS,
+    DREAM_FAILURES_MAX,
     DayDream,
     DreamDay,
     GlimmerDayDreams,
@@ -117,6 +118,23 @@ def test_the_switch_is_seeded_only_and_rides_with_capacity() -> None:
         LoraCfg(objective="sft_dpo", day_dreams=True)
 
 
+def _earlier(made: list[Any]) -> Any:
+    """The dataset of ``made`` as earlier practice, plus one example with no transcript (``gone``)."""
+    data = _data(made)
+    gone = replace(data.examples[0], id="gone")  # nothing dates it: it is considered after the dated rows
+    return replace(data, examples=tuple(replace(example, new=False) for example in (*data.examples, gone)))
+
+
+def test_a_replay_refusal_past_the_cap_is_not_counted() -> None:
+    dated = [_replay(i, created_at=AT - timedelta(minutes=i)) for i in range(terms.SEED_REPLAY_MAX)]
+    rows, dropped = terms.seed_rows(_earlier(dated), Transcripts(dated), [], [], hosted_in_training=False, replay=True)
+    assert len(rows) == terms.SEED_REPLAY_MAX and dropped["missing"] == 0  # the cap closed before it was read
+
+    short = dated[:-1]
+    rows, dropped = terms.seed_rows(_earlier(short), Transcripts(short), [], [], hosted_in_training=False, replay=True)
+    assert len(rows) == terms.SEED_REPLAY_MAX - 1 and dropped["missing"] == 1  # the cap still had room
+
+
 def test_replay_rows_are_newest_first_and_capped() -> None:
     made = [_transcript(0), _replay(1, created_at=AT - timedelta(days=1)),
             _replay(2, created_at=AT - timedelta(days=2))]
@@ -203,6 +221,20 @@ def test_a_cut_unreadable_or_failed_answer_yields_fewer_dreams_not_a_failed_nigh
     assert GlimmerDayDreams(_Client([]), seed=1).dream("p1", NIGHT, None, _day("")) == ()  # no day, no call
 
 
+def test_a_failed_reply_costs_one_dream_and_three_in_a_row_end_the_asking() -> None:
+    from anjo.sleep.model_api import ModelApiError
+
+    client = _Client([_Answer(_lines(4)), _Answer("one"), ModelApiError("the reply call failed"),
+                      _Answer("three"), _Answer("four")])
+    made = GlimmerDayDreams(client, seed=1).dream("p1", NIGHT, None, _day())
+    assert [dream.reply for dream in made] == ["one", "three", "four"]  # one failure skipped one dream, not the rest
+
+    client = _Client([_Answer(_lines(5)), *[ModelApiError("down") for _ in range(DREAM_FAILURES_MAX)],
+                      _Answer("never")])
+    made = GlimmerDayDreams(client, seed=1).dream("p1", NIGHT, None, _day())
+    assert made == () and len(client.calls) == 1 + DREAM_FAILURES_MAX  # three in a row stop the asking
+
+
 def test_day_dream_rows_obey_the_decontaminator_the_probe_rule_and_the_length() -> None:
     day = _day("Notes: they edit at night. What they told you today:\n- They switched the short to 16mm today.")
     rows, dropped = terms.day_dream_rows([_dream(0), _dream(1)], day, [], _NoLeak(), hosted_in_training=False)
@@ -275,6 +307,52 @@ def test_a_failed_day_dream_source_leaves_the_night_with_zero_dreams(tmp_path: P
                                              SpendMeter(spark_in_per_m=0.2, spark_out_per_m=0.6))
     assert receipt["day_dreams"]["generated"] == receipt["day_dreams"]["kept"] == 0
     assert [row.id for row in data.seeds] == ["t0"]  # the night still has its seeding row
+
+
+def test_an_uncleared_day_asks_nothing_of_her_glimmer(tmp_path: Path) -> None:
+    made = [_transcript(0)]
+    world = World(tmp_path)
+    world.evidence("p1").add([replace(own("p1", NIGHT, 0), ancestry=frozenset({GEMINI}))])
+    world.transcripts("p1").add(made)
+    source = _DaySource((_dream(0),))
+    deps = world.deps(terms=Terms(seed=True, day_dreams=True), day_dreams=source)
+    spend = SpendMeter(spark_in_per_m=0.2, spark_out_per_m=0.6)
+
+    _, receipt = terms.attach_night_terms(deps, "p1", NIGHT, world.evidence("p1"), [], _data(made), spend)
+
+    assert source.days == []  # no day reached her Glimmer: nothing was asked
+    assert receipt["day_dreams"]["skipped"] == "uncleared" and receipt["day_dreams"]["generated"] == 0
+    assert receipt["day_dreams"]["kept"] == 0 and spend.parts()["practice"] == 0.0  # and nothing was spent
+
+
+def test_a_day_holding_a_sealed_probe_asks_nothing_of_her_glimmer(tmp_path: Path) -> None:
+    sealed = Probe("q1", "p1", "new_work",
+                   "the late tomatoes need a sooner planting date and a warmer bed this year", None, None, ())
+    made = [replace(_transcript(0), context=f"Notes: {sealed.prompt}.")]
+    world = World(tmp_path)
+    world.evidence("p1").add([own("p1", NIGHT, 0)])
+    world.transcripts("p1").add(made)
+    source = _DaySource((_dream(0),))
+    deps = world.deps(terms=Terms(seed=True, day_dreams=True), day_dreams=source)
+    spend = SpendMeter(spark_in_per_m=0.2, spark_out_per_m=0.6)
+
+    _, receipt = terms.attach_night_terms(deps, "p1", NIGHT, world.evidence("p1"), [sealed], _data(made), spend)
+
+    assert source.days == [] and receipt["day_dreams"]["skipped"] == "probe"
+    assert receipt["day_dreams"]["generated"] == 0 and spend.parts()["practice"] == 0.0
+
+
+def test_the_day_is_the_newest_cleared_transcript_with_a_context() -> None:
+    newest = replace(_transcript(0), context="Notes: a Gemini summary.", ancestry=frozenset({GEMINI}))
+    empty = replace(_transcript(1), created_at=AT - timedelta(minutes=1), context="")
+    kept = replace(_transcript(2), created_at=AT - timedelta(minutes=2), context="Notes: they edit at night.")
+    made = [newest, empty, kept]
+
+    notes, ancestry = terms.day_notes(_data(made), Transcripts(made), hosted_in_training=False)
+
+    assert notes == kept.context and ancestry == kept.ancestry  # the uncleared and the empty one are not the day
+    day = terms.day_dream_context(_data(made), Transcripts(made), [_today(frozenset())], hosted_in_training=False)
+    assert "they edit at night" in day.text and "Gemini summary" not in day.text
 
 
 def test_a_dream_group_round_trips_through_the_job_payload() -> None:

@@ -119,7 +119,8 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.core_dreams import core_dreams, dreams_channel
-from anjo.sleep.night.day_dreams import GlimmerDayDreams
+from anjo.sleep.night.day_dreams import SWITCH_ENV as DAY_DREAMS_ENV
+from anjo.sleep.night.day_dreams import GlimmerDayDreams, NoDayDreams
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.sleep_pressure import policy_from
@@ -398,7 +399,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
         core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
                                       channel=dreams_channel(os.environ, channel)),
-        day_dreams=GlimmerDayDreams(client, seed=night_settings.seed),
+        day_dreams=(GlimmerDayDreams(client, seed=night_settings.seed)
+                    if os.environ.get(DAY_DREAMS_ENV, "").strip() == "1" else NoDayDreams()),  # switch off: no source
         estimator=registered_estimator(), baseline=baseline,
     )
 

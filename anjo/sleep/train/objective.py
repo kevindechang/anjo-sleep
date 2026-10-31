@@ -37,6 +37,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
+from anjo.sleep.night.day_dreams import SWITCH_ENV
 from anjo.sleep.night.dreams import Terms
 from anjo.sleep.serving.config import MAX_LORA_RANK
 from anjo.sleep.train.lora import PROTECTIONS, LoraCfg, LoraCfgError, Objective, Protection
@@ -44,7 +45,7 @@ from anjo.sleep.train.lora import PROTECTIONS, LoraCfg, LoraCfgError, Objective,
 OBJECTIVE_ENV: Final = "ANJO_SLEEP_OBJECTIVE"
 FOLD_ENV: Final = "ANJO_SLEEP_ADAPTER_FOLD"
 DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
-DAY_DREAMS_ENV: Final = "ANJO_SLEEP_DAY_DREAMS"
+DAY_DREAMS_ENV: Final = SWITCH_ENV  # the app wires her day dreams by the same name (``night/day_dreams``)
 PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
 CAPACITY_ENV: Final = "ANJO_SLEEP_CAPACITY"
 CAPACITY_PASSES: Final = 3

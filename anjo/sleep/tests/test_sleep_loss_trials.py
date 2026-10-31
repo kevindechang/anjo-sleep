@@ -48,7 +48,7 @@ def test_a_group_that_lowers_held_out_kl_is_kept_and_one_that_does_not_is_droppe
     monkeypatch.setattr(sleep_loss, "anchor_score", lambda *a, **k: 0.5)
     teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
     optimizer = _optimizer(model)
-    timer = iter([0.0, 120.0])
+    timer = iter([0.0, 120.0, 120.0, 120.0, 120.0, 120.0])  # started, three deadline checks, two groups, minutes
 
     kept, receipt = sleep_loss._dream_trials(
         model, sleep_loss.Batch(seeds=seeds, anchors=_anchors()), plan, teacher, optimizer,
@@ -102,6 +102,109 @@ def test_the_trials_need_the_anchor_items_they_score() -> None:
     teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
     with pytest.raises(ValueError, match="anchor"):
         sleep_loss._dream_trials(model, sleep_loss.Batch(seeds=seeds), plan, teacher, _optimizer(model))
+
+
+def test_the_deadline_stops_the_trials_before_tau_the_anchors_and_every_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, seeds = _tiny(torch), _seeds(10)
+    plan = _plan(deadline=50.0)
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    called: list[str] = []
+    monkeypatch.setattr(sleep_loss, "mean_seed_kl", lambda *a, **k: called.append("tau") or 1.0)
+    monkeypatch.setattr(sleep_loss, "anchor_score", lambda *a, **k: called.append("anchor") or 0.5)
+    before = _params(model)
+
+    kept, receipt = sleep_loss._dream_trials(
+        model, sleep_loss.Batch(seeds=seeds, anchors=_anchors()), plan, teacher, _optimizer(model),
+        timer=lambda: 60.0,
+    )
+
+    assert called == [] and kept == []  # no group tried, nothing measured, nothing kept
+    assert receipt["groups"] == [] and receipt["kept"] == 0 and receipt["trialed"] and receipt["out_of_time"]
+    assert all(torch.equal(a, b) for a, b in zip(_params(model), before, strict=True))
+
+
+def test_the_deadline_cuts_a_later_group_but_keeps_the_one_already_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, seeds, plan = _tiny(torch), _seeds(10), _plan(deadline=50.0)
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    _, groups = sleep_loss.dream_split(seeds, plan.seed)
+    taus = iter([1.0, 0.98])  # untouched, then group 1's 2% drop: it is kept
+    monkeypatch.setattr(sleep_loss, "mean_seed_kl", lambda *a, **k: next(taus))
+    monkeypatch.setattr(sleep_loss, "anchor_score", lambda *a, **k: 0.5)
+    clock = iter([0.0, 0.0, 0.0, 0.0, 100.0, 100.0])  # started, two checks, group 1, group 2, minutes
+
+    kept, receipt = sleep_loss._dream_trials(
+        model, sleep_loss.Batch(seeds=seeds, anchors=_anchors()), plan, teacher, _optimizer(model),
+        timer=lambda: next(clock),
+    )
+
+    assert kept == groups[0] and len(receipt["groups"]) == 1  # group 2 was never tried
+    assert receipt["out_of_time"] and receipt["minutes"] == round(100.0 / 60.0, 4)
+
+
+def test_each_trial_restores_the_torch_rng_so_the_main_block_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, seeds, plan = _tiny(torch), _seeds(10), _plan()
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+
+    def noisy(model: Any, row: Any, teacher: Any, soft: Any = None, ref: Any = None) -> Any:
+        if torch.is_grad_enabled():  # a training forward's dropout draws; the eval measure draws nothing
+            torch.rand(4)
+        return (model.lora_B ** 2).sum() * 1e-4
+
+    monkeypatch.setattr(sleep_loss, "seed_kl", noisy)
+    before = torch.get_rng_state().clone()
+
+    sleep_loss._dream_trials(model, sleep_loss.Batch(seeds=seeds, anchors=_anchors()), plan, teacher,
+                             _optimizer(model))
+
+    assert torch.equal(torch.get_rng_state(), before)  # two trials' draws are not the main block's
+
+
+def test_four_dreams_or_fewer_train_untried_and_measure_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _tiny(torch)
+    seeds = _seeds(sleep_loss.DREAM_HELD)
+    plan = _plan()
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    called: list[str] = []
+    monkeypatch.setattr(sleep_loss, "mean_seed_kl", lambda *a, **k: called.append("tau") or 0.0)
+    monkeypatch.setattr(sleep_loss, "anchor_score", lambda *a, **k: called.append("anchor") or 0.0)
+    before = _params(model)
+
+    kept, receipt = sleep_loss._dream_trials(model, sleep_loss.Batch(seeds=seeds), plan, teacher, _optimizer(model))
+
+    assert called == [] and kept == list(range(len(seeds)))  # every dream trains as an ordinary seed row
+    assert receipt == {"dreams": sleep_loss.DREAM_HELD, "trialed": False}  # and no anchors were needed
+    assert all(torch.equal(a, b) for a, b in zip(_params(model), before, strict=True))
+
+
+def test_fewer_dreams_than_the_held_out_set_train_as_ordinary_seed_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _tiny(torch)
+    seeds = _seeds(sleep_loss.DREAM_HELD)
+    monkeypatch.setattr(sleep_loss, "mean_seed_kl", lambda *a, **k: pytest.fail("a trial measured tau"))
+    monkeypatch.setattr(sleep_loss, "anchor_score", lambda *a, **k: pytest.fail("a trial scored the anchors"))
+
+    receipt = sleep_loss.train_terms(model, sleep_loss.Batch(seeds=seeds, anchors=_anchors()), _plan())
+
+    assert receipt["dream_trials"] == {"dreams": sleep_loss.DREAM_HELD, "trialed": False}
+    assert receipt["rows"]["seed"] == sleep_loss.DREAM_HELD  # every dream trained, as a seed row
+
+
+def test_a_cut_trial_sets_out_of_time_and_counts_its_seconds_in_the_receipt() -> None:
+    model, seeds = _tiny(torch), _seeds(10)
+    batch = sleep_loss.Batch(sft=(sleep_loss.Seq((1, 2), (3, 11)),), seeds=seeds, anchors=_anchors())
+
+    receipt = sleep_loss.train_terms(model, batch, _plan(deadline=0.0))  # monotonic is always past zero
+
+    assert receipt["out_of_time"] and receipt["dream_trials"]["out_of_time"] and receipt["dream_trials"]["groups"] == []
+    assert "dream_trials" in receipt["minutes"] and receipt["rows"]["seed"] == 0  # no group was kept
+
 
 
 def test_day_dreams_take_four_imitation_samples(monkeypatch: pytest.MonkeyPatch) -> None:

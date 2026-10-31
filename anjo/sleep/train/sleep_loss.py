@@ -52,10 +52,12 @@ rows, one row a step, in place of the step plan; the DPO block keeps its own. Ne
 the main block the job holds out ``DREAM_HELD`` dream rows (fixed by the plan seed), tries each group of
 ``DREAM_GROUP`` for ``DREAM_TRIAL_STEPS`` steps at the main rate, and keeps a group only if the held-out
 seeding KL falls by ``DREAM_MIN_GAIN`` while the anchor score stays within ``ANCHOR_BAND`` of the
-untouched one. Every trial restores the weights and the optimizer's state exactly, and the held-out rows
-never train: the same keep-if-improves selection the paper runs with isolated adapters, at the cost of a
-few steps and one loaded job. With the switch on, the dream block's rollback also restores the projector's
-params, and imitation samples ``IMITATION_SAMPLES_DAY`` times.
+untouched one. Every trial restores the weights, the optimizer's state and the torch RNG exactly, and the
+held-out rows never train: the same keep-if-improves selection the paper runs with isolated adapters, at
+the cost of a few steps and one loaded job. The deadline stops the trials as it stops the main loop, and
+with ``DREAM_HELD`` dreams or fewer there is nothing to hold out: every dream trains as an ordinary seed
+row, untried. With the switch on, the dream block's rollback also restores the projector's params, and
+imitation samples ``IMITATION_SAMPLES_DAY`` times.
 
 **The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
 hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
@@ -236,7 +238,9 @@ def select_dreams(norms: Sequence[float], k: int, b: int, seed: int) -> list[int
 
 def dream_split(seeds: Sequence[SeedSeq], seed: int) -> tuple[list[int], list[list[int]]]:
     """The day dreams' trial split: ``DREAM_HELD`` rows fixed by the run's seed as tau's set (never
-    trained), then the rest in groups of ``DREAM_GROUP`` the keep-if-improves trials judge."""
+    trained once a group is tried), then the rest in groups of ``DREAM_GROUP`` the trials judge. With
+    ``DREAM_HELD`` dreams or fewer the held set is every dream and there are no groups to try: those
+    rows train as ordinary seed rows."""
     dream = [i for i, row in enumerate(seeds) if row.group == DREAM_KIND]
     held = random.Random(seed).sample(dream, min(DREAM_HELD, len(dream)))
     chosen = set(held)
@@ -541,25 +545,51 @@ def _dream_trials(
     """The paper's dream selection inside the one job: hold out ``DREAM_HELD`` dream rows, try each
     group of ``DREAM_GROUP`` for ``DREAM_TRIAL_STEPS`` steps at the main rate, and keep it only if the
     held-out seeding KL falls by ``DREAM_MIN_GAIN`` and the anchor score holds within ``ANCHOR_BAND``.
-    Every trial restores the weights and the optimizer's state exactly; the held-out rows never train."""
+    Every trial restores the weights, the optimizer's state and the torch RNG exactly, so the main
+    block's dropout and on-policy samples don't depend on how many groups were tried; the held-out
+    rows never train. The deadline stops the trials as it stops the main loop: checked before tau,
+    before the anchors and before every group, and once it passes no further group is kept. With no
+    group to try (``dreams <= DREAM_HELD``) nothing is measured: every dream trains as a seed row."""
     import torch
 
     held, groups = dream_split(batch.seeds, plan.seed)
     if not held and not groups:
         return [], {}
-    if groups and not batch.anchors:
+    if not groups:  # four dreams or fewer: there is no held-out set to judge a group against
+        return sorted(held), {"dreams": len(held), "trialed": False}
+    if not batch.anchors:
         raise ValueError("dream trials need the anchor items they score")
     held_rows = [batch.seeds[i] for i in held]
     params = [p for group in optimizer.param_groups for p in group["params"]]
     started = timer()
+
+    def late() -> bool:
+        return timer() > plan.deadline
+
+    def cut(tau: float | None = None) -> tuple[list[int], dict[str, Any]]:
+        """The receipt when the deadline stops the trials: nothing after the check was measured."""
+        return [], {"dreams": len(held) + sum(len(group) for group in groups), "held": len(held),
+                    "groups": [], "kept": 0, "groups_kept": 0, "tau_before": tau, "anchor_before": None,
+                    "minutes": round((timer() - started) / 60.0, 4), "trialed": True, "out_of_time": True}
+
+    if late():  # before tau, before the anchors, and before every group below
+        return cut()
     tau_before = mean_seed_kl(model, held_rows, teacher, soft)
-    anchor_before = anchor_score(model, batch.anchors) if batch.anchors else 0.0
+    if late():
+        return cut(tau_before)
+    anchor_before = anchor_score(model, batch.anchors)
+    out_of_time = False
     model.train()
     kept: list[int] = []
     receipts: list[dict[str, Any]] = []
     for group in groups:
+        if late():
+            out_of_time = True
+            break
         saved = [p.detach().clone() for p in params]
         state = copy.deepcopy(optimizer.state_dict())
+        rng = torch.get_rng_state()
+        cuda = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         for step in range(DREAM_TRIAL_STEPS):
             row = batch.seeds[group[step % len(group)]]  # four steps even from a short last group
             student = _tokens(soft, row.state, detach=True)
@@ -569,11 +599,14 @@ def _dream_trials(
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
         tau_after = mean_seed_kl(model, held_rows, teacher, soft)
-        anchor_after = anchor_score(model, batch.anchors) if batch.anchors else 0.0
+        anchor_after = anchor_score(model, batch.anchors)
         with torch.no_grad():
             for p, value in zip(params, saved, strict=True):
                 p.copy_(value)
         optimizer.load_state_dict(state)
+        torch.set_rng_state(rng)
+        if cuda is not None:
+            torch.cuda.set_rng_state_all(cuda)
         for p in params:
             p.grad = None
         keep = dream_kept(tau_before, tau_after, anchor_before, anchor_after)
@@ -584,7 +617,8 @@ def _dream_trials(
     minutes = (timer() - started) / 60.0
     return kept, {"dreams": len(held) + sum(len(group) for group in groups), "held": len(held),
                   "groups": receipts, "kept": len(kept), "groups_kept": sum(g["kept"] for g in receipts),
-                  "tau_before": tau_before, "anchor_before": anchor_before, "minutes": round(minutes, 4)}
+                  "tau_before": tau_before, "anchor_before": anchor_before, "minutes": round(minutes, 4),
+                  "trialed": True, "out_of_time": out_of_time}
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
@@ -834,9 +868,12 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
     optimizer = torch.optim.AdamW(groups, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
     hooks = freeze_leading(named, plan.long_term_rank) if plan.long_term_rank else []
     held = leading(named, plan.long_term_rank) if plan.long_term_rank else []
+    clock = _Clock(timer)
     try:
-        trialed, trials = (_dream_trials(model, batch, plan, teacher, optimizer, soft, timer)
-                           if any(row.group == DREAM_KIND for row in batch.seeds) else ([], {}))
+        trialed, trials = [], {}
+        if any(row.group == DREAM_KIND for row in batch.seeds):
+            with clock("dream_trials"):  # the trials' seconds are in the receipt, not only their own block
+                trialed, trials = _dream_trials(model, batch, plan, teacher, optimizer, soft, timer)
         seeds = batch.seeds
         if trials:  # held-out rows and dropped groups never train; kept groups train as ordinary seeds
             keep = set(trialed)
@@ -852,8 +889,9 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         if main + len(batch.pairs) + dream_steps == 0:
             raise ValueError("a night trains at least one row")
         run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
-                   teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
+                   teacher, clock, rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
                    warmup_updates=int(soft.warmup_share * main) if soft else 0)
+        run.out_of_time = bool(trials.get("out_of_time"))  # the deadline cut the trials before the main block
         probe = seeds[0] if seeds else None
         teacher_before, kl_before = _probe(model, probe, teacher, soft)
         model.train()

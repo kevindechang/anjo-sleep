@@ -11,8 +11,10 @@ training target.
 
 One call returns the messages, one JSON object a line. A cut answer loses only its last line (an
 array cut mid-way would lose every message), and an unreadable line is skipped: a bad answer yields
-fewer dreams, never a failed night. A failed call yields none. The training job holds every dream to
-the decontaminator's rules and the probes' 13-gram rule exactly as it holds MIND's dreams
+fewer dreams, never a failed night. A failed answer to one message loses only that dream; the replies
+stop after ``DREAM_FAILURES_MAX`` failures in a row, so an unreachable server doesn't hold the night on
+call after call. A failed call for the messages yields none. The training job holds every dream to the
+decontaminator's rules and the probes' 13-gram rule exactly as it holds MIND's dreams
 (``train/terms.py``); this module only writes them down.
 """
 from __future__ import annotations
@@ -32,10 +34,12 @@ from anjo.sleep.provenance import GLIMMER
 from anjo.sleep.serving.client import ServingError
 from anjo.sleep.types import CheckpointRef
 
+SWITCH_ENV: Final = "ANJO_SLEEP_DAY_DREAMS"  # objective.DAY_DREAMS_ENV aliases it: one name, read here too
 DAY_DREAMS: Final = 16  # messages a night asks for
 DREAM_MIX: Final = (8, 4, 4)  # new work, field questions, choices their preferences bear on
 MESSAGE_TOKENS: Final = 2400  # one answer holding every JSON line, with room for sixteen messages
 REPLY_TOKENS: Final = 400
+DREAM_FAILURES_MAX: Final = 3  # replies that fail in a row end the night's asking; one failure loses one dream
 DREAM_TEMPERATURE: Final = 1.0  # as MIND's dreams: her own sampling, never a judge's
 DAY_DREAM_GROUP: Final = "dream"  # SeedRow.group, the job's keep-if-improves trial set
 PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "day_dreams_v1.md"
@@ -155,6 +159,7 @@ class GlimmerDayDreams:
         except (ModelApiError, ServingError):
             return ()
         made: list[DayDream] = []
+        failures = 0
         for i, message in enumerate(messages_from(asked.text)[: self._count]):
             try:
                 answered = self._client.complete(
@@ -163,7 +168,11 @@ class GlimmerDayDreams:
                     max_tokens=REPLY_TOKENS,
                 )
             except (ModelApiError, ServingError):
-                break
+                failures += 1  # one lost reply is one fewer dream, not the end of them all
+                if failures >= DREAM_FAILURES_MAX:
+                    break
+                continue
+            failures = 0
             reply = answered.text.strip()
             if answered.finish_reason != NORMAL_STOP or not reply:
                 continue
