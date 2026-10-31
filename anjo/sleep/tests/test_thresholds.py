@@ -79,8 +79,10 @@ def test_thresholds_pin_the_review_items():
     # 3. placeholders
     ph = T["placeholders"]
     assert {"bootstrap.seed", "night_token_cap", "nights_per_life_final"} <= set(ph)
-    assert ph["nights_per_life_final"] == "set at the Nov 1 freeze, before the reveal (null until then)"
-    assert T["nights_per_life_final"] is None
+    assert ph["nights_per_life_final"].startswith("2026-11-01, set at the Nov 1 freeze before the reveal")
+    assert T["nights_per_life_final"] == 2  # set at the freeze (Kevin, 2026-11-01)
+    assert T["human_check"]["sample_seed"] == 20261102
+    assert T["judging"]["judge"].startswith("DeepSeek V4.1 Flash") and "judge_v1.md" in T["judging"]["judge"]
     # 4. fairness: two separate comparisons, no donor conditions
     f = T["fairness"]
     assert [x["id"] for x in f["comparisons"]] == ["4_vs_2C", "4_vs_2F"]

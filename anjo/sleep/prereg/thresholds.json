@@ -3,14 +3,14 @@
  "registered_on": "2026-10-27",
  "spec": "docs/hackathon sleep spec 5.1, 5.1b and Task 2",
  "placeholders": {
-  "bootstrap.seed": "filled in (20261101) but provisional; the committed seed is registered with the final analysis",
-  "night_token_cap": "filled in (16384) but provisional; set during development, frozen at the Nov 1 freeze",
-  "replay_token_penalty": "2026-10-28: 0.01 chosen a priori on fakes (a night spent to the 20,000-token cap then costs 0.2, a tenth of the Brier score's range of 2), not set on development; to be confirmed on development lives before the Nov 1 12:00 ET registration",
-  "nights_per_life_final": "set at the Nov 1 freeze, before the reveal (null until then)",
-  "human_check.sample_seed": "set at the Nov 1 freeze, before the reveal (null until then)"
+  "bootstrap.seed": "2026-11-01, frozen at the Nov 1 freeze before the reveal: 20261101, the provisional value kept (Kevin)",
+  "night_token_cap": "2026-11-01, frozen at the Nov 1 freeze: 16384, the development value kept (Kevin)",
+  "replay_token_penalty": "2026-10-28: 0.01 chosen a priori on fakes (a night spent to the 20,000-token cap then costs 0.2, a tenth of the Brier score's range of 2), not set on development; to be confirmed on development lives before the Nov 1 12:00 ET registration; 2026-11-01: kept at 0.01 at the registration (Kevin)",
+  "nights_per_life_final": "2026-11-01, set at the Nov 1 freeze before the reveal: 2, the design of every development read (Kevin)",
+  "human_check.sample_seed": "2026-11-01, set at the Nov 1 freeze before the reveal: 20261102 (Kevin)"
  },
  "planned_nights_development": 8,
- "nights_per_life_final": null,
+ "nights_per_life_final": 2,
  "general_skills": {
   "items": 200,
   "sources": [
@@ -242,7 +242,7 @@
  "human_check": {
   "final_pairs": 30,
   "drawn": "randomly, seeded",
-  "sample_seed": null,
+  "sample_seed": 20261102,
   "strata": [
    "3 vs 1",
    "3 vs 3x"
@@ -262,13 +262,14 @@
   "source": "Kevin blind-rates 30 randomly drawn final pairs from 3 against 1 and 3 against 3x, with the brief, arms hidden and order randomized. The judge-human agreement is reported. (5.1)"
  },
  "judging": {
-  "judge": "Muse Spark with judge_v1.md; reads the person's judge brief including held-out preferences; answers A, B or tie; taste_ab never goes to a judge",
+  "judge": "DeepSeek V4.1 Flash (Fireworks) with judge_v1.md; reads the person's judge brief including held-out preferences; answers A, B or tie; taste_ab never goes to a judge",
+  "judge_changed": "2026-11-01, before the freeze: Kevin moved the judge from Muse Spark to DeepSeek V4.1 Flash (the Oct 30 move of Sleep's credits to Fireworks); the four development lives were rescored under DeepSeek, and Muse Spark scores stay development-only",
   "orders": "each pair judged in both orders; a flipped verdict is a tie; ties count half",
   "second_judge": {
    "model": "Gemini 3.8 Flash on Vertex",
    "scope": "every final pair, synthetic people only",
    "status": "diagnostic",
-   "report": "agreement with Muse Spark per life and per dimension; every disagreement shown prominently, not only significant reversals",
+   "report": "agreement with the judge (DeepSeek V4.1 Flash) per life and per dimension; every disagreement shown prominently, not only significant reversals",
    "source": "Agreement with Muse Spark is reported per life and per dimension, and every disagreement is shown prominently, not only significant reversals. (5.1)"
   },
   "style_neutral": {
