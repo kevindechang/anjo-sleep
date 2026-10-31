@@ -362,7 +362,8 @@ def test_the_vm_record_and_day_lengths_pass_through_the_rig(tmp_path: Path) -> N
     assert _summary(results[0].log_path)["vm"] == {"night": START.isoformat(), "vm_kept": False, "idle_s_before": None}
 
 
-def test_fake_gate_includes_scoring(capsys: pytest.CaptureFixture[str]) -> None:
+def test_fake_gate_includes_scoring(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")  # the registered six, before the reported-only 2H
     assert accelerated.main(["--fake", "--days", "2"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["scored_nights"] == 2

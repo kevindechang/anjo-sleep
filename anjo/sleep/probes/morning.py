@@ -109,7 +109,7 @@ PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {
     "4M_vs_2A": ("4M", "2A"),
     "4M_vs_4": ("4M", "4"),
 }
-# The reported-only harness pair: asked only when ``ANJO_SLEEP_HARNESS=1``, and never a registered
+# The reported-only harness pair: asked unless ``ANJO_SLEEP_HARNESS=0``, and never a registered
 # win. Its absence leaves the score file exactly as it was.
 HARNESS_PAIR: Final = "2H_vs_2C"
 HARNESS_PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {HARNESS_PAIR: (HARNESS_ARM, "2C")}
@@ -198,8 +198,8 @@ def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
 
 def full_arms(environ: Mapping[str, str]) -> tuple[Arm, ...]:
     """The arms a full morning asks: the committed six, 2A and 4M only when
-    ``ANJO_SLEEP_ARMS_EXTRA=1``, and 2H last only when ``ANJO_SLEEP_HARNESS=1``, so the default
-    full run is the one scored before them and a subset names any of the newer arms explicitly."""
+    ``ANJO_SLEEP_ARMS_EXTRA=1``, and 2H last unless ``ANJO_SLEEP_HARNESS=0``, so the six are scored
+    before it and a subset names any of the newer arms explicitly."""
     asked = ARM_ORDER if environ.get(ARMS_EXTRA_ENV, "").strip() == "1" else COMMITTED_ARMS
     return (*asked, HARNESS_ARM) if harness_on(environ) else asked
 

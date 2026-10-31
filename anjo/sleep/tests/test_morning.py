@@ -39,6 +39,12 @@ PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5,
 COMMITTED_PAIRS = frozenset(name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS)
 
 
+@pytest.fixture(autouse=True)
+def harness_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These files are the registered morning's: the reported-only 2H arm is explicitly off."""
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+
+
 class Judge:
     """Deterministic: the longer reply wins; calls are counted."""
 

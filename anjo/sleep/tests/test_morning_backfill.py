@@ -35,6 +35,12 @@ NIGHTS = (date(2026, 10, 24), date(2026, 10, 25), date(2026, 10, 26))
 PRICES = Prices(spark_in_per_m=1.25, spark_out_per_m=4.25, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.96)
 
 
+@pytest.fixture(autouse=True)
+def harness_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These plans are the registered morning's: the reported-only 2H arm is explicitly off."""
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+
+
 def _ckpt(n: int) -> CheckpointRef:
     return CheckpointRef(f"p-abc-n{n}", USER, NIGHTS[n - 1], f"uri://{n}", None if n == 1 else f"p-abc-n{n - 1}")
 

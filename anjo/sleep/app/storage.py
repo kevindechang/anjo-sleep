@@ -36,7 +36,7 @@ CLEARED_FILE: Final = "cleared_sessions.jsonl"
 EXTRACTIONS_FILE: Final = "extractions.jsonl"
 BRIEFS_FILE: Final = "briefs.jsonl"  # the served and training briefs (Task 5)
 PRACTICE_FILE: Final = "practice.jsonl"  # the night's practice transcripts (Task 5)
-STRATEGIES_FILE: Final = "strategies.jsonl"  # the harness list's versions (ANJO_SLEEP_HARNESS=1)
+STRATEGIES_FILE: Final = "strategies.jsonl"  # the harness list's versions (ANJO_SLEEP_HARNESS=0 turns it off)
 WORKSPACE_FILE: Final = "workspace.jsonl"  # MIND's workspace log (Task 17)
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 

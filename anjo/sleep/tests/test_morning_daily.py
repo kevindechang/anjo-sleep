@@ -37,6 +37,12 @@ FULL_KEYS = {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms
 COMMITTED_PAIRS = {name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS}
 
 
+@pytest.fixture(autouse=True)
+def harness_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These files are the registered morning's: the reported-only 2H arm is explicitly off."""
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+
+
 def sealed() -> list[Any]:
     found = []
     for kind, count in COUNTS.items():
