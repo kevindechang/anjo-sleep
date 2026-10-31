@@ -5,8 +5,9 @@ that is serving after the night.
 each arm against arm 1 in both orders (``score.score``; ``taste_ab`` by log-probability, no judge),
 and writes ``scores/night-NN.json`` in the layout ``reports.results`` reads: per arm and dimension,
 the tie-inclusive score against arm 1 (arm 1 is 0.5 against itself by definition), plus the headline
-pairs (3 against 3x, 4 against 2C, 4 against 2F). The file holds numbers, the night, the label and the
-checkpoint id, never a reply or a probe, and nothing is written to history, evidence or memory (RF5).
+pairs (3 against 3x, 4 against 2C, 4 against 2F). The file holds numbers, the night, the label, the judge
+(``muse`` or ``deepseek``) and the checkpoint id, never a reply or a probe, and nothing is written to history,
+evidence or memory (RF5).
 
 - Glimmer is woken first (``Morning.wake``); if it can't be, the run stops with ``glimmer_not_ready``
   before any call, and the score file records ``wake_seconds``.
@@ -215,6 +216,11 @@ class Morning:
     @property
     def judge_call_usd(self) -> float:
         return DEEPSEEK_JUDGE_USD_PER_CALL if self.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH else JUDGE_USD_PER_CALL
+
+    @property
+    def judge_name(self) -> str:
+        """The judge's name as a score file records it: ``muse`` or ``deepseek``."""
+        return "deepseek" if self.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH else "muse"
 
 
 @dataclass(frozen=True)
@@ -425,16 +431,20 @@ def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER)
 def run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
     label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
+    path: Path | None = None, hold_key: str | None = None,
 ) -> MorningResult:
-    """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends."""
+    """``_run_morning`` as one phase: Glimmer goes back to sleep when the run ends, however it ends.
+    ``path`` writes the score file there instead of under the morning's root, and ``hold_key`` names the
+    holds instead of the morning's own (a rescore into a folder of its own: ``tools.morning_backfill``)."""
     with phase(morning.sleep):
         return _run_morning(user_id, night, checkpoint, morning=morning, label=label, promoted=promoted, subset=subset,
-                            pinned=pinned)
+                            pinned=pinned, path=path, hold_key=hold_key)
 
 
 def _run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
     label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
+    path: Path | None = None, hold_key: str | None = None,
 ) -> MorningResult:
     """Score every arm on ``user_id``'s sealed probes, on the checkpoint serving after ``night``.
 
@@ -446,7 +456,8 @@ def _run_morning(
     if subset is not None and label == "final":
         raise MorningError("a final run asks the full set of probes and arms, never a subset")
     folder = results.results_root(morning.root) / user_id / SCORES
-    target = _next_file(folder, night, None if subset is None else subset.name, any_set=not pinned)
+    target = path if path is not None else _next_file(
+        folder, night, None if subset is None else subset.name, any_set=not pinned)
     serving = morning.arms.adapters.last_promoted(user_id)
     if promoted:
         if checkpoint is None:
@@ -471,7 +482,8 @@ def _run_morning(
     worst_judge = _worst_judge_calls(probes, arms)
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
     # A backfill holds under a key of its own, so a failed morning's settled spend still counts (``latest_attempts``)
-    key = f"morning:{night.isoformat()}:{user_id}" + (f":backfill-{probe_set(subset)}" if pinned else "")
+    key = hold_key or f"morning:{night.isoformat()}:{user_id}" + (
+        f":backfill-{probe_set(subset)}" if pinned else "")
     inner = morning.judge
     per_call = morning.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH and morning.ledger is not None
     if per_call:
@@ -523,6 +535,7 @@ def _run_morning(
         stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
         "night": night.isoformat(), "label": label, "probes": len(probes), "judge_model": morning.judge_model,
+        "judge": morning.judge_name,
         "checkpoint": None if checkpoint is None else checkpoint.id,
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,
@@ -536,7 +549,7 @@ def _run_morning(
         record[NO_VERDICT] = no_verdict
     if woke is not None:
         record["wake_seconds"] = woke.seconds
-    folder.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.tmp")
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")
     os.replace(pending, target)

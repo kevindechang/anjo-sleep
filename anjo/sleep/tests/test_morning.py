@@ -78,8 +78,9 @@ def test_morning_run_never_saved_to_history(tmp_path: Path) -> None:
     body = done.path.read_text(encoding="utf-8")
     assert "reply from" not in body and all(p.prompt not in body for p in rig.probes)  # no reply or probe text
     assert set(json.loads(body)) == {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable",
-                               "outcomes", "seconds", "judge_model"}  # its wall time (the arms and the judge), a number only
+                               "outcomes", "seconds", "judge_model", "judge"}  # its wall time (the arms and the judge), a number only
     assert json.loads(body)["judge_model"] == "unknown"  # the fake has no model ID
+    assert json.loads(body)["judge"] == "muse"  # and no other judge than the morning's own
 
 
 def test_morning_rerun_refused_once_scored(tmp_path: Path) -> None:
