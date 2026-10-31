@@ -47,6 +47,7 @@ from anjo.sleep.mind.self_predict import (
     SelfPrediction,
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
+from anjo.sleep.night.day_dreams import DayDreamSource, NoDayDreams
 from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
@@ -483,6 +484,8 @@ class NightDeps:
     # sft_dpo_seed's extra rows (``night/dreams.py``): off unless the night command's switches say so.
     terms: Terms = field(default_factory=Terms)
     dreams: DreamSource = field(default_factory=NoDreams)
+    # ANJO_SLEEP_DAY_DREAMS: her Glimmer's messages from the day and replies (``night/day_dreams.py``).
+    day_dreams: DayDreamSource = field(default_factory=NoDayDreams)
     # Nap or deep sleep (``sleep_pressure.py``); None: every night may train, the night before naps (tests, fakes).
     sleep_policy: SleepPolicy | None = None
     # The person's own turns inside the night's window, a count; None counts none.

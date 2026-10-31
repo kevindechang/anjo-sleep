@@ -48,6 +48,15 @@ any night. It never dreams: it is the control a dreaming arm is held to.
 **Capacity** (``Plan.passes``, ``ANJO_SLEEP_CAPACITY``): the main block takes ``passes`` passes over its
 rows, one row a step, in place of the step plan; the DPO block keeps its own. Never with a time budget.
 
+**Day dreams** (``ANJO_SLEEP_DAY_DREAMS``): the batch's seed rows may carry a day dream's group. Before
+the main block the job holds out ``DREAM_HELD`` dream rows (fixed by the plan seed), tries each group of
+``DREAM_GROUP`` for ``DREAM_TRIAL_STEPS`` steps at the main rate, and keeps a group only if the held-out
+seeding KL falls by ``DREAM_MIN_GAIN`` while the anchor score stays within ``ANCHOR_BAND`` of the
+untouched one. Every trial restores the weights and the optimizer's state exactly, and the held-out rows
+never train: the same keep-if-improves selection the paper runs with isolated adapters, at the cost of a
+few steps and one loaded job. With the switch on, the dream block's rollback also restores the projector's
+params, and imitation samples ``IMITATION_SAMPLES_DAY`` times.
+
 **The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
 hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
 are tonight's fresh slot (B at zero: the reset, ``load_leading``); after training the job folds it.
@@ -66,6 +75,7 @@ tests import it as a module and run every function on a tiny CPU model.
 """
 from __future__ import annotations
 
+import copy
 import math
 import random
 import time
@@ -80,6 +90,7 @@ ON_POLICY_SHARE: Final = 0.25  # GKD's lambda: the seed rows scored on a fresh s
 FRESH_TOKENS: Final = 192
 IMITATION_ROWS: Final = 4
 IMITATION_SAMPLES: Final = 2
+IMITATION_SAMPLES_DAY: Final = 4  # day dreams: four samples, their rows are the volume the switch buys
 IMITATION_TOKENS: Final = 48
 IMITATION_Z0: Final = 0.5
 PREFIX_SHARE: Final = (0.3, 0.7)
@@ -87,6 +98,12 @@ DREAM_TOP_K: Final = 6
 DREAM_RANDOM: Final = 2
 DREAM_RATE: Final = 0.5  # the dream block's share of the peak learning rate
 ANCHOR_TOLERANCE: Final = 0.0  # a dream block is kept only if the anchor score doesn't fall
+DREAM_KIND: Final = "dream"  # a seed row's group when it is one of the day's dreams
+DREAM_HELD: Final = 4  # the day dreams tau is measured on, fixed by the plan seed, never trained
+DREAM_GROUP: Final = 4  # day dreams a trial trains and judges together
+DREAM_TRIAL_STEPS: Final = 4  # steps a group is tried at, at the main rate
+DREAM_MIN_GAIN: Final = 0.01  # a group is kept only if held-out seeding KL falls by this share
+ANCHOR_BAND: Final = 0.005  # and the anchor score stays within this of the untouched one
 MAX_GRAD_NORM: Final = 1.0
 WARMUP: Final = 0.03
 MAX_ACCUMULATION: Final = 16
@@ -115,12 +132,14 @@ class PairSeq:
 
 @dataclass(frozen=True)
 class SeedSeq:
-    """The student's prompt (no context), the teacher's (the consolidated day, then the same message), the reply."""
+    """The student's prompt (no context), the teacher's (the consolidated day, then the same message), the reply.
+    ``group`` marks one of the day's dreams (``"dream"``); None is every other row, replay included."""
 
     prompt: Ids
     teacher: Ids
     reply: Ids
     state: str | None = None
+    group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +170,7 @@ class Plan:
     dpo_lr: float  # today's DPO rate: the DPO block's own optimizer, never the main block's rate
     long_term_rank: int = 0  # the fold: the leading ranks that hold the long-term adapter, frozen
     dreams: bool = False
+    day_dreams: bool = False  # ANJO_SLEEP_DAY_DREAMS: the dream block's rollback covers the projector too
     stretch_s: float = 0.0  # the matched control: the main block trains this long by the clock (0: the step plan)
     deadline: float = math.inf  # the timer's reading past which no update starts (the channel's ``max_minutes``)
     passes: int = 0  # capacity: the main block's passes over its rows, one row a step (0: the step plan)
@@ -212,6 +232,22 @@ def select_dreams(norms: Sequence[float], k: int, b: int, seed: int) -> list[int
     order = sorted(range(len(norms)), key=lambda i: (-norms[i], i))
     top, rest = order[:k], order[k:]
     return top + random.Random(seed).sample(rest, min(b, len(rest)))
+
+
+def dream_split(seeds: Sequence[SeedSeq], seed: int) -> tuple[list[int], list[list[int]]]:
+    """The day dreams' trial split: ``DREAM_HELD`` rows fixed by the run's seed as tau's set (never
+    trained), then the rest in groups of ``DREAM_GROUP`` the keep-if-improves trials judge."""
+    dream = [i for i, row in enumerate(seeds) if row.group == DREAM_KIND]
+    held = random.Random(seed).sample(dream, min(DREAM_HELD, len(dream)))
+    chosen = set(held)
+    rest = [i for i in dream if i not in chosen]
+    return held, [rest[i:i + DREAM_GROUP] for i in range(0, len(rest), DREAM_GROUP)]
+
+
+def dream_kept(tau_before: float, tau_after: float, anchor_before: float, anchor_after: float) -> bool:
+    """The paper's dream selection, cheap: the held-out seeding KL falls by ``DREAM_MIN_GAIN``
+    relative to the untouched adapter, and the anchor score stays within ``ANCHOR_BAND`` of it."""
+    return tau_after <= tau_before * (1.0 - DREAM_MIN_GAIN) and anchor_after >= anchor_before - ANCHOR_BAND
 
 
 def step_plan(n: int, min_steps: int) -> tuple[int, int, int]:
@@ -391,7 +427,8 @@ def imitation_loss(model: Any, row: SeedSeq, rng: random.Random, plan: Plan,
         return None, None
     cut = rng.randint(low, high)
     prompt, target = (*row.prompt, *row.reply[:cut]), row.reply[cut:cut + IMITATION_TOKENS]
-    samples = [sample(model, prompt, len(target), plan, soft) for _ in range(IMITATION_SAMPLES)]
+    samples_taken = IMITATION_SAMPLES_DAY if plan.day_dreams else IMITATION_SAMPLES
+    samples = [sample(model, prompt, len(target), plan, soft) for _ in range(samples_taken)]
     rewards = [edit_reward(s, target) for s in samples]
     total, n = sum(rewards), len(rewards)
     advantages = [r - (total - r) / (n - 1) for r in rewards]
@@ -481,6 +518,73 @@ def anchor_score(model: Any, anchors: Sequence[AnchorSeq]) -> float:
             sums = torch.stack([reply_logprobs(model, item.prompt, choice).sum() for choice in item.choices])
             scores.append(float(torch.log_softmax(sums, dim=-1)[item.answer]))
     return sum(scores) / len(scores)
+
+
+def mean_seed_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: Soft | None = None) -> float:
+    """Tau: the seeding KL over ``rows``, averaged, without dropout or a gradient (the trial's measure)."""
+    import torch
+
+    if not rows:
+        return 0.0
+    scores = []
+    with _evaluating(model), torch.no_grad():
+        for row in rows:
+            scores.append(float(seed_kl(model, row, teacher, _tokens(soft, row.state, detach=True),
+                                       _tokens(soft, row.state, ref=True))))
+    return sum(scores) / len(scores)
+
+
+def _dream_trials(
+    model: Any, batch: Batch, plan: Plan, teacher: Teacher, optimizer: Any, soft: Soft | None = None,
+    timer: Callable[[], float] = time.monotonic,
+) -> tuple[list[int], dict[str, Any]]:
+    """The paper's dream selection inside the one job: hold out ``DREAM_HELD`` dream rows, try each
+    group of ``DREAM_GROUP`` for ``DREAM_TRIAL_STEPS`` steps at the main rate, and keep it only if the
+    held-out seeding KL falls by ``DREAM_MIN_GAIN`` and the anchor score holds within ``ANCHOR_BAND``.
+    Every trial restores the weights and the optimizer's state exactly; the held-out rows never train."""
+    import torch
+
+    held, groups = dream_split(batch.seeds, plan.seed)
+    if not held and not groups:
+        return [], {}
+    if groups and not batch.anchors:
+        raise ValueError("dream trials need the anchor items they score")
+    held_rows = [batch.seeds[i] for i in held]
+    params = [p for group in optimizer.param_groups for p in group["params"]]
+    started = timer()
+    tau_before = mean_seed_kl(model, held_rows, teacher, soft)
+    anchor_before = anchor_score(model, batch.anchors) if batch.anchors else 0.0
+    model.train()
+    kept: list[int] = []
+    receipts: list[dict[str, Any]] = []
+    for group in groups:
+        saved = [p.detach().clone() for p in params]
+        state = copy.deepcopy(optimizer.state_dict())
+        for step in range(DREAM_TRIAL_STEPS):
+            row = batch.seeds[group[step % len(group)]]  # four steps even from a short last group
+            student = _tokens(soft, row.state, detach=True)
+            loss = seed_kl(model, row, teacher, student, _tokens(soft, row.state, ref=True))
+            (WEIGHTS["seed"] * loss).backward()
+            torch.nn.utils.clip_grad_norm_(params, MAX_GRAD_NORM)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+        tau_after = mean_seed_kl(model, held_rows, teacher, soft)
+        anchor_after = anchor_score(model, batch.anchors) if batch.anchors else 0.0
+        with torch.no_grad():
+            for p, value in zip(params, saved, strict=True):
+                p.copy_(value)
+        optimizer.load_state_dict(state)
+        for p in params:
+            p.grad = None
+        keep = dream_kept(tau_before, tau_after, anchor_before, anchor_after)
+        receipts.append({"rows": len(group), "tau_before": tau_before, "tau_after": tau_after,
+                         "anchor_before": anchor_before, "anchor_after": anchor_after, "kept": keep})
+        if keep:
+            kept.extend(group)
+    minutes = (timer() - started) / 60.0
+    return kept, {"dreams": len(held) + sum(len(group) for group in groups), "held": len(held),
+                  "groups": receipts, "kept": len(kept), "groups_kept": sum(g["kept"] for g in receipts),
+                  "tau_before": tau_before, "anchor_before": anchor_before, "minutes": round(minutes, 4)}
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
@@ -653,7 +757,7 @@ def _dpo_block(run: _Run, pairs: Sequence[PairSeq]) -> dict[str, Any]:
 
 def _dream_block(run: _Run, batch: Batch, accumulation: int) -> dict[str, Any]:
     """Rank the dreams by gradient norm, keep the top k plus b at random, train them, and keep the
-    block only if the anchor score holds; else the adapter goes back to its state before the block."""
+    block only if the anchor score holds; else the weights go back (the projector's too with day dreams)."""
     import torch
 
     with run.clock("dream_rank"):
@@ -661,7 +765,9 @@ def _dream_block(run: _Run, batch: Batch, accumulation: int) -> dict[str, Any]:
     kept = select_dreams(norms, DREAM_TOP_K, DREAM_RANDOM, run.plan.seed)
     with run.clock("anchor"):
         before = anchor_score(run.model, batch.anchors)
-    saved = [p.detach().clone() for p in run.params]
+    restorable = ([p for group in run.optimizer.param_groups for p in group["params"]]
+                  if run.plan.day_dreams else run.params)  # day dreams: the projector rolls back too
+    saved = [p.detach().clone() for p in restorable]
     for chunk in _chunks([("dream", batch.dreams[i]) for i in kept], accumulation):
         run.step(chunk)
     with run.clock("anchor"):
@@ -669,7 +775,7 @@ def _dream_block(run: _Run, batch: Batch, accumulation: int) -> dict[str, Any]:
     held = after >= before - ANCHOR_TOLERANCE
     if not held:
         with torch.no_grad():
-            for p, value in zip(run.params, saved, strict=True):
+            for p, value in zip(restorable, saved, strict=True):
                 p.copy_(value)
     return {"candidates": len(batch.dreams), "kept": len(kept), "keep_rate": round(len(kept) / len(batch.dreams), 4),
             "block_kept": held, "anchor_before": before, "anchor_after": after,
@@ -709,41 +815,48 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
                 timer: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     """Train the adapter (and with ``soft`` the projector) on the one loss; returns the receipt: rows,
     mean loss and minutes per term, the on-policy samples taken, the imitation reward, the dream block's
-    outcome, and whether the deadline cut the loop short. Counts only."""
+    outcome, the day dream trials' groups, and whether the deadline cut the loop short. Counts only."""
     import torch
 
     named = adapter_params(model)
     dreaming = plan.dreams and bool(batch.dreams)
     if dreaming and not batch.anchors:
         raise ValueError("dreams need the anchor items their check scores")
-    if plan.stretch_s and (plan.stretch_s < 0 or dreaming or plan.passes):
+    if plan.stretch_s and (plan.stretch_s < 0 or dreaming or plan.passes or plan.day_dreams):
         raise ValueError("a matched control trains a positive time budget, and no dreams or passes")
     if batch.dream_groups and len(batch.dream_groups) != len(batch.dreams):
         raise ValueError("each dream has one seed kind")
     rng = random.Random(plan.seed)
     torch.manual_seed(plan.seed)
-    items, imitating = _stream(batch, rng)
-    fresh = set(rng.sample(range(len(batch.seeds)), math.ceil(ON_POLICY_SHARE * len(batch.seeds))))
-    accumulation, epochs, per_epoch = step_plan(len(items), plan.min_steps) if items else (1, 0, 0)
-    if items and plan.passes:  # capacity: every row its own step, each pass; the DPO block keeps its own plan
-        accumulation, epochs, per_epoch = 1, plan.passes, len(items)
-    main = epochs * per_epoch
-    dream_steps = math.ceil(min(len(batch.dreams), DREAM_TOP_K + DREAM_RANDOM) / accumulation) if dreaming else 0
-    if main + len(batch.pairs) + dream_steps == 0:
-        raise ValueError("a night trains at least one row")
     params = [p for _, p in named]
     teacher = Teacher(params)  # the night-start adapter: the long-term one, before anything trains
     groups = [{"params": params, "lr": plan.lr}, *(dict(group) for group in (soft.groups if soft else ()))]
     optimizer = torch.optim.AdamW(groups, lr=plan.lr, weight_decay=0.0)  # no decay: a masked rank stays put
-    run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
-               teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
-               warmup_updates=int(soft.warmup_share * main) if soft else 0)
     hooks = freeze_leading(named, plan.long_term_rank) if plan.long_term_rank else []
     held = leading(named, plan.long_term_rank) if plan.long_term_rank else []
-    probe = batch.seeds[0] if batch.seeds else None
-    teacher_before, kl_before = _probe(model, probe, teacher, soft)
-    model.train()
     try:
+        trialed, trials = (_dream_trials(model, batch, plan, teacher, optimizer, soft, timer)
+                           if any(row.group == DREAM_KIND for row in batch.seeds) else ([], {}))
+        seeds = batch.seeds
+        if trials:  # held-out rows and dropped groups never train; kept groups train as ordinary seeds
+            keep = set(trialed)
+            seeds = tuple(row for i, row in enumerate(batch.seeds)
+                          if row.group != DREAM_KIND or i in keep)
+        items, imitating = _stream(replace(batch, seeds=seeds), rng)
+        fresh = set(rng.sample(range(len(seeds)), math.ceil(ON_POLICY_SHARE * len(seeds))))
+        accumulation, epochs, per_epoch = step_plan(len(items), plan.min_steps) if items else (1, 0, 0)
+        if items and plan.passes:  # capacity: every row its own step, each pass; the DPO block keeps its own plan
+            accumulation, epochs, per_epoch = 1, plan.passes, len(items)
+        main = epochs * per_epoch
+        dream_steps = math.ceil(min(len(batch.dreams), DREAM_TOP_K + DREAM_RANDOM) / accumulation) if dreaming else 0
+        if main + len(batch.pairs) + dream_steps == 0:
+            raise ValueError("a night trains at least one row")
+        run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
+                   teacher, _Clock(timer), rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
+                   warmup_updates=int(soft.warmup_share * main) if soft else 0)
+        probe = seeds[0] if seeds else None
+        teacher_before, kl_before = _probe(model, probe, teacher, soft)
+        model.train()
         stretched = _stretched(run, items, accumulation, timer) if plan.stretch_s else None
         for chunk in [] if stretched else [c for _ in range(epochs) for c in _chunks(items, accumulation)]:
             if run.late():
@@ -758,7 +871,7 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
     drift = None if probe is None else float((teacher_after - teacher_before).abs().max())
     moved = max((float((now - was).abs().max()) for now, was in zip(leading(named, plan.long_term_rank), held,
                                                                      strict=True)), default=0.0) if held else None
-    rows = {"sft": len(batch.sft), "dpo": len(batch.pairs), "seed": len(batch.seeds), "imitate": imitating,
+    rows = {"sft": len(batch.sft), "dpo": len(batch.pairs), "seed": len(seeds), "imitate": imitating,
             "dream": dream["kept"] if dream else 0}
     minutes = {part: round(seconds / 60.0, 4) for part, seconds in
                {**dict.fromkeys(WEIGHTS, 0.0), **run.clock.seconds}.items()}
@@ -770,4 +883,5 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         "grads_adapter_only": run.grads_checked, "teacher_drift": drift, "long_term_drift": moved, "seed_kl_before": kl_before,
         "seed_kl_after": kl_after, "out_of_time": run.out_of_time, **({"stretch": stretched} if stretched else {}),
         **({"projector_only_updates": run.projector_only} if soft else {}),
+        **({"dream_trials": trials} if trials else {}),
     }
