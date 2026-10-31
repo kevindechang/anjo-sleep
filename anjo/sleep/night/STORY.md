@@ -34,7 +34,7 @@ objective's terms (`TERMS_OFF`), a term had no rows tonight, or the training job
 | `learn.channel_loss`, `learn.stamp` | the channel's last training loss (`channel.loss_last`), and the projector's stamp: its id's first 12 characters (`channel.projector`), else its file's name, never its folder | thought-channel (filled from the train step's `receipt`) |
 | `learn.seeding`, `learn.imitation`, `learn.fold`, `learn.protect` | `Seeding(rows, kl_before, kl_after, minutes)`, `Imitation(rows, reward, minutes)`, the rank the adapter was folded to, `Protect(basis, rank, minutes)`: the sleep objective's terms in the train step's `receipt.terms` | sleep-objective (filled) |
 | `learn.core_adaptation` | the core's per-person adaptation loss on today's resolved outcomes | **mind-frontier** (no step logs it yet) |
-| `learn.learned` | one strategy line the harness promoted tonight (the `harness` step's `learned`); the key is absent on every other night, so the story is byte-identical to today's | harness (filled when `ANJO_SLEEP_HARNESS=1` promotes one) |
+| `learn.learned` | one strategy line the harness promoted tonight (the `harness` step's `learned`); the key is absent on every other night, so the story is byte-identical to today's | harness (filled when it promotes one, unless `ANJO_SLEEP_HARNESS=0`) |
 | `check` | `Check(gates, promoted)`, each `Gate(name, passed, skipped, value, threshold)` | night-story (filled) |
 | `wake.morning` | `Morning(replies, no_verdict)` or `Failed("morning", error)` | night-story (filled by `daily.py`) |
 | `wake.self_model` | `SelfModel(predicted, actual)`: MIND's predicted error against its real error | **mind-frontier** (no step logs it yet) |

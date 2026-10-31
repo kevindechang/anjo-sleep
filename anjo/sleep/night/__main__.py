@@ -129,7 +129,7 @@ def execute(
     # The runner trains only the people named with a persona (the wiring refuses a persona on an
     # account that isn't registered synthetic), and the others named only with --allow-real.
     cfg = night_cfg()  # before any runner, sweep or call
-    terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows; all off is today's night
+    terms = objective.night_terms(os.environ)  # sft_dpo_seed's extra rows; the explicit off values are today's night
     ledger = default_ledger()
     real = [user for user in users if user not in personas] if allow_real else []
     chosen = chosen_runner(data_dir, ledger, personas, real)

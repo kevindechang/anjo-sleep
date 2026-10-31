@@ -26,7 +26,7 @@ decontaminator's three rules and its thread (the student's input) to C's. **Anch
 hand-written items of ``sets/anchors.jsonl``, which the training job scores before and after the dream block. No gate
 scores them: training must never see a gate item.
 
-**Day dreams** (``day_dream_rows``, ``ANJO_SLEEP_DAY_DREAMS=1``): her Glimmer writes the messages the
+**Day dreams** (``day_dream_rows``, ``ANJO_SLEEP_DAY_DREAMS``, on under ``sft_dpo_seed`` unless ``0``): her Glimmer writes the messages the
 person might send next from the same consolidated day the seed teacher reads, then answers each with
 that day in context (``night/day_dreams.py``). The rows are knowledge-seeding rows, so the teacher's
 context is the day and the student's the message alone; ``group="dream"`` marks them for the job's

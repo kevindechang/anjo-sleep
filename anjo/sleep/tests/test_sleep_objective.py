@@ -156,7 +156,7 @@ class _NoLeak:
 
 
 def test_switches_off_are_todays_night(tmp_path: Path) -> None:
-    today = {objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "0"}
+    today = {objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"}
     for env in (today, {**today, objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0"},
                 {**today, "ANJO_SLEEP_MATCH_MINUTES": "6.5"}):
         cfg = objective.night_cfg(env)
@@ -202,19 +202,20 @@ def test_the_night_command_sets_the_terms_only_when_a_switch_is_on(tmp_path: Pat
         return {}
 
     monkeypatch.setattr(command, "run_night_batch_with", record)
-    for name in (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV):
+    for name in (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, objective.DAY_DREAMS_ENV):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo")  # today's objective, explicitly
     command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
     monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo_seed")
     monkeypatch.setenv(objective.DREAMS_ENV, "1")
+    monkeypatch.setenv(objective.DAY_DREAMS_ENV, "0")
     command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
     assert [deps.terms for deps in seen] == [Terms(), Terms(seed=True, dreams=True)]
 
 
 def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night() -> None:
     on = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.DREAMS_ENV: "1",
-          objective.CAPACITY_ENV: "0"}
+          objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"}
     cfg = objective.night_cfg(on)
     assert (cfg.objective, cfg.fold_rank, cfg.dreams) == ("sft_dpo_seed", config.MAX_LORA_RANK, True)
     assert objective.night_terms(on) == Terms(seed=True, dreams=True)
@@ -230,7 +231,7 @@ def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night()
 
 
 def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.DAY_DREAMS_ENV: "0"}
     cfg = objective.night_cfg(seed)  # unset is on
     assert (cfg.objective, cfg.r, cfg.passes, cfg.fold_rank) == ("sft_dpo_seed", config.MAX_LORA_RANK, 3, None)
     assert objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"}) == cfg

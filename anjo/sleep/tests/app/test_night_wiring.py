@@ -513,10 +513,11 @@ def test_her_day_dreams_are_wired_only_with_their_switch(
     _night_env(monkeypatch, tmp_path)
     register_synthetic("synthetic-founder", at=NOW)
     options = NightOptions(night=date(2026, 10, 28), personas={"synthetic-founder": "founder"})
-    assert isinstance(night.build(NoTrainer(), options).day_dreams, NoDayDreams)  # off: no source built
+    monkeypatch.setenv(objective.DAY_DREAMS_ENV, "0")
+    assert isinstance(night.build(NoTrainer(), options).day_dreams, NoDayDreams)  # explicit off: no source built
 
     monkeypatch.setenv(objective.OBJECTIVE_ENV, objective.SEED_OBJECTIVE)
-    monkeypatch.setenv(objective.DAY_DREAMS_ENV, "1")
+    monkeypatch.delenv(objective.DAY_DREAMS_ENV, raising=False)  # unset is on under the seed objective
     deps = night.build(NoTrainer(), options)
     assert isinstance(deps.day_dreams, GlimmerDayDreams)  # on: her Glimmer at night's client
     source: Any = deps.day_dreams

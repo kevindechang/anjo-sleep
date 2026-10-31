@@ -456,7 +456,7 @@ class NightDeps:
     settings: NightSettings
     prices: Prices
     gpu: GpuSession = field(default_factory=NoGpu)
-    # Harness learning (``ANJO_SLEEP_HARNESS=1``): the person's strategy log and her serving
+    # Harness learning (``ANJO_SLEEP_HARNESS``, on unless 0): the person's strategy log and her serving
     # Glimmer for the loop's probe. Both None off, and then the night has no harness step.
     strategies: Callable[[str], StrategyStore] | None = None
     glimmer: Glimmer | None = None

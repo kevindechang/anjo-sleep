@@ -1,8 +1,9 @@
 """Dreams as data, and which of the sleep objective's terms a night builds rows for.
 
 **Terms.** ``Terms`` says which extra rows the night's dataset step builds for ``sft_dpo_seed``
-(``train/objective.py`` reads the switches; the night command sets them). The default is all off:
-the night is today's, and nothing here runs.
+(``train/objective.py`` reads the switches; the night command sets them). The dataclass defaults to
+all off; the night's recipe decides, and ``ANJO_SLEEP_DAY_DREAMS`` is on under the seed objective
+unless set to ``0``.
 
 **One dream step.** MIND's core dreams once a night (its ``dream_states`` call, which the core
 owns and which also picks the night's practice curriculum). Each state it returns reaches the night

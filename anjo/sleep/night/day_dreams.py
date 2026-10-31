@@ -1,5 +1,5 @@
 """Day dreams: the messages the person might plausibly send next, written from the consolidated day
-(``ANJO_SLEEP_DAY_DREAMS=1``, ``sft_dpo_seed`` only).
+(``ANJO_SLEEP_DAY_DREAMS``, on under ``sft_dpo_seed`` unless set to ``0``).
 
 The paper's dreaming starts from the knowledge being consolidated, not from a task: the model writes
 its own practice about what it just learned. Here the day is the person's own material (her notes on
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -43,6 +43,12 @@ DREAM_FAILURES_MAX: Final = 3  # replies that fail in a row end the night's aski
 DREAM_TEMPERATURE: Final = 1.0  # as MIND's dreams: her own sampling, never a judge's
 DAY_DREAM_GROUP: Final = "dream"  # SeedRow.group, the job's keep-if-improves trial set
 PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "day_dreams_v1.md"
+
+
+def day_dreams_on(environ: Mapping[str, str]) -> bool:
+    """Whether the host builds her day dream source: off only for ``0`` (unset or ``1`` is on). The
+    recipe's objective still decides whether the rows are asked (``objective.night_terms``)."""
+    return environ.get(SWITCH_ENV, "").strip() != "0"
 
 
 @dataclass(frozen=True)
