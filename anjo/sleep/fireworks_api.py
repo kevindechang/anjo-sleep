@@ -30,7 +30,14 @@ SPARK_OPEN: Final = "accounts/fireworks/models/muse-spark-open"
 # not in the night's ledger.
 CONNECT_RETRIES: Final = 2
 REPLY_ATTEMPTS: Final = 2
-SLEEP_RETRIES: Final = Retries(connect_attempts=CONNECT_RETRIES + 1, reply_attempts=REPLY_ATTEMPTS)
+# A 503 from Fireworks on 2026-10-31 outlasted the shared schedule (2 s, then 4 s) and ended a whole
+# accelerated life on day 1. The night's Spark Open call now waits this schedule between busy
+# replies, honouring a Retry-After first as always: six tries over about four minutes before a day
+# counts as failed. A 429 or 5xx was charged nothing, so these waits cost wall time, not the ledger:
+# only the reply that came is metered.
+SPARK_BUSY_BACKOFF_S: Final = (2.0, 5.0, 15.0, 30.0, 60.0, 120.0)
+SLEEP_RETRIES: Final = Retries(connect_attempts=CONNECT_RETRIES + 1, reply_attempts=REPLY_ATTEMPTS,
+                               backoff_s=SPARK_BUSY_BACKOFF_S)
 # Cheaper writers of MIND's core splits and pairs (``mind.apd.generators``); never Spark Open's stand-in.
 GPT_OSS_120B: Final = "accounts/fireworks/models/gpt-oss-120b"
 GLM_5P3_FLASH: Final = "accounts/fireworks/models/glm-5p3-flash"

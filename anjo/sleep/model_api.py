@@ -7,8 +7,10 @@ transport error's text, and they don't chain the transport's exception. No objec
 key.
 
 There are no retries unless the caller passes ``Retries``: then a reply of 429 or 5xx (the
-provider was busy, and charged nothing) is asked for again, ``Retries.attempts`` in all, after the
-provider's ``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or the backoff in ``BACKOFF_S``.
+provider was busy, and charged nothing) is asked for again, one attempt per entry in the policy's
+``backoff_s`` (``BACKOFF_S`` unless the caller names its own schedule), after the provider's
+``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or that entry. A call whose one failure
+costs a whole night may wait longer than the shared schedule (the night's Spark Open call does).
 A connection that never opened (``httpx.ConnectError`` or ``ConnectTimeout``) is sent again too, up
 to ``Retries.connect_attempts`` in all: the request never reached the provider, so nothing was
 charged. A request sent whose reply never came whole (a read timeout, a dropped or broken read) is
@@ -86,23 +88,26 @@ class ChatResult:
 
 @dataclass(frozen=True)
 class Retries:
-    """How a call answered 429 or 5xx goes again: ``len(BACKOFF_S) + 1`` attempts in all. A
+    """How a call answered 429 or 5xx goes again: ``len(backoff_s) + 1`` attempts in all. A
     connection that never opened goes again up to ``connect_attempts`` in all (1: only the first
-    try), waiting the backoff in ``BACKOFF_S``; a reply that never came whole goes again up to
+    try), waiting the backoff in ``backoff_s``; a reply that never came whole goes again up to
     ``reply_attempts`` in all (1: never), the same way. Such a resend may be charged twice, so only
     a caller whose single failure costs a whole night or morning sets ``reply_attempts`` above 1.
-    ``counted`` hears each one sent again (the night log's count)."""
+    ``counted`` hears each one sent again (the night log's count). ``backoff_s`` is the shared
+    schedule unless a caller whose one refusal costs a whole day names a longer one; a 429 or 5xx
+    was charged nothing, so waiting longer spends wall time, never the ledger."""
 
     sleep: Callable[[float], None] = time.sleep
     counted: Callable[[], None] = field(default=lambda: None)
     connect_attempts: int = 1
     reply_attempts: int = 1
+    backoff_s: tuple[float, ...] = BACKOFF_S  # before each attempt after a busy reply, in order
 
     def pause(self, attempt: int, response: httpx.Response) -> float | None:
         """The wait before sending again after ``response`` on ``attempt`` (from 0); None: never again."""
-        if response.status_code not in RETRY_STATUSES or attempt >= len(BACKOFF_S):
+        if response.status_code not in RETRY_STATUSES or attempt >= len(self.backoff_s):
             return None
-        return _retry_after(response.headers.get("retry-after")) or BACKOFF_S[attempt]
+        return _retry_after(response.headers.get("retry-after")) or self.backoff_s[attempt]
 
 
 def _retry_after(value: str | None) -> float | None:
@@ -213,14 +218,14 @@ def _send(
                 raise ConnectFailed(f"{where} failed in transport ({type(exc).__name__})") from None
             assert retries is not None  # connects > 1 only with a policy
             retries.counted()
-            retries.sleep(BACKOFF_S[min(connect_sends, len(BACKOFF_S) - 1)])
+            retries.sleep(retries.backoff_s[min(connect_sends, len(retries.backoff_s) - 1)])
             connect_sends += 1
         except httpx.HTTPError as exc:
             if reply_sends + 1 >= replies or not _reply_lost(exc):
                 raise
             assert retries is not None  # replies > 1 only with a policy
             retries.counted()
-            retries.sleep(BACKOFF_S[min(reply_sends, len(BACKOFF_S) - 1)])
+            retries.sleep(retries.backoff_s[min(reply_sends, len(retries.backoff_s) - 1)])
             reply_sends += 1
 
 
