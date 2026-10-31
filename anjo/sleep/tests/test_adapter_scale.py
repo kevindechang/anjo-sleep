@@ -505,3 +505,18 @@ def test_a_glimmer_that_does_not_wake_is_refused_without_a_call_or_upload(tmp_pa
     assert said[-1] == "refused: the serving app did not wake: nothing was generated"
     assert world.model.calls == [] and world.published == [] and not world.target.exists()
     assert sorted(path.name for path in world.adapters.iterdir()) == [NAME]  # no scaled copy written
+
+
+def test_a_deepseek_judge_that_is_not_a_musejudge_is_refused_before_any_call(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    deepseek = replace(world.morning(USER, "film_founder", NIGHT),
+                       judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH)
+    ports = replace(world.ports, morning=lambda _user, _persona, _night: deepseek)
+    said: list[str] = []
+    code = tool.main(["--user", USER, "--night", NIGHT.isoformat(), "--replies", str(world.replies),
+                      "--scales", "0.5", "--go"], ports=ports, out=said.append)
+    assert code == 1
+    assert said[-1] == "refused: DeepSeek requires the configured MuseJudge"
+    assert world.model.calls == [] and world.judge.calls == 0
+    assert world.published == [] and not world.target.exists()
+    assert world.ledger.open_holds() == ()  # refused before any hold was reserved

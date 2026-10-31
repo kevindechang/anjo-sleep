@@ -100,7 +100,7 @@ MARKDOWN_FILE: Final = 'mind-causal.md'
 EMBEDDER: Final = 'anjo.sleep.app.recall:default_embed'
 _STATES: Final[tuple[str, ...]] = ('own', 'swapped')
 _TALKERS: Final[tuple[str, ...]] = ('A', 'B')
-_TOKEN: Final[re.compile] = re.compile(r"[A-Za-z0-9']+")
+_TOKEN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9']+")
 _CITED: Final[re.compile] = re.compile(r'\[([^\[\]\n]{1,120})\]')
 _ID: Final[re.compile] = re.compile(r'^[A-Za-z][\w.:-]*$')
 
