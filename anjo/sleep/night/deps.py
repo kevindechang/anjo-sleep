@@ -37,6 +37,8 @@ from anjo.sleep.budget import Ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
 from anjo.sleep.context.brief import ChatFn
 from anjo.sleep.context.brief_store import JsonlBriefStore
+from anjo.sleep.harness.loop import Glimmer
+from anjo.sleep.harness.store import StrategyStore
 from anjo.sleep.mind.expect import Coefficients
 from anjo.sleep.mind.loop_focus import Focus, FocusTarget
 from anjo.sleep.mind.points import QuestionState
@@ -453,6 +455,10 @@ class NightDeps:
     settings: NightSettings
     prices: Prices
     gpu: GpuSession = field(default_factory=NoGpu)
+    # Harness learning (``ANJO_SLEEP_HARNESS=1``): the person's strategy log and her serving
+    # Glimmer for the loop's probe. Both None off, and then the night has no harness step.
+    strategies: Callable[[str], StrategyStore] | None = None
+    glimmer: Glimmer | None = None
     homework: Homework = field(default_factory=NoHomework)
     inquiry: Inquiry = field(default_factory=NoInquiry)
     notice: Notice = field(default_factory=NoNotice)

@@ -63,11 +63,12 @@ from typing import Any, Final
 
 from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Bound, Ledger, Pool
+from anjo.sleep.harness import harness_on
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.parallel import Calls
-from anjo.sleep.probes.arms import ARMS, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
+from anjo.sleep.probes.arms import ARMS, HARNESS_ARM, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
 from anjo.sleep.probes.clients import AdapterRegistry
 from anjo.sleep.probes.score import (
     JUDGE_RETRY_MAX_TOKENS,
@@ -93,6 +94,10 @@ from anjo.sleep.types import CheckpointRef, Probe
 ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2F", "3", "3x", "4")
 BASELINE: Final[Arm] = "1"
 PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {"3_vs_3x": ("3", "3x"), "4_vs_2C": ("4", "2C"), "4_vs_2F": ("4", "2F")}
+# The reported-only harness pair: asked only when ``ANJO_SLEEP_HARNESS=1``, and never a registered
+# win. Its absence leaves the score file exactly as it was.
+HARNESS_PAIR: Final = "2H_vs_2C"
+HARNESS_PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {HARNESS_PAIR: (HARNESS_ARM, "2C")}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 # The judge's hold a call, and what a call that reported no usage (or failed) settles at, marked estimated.
 JUDGE_USD_PER_CALL: Final = 0.02
@@ -396,10 +401,23 @@ def _answer(
     return {arm: [next(answers) for _ in asked] for arm, asked in questions.items()}, unavailable
 
 
+def _arms() -> tuple[Arm, ...]:
+    """The arms a full morning asks: the six registered ones, and 2H only with the harness switch on."""
+    return (*ARM_ORDER, HARNESS_ARM) if harness_on(os.environ) else ARM_ORDER
+
+
+def _pairs(asked: Sequence[Arm]) -> dict[str, tuple[Arm, Arm]]:
+    """The registered headline pairs, plus 2H against 2C when 2H answered."""
+    pairs = dict(PAIRS)
+    if HARNESS_ARM in asked:
+        pairs.update(HARNESS_PAIRS)
+    return pairs
+
+
 def _comparisons(replies: Mapping[Arm, Sequence[ArmReply]]) -> list[tuple[str, Arm, Arm]]:
     """Each arm against arm 1, then the headline pairs whose arms both answered, in file order."""
-    found = [(f"{arm}_vs_1", arm, BASELINE) for arm in ARM_ORDER if arm != BASELINE and arm in replies]
-    return found + [(name, a, b) for name, (a, b) in PAIRS.items() if a in replies and b in replies]
+    found = [(f"{arm}_vs_1", arm, BASELINE) for arm in _arms() if arm != BASELINE and arm in replies]
+    return found + [(name, a, b) for name, (a, b) in _pairs(tuple(replies)).items() if a in replies and b in replies]
 
 
 def _judged(
@@ -424,7 +442,7 @@ def _judged(
 
 def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = ARM_ORDER) -> int:
     judged = sum(1 for p in probes if p.kind != "taste_ab")
-    pairs = sum(1 for a, b in PAIRS.values() if a in arms and b in arms)
+    pairs = sum(1 for a, b in _pairs(arms).values() if a in arms and b in arms)
     return (len(arms) - 1 + pairs) * judged * 2
 
 
@@ -469,7 +487,7 @@ def _run_morning(
     probes = list(morning.sealed(user_id))
     if subset is not None:
         probes = subset_probes(probes, subset)
-    arms = ARM_ORDER if subset is None else tuple(a for a in ARM_ORDER if a in subset.arms)
+    arms = _arms() if subset is None else tuple(a for a in ARM_ORDER if a in subset.arms)
     if not probes:
         raise MorningError(f"{user_id} has no sealed probes")
     if any(p.person_id != user_id for p in probes):
@@ -558,5 +576,5 @@ def _run_morning(
                          judge_usd, estimated, None if subset is None else subset.name)
 
 
-__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",
-           "subset_probes"]
+__all__ = ["ARMS", "DAILY", "HARNESS_PAIR", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts",
+           "run_morning", "subset_probes"]

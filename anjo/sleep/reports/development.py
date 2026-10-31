@@ -28,7 +28,7 @@ from anjo.sleep.probes.score import (
     dimension_of,
     score_outcomes,
 )
-from anjo.sleep.reports.results import FULL_SET, results_root
+from anjo.sleep.reports.results import FULL_SET, REPORTED_ONLY, results_root
 from anjo.sleep.types import Probe, ProbeKind
 
 THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
@@ -36,7 +36,7 @@ SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"  # the app's name for the sealed pro
 HEADLINE: Final = ("3_vs_1", "3_vs_3x")
 FAIRNESS: Final = ("4_vs_2C", "4_vs_2F")
 DIMENSIONS: Final = ("knowledge", "interaction")
-Label = Literal["win", "loss", "inconclusive", "match"]
+Label = Literal["win", "loss", "inconclusive", "match", "reported"]
 
 
 class DevelopmentError(ValueError):
@@ -427,6 +427,35 @@ def life_scores(
     return lines
 
 
+def _reported_only(
+    root: Path,
+    accounts: Mapping[str, str],
+    *,
+    bootstrap: BootstrapConfig | None = None,
+    probes_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """The reported-only comparisons when their score files carry them, per dimension. They are
+    never labeled a win, a loss or a match, and a tree without them yields no line."""
+    lines: list[dict[str, Any]] = []
+    for pair in REPORTED_ONLY:
+        for dimension in DIMENSIONS:
+            rows = pooled_rows(
+                root,
+                accounts,
+                pair,
+                kinds=_kinds_for_dimension(dimension),
+                probes_root=probes_root,
+            )
+            if not rows:
+                continue
+            wins, ties, losses, score, ci, decisive = score_pooled(
+                rows, dimension, bootstrap=bootstrap
+            )
+            line = _result_line(pair, dimension, wins, ties, losses, score, ci, decisive, "reported")
+            lines.append(line)
+    return lines
+
+
 def comparisons(
     root: Path,
     accounts: Mapping[str, str],
@@ -495,6 +524,7 @@ def comparisons(
         lines.append(
             _result_line(pair, "knowledge", wins, ties, losses, score, ci, decisive, label)
         )
+    lines += _reported_only(root, accounts, bootstrap=bootstrap, probes_root=probes_root)
     return lines
 
 

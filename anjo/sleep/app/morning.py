@@ -32,7 +32,7 @@ from anjo.sleep.app.cleared_sessions import is_synthetic
 from anjo.sleep.app.context_builder import RECALL, anjo_context_builder
 from anjo.sleep.app.flags import require_sleep_host
 from anjo.sleep.app.night import SEALED_ENV, prices
-from anjo.sleep.app.storage import SLEEP_DIR, brief_store, checkpoint_registry, data_root, evidence_store
+from anjo.sleep.app.storage import SLEEP_DIR, brief_store, checkpoint_registry, data_root, evidence_store, strategy_store
 from anjo.sleep.budget import LEDGER_NAME, Ledger
 from anjo.sleep.model_api import Retries
 from anjo.sleep.context.brief_store import ServedBriefs
@@ -108,7 +108,8 @@ def build(user_id: str, persona: str, night: date) -> Morning:
     arms = ArmDeps(
         model=client, adapters=checkpoint_registry(), contexts=anjo_context_builder(
             ServedBriefs(brief_store), until=night, settings=RECALL),
-        evidence=evidence_store, logprobs=client, donors=donors(), until=night)
+        evidence=evidence_store, logprobs=client, donors=donors(), until=night,
+        strategies=lambda uid: strategy_store(uid).lines())
     resent = _Resent()
     tokens = JudgeTokens()  # the judge settles at its tokens, priced at ANJO_SLEEP_PRICES' Spark lines
     judge = make_judge(persona, tokens, resent)

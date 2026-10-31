@@ -2,8 +2,8 @@
 
 It carries everything under ``data/users/<id>/sleep/``: the evidence, the target log's table
 (targets, results, expectations and the evidence ids it counted), the committed extractions, the
-cleared-session records, each served reply's ancestry (Task 4), the briefs and practice
-transcripts (Task 5), and MIND's workspace log with its folded records (Task 17).
+cleared-session records, each served reply's ancestry (Task 4), the briefs, practice transcripts and
+the harness strategy list (Task 5), and MIND's workspace log with its folded records (Task 17).
 The inventory names the whole folder (``sleep/**``), so a file this section doesn't know fails
 the export instead of being left out silently; a task that adds a sleep file adds it here.
 """
@@ -23,12 +23,14 @@ from anjo.sleep.app.storage import (
     EXTRACTIONS_FILE,
     PRACTICE_FILE,
     SLEEP_DIR,
+    STRATEGIES_FILE,
     TARGETS_FILE,
     WORKSPACE_FILE,
     brief_store,
     evidence_store,
     extraction_log,
     sleep_dir,
+    strategy_store,
     target_store,
     transcript_store,
     workspace_log,
@@ -36,7 +38,7 @@ from anjo.sleep.app.storage import (
 
 KNOWN_FILES = frozenset({
     EVIDENCE_FILE, TARGETS_FILE, EXTRACTIONS_FILE, CLEARED_FILE, ANCESTRY_FILE, BRIEFS_FILE, PRACTICE_FILE,
-    WORKSPACE_FILE,
+    STRATEGIES_FILE, WORKSPACE_FILE,
 })
 
 
@@ -65,6 +67,7 @@ def export_sleep(user_id: str) -> dict[str, Any]:
         **extraction_log(user_id).export(),
         **brief_store(user_id).export(),
         **transcript_store(user_id).export(),
+        **strategy_store(user_id).export(),
         **workspace_log(user_id).export(),
         "cleared_sessions": export_sessions(user_id),
         "reply_ancestry": export_ancestry(user_id),

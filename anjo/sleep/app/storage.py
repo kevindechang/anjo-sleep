@@ -24,6 +24,7 @@ from anjo.sleep.evidence.extractions import ExtractionLog
 from anjo.sleep.evidence.jsonl import Guard
 from anjo.sleep.evidence.store import JsonlEvidenceStore
 from anjo.sleep.evidence.targets import EventLogTargetStore
+from anjo.sleep.harness.store import JsonlStrategyStore
 from anjo.sleep.mind.inquiry.log import JsonlWorkspaceLog
 from anjo.sleep.practice.transcripts import JsonlTranscriptStore
 from anjo.sleep.serving.activity import turns_dir
@@ -35,6 +36,7 @@ CLEARED_FILE: Final = "cleared_sessions.jsonl"
 EXTRACTIONS_FILE: Final = "extractions.jsonl"
 BRIEFS_FILE: Final = "briefs.jsonl"  # the served and training briefs (Task 5)
 PRACTICE_FILE: Final = "practice.jsonl"  # the night's practice transcripts (Task 5)
+STRATEGIES_FILE: Final = "strategies.jsonl"  # the harness list's versions (ANJO_SLEEP_HARNESS=1)
 WORKSPACE_FILE: Final = "workspace.jsonl"  # MIND's workspace log (Task 17)
 _ENCRYPTED: Final = "enc1:"  # encrypt_db's prefix
 
@@ -107,6 +109,11 @@ def transcript_store(user_id: str) -> JsonlTranscriptStore:
 def workspace_log(user_id: str) -> JsonlWorkspaceLog:
     require_sleep_host()
     return JsonlWorkspaceLog(sleep_dir(user_id) / WORKSPACE_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
+
+
+def strategy_store(user_id: str) -> JsonlStrategyStore:
+    require_sleep_host()
+    return JsonlStrategyStore(sleep_dir(user_id) / STRATEGIES_FILE, user_id, codec=CODEC, guard=writer_guard(user_id))
 
 
 def data_root() -> Path:

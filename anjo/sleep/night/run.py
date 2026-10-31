@@ -78,6 +78,8 @@ from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady
 from anjo.sleep.night import channel_night
 from anjo.sleep.night.core_steps import CoreSteps
+from anjo.sleep.harness import harness_on
+from anjo.sleep.harness.loop import HARNESS_MAX_CALLS, HarnessCall, run_harness
 from anjo.sleep.night.holds import SPARK_MAX_OUT_TOKENS, held, spark_worst_usd, usd
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
@@ -152,6 +154,7 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "choose": ("new", None),
     "brief": ("new", None),
     "practice": ("new", None),
+    "harness": ("new", None),
     "dataset": ("new", None),
     "train": ("new", None),
     "gates": ("existing", "crisis check"),
@@ -176,6 +179,9 @@ STUDY_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, LookupError)
 # fold, a summary or focus record of the wrong shape, a prompt file that can't be read. The loop
 # degrades to today's practice and the night trains; a cancel or a budget stop still reaches it.
 LOOP_FAILURES: Final = (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError)
+# What ends the harness step, not the night: the proposal, the vet or a probe call failed, or its
+# log couldn't be read. The night keeps the list it had and goes on to train.
+HARNESS_FAILURES: Final = (ModelApiError, BudgetStop, ValueError, KeyError, TypeError, OSError, RuntimeError)
 logger = logging.getLogger(__name__)
 
 
@@ -319,6 +325,7 @@ class NightRunner(CoreSteps):
                 for p in due:
                     for step, fn in (
                         ("practice", self._practice),
+                        *((("harness", self._harness),) if harness_on(os.environ) else ()),
                         ("dataset", self._dataset),
                         ("train", self._train),
                         ("gates", self._gates),
@@ -847,6 +854,49 @@ class NightRunner(CoreSteps):
             **self._seed_record(p, seeded),
             **self._serving(p, "practice", started),
             **({} if loop.record is None else {"loop": loop.record}),
+        }
+
+    def _harness(self, p: PersonNight) -> Mapping[str, Any]:
+        """Harness learning, after practice: one vetted strategy edit, probed contrastively.
+
+        Off, the step never runs. On, it never fails the night: a failed proposal, vet or probe is
+        logged by its error's type, the list stays as it was, and dataset and training go on. Its
+        Spark Open calls go through the night's metered client and its Glimmer probes through the
+        serving GPU the night already holds, both charged to the practice part."""
+        strategies, glimmer = self.deps.strategies, self.deps.glimmer
+        if strategies is None or glimmer is None:
+            return {"noop": True, "why": "the harness switch is on, but its ports aren't wired"}
+        before = p.spend.parts().get("practice", 0.0)
+        started = self._timer(), self.deps.retries()
+        p.spend.part = "practice"
+        store = None
+        try:
+            store = strategies(p.uid)
+            call = HarnessCall(
+                user_id=p.uid, night=p.night, seed=self.deps.settings.seed, at=p.stamp, store=store,
+                transcripts=self.deps.transcripts(p.uid).for_night(p.night), glimmer=glimmer,
+                chat=p.spend.wrap_chat(self.deps.spark_chat),
+                adapter=self.deps.registry.last_promoted(p.uid), cancelled=lambda: self.deps.cancel(p.uid),
+            )
+            with self._metered(p, "practice", "harness", HARNESS_MAX_CALLS):
+                done = run_harness(call)
+        except HARNESS_FAILURES as error:  # the harness failed, not the night: the list stays
+            logger.warning("harness: the loop didn't finish (%s); the list stays", type(error).__name__)
+            size = 0
+            if store is not None:
+                try:
+                    size = len(store.lines())
+                except HARNESS_FAILURES:
+                    pass  # the log can't be read either: the receipt still says no edit
+            served = self._serving(p, "practice", started)
+            return {
+                "error": safe_error(error), "why": "the harness failed; the list stays",
+                "promoted": False, "list_size": size, "calls": 0,
+                "usd": round(p.spend.parts().get("practice", 0.0) - before, 6), **served,
+            }
+        served = self._serving(p, "practice", started)
+        return {
+            **done, "usd": round(p.spend.parts().get("practice", 0.0) - before, 6), **served,
         }
 
     def _focus(self, p: PersonNight) -> _Focus:

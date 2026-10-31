@@ -8,6 +8,11 @@
 | 2C | base | C |
 | 2F | base | C, plus every stored evidence item raw |
 | 4 | the person's adapter | C, byte-identical to 2C |
+| 2H | base | C, then the person's strategy list in its marked block (reported only) |
+
+``2H`` is the harness arm: with an empty list its prompt is 2C's exactly, so it measures the list
+and nothing else. It is asked only when ``ANJO_SLEEP_HARNESS=1`` (``probes.morning``), never in
+place of a registered arm.
 
 ``reply`` only reads: it writes no history, no evidence and no memory (RF5). It never touches the
 judge brief or the scorer, which hold held-out preferences no arm may see. It is ``ask`` after
@@ -18,20 +23,24 @@ question on one thread and ask them side by side.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Final, Literal, get_args
+from typing import Final, Literal
 
 from anjo.sleep.context.recall_common import estimate_tokens
+from anjo.sleep.harness.store import strategy_block
 from anjo.sleep.ports import ContextBuilder, EvidenceStore
 from anjo.sleep.probes.clients import AdapterRegistry, ModelClient, TokenLogprobs
 from anjo.sleep.probes.logprob import TasteChoice, forced_choice, present
 from anjo.sleep.types import CheckpointRef, Evidence, Probe
 
-Arm = Literal["1", "2C", "2F", "3", "3x", "4"]
-ARMS: Final = frozenset(get_args(Arm))
-WITH_CONTEXT: Final = frozenset({"2C", "2F", "4"})
+Arm = Literal["1", "2C", "2F", "3", "3x", "4", "2H"]
+# The six registered arms, and the reported-only harness arm beside them.
+ARMS: Final = frozenset({"1", "2C", "2F", "3", "3x", "4"})
+HARNESS_ARM: Final = "2H"
+KNOWN: Final = ARMS | {HARNESS_ARM}
+WITH_CONTEXT: Final = frozenset({"2C", "2F", "4", "2H"})
 PERSONAL: Final = frozenset({"3", "4"})
 REPLY_TEMPERATURE: Final = 0.7  # replies are sampled (spec 5.1); only taste_ab is deterministic
 GLIMMER_WINDOW_TOKENS: Final = 131_072
@@ -82,6 +91,8 @@ class ArmDeps:
     window_tokens: int = GLIMMER_WINDOW_TOKENS
     temperature: float = REPLY_TEMPERATURE
     run_seed: int = 0
+    # The person's current strategy list (``harness.store``); empty off, and then 2H is 2C exactly.
+    strategies: Callable[[str], Sequence[str]] = lambda user_id: ()
     context_cache: dict[tuple[str, str], str] = field(default_factory=dict, compare=False, repr=False)
 
 
@@ -164,7 +175,7 @@ def prepare(
     ``donor`` is for callers that name one (arm 3x): any donor other than the registered one is
     refused before a single adapter is asked for.
     """
-    if arm not in ARMS:
+    if arm not in KNOWN:
         raise ValueError(f"unknown arm {arm!r}")
     if probe.person_id != user_id:
         raise ValueError(f"probe {probe.id} belongs to another person than {user_id}")
@@ -175,6 +186,8 @@ def prepare(
         context = _context(user_id, probe, deps)
         if arm == "2F":
             context, dropped = _with_all_evidence(context, probe, user_id, deps)
+        elif arm == HARNESS_ARM:
+            context = strategy_block(context, deps.strategies(user_id))
     return Question(arm, probe, adapter, context, dropped)
 
 
