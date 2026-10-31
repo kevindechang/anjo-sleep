@@ -282,6 +282,19 @@ def test_a_judge_call_sends_429_and_5xx_again_honoring_retry_after() -> None:
     assert slept == [3.0, BACKOFF_S[1]] and counted == [1, 1]  # the server's wait, then the backoff
 
 
+def test_a_policy_keeps_the_shared_backoff_schedule_by_default() -> None:
+    retries = Retries()
+    assert retries.backoff_s == BACKOFF_S
+    assert [retries.pause(n, httpx.Response(503)) for n in range(len(BACKOFF_S) + 1)] == [*BACKOFF_S, None]
+
+
+def test_a_policy_can_name_its_own_wait_between_busy_replies() -> None:
+    retries = Retries(backoff_s=(7.0, 11.0))
+    assert retries.pause(0, httpx.Response(503)) == 7.0
+    assert retries.pause(1, httpx.Response(429, headers={"Retry-After": "999"})) == RETRY_AFTER_MAX_S
+    assert retries.pause(2, httpx.Response(503)) is None
+
+
 @pytest.mark.parametrize("status", [400, 401, 404])
 def test_judge_retries_stop_at_three_and_never_send_another_status_again(status: int) -> None:
     seen: list[httpx.Request] = []

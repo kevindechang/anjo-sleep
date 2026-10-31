@@ -6,8 +6,9 @@ not start, and the night records ``glimmer_not_ready`` as a failure, not a short
 A cleared session is answered only by Glimmer: when it can't answer, the turn fails and nothing is
 stored (Task 4). The transport raises ``TurnFailed`` for such a turn, and the day ends there as a
 short day, never an error: the night still runs on what was stored, and its log records how many
-turns were answered and failed. The window is the wall-clock span around the day, which the
-night's extraction reads.
+turns were answered and failed. The same holds when Spark Open can't answer after every retry
+(``ModelApiError``): the day has no turns, and its detail names the error's class only, never its
+message. The window is the wall-clock span around the day, which the night's extraction reads.
 
 ``replies`` is required: without it every reply the simulator reads counts as unknown ancestry,
 and none of the person's simulated lines could train.
@@ -21,6 +22,7 @@ from typing import Any, Final
 
 from anjo.sleep import baseten_api
 from anjo.sleep.baseten_api import SPARK_OPEN
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.personas.model import Persona
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import WakeResult
@@ -88,6 +90,10 @@ def run_day(
             failed, detail = 0, None
         except TurnFailed as error:
             turns, failed, detail = (), 1, error.reason
+        except ModelApiError as error:
+            # Spark Open refused after every retry: the day stored nothing, and its marker names the
+            # provider error's class only (never its message), so the night runs as after a failed turn.
+            turns, failed, detail = (), 1, type(error).__name__
         return DayRun((start, clock()), counting.answered, failed, turns,
                       wake_seconds=None if woke is None else woke.seconds, failure_detail=detail)
 

@@ -13,7 +13,7 @@ from anjo.sleep.baseten_api import SPARK_OPEN
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.provenance import GLIMMER
-from anjo.sleep.model_api import ChatResult
+from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.sim.day import SparkSim, TurnFailed, run_day
 from anjo.sleep.tests.night_fakes import NIGHT, World, step, steps
@@ -76,6 +76,26 @@ def test_the_night_logs_a_short_day_and_runs_on_its_window(tmp_path: Path) -> No
                       "answered": 0, "failed_turns": 1, "short_day": True}
     assert steps(result.log_path)[0]["step"] == "simulate"
     assert step(result.log_path, "close_day")["window"] == [day.window[0].isoformat(), day.window[1].isoformat()]
+
+
+class Down:
+    """Spark Open refusing after every retry, its message carrying text that must not travel."""
+
+    def complete(self, system: str, messages: list[dict[str, str]], *, temperature: float, seed: int) -> str:
+        raise ModelApiError("Fireworks chat with muse-spark-open returned HTTP 503: an upstream body")
+
+
+def test_a_spark_open_failure_ends_the_day_short_not_the_life(tmp_path: Path) -> None:
+    """Fireworks' 503 on 2026-10-31 killed three accelerated lives on day 1: a day now fails instead."""
+    day = run_day(PERSONA, 1, 7, model=Down(), transport=Transport(), replies=Served(), clock=_clock())  # type: ignore[arg-type]
+    assert (day.answered, day.failed, day.turns) == (0, 1, ()) and day.short
+    assert day.failure is None and day.failure_detail == "ModelApiError"  # the class, never the message
+    world = World(tmp_path)
+    world.plan("p1", NIGHT)
+    result = run_night_batch_with(world.deps(), {"p1": NIGHT}, days={"p1": day})["p1"]
+    assert result.failed_at is None  # the night ran on the day's empty window
+    record = step(result.log_path, "simulate")
+    assert (record["answered"], record["failed_turns"], record["short_day"]) == (0, 1, True)
 
 
 def test_spark_sim_meters_the_tokens_it_spends() -> None:

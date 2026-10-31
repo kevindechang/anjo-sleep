@@ -9,6 +9,7 @@ resend may have been charged twice. A capped reply's wait is scaled to its cap, 
 isn't cut at 180 s. Fakes only: ``httpx.MockTransport`` and a fake ``post_chat``, no network."""
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Final
 
 import httpx
@@ -16,7 +17,7 @@ import pytest
 
 from anjo.sleep import fireworks_api
 from anjo.sleep.mind.apd.retry import reply_timeout_s
-from anjo.sleep.model_api import BACKOFF_S, ChatResult, ConnectFailed, ModelApiError, Retries
+from anjo.sleep.model_api import BACKOFF_S, RETRY_AFTER_MAX_S, ChatResult, ConnectFailed, ModelApiError, Retries
 
 MESSAGES: Final = [{"role": "user", "content": "hello"}]
 
@@ -149,6 +150,34 @@ def test_sleeps_delegated_policy_sends_a_dropped_connection_again() -> None:
 def test_sleeps_delegated_policy_sends_a_lost_reply_once_more() -> None:
     """Practice, the brief and MIND go through this policy: one lost reply no longer fails a night."""
     assert fireworks_api.SLEEP_RETRIES.reply_attempts == fireworks_api.REPLY_ATTEMPTS == 2
+
+
+def test_sleeps_busy_reply_waits_a_longer_named_schedule() -> None:
+    """Fireworks' 503 on 2026-10-31 outlasted the shared 2 s then 4 s and killed a life on day 1."""
+    assert fireworks_api.SLEEP_RETRIES.backoff_s == fireworks_api.SPARK_BUSY_BACKOFF_S
+    assert len(fireworks_api.SPARK_BUSY_BACKOFF_S) > len(BACKOFF_S)
+    assert sum(fireworks_api.SPARK_BUSY_BACKOFF_S) > 200 > sum(BACKOFF_S)
+
+
+def test_a_503_then_200_succeeds_after_sleeps_longer_waits() -> None:
+    replies = iter([httpx.Response(503), httpx.Response(503),
+                    httpx.Response(200, json=_ok(fireworks_api.SPARK_OPEN))])
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return next(replies)
+
+    retries = replace(fireworks_api.SLEEP_RETRIES, sleep=slept.append)
+    result = _chat(httpx.MockTransport(handler), retries=retries)
+    assert result.text == "ok" and len(seen) == 3
+    assert slept == list(fireworks_api.SPARK_BUSY_BACKOFF_S[:2])  # the longer waits, not BACKOFF_S
+
+
+def test_sleeps_longer_schedule_still_honours_a_capped_retry_after() -> None:
+    busy = httpx.Response(503, headers={"Retry-After": "999"})
+    assert fireworks_api.SLEEP_RETRIES.pause(0, busy) == RETRY_AFTER_MAX_S
 
 
 def test_a_callers_policy_replaces_the_selected_providers_and_reaches_fireworks(monkeypatch: pytest.MonkeyPatch) -> None:

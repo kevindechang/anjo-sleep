@@ -20,11 +20,12 @@ from anjo.sleep.night.deps import NightDeps
 from anjo.sleep.night.nightlog import STORY
 from anjo.sleep.night.run import day_window
 from anjo.sleep.night.story import MORNING_FAILED, SELF_MODEL_NOT_YET, Failed, NotRun, Wake, story_from
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.sim import accelerated
 from anjo.sleep.sim.accelerated import AcceleratedError, run_accelerated, run_accelerated_batch
 from anjo.sleep.probes.morning import MorningError, PAIRS, TooManyNoVerdicts
-from anjo.sleep.sim.day import DayRun
+from anjo.sleep.sim.day import DayRun, run_day
 from anjo.sleep.types import CheckpointRef, NightResult
 from anjo.sleep.tests import accelerated_rig
 from anjo.sleep.tests.accelerated_rig import CLOCK_START, FAKE_SHA, FakeAccelerated
@@ -237,6 +238,43 @@ def test_a_failed_night_does_not_stop_the_life(tmp_path: Path) -> None:
     fake.world.extract_fails["u1"] = RuntimeError("boom")
     results = run_accelerated("u1", FOUNDER, 2, START, rig=fake.rig())
     assert [r.status for r in results] == ["failed", "failed"]
+
+
+class Down:
+    """Spark Open refusing after every retry, its message carrying text that must not travel."""
+
+    def complete(self, system: str, messages: list[dict[str, str]], *, temperature: float, seed: int) -> str:
+        raise ModelApiError("Fireworks chat with muse-spark-open returned HTTP 503: an upstream body")
+
+
+def test_a_day_whose_spark_open_call_fails_is_recorded_and_the_life_goes_on(tmp_path: Path) -> None:
+    """Day 2 of 3 has no Spark Open reply after its waits: its day is short, days 1 and 3 still run."""
+    fake = FakeAccelerated(tmp_path)
+    rig = fake.rig()
+    failed: list[DayRun] = []
+
+    class Never:
+        def send(self, session_id: str, text: str, *, cleared: bool) -> str:
+            raise AssertionError("a day whose Spark Open call failed sends no turn")
+
+    def simulate(uid: str, person: Persona, i: int, seed: int) -> DayRun:
+        if i != 1:
+            return rig.simulate(uid, person, i, seed)
+        day = run_day(person, i, seed, model=Down(), transport=Never(), replies=accelerated_rig.Replies(),
+                      clock=fake.clock)
+        failed.append(day)
+        return day
+
+    results = run_accelerated("u1", FOUNDER, 3, START, rig=replace(rig, simulate=simulate))
+    assert len(results) == 3 and [r.status for r in results[:1] + results[2:]] == ["promoted", "promoted"]
+    assert all(r.failed_at is None for r in results)  # the night ran, never a dead life
+    (day,) = failed  # day 2's own summary: no turns, one failure, the error class only
+    assert (day.answered, day.failed, day.turns) == (0, 1, ()) and day.short
+    assert day.failure_detail == "ModelApiError" and "503" not in day.failure_detail and "body" not in day.failure_detail
+    record = step(results[1].log_path, "simulate")  # and the night that closed it records the short day
+    assert (record["answered"], record["failed_turns"], record["short_day"]) == (0, 1, True)
+    extracted = [e[2] for e in fake.world.events if e[0] == "extract"]
+    assert extracted == [START, START + timedelta(days=1), START + timedelta(days=2)]  # every day's night ran
 
 
 def test_days_must_be_positive(tmp_path: Path) -> None:
