@@ -11,9 +11,11 @@ stores for one synthetic person.
   account that plays the persona;
 - judge: Muse Spark or DeepSeek, selected by ``ANJO_SLEEP_JUDGE``, with the persona's judge brief;
 - the arms' and the judge's calls side by side, ``ANJO_SLEEP_CONCURRENCY`` at once (8 by default); a
-  judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and so does a DeepSeek
-  reply that never came whole, which cost a whole morning on 2026-10-30; the night log counts
-  those with the requests Glimmer's client sent again.
+  judge call the API answers 429 or 5xx goes again (``model_api.Retries``), and the DeepSeek judge
+  waits the longer busy schedule between tries; a DeepSeek reply that never came whole is sent again
+  up to ``DEEPSEEK_JUDGE_REPLY_ATTEMPTS`` attempts in all: one such call cost a whole morning on
+  2026-10-30 and a 3 h 48 min adapter-strength read on 2026-10-31; the night log counts those with
+  the requests Glimmer's client sent again.
 """
 from __future__ import annotations
 
@@ -44,6 +46,9 @@ from anjo.sleep.types import Probe
 
 DONORS_ENV: Final = "ANJO_SLEEP_DONORS"
 JUDGE_ENV: Final = "ANJO_SLEEP_JUDGE"
+# A judge call whose reply never came whole is sent again, up to this many attempts in all: one
+# ReadError among ~240 calls ended a 3 h 48 min adapter-strength read on 2026-10-31.
+DEEPSEEK_JUDGE_REPLY_ATTEMPTS: Final = 4
 
 
 def make_judge(persona: str, tokens: JudgeTokens, resent: _Resent) -> MuseJudge:
@@ -53,9 +58,13 @@ def make_judge(persona: str, tokens: JudgeTokens, resent: _Resent) -> MuseJudge:
         return MuseJudge(partial(meta_api.chat, retries=Retries(counted=resent)), lambda _person: judge_brief(persona),
                          tokens=tokens)
     if selected == "deepseek":
-        # A reply that never came whole failed a whole morning on 2026-10-30: it is sent again, up
-        # to two attempts, though the resend may be charged twice.
-        retries = Retries(counted=resent, connect_attempts=3, reply_attempts=2)
+        # A reply that never came whole failed a whole morning on 2026-10-30 and a whole
+        # adapter-strength read on 2026-10-31: it is sent again, up to DEEPSEEK_JUDGE_REPLY_ATTEMPTS
+        # attempts, and a busy 429/5xx waits the longer schedule. The resends stay inside the one
+        # call's hold (probes.morning._HeldDeepseekChat), so one per-call bound still covers them.
+        retries = Retries(counted=resent, connect_attempts=3,
+                          reply_attempts=DEEPSEEK_JUDGE_REPLY_ATTEMPTS,
+                          backoff_s=fireworks_api.SPARK_BUSY_BACKOFF_S)
         return MuseJudge(partial(fireworks_api.chat, retries=retries), lambda _person: judge_brief(persona),
                          tokens=tokens, model=fireworks_api.DEEPSEEK_V4P1_FLASH)
     raise ValueError(f"{JUDGE_ENV} must be muse or deepseek")

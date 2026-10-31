@@ -25,7 +25,11 @@ and only arm 4 is generated. Without ``--persona`` the run reads the host's acco
 
 A run generates ``probes x (1 + scales)`` replies (the 2C once a probe, arm 4 at each scale), or
 ``probes x scales`` when the stored 2C replies are reused, and judges ``2 x probes x scales`` pairs
-(both orders, DeepSeek when ``ANJO_SLEEP_JUDGE=deepseek``), against the full morning's six arms.
+(both orders, DeepSeek when ``ANJO_SLEEP_JUDGE=deepseek``), against the full morning's six arms. A
+reply lost in transport is sent again, up to ``REPLY_RESENDS`` times with the same seed; a reply that
+still fails, like a judge call that still fails after its retries, leaves that probe at that scale a no
+verdict, counted in the result's ``no_verdict``. Past ``NO_VERDICT_MAX`` of a scale's probes (one share
+for both causes) the read stops and writes nothing, as the morning stops past its own share.
 
 **What it writes.** One file beside that night's scores, ``scores/adapter-scale-<night>.json``,
 always labelled ``development`` and never the final: per scale the adapter's name, the wins, ties
@@ -42,7 +46,9 @@ modified. A copy already written locally is reused, so a rerun pays only for wha
 
 **Holds and spend** are the morning's: Glimmer on ``modal_usd`` and ``baseten_sleep_usd`` at
 ``ARM_CALL_S`` a reply, and the judge on its provider pool plus ``judge_usd`` (DeepSeek holds each
-call's full context separately), settled at what it metered. The holds are reserved before any
+call's full context separately), settled at what it metered. The arms' hold carries the replies this
+run sends again (at most ``REPLY_RESEND_SHARE`` of them), one ``ARM_CALL_S`` each, so a resend never
+settles above its bound. The holds are reserved before any
 upload, so a failed upload still settles them and a rerun can reserve again. This tool's own holds
 are keyed ``morning:adapter-scale:...``: the night sweep already settles that prefix, and a run
 settles its own leftovers at their full bound before it reserves. Refused before any call, hold,
@@ -59,8 +65,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import logging
 import math
 import os
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -71,6 +79,7 @@ from typing import Any, Final
 from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Bound, Ledger, default_ledger
 from anjo.sleep.checkpoints import CheckpointRegistry
+from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.night.cost import Units
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.night.sweep import NightBusy, held_elsewhere, night_lock
@@ -79,7 +88,7 @@ from anjo.sleep.probes.arms import ArmReply, Question, ask, prepare
 from anjo.sleep.probes.morning import (
     ARM_CALL_S,
     JUDGE_RETRY_SHARE,
-    NO_VERDICT_MAX_SHARE,
+    JUDGE_USD_PER_CALL,
     SCORES,
     Morning,
     MorningError,
@@ -100,7 +109,7 @@ from anjo.sleep.probes.score import (
 from anjo.sleep.reports.results import results_root
 from anjo.sleep.serving import config, scale
 from anjo.sleep.serving.backend import phase
-from anjo.sleep.serving.client import GlimmerNotReady
+from anjo.sleep.serving.client import GlimmerNotReady, ResultUnread, TransportFailed
 from anjo.sleep.serving.scale import ScaleError
 from anjo.sleep.types import CheckpointRef, Probe
 
@@ -118,10 +127,28 @@ ARTIFACT: Final = "adapter-scale-"
 DEFAULT_SCALES: Final = "0.25,0.5,0.75"
 CONTROL: Final = 1.0  # the adapter as trained: its copy is a byte-for-byte control for arm 4
 MAX_SCALES: Final = 8
+# A reply lost in transport is sent again, up to this many times in all (the same seed: the same
+# request), after this pause; the run may send at most REPLY_RESEND_SHARE of its replies again, so the
+# arms' hold covers every resend. One ReadError among ~240 replies ended a 3 h 48 min read on 2026-10-31.
+REPLY_RESENDS: Final = 2
+REPLY_RESEND_PAUSE_S: Final = 2.0
+REPLY_RESEND_SHARE: Final = 0.1
+# A reply that still fails, like a judge call that still fails after its retries, leaves its probe at
+# that scale without a verdict, as the morning leaves an unreadable answer. Past this share of a
+# scale's probes, both causes together, the read stops: one ReadError among ~240 calls ended a 3 h 48
+# min read on 2026-10-31, and a transport that is down would lose most of a scale.
+NO_VERDICT_MAX: Final = 0.1
 # The night sweep settles every ``morning:`` hold before a night starts (``night.sweep.NIGHT_KINDS``),
 # so a hard-killed read's holds are closed there; this tool also settles its own before it reserves.
 KEY: Final = "morning:adapter-scale:"
 TAKEN: Final = ("already on the volume", "already in the bucket")  # an adapter already on the serving side
+logger = logging.getLogger(__name__)
+
+
+def _resend_allowance(replies: int) -> int:
+    """The most replies one run sends again: ``REPLY_RESEND_SHARE`` of them, each one ``ARM_CALL_S``
+    at most, so the arms' hold covers every resend."""
+    return math.ceil(replies * REPLY_RESEND_SHARE)
 
 
 class Refused(RuntimeError):
@@ -362,14 +389,14 @@ def plan(
         probes=probes, scales=tuple(scales), names=names, morning=morning, stored=stored,
         replies=replies, judge_calls=calls,
         judge_hold_usd=(calls + math.ceil(calls * JUDGE_RETRY_SHARE)) * morning.judge_call_usd,
-        arms_hold_usd=serve * replies * ARM_CALL_S / 3600.0,
+        arms_hold_usd=serve * (replies + _resend_allowance(replies)) * ARM_CALL_S / 3600.0,
         gpu_s=units.wake_s + ARM_CALL_S * replies + config.SCALEDOWN_S, target=target,
     )
 
 
 def describe(chosen: Plan) -> list[str]:
     serve = chosen.morning.prices.serve_gpu_per_hour
-    judge = chosen.judge_calls * chosen.morning.judge_call_usd
+    judge = chosen.judge_calls * JUDGE_USD_PER_CALL
     gpu = chosen.gpu_s * serve / 3600.0
     scales = ", ".join(f"{value:g}" for value in chosen.scales)
     serving = "the base model" if chosen.serving is None else chosen.serving.id
@@ -394,9 +421,10 @@ def describe(chosen: Plan) -> list[str]:
         f"  judge: up to {chosen.judge_calls} calls, both orders, {chosen.morning.judge_model}",
         f"  holds: the judge ${chosen.judge_hold_usd:.2f} on {'/'.join(chosen.morning.judge_pools)}, "
         f"the arms ${chosen.arms_hold_usd:.2f} on modal_usd and baseten_sleep_usd, reserved before any upload",
-        f"  expected: ${judge + gpu:.2f} (the judge ${judge:.2f} at ${chosen.morning.judge_call_usd:g} "
-        f"a call, settled at its tokens; the serving GPU ${gpu:.2f}, {chosen.gpu_s / 60.0:.0f} min: "
-        f"the wake, {chosen.replies} replies at {ARM_CALL_S:g} s and Modal's idle window, at ${serve:g}/h)",
+        f"  expected: ${judge + gpu:.2f} (the judge ${judge:.2f} at ${JUDGE_USD_PER_CALL:g} "
+        f"a call, the cost model's estimate, settled at its tokens; the serving GPU ${gpu:.2f}, "
+        f"{chosen.gpu_s / 60.0:.0f} min: the wake, {chosen.replies} replies at {ARM_CALL_S:g} s and "
+        f"Modal's idle window, at ${serve:g}/h)",
         f"  writes: {chosen.target} (label {LABEL}, never the final)",
         "run again with --go to run it",
     ]
@@ -405,6 +433,44 @@ def describe(chosen: Plan) -> list[str]:
 def _ref(chosen: Plan, name: str) -> CheckpointRef:
     return CheckpointRef(name, chosen.user, chosen.night, f"{config.ADAPTERS_DIR}/{name}",
                          chosen.checkpoint.parent_id, rendering=chosen.checkpoint.rendering)
+
+
+class _ReplyResends:
+    """What one run may still send again after a transport failure, counted across its threads."""
+
+    def __init__(self, allowed: int) -> None:
+        self.allowed = allowed
+        self.count = 0
+        self._lock = threading.Lock()
+
+    def take(self) -> bool:
+        with self._lock:
+            if self.count >= self.allowed:
+                return False
+            self.count += 1
+            return True
+
+
+def _reply(question: Question, deps: Any, resends: _ReplyResends,
+           pause: Callable[[float], None]) -> ArmReply | None:
+    """One arm reply, sent again after a transport failure, up to ``REPLY_RESENDS`` times, with the
+    same question (``ask`` derives the seed from it). A reply still lost is ``None``: no verdict, and
+    the warning names only the error's class, never a message or a reply."""
+    tries = 0
+    while True:
+        try:
+            return ask(question, deps=deps)
+        except ResultUnread as error:  # a call that answered 303 may still be running: never sent again
+            logger.warning("reply: arm %s probe %s lost its result (%s): no verdict",
+                           question.arm, question.probe.id, type(error).__name__)
+            return None
+        except TransportFailed as error:
+            if tries >= REPLY_RESENDS or not resends.take():
+                logger.warning("reply: arm %s probe %s failed after its resends (%s): no verdict",
+                               question.arm, question.probe.id, type(error).__name__)
+                return None
+            tries += 1
+            pause(REPLY_RESEND_PAUSE_S)
 
 
 def _questions(
@@ -467,21 +533,24 @@ class Result:
     replies: int
     judge_calls: int
     judge_usd: float
+    no_verdict: int = 0  # (scale, probe) pairs without a verdict: a lost reply or an unreadable judge answer
 
 
 def read(
     chosen: Plan, ports: Ports, *, timer: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Result:
     """Write the scaled copies, generate 2C (when it isn't reused) and arm 4 at each scale, judge the
     pairs, and write one development record beside the night's scores."""
     try:
         with night_lock(ports.ledger), phase(chosen.morning.sleep):
-            return _read(chosen, ports, timer)
+            return _read(chosen, ports, timer, sleep)
     except NightBusy as busy:
         raise Refused(str(busy)) from None
 
 
-def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
+def _read(chosen: Plan, ports: Ports, timer: Callable[[], float],
+          sleep: Callable[[float], None]) -> Result:
     if chosen.target.exists():  # another run may have planned before this one took the lock
         raise Refused(f"{chosen.night.isoformat()} already has an adapter-scale read ({chosen.target.name})")
     stored: StoredReplies | None = None
@@ -519,12 +588,14 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
 
     started = timer()
     outcomes: dict[float, list[Any]] = {value: [] for value in chosen.scales}
+    lost: dict[float, int] = {value: 0 for value in chosen.scales}
     with held(
         None if per_call else book, f"{key}:judge", chosen.morning.judge_pools,
         usd((2 * judged + retries) * chosen.morning.judge_call_usd), lambda: spend()[0],
     ), held(
         book, f"{key}:arms", ("modal_usd", "baseten_sleep_usd"),
-        Bound(chosen.morning.prices.serve_gpu_per_hour, chosen.replies * ARM_CALL_S),
+        Bound(chosen.morning.prices.serve_gpu_per_hour,
+              (chosen.replies + _resend_allowance(chosen.replies)) * ARM_CALL_S),
         lambda: chosen.morning.prices.serve_gpu_per_hour * max(0.0, timer() - started) / 3600.0,
     ):
         for value, folder in folders.items():  # every hold is reserved before the first upload
@@ -532,9 +603,11 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
         started = timer()  # the GPU's billed time starts with the first arm call, not the uploads
         baseline, asked = _questions(chosen, deps, stored=stored is not None)
         questions = [question for _value, _probe, question in asked] + baseline
-        answers = Calls(chosen.morning.concurrency).map(lambda question: ask(question, deps=deps), questions)
+        resends = _ReplyResends(_resend_allowance(chosen.replies))
+        answers = Calls(chosen.morning.concurrency).map(
+            lambda question: _reply(question, deps, resends, sleep), questions)
         arm_four, generated = answers[:len(asked)], answers[len(asked):]
-        by_scale: dict[float, list[ArmReply]] = {value: [] for value in chosen.scales}
+        by_scale: dict[float, list[ArmReply | None]] = {value: [] for value in chosen.scales}
         for (value, _probe, _question), reply in zip(asked, arm_four, strict=True):
             by_scale[value].append(reply)  # map returns (scale, probe) order
         two_c = ({probe.id: ArmReply(stored.texts[probe.id], 0) for probe in chosen.probes}
@@ -542,10 +615,25 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
                                                     strict=True)))
         for value in chosen.scales:
             for probe, reply in zip(chosen.probes, by_scale[value], strict=True):
-                try:
-                    outcomes[value].append(probe_outcome(probe, reply, two_c[probe.id], judge))
-                except NoVerdict:
-                    outcomes[value].append(None)
+                baseline_reply = two_c[probe.id]
+                outcome = None
+                if reply is None or baseline_reply is None:  # a lost reply was warned where it was asked
+                    lost[value] += 1
+                else:
+                    try:
+                        outcome = probe_outcome(probe, reply, baseline_reply, judge)
+                    except NoVerdict:
+                        lost[value] += 1
+                    except ModelApiError as error:  # still failed after the judge's own retries
+                        logger.warning("judge: probe %s at scale %g failed after its retries (%s): no verdict",
+                                       probe.id, value, type(error).__name__)
+                        lost[value] += 1
+                outcomes[value].append(outcome)
+                if lost[value] > NO_VERDICT_MAX * len(chosen.probes):
+                    raise TooManyNoVerdicts(
+                        f"no verdict on {lost[value]} of {len(chosen.probes)} probes at scale {value:g}, "
+                        f"more than {NO_VERDICT_MAX:.0%}: nothing was scored",
+                        no_verdict=sum(lost.values()))
     record: dict[str, object] = {
         "night": chosen.night.isoformat(), "label": LABEL, "kind": "adapter_scale",
         "user": chosen.user, "persona": chosen.persona, "baseline": BASELINE, "arm": PERSONAL,
@@ -563,12 +651,6 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
     scores: dict[str, object] = {}
     for value in chosen.scales:
         found = outcomes[value]
-        missing = sum(1 for outcome in found if outcome is None)
-        if missing > NO_VERDICT_MAX_SHARE * len(chosen.probes):
-            raise TooManyNoVerdicts(
-                f"the judge gave no readable verdict on {missing} of {len(chosen.probes)} probes at "
-                f"scale {value:g}, more than {NO_VERDICT_MAX_SHARE:.0%}: nothing was scored",
-                no_verdict=missing)
         kept = [(probe, outcome) for probe, outcome in zip(chosen.probes, found, strict=True)
                 if outcome is not None]
         done = score_outcomes([probe for probe, _ in kept], [outcome.outcome for _, outcome in kept],
@@ -583,13 +665,16 @@ def _read(chosen: Plan, ports: Ports, timer: Callable[[], float]) -> Result:
         scores[f"{value:g}"] = stats
     record["scales"] = scores
     record["seconds"] = round(timer() - started, 3)
+    total_lost = sum(lost.values())
+    if total_lost:
+        record["no_verdict"] = total_lost
     folder = chosen.target.parent
     folder.mkdir(parents=True, exist_ok=True)
     pending = chosen.target.with_name(f".{chosen.target.name}.tmp")
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")
     os.replace(pending, chosen.target)
     j_usd, _estimated = spend()
-    return Result(chosen.target, chosen.replies, judge.calls, j_usd)
+    return Result(chosen.target, chosen.replies, judge.calls, j_usd, total_lost)
 
 
 def _named(path: str) -> Any:
@@ -618,7 +703,7 @@ def app_ports(morning: str = MORNING) -> Ports:
 
 
 def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None,
-         out: Callable[[str], None] = print) -> int:
+         out: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep) -> int:
     parser = argparse.ArgumentParser(description="Arm 4 with its adapter scaled down, against arm 2C.")
     parser.add_argument("--user", required=True, help="the account")
     parser.add_argument("--night", required=True, type=date.fromisoformat, help="the night, YYYY-MM-DD")
@@ -645,7 +730,7 @@ def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None,
             out(line)
         if not args.go:
             return 0
-        done = read(chosen, found)
+        done = read(chosen, found, sleep=sleep)
     except Refused as refused:
         out(f"refused: {refused}")
         return 1
@@ -661,7 +746,9 @@ def main(argv: Sequence[str] | None = None, *, ports: Ports | None = None,
     except TooManyNoVerdicts as error:
         out(f"failed: {error}")
         return 1
-    out(f"read: {done.path} ({done.replies} replies, {done.judge_calls} judge calls, judge ${done.judge_usd:.2f})")
+    unread = f", {done.no_verdict} no verdict" if done.no_verdict else ""
+    out(f"read: {done.path} ({done.replies} replies, {done.judge_calls} judge calls, "
+        f"judge ${done.judge_usd:.2f}{unread})")
     return 0
 
 
