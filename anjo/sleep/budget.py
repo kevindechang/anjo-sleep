@@ -18,12 +18,13 @@ still counts after the clearing.
 
 The caps are §12.1's. Baseten's $100 credit is two pools, and Sleep has priority: when
 ``baseten_sleep_usd`` runs short it may take MIND's unspent balance, so the two together never
-pass $100 and MIND never passes its own $40. Fireworks' $100 credit is two pools that together
-never pass it (``FIREWORKS_TOTAL``): ``fireworks_mind_usd`` ($20), for MIND's experiment when it runs
-Spark Open there (``mind.spark_provider``), and
-``fireworks_sleep_usd`` ($80), Sleep's practice critic when DeepSeek V4.1 Flash plays it
-(``practice.critics``). They share nothing with Baseten's. ``vertex_mind_usd`` holds MIND's data's
-Gemini gate reads (``mind.apd.readers``), apart from ``vertex_usd``'s diagnostic judge.
+pass $100 and MIND never passes its own $40. Fireworks' credit is two pools too, and Sleep has
+priority there: ``fireworks_mind_usd`` ($20), MIND's experiment when it runs Spark Open there
+(``mind.spark_provider``), keeps its own cap, and ``fireworks_sleep_usd``, Sleep's practice critic
+when DeepSeek V4.1 Flash plays it (``practice.critics``), may take all the room the account's
+reading leaves (``FIREWORKS_TOTAL``, ``FIREWORKS_ROOM_USD``). They share nothing with Baseten's.
+``vertex_mind_usd`` holds MIND's data's Gemini gate reads (``mind.apd.readers``), apart from
+``vertex_usd``'s diagnostic judge.
 
 **One switch, one pool.** With ``ANJO_SLEEP_SPARK=fireworks`` Sleep's Spark Open runs on Fireworks
 (``spark_provider``), so a reservation naming ``baseten_sleep_usd`` or ``baseten_mind_usd`` holds
@@ -60,6 +61,18 @@ Pool = Literal[
 ]
 POOLS: Final[tuple[Pool, ...]] = get_args(Pool)
 
+# Fireworks' credit as the ledger counts it. 2026-11-01: Fireworks console shows $63.99 remaining; the
+# local ledger had $64.52 recorded. The $28.51 between them is what the worst-case holds of judge calls
+# that failed while the Mac slept mid-run (2026-10-31 and 2026-11-01) settled at though nothing was
+# billed, so the credit is that reading plus what the ledger had recorded, and the room it leaves is
+# the reading less a margin for billing lag: $58.99 of further spend, the two pools together.
+FIREWORKS_REMAINING_USD: Final = 63.99
+FIREWORKS_RECORDED_USD: Final = 64.52
+FIREWORKS_MARGIN_USD: Final = 5.0
+FIREWORKS_ROOM_USD: Final = FIREWORKS_REMAINING_USD - FIREWORKS_MARGIN_USD  # 58.99, further spend
+FIREWORKS_TOTAL: Final = FIREWORKS_RECORDED_USD + FIREWORKS_ROOM_USD  # 123.51: recorded + room
+FIREWORKS_CREDIT_USD: Final = FIREWORKS_REMAINING_USD + FIREWORKS_RECORDED_USD  # $128.51 as counted
+
 CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "modal_usd": 500.0,  # of which about $120 is warm hours for the live page in judging week
     # Training (Task 5) and MIND's synthetic runs (Tasks 17, 17b). The real balance on 2026-10-27 was
@@ -69,7 +82,8 @@ CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b
     "fireworks_mind_usd": 20.0,  # MIND's protocol-only experiment
-    "fireworks_sleep_usd": 80.0,  # Sleep's share of the Fireworks credit
+    # Sleep's share of the whole credit ``FIREWORKS_TOTAL`` leaves, MIND's own $20 kept inside it
+    "fireworks_sleep_usd": FIREWORKS_TOTAL - 20.0,
     "vertex_usd": 50.0,  # the Gemini diagnostic judge
     "vertex_mind_usd": 150.0,  # MIND's data: Gemini's gate reads of the core splits and the pairs (GCP credits)
     "judge_usd": 100.0,  # judges' sleep-now nights, inside the totals above
@@ -78,8 +92,6 @@ UNITS: Final[Mapping[Pool, str]] = MappingProxyType(
     {pool: "cu" if pool == "colab_cu" else "usd" for pool in POOLS}
 )
 BASETEN_TOTAL: Final = CAPS["baseten_sleep_usd"] + CAPS["baseten_mind_usd"]
-FIREWORKS_CREDIT_USD: Final = 100.0
-FIREWORKS_TOTAL: Final = CAPS["fireworks_mind_usd"] + CAPS["fireworks_sleep_usd"]
 
 # The time caps every paid job runs under (§12.1). A GPU runner passes these as hard timeouts,
 # and a job's Bound is its rate over the same timeout.
@@ -331,6 +343,12 @@ class Ledger:
             return total - baseten
         if pool == "baseten_mind_usd":
             return min(self._caps[pool] - used[pool], total - baseten)
+        if pool in ("fireworks_sleep_usd", "fireworks_mind_usd"):  # one credit, Sleep's share first
+            fireworks = used["fireworks_sleep_usd"] + used["fireworks_mind_usd"]
+            credit = self._caps["fireworks_sleep_usd"] + self._caps["fireworks_mind_usd"]
+            if pool == "fireworks_sleep_usd":
+                return credit - fireworks
+            return min(self._caps[pool] - used[pool], credit - fireworks)
         return self._caps[pool] - used[pool]
 
     def _holds(self) -> dict[str, _Hold]:

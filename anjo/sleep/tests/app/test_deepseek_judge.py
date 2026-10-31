@@ -1,7 +1,11 @@
 # mypy: ignore-errors
 """Morning judge selection and accounting, with no provider calls."""
 import json
+import threading
 from dataclasses import replace
+from functools import partial
+from pathlib import Path
+from typing import Any
 
 import pytest
 import httpx
@@ -10,7 +14,8 @@ from anjo.sleep import baseten_api, fireworks_api, meta_api
 from anjo.sleep.app import morning as app
 from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
-from anjo.sleep.model_api import ChatResult, Retries
+from anjo.sleep.model_api import ChatResult, ConnectFailed, ModelApiError, Retries
+from anjo.sleep.night.holds import usd
 from anjo.sleep.probes.score import JudgeTokens, MuseJudge, judge_orders
 from anjo.sleep.probes.morning import DEEPSEEK_JUDGE_USD_PER_CALL, _HeldDeepseekChat
 from anjo.sleep.stops import BudgetStop
@@ -155,4 +160,73 @@ def test_unmetered_or_failed_call_settles_full_bound(tmp_path, fail):
         held_chat("model", [], None, 1)
     assert ledger.used("judge_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
     assert ledger.used("fireworks_sleep_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
+    assert not ledger.open_holds()
+
+
+def _recorded_fireworks(tmp_path: Path) -> Ledger:
+    """The Fireworks pools as the local ledger had them on 2026-11-01: $64.52 recorded."""
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    for job, pool, amount in (("morning:recorded:sleep", "fireworks_sleep_usd", 57.75),
+                              ("morning:recorded:mind", "fireworks_mind_usd", 6.77)):
+        found = ledger.reserve(job, (pool,), usd(amount))
+        assert found is not None
+        found.settle(amount)
+    return ledger
+
+
+def test_a_morning_holds_sixteen_deepseek_calls_at_once_beside_the_recorded_spend(tmp_path: Path) -> None:
+    """A morning holds each judge call's full context until it settles: the sixteen in flight (about
+    $20.13) fit beside the $64.52 the ledger had recorded, which the $100 credit refused."""
+    ledger = _recorded_fireworks(tmp_path)
+    rig = Rig(tmp_path, ledger=ledger)
+    tokens = JudgeTokens()
+    lock, together, seen, held = threading.Lock(), threading.Event(), [0], []
+
+    def chat(model, messages, tools, timeout, **kwargs):
+        with lock:
+            seen[0] += 1
+            if seen[0] == 16:
+                held.append(ledger.used("fireworks_sleep_usd"))  # every one of the sixteen is held
+                together.set()
+        assert together.wait(timeout=30), "the morning never held sixteen judge calls at once"
+        return ChatResult('{"verdict":"tie"}', (), model, 3000, 500, "stop")
+
+    model = fireworks_api.DEEPSEEK_V4P1_FLASH
+    rig.morning = replace(rig.morning, judge=MuseJudge(chat, lambda _: "brief", tokens, model),
+                          judge_tokens=tokens, judge_model=model, concurrency=16)
+    done = rig.run()
+    assert held == [pytest.approx(57.75 + 16 * DEEPSEEK_JUDGE_USD_PER_CALL)]
+    assert done.judge_calls > 16 and not ledger.open_holds()
+    assert ledger.used("fireworks_sleep_usd") == pytest.approx(
+        57.75 + done.judge_calls * (3000 * 0.30 + 500 * 1.20) / 1e6)
+
+
+def test_a_connection_that_never_opened_settles_nothing_and_a_lost_reply_its_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Mac slept mid-run on 2026-10-31 and 2026-11-01: a refused or unresolvable connection sent
+    nothing, so it was billed nothing; a reply lost after the request went may have been billed."""
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "test-key")
+    ledger = Ledger(tmp_path / "budget.jsonl")
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    def lost(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow reply", request=request)
+
+    def held_chat(handler: Any, key: str) -> _HeldDeepseekChat:
+        chat = partial(fireworks_api.chat, transport=httpx.MockTransport(handler),
+                       retries=Retries(sleep=lambda _: None))
+        return _HeldDeepseekChat(chat, ledger, key)
+
+    with pytest.raises(ConnectFailed, match="ConnectError"):
+        held_chat(refused, "morning:judge:unsent")(fireworks_api.DEEPSEEK_V4P1_FLASH, [], None, 1.0)
+    assert (ledger.used("fireworks_sleep_usd"), ledger.used("judge_usd")) == (0.0, 0.0)
+    assert not ledger.open_holds()
+
+    with pytest.raises(ModelApiError, match="timed out"):
+        held_chat(lost, "morning:judge:lost")(fireworks_api.DEEPSEEK_V4P1_FLASH, [], None, 1.0)
+    assert ledger.used("fireworks_sleep_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
+    assert ledger.used("judge_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
     assert not ledger.open_holds()
