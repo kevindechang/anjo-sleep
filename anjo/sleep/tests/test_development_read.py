@@ -374,3 +374,33 @@ def test_development_reads_a_scores_only_root_as_the_full_tree(tmp_path: Path) -
     assert dev.read(scores_only, POOLED, bootstrap=CFG, probes_root=sealed) == dev.read(
         full, POOLED, bootstrap=CFG, probes_root=sealed
     )
+
+
+def test_reported_only_harness_pair_is_carried_when_present_and_absent(tmp_path: Path) -> None:
+    sealed = tmp_path / SEALED
+    for persona, account in POOLED.items():
+        outcomes = [
+            _row(f"{persona}-2h-nw", "2H_vs_2C", "new_work", "win", source=f"{persona}-2h-src"),
+            _row(f"{persona}-2h-vo", "2H_vs_2C", "vocab", "tie"),
+            _row(f"{persona}-2h-th", "2H_vs_2C", "tone_hold", "loss"),
+            _row(f"{persona}-2h-ta", "2H_vs_2C", "taste_ab", "win", source=f"{persona}-2h-taste"),
+        ]
+        _write_score(tmp_path, account, 1, "2026-10-31", outcomes, persona=persona, sealed_dir=sealed)
+    lines = [line for line in dev.read(tmp_path, POOLED, bootstrap=CFG, probes_root=sealed)
+             if line["line"] == "comparison" and line["pair"] == "2H_vs_2C"]
+    assert {line["dimension"] for line in lines} == {"knowledge", "interaction"}
+    assert all(line["label"] == "reported" for line in lines)
+    assert all(line["pair"] not in dev.HEADLINE + dev.FAIRNESS for line in lines)
+
+    absent = tmp_path / "absent"
+    absent_sealed = tmp_path / "absent-sealed"
+    _fill_accounts(
+        absent,
+        "3_vs_1",
+        lambda persona, account, pair: [
+            _row(f"{persona}-3v1-nw", pair, "new_work", "win", source=f"{persona}-3v1-src"),
+        ],
+        sealed_dir=absent_sealed,
+    )
+    assert not [line for line in dev.read(absent, POOLED, bootstrap=CFG, probes_root=absent_sealed)
+                if line.get("pair") == "2H_vs_2C"]

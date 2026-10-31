@@ -54,7 +54,7 @@ FIREWORKS_HOMES = ("fireworks_api.py", "spark_provider.py", "provenance.py", "bu
 # agent records the id that answered, so its notes carry Spark Open's ancestry).
 SELECTOR_HOMES = ("baseten_api.py", "spark_inquiry.py", "evidence/extract.py", "context/brief_store.py",
                   "practice/run.py", "practice/full.py", "sim/persona_sim.py", "night/mind.py", "app/night.py",
-                  "agent_baseline/night.py")
+                  "agent_baseline/night.py", "harness/loop.py")
 # Practice's opt-in DeepSeek critic (a synthetic person's, on its own Fireworks pool) is the one Sleep file
 # that may name Fireworks, and never MIND's pool, Spark Open provider or setting: Sleep's Spark Open stays
 # on Baseten.

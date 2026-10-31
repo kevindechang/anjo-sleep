@@ -31,7 +31,7 @@ from __future__ import annotations
 import math
 import types
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from datetime import date
 from pathlib import PurePosixPath
 from typing import Any, Final, Literal, Union, cast, get_args, get_origin, get_type_hints
@@ -262,6 +262,9 @@ class Learn:
     fold: int | NotRun
     protect: Protect | NotRun
     core_adaptation: float | NotRun
+    # One strategy line the harness promoted tonight, in its words; empty on every other night, and
+    # then the story has no such key and is byte-identical to today's.
+    learned: tuple[str, ...] = ()
 
 
 # ── check (this branch) ──────────────────────────────────────────────────────
@@ -349,7 +352,8 @@ def _encode(value: Any) -> Any:
     if isinstance(value, Failed):
         return {"failed": {"step": value.step, "error": value.error}}
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _encode(getattr(value, f.name)) for f in fields(value)}
+        return {f.name: _encode(getattr(value, f.name)) for f in fields(value)
+                if not (f.name == "learned" and not getattr(value, f.name))}
     if isinstance(value, tuple):
         return [_encode(item) for item in value]
     if isinstance(value, date):
@@ -411,12 +415,17 @@ def _record(cls: type, raw: Any, where: str) -> Any:
     names, at = [f.name for f in fields(cls)], where or "story"
     if not isinstance(raw, dict):
         raise StoryError(f"{at}: not a record")
-    if missing := [name for name in names if name not in raw]:
+    # Only the harness's one new field is optional: a story from before it has no ``learned`` key,
+    # and every other defaulted field is still required like the rest of its record.
+    optional = {f.name for f in fields(cls) if f.name == "learned"
+                and (f.default is not MISSING or f.default_factory is not MISSING)}
+    if missing := [name for name in names if name not in raw and name not in optional]:
         raise StoryError(f"{at}: no {', '.join(missing)}")
     if extra := sorted(set(raw) - set(names)):
         raise StoryError(f"{at}: no field {', '.join(extra)}")
     hints = get_type_hints(cls)
-    values = {name: _decode(hints[name], raw[name], f"{where}.{name}" if where else name) for name in names}
+    values = {name: _decode(hints[name], raw[name], f"{where}.{name}" if where else name)
+              for name in names if name in raw}
     try:
         return cls(**values)
     except StoryError as error:  # a record's own check (a not_run with no reason)
@@ -662,8 +671,13 @@ def _learn(by: Steps) -> Learn:
     terms = said.get("terms") if isinstance(said, Mapping) else None
     off = NotRun(TERMS_OFF)
     seeding, imitation, fold, protect = _terms(terms) if isinstance(terms, Mapping) else (off, off, off, off)
+    harness = by.get("harness")
+    learned = (harness["learned"],) if (
+        isinstance(harness, Mapping) and harness.get("status") == "ok"
+        and isinstance(harness.get("learned"), str) and harness["learned"]
+    ) else ()
     return Learn(_need(by["dataset"], "examples", "int"), _surprise(by), channel_loss, stamp, seeding, imitation, fold,
-                 protect, NotRun(ADAPTATION_NOT_YET))
+                 protect, NotRun(ADAPTATION_NOT_YET), learned=learned)
 
 
 def _check(by: Steps) -> Check:

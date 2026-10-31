@@ -98,6 +98,7 @@ from anjo.sleep.app.storage import (
     glimmer_turns,
     target_store,
     transcript_store,
+    strategy_store,
     workspace_log,
 )
 from anjo.sleep.budget import LEDGER_NAME, Ledger
@@ -393,6 +394,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         note_check=passes_reply_check, ledger=ledger,
         logs=night_logs, cancel=cancel_flag().watcher(), purge=purge, is_synthetic=is_synthetic,
         settings=night_settings, prices=night_prices,
+        strategies=strategy_store, glimmer=client,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=gpu_rate), mind_state=mind_state, channel=channel,
         intentions=LedgerIntentions(), homework=homework,
         wake=serving.wake, sleep=serving.sleep_now, gpu_stop=gpu_stop(serving, os.environ, ledger), retries=client.retries,

@@ -10,11 +10,16 @@
 | 2F | base | C, plus every stored evidence item raw |
 | 4 | the person's adapter | C, byte-identical to 2C |
 | 4M | the person's adapter | C, plus MIND's homework and records |
+| 2H | base | C, then the person's strategy list in its marked block (reported only) |
 
 2A differs from 2C only by the evidence items the scheduled agent wrote (``kind``
 ``agent_note``, ids ``agent-``), and 4M differs from 4 only by what MIND produced (its
 ``mind-`` homework and its records' findings and notices). Both read their extra items
 tolerantly: with none stored, the arm's context is C itself, byte for byte.
+
+``2H`` is the harness arm: with an empty list its prompt is 2C's exactly, so it measures the list
+and nothing else. It is asked only when ``ANJO_SLEEP_HARNESS=1`` (``probes.morning``), never in
+place of a registered arm.
 
 ``reply`` only reads: it writes no history, no evidence and no memory (RF5). It never touches the
 judge brief or the scorer, which hold held-out preferences no arm may see. It is ``ask`` after
@@ -25,20 +30,25 @@ question on one thread and ask them side by side.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Final, Literal, get_args
 
 from anjo.sleep.context.recall_common import estimate_tokens
+from anjo.sleep.harness.store import strategy_block
 from anjo.sleep.ports import ContextBuilder, EvidenceStore
 from anjo.sleep.probes.clients import AdapterRegistry, ModelClient, TokenLogprobs
 from anjo.sleep.probes.logprob import TasteChoice, forced_choice, present
 from anjo.sleep.types import CheckpointRef, Evidence, Probe
 
-Arm = Literal["1", "2C", "2A", "2F", "3", "3x", "4", "4M"]
+Arm = Literal["1", "2C", "2A", "2F", "3", "3x", "4", "4M", "2H"]
+# Every arm a morning can ask: the six registered ones, the reported-only 2A and 4M
+# (ANJO_SLEEP_ARMS_EXTRA) and the reported-only harness arm 2H (ANJO_SLEEP_HARNESS).
 ARMS: Final = frozenset(get_args(Arm))
-WITH_CONTEXT: Final = frozenset({"2C", "2A", "2F", "4", "4M"})
+HARNESS_ARM: Final = "2H"
+WITH_CONTEXT: Final = frozenset({"2C", "2A", "2F", "4", "4M", "2H"})
 PERSONAL: Final = frozenset({"3", "4", "4M"})
 REPLY_TEMPERATURE: Final = 0.7  # replies are sampled (spec 5.1); only taste_ab is deterministic
 GLIMMER_WINDOW_TOKENS: Final = 131_072
@@ -49,6 +59,7 @@ AGENT_NOTE_PREFIX: Final = "agent-"
 MIND_HOMEWORK_PREFIX: Final = "mind-"  # MIND's homework artifacts: one of 4M's differences from 4
 AGENT_NOTES_HEADING: Final = "## The night's agent notes"
 MIND_NOTES_HEADING: Final = "## What MIND found"
+logger = logging.getLogger(__name__)
 
 
 class DonorError(RuntimeError):
@@ -98,6 +109,9 @@ class ArmDeps:
     window_tokens: int = GLIMMER_WINDOW_TOKENS
     temperature: float = REPLY_TEMPERATURE
     run_seed: int = 0
+    # The person's strategy list as of a night (``harness.store``); empty off, and then 2H is 2C
+    # exactly.
+    strategies: Callable[[str, date | None], Sequence[str]] = lambda user_id, until: ()
     context_cache: dict[tuple[str, str], str] = field(default_factory=dict, compare=False, repr=False)
     mind_notes: Callable[[str, date], Sequence[str]] | None = None
     mind_cache: dict[str, tuple[str, ...]] = field(default_factory=dict, compare=False, repr=False)
@@ -205,6 +219,17 @@ def _with_mind_notes(context: str, user_id: str, deps: ArmDeps) -> str:
     return _notes_section(context, MIND_NOTES_HEADING, lines)
 
 
+def _strategy_lines(user_id: str, deps: ArmDeps) -> tuple[str, ...]:
+    """The person's list as of ``deps.until``, read tolerantly: a corrupt or unreadable log gives
+    the empty list and is logged, so the reported-only arm asks exactly what 2C asks, never failing
+    the morning that carries every other arm."""
+    try:
+        return tuple(deps.strategies(user_id, deps.until))
+    except (OSError, ValueError) as error:
+        logger.warning("2H: the strategy list can't be read (%s); it asks as 2C", type(error).__name__)
+        return ()
+
+
 def _question_text(probe: Probe) -> str:
     if probe.options is None:
         return probe.prompt
@@ -241,6 +266,8 @@ def prepare(
             context = _with_agent_notes(context, user_id, deps)
         elif arm == "4M":
             context = _with_mind_notes(context, user_id, deps)
+        elif arm == HARNESS_ARM:
+            context = strategy_block(context, _strategy_lines(user_id, deps))
     return Question(arm, probe, adapter, context, dropped)
 
 

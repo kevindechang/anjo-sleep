@@ -65,11 +65,12 @@ from typing import Any, Final
 
 from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Bound, Ledger, Pool
+from anjo.sleep.harness import harness_on
 from anjo.sleep.model_api import ChatResult, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.parallel import Calls
-from anjo.sleep.probes.arms import ARMS, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
+from anjo.sleep.probes.arms import ARMS, HARNESS_ARM, Arm, ArmDeps, ArmReply, DonorError, Question, ask, prepare
 from anjo.sleep.probes.clients import AdapterRegistry
 from anjo.sleep.probes.score import (
     JUDGE_RETRY_MAX_TOKENS,
@@ -90,6 +91,7 @@ from anjo.sleep.probes.score import (
 from anjo.sleep.reports import results
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.serving.client import GlimmerNotReady, WakeResult
+from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.types import CheckpointRef, Probe
 
 ARM_ORDER: Final[tuple[Arm, ...]] = ("1", "2C", "2A", "2F", "3", "3x", "4", "4M")
@@ -107,6 +109,10 @@ PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {
     "4M_vs_2A": ("4M", "2A"),
     "4M_vs_4": ("4M", "4"),
 }
+# The reported-only harness pair: asked only when ``ANJO_SLEEP_HARNESS=1``, and never a registered
+# win. Its absence leaves the score file exactly as it was.
+HARNESS_PAIR: Final = "2H_vs_2C"
+HARNESS_PAIRS: Final[dict[str, tuple[Arm, Arm]]] = {HARNESS_PAIR: (HARNESS_ARM, "2C")}
 ARM_CALL_S: Final = 60.0  # the most one arm reply holds the serving GPU
 # The judge's hold a call, and what a call that reported no usage (or failed) settles at, marked estimated.
 JUDGE_USD_PER_CALL: Final = 0.02
@@ -126,6 +132,13 @@ DEEPSEEK_JUDGE_POOLS: Final[tuple[Pool, ...]] = ("fireworks_sleep_usd", "judge_u
 DEEPSEEK_JUDGE_USD_PER_CALL: Final = 1_048_576 * fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES[1] / 1e6
 SCORES: Final = "scores"
 DONOR_UNAVAILABLE: Final = "donor_unavailable"
+# 2H is reported only: a strategy read or reply that fails leaves it out with a code, never the
+# morning, and every registered arm's replies and bytes stay the switch-off run's.
+HARNESS_UNAVAILABLE: Final = "harness_unavailable"
+HARNESS_FAILURES: Final = (
+    ModelApiError, BudgetStop, ValueError, KeyError, TypeError, OSError, RuntimeError,
+    AttributeError, ImportError, LookupError, AssertionError,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -184,10 +197,11 @@ def morning_subset(environ: Mapping[str, str]) -> ProbeSubset | None:
 
 
 def full_arms(environ: Mapping[str, str]) -> tuple[Arm, ...]:
-    """The arms a full morning asks: the committed six, and 2A and 4M only when
-    ``ANJO_SLEEP_ARMS_EXTRA=1``, so the default full run is the one scored before them and a
-    subset names any of the newer arms explicitly."""
-    return ARM_ORDER if environ.get(ARMS_EXTRA_ENV, "").strip() == "1" else COMMITTED_ARMS
+    """The arms a full morning asks: the committed six, 2A and 4M only when
+    ``ANJO_SLEEP_ARMS_EXTRA=1``, and 2H last only when ``ANJO_SLEEP_HARNESS=1``, so the default
+    full run is the one scored before them and a subset names any of the newer arms explicitly."""
+    asked = ARM_ORDER if environ.get(ARMS_EXTRA_ENV, "").strip() == "1" else COMMITTED_ARMS
+    return (*asked, HARNESS_ARM) if harness_on(environ) else asked
 
 
 def _rank(subset: ProbeSubset, probe: Probe) -> str:
@@ -336,11 +350,15 @@ def _judge_usage(morning: Morning) -> tuple[int, int, int]:
     return (0, 0, 0) if morning.judge_tokens is None else morning.judge_tokens.read()
 
 
-def _judge_spend(judge: _Counting, morning: Morning, before: tuple[int, int, int]) -> tuple[float, int]:
+def _judge_spend(
+    judge: _Counting, morning: Morning, before: tuple[int, int, int], *,
+    calls: Callable[[], int] | None = None,
+) -> tuple[float, int]:
     """The judge's dollars since ``before``: its replies' tokens at its list price, and every call that
-    reported no usage (or failed) at ``JUDGE_USD_PER_CALL``, the hold's bound; and how many those were."""
+    reported no usage (or failed) at ``JUDGE_USD_PER_CALL``, the hold's bound; and how many those were.
+    ``calls`` reads every judge the run made when it kept the harness pair's pool separate."""
     metered, tokens_in, tokens_out = (now - then for now, then in zip(_judge_usage(morning), before, strict=True))
-    estimated = max(0, judge.calls - metered)
+    estimated = max(0, (judge.calls if calls is None else calls()) - metered)
     rates = (fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES if morning.judge_model == fireworks_api.DEEPSEEK_V4P1_FLASH
              else (morning.prices.spark_in_per_m, morning.prices.spark_out_per_m))
     tokens = (tokens_in * rates[0] + tokens_out * rates[1]) / 1e6
@@ -402,11 +420,15 @@ def _rows(pair: str, probes: Sequence[Probe], found: Sequence[ProbeOutcome | Non
 
 def _answer(
     user_id: str, probes: Sequence[Probe], deps: ArmDeps, calls: Calls, arms: Sequence[Arm] = COMMITTED_ARMS,
+    *, harness_calls: Calls | None = None,
 ) -> tuple[dict[Arm, list[ArmReply]], dict[str, str]]:
-    """Every arm's questions prepared here, in arm and probe order, then asked side by side."""
+    """Every registered arm's questions prepared here, in arm and probe order, then asked side by
+    side exactly as before. 2H is reported only and best-effort, in its own ``Calls`` step after
+    them: a failed prepare or reply leaves it out with a code, never poisoning the registered run."""
     questions: dict[Arm, list[Question]] = {}
     unavailable: dict[str, str] = {}
-    for arm in arms:
+    registered = tuple(arm for arm in arms if arm != HARNESS_ARM)
+    for arm in registered:
         try:
             questions[arm] = [prepare(arm, user_id, p, deps=deps) for p in probes]
         except DonorError:
@@ -414,22 +436,39 @@ def _answer(
                 raise
             unavailable[arm] = DONOR_UNAVAILABLE  # a code: score files hold ids, codes and numbers only
     answers = iter(calls.map(partial(ask, deps=deps), [q for asked in questions.values() for q in asked]))
-    return {arm: [next(answers) for _ in asked] for arm, asked in questions.items()}, unavailable
+    replies = {arm: [next(answers) for _ in asked] for arm, asked in questions.items()}
+    if HARNESS_ARM in arms:
+        try:
+            asked = [prepare(HARNESS_ARM, user_id, p, deps=deps) for p in probes]
+            own = harness_calls if harness_calls is not None else Calls(calls.workers)
+            replies[HARNESS_ARM] = own.map(partial(ask, deps=deps), asked)
+        except HARNESS_FAILURES:
+            unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
+    return replies, unavailable
+
+
+def _pairs(asked: Sequence[Arm]) -> dict[str, tuple[Arm, Arm]]:
+    """The registered headline pairs, plus 2H against 2C when 2H answered."""
+    pairs = dict(PAIRS)
+    if HARNESS_ARM in asked:
+        pairs.update(HARNESS_PAIRS)
+    return pairs
 
 
 def _comparisons(replies: Mapping[Arm, Sequence[ArmReply]]) -> list[tuple[str, Arm, Arm]]:
     """Each arm against arm 1, then the headline pairs whose arms both answered, in file order."""
-    found = [(f"{arm}_vs_1", arm, BASELINE) for arm in ARM_ORDER if arm != BASELINE and arm in replies]
-    return found + [(name, a, b) for name, (a, b) in PAIRS.items() if a in replies and b in replies]
+    found = [(f"{arm}_vs_1", arm, BASELINE) for arm in (*ARM_ORDER, HARNESS_ARM) if arm != BASELINE and arm in replies]
+    return found + [(name, a, b) for name, (a, b) in _pairs(tuple(replies)).items() if a in replies and b in replies]
 
 
 def _judged(
-    probes: Sequence[Probe], replies: Mapping[Arm, Sequence[ArmReply]], judge: PairwiseJudge, calls: Calls,
+    probes: Sequence[Probe], replies: Mapping[Arm, Sequence[ArmReply]], judge: PairwiseJudge, calls: Calls, *,
+    comparisons: Sequence[tuple[str, Arm, Arm]] | None = None,
 ) -> list[tuple[str, Arm, Arm, list[ProbeOutcome | None]]]:
     """Every comparison's per-probe outcomes, judged side by side, gathered by comparison and probe;
     None where the judge gave no readable verdict."""
-    comparisons = _comparisons(replies)
-    jobs = [(first, second, index) for _, first, second in comparisons for index in range(len(probes))]
+    chosen = _comparisons(replies) if comparisons is None else comparisons
+    jobs = [(first, second, index) for _, first, second in chosen for index in range(len(probes))]
 
     def outcome(job: tuple[Arm, Arm, int]) -> ProbeOutcome | None:
         first, second, index = job
@@ -440,12 +479,12 @@ def _judged(
 
     found = calls.map(outcome, jobs)
     size = len(probes)
-    return [(name, a, b, found[n * size:(n + 1) * size]) for n, (name, a, b) in enumerate(comparisons)]
+    return [(name, a, b, found[n * size:(n + 1) * size]) for n, (name, a, b) in enumerate(chosen)]
 
 
 def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = COMMITTED_ARMS) -> int:
     judged = sum(1 for p in probes if p.kind != "taste_ab")
-    pairs = sum(1 for a, b in PAIRS.values() if a in arms and b in arms)
+    pairs = sum(1 for a, b in _pairs(arms).values() if a in arms and b in arms)
     return (len(arms) - 1 + pairs) * judged * 2
 
 
@@ -500,7 +539,9 @@ def _run_morning(
         raise GlimmerNotReady()  # nothing was called or written
     deps = replace(morning.arms, adapters=_Pinned(morning.arms.adapters, user_id, checkpoint), until=night,
                    context_cache={})
-    worst_judge = _worst_judge_calls(probes, arms)
+    registered = tuple(arm for arm in arms if arm != HARNESS_ARM)
+    judged = sum(1 for p in probes if p.kind != "taste_ab")
+    worst_judge = _worst_judge_calls(probes, registered)
     retries = math.ceil(worst_judge * JUDGE_RETRY_SHARE)
     # A backfill holds under a key of its own, so a failed morning's settled spend still counts (``latest_attempts``)
     key = hold_key or f"morning:{night.isoformat()}:{user_id}" + (
@@ -516,28 +557,70 @@ def _run_morning(
         with held(morning.ledger, f"{key}:judge:preflight", DEEPSEEK_JUDGE_POOLS,
                   usd(DEEPSEEK_JUDGE_USD_PER_CALL), lambda: 0.0):
             pass
+    # The 2H comparisons (against 1 and against 2C) have their own retry allowance, so the
+    # registered judge's is the switch-off run's whether 2H answered or not, and its calls never
+    # spend a registered pair's retries.
+    harness_worst = 2 * 2 * judged if HARNESS_ARM in arms else 0
+    harness_judge = (_Counting(inner, math.ceil(harness_worst * JUDGE_RETRY_SHARE))
+                     if HARNESS_ARM in arms else None)
+
+    def judge_calls() -> int:
+        return judge.calls + (0 if harness_judge is None else harness_judge.calls)
+
     judge = _Counting(inner, retries)
-    spend = partial(_judge_spend, judge, morning, _judge_usage(morning))
+    spend = partial(_judge_spend, judge, morning, _judge_usage(morning), calls=judge_calls)
     arm_s = len(probes) * len(arms) * ARM_CALL_S
     started = morning.timer()
     with ExitStack() as holds:
         if not per_call:
             holds.enter_context(held(morning.ledger, f"{key}:judge", morning.judge_pools,
-                                     usd((worst_judge + retries) * morning.judge_call_usd), lambda: spend()[0]))
+                                     usd((worst_judge + retries + harness_worst
+                                          + math.ceil(harness_worst * JUDGE_RETRY_SHARE)) * morning.judge_call_usd),
+                                     lambda: spend()[0]))
         holds.enter_context(held(morning.ledger, f"{key}:arms", ARM_POOLS,
                                  Bound(morning.prices.serve_gpu_per_hour, arm_s),
                                  lambda: morning.prices.serve_gpu_per_hour * max(0.0, morning.timer() - started) / 3600.0))
         calls = Calls(morning.concurrency)
-        replies, unavailable = _answer(user_id, probes, deps, calls, arms)
+        harness_calls = Calls(morning.concurrency) if harness_judge is not None else None
+        replies, unavailable = _answer(user_id, probes, deps, calls, arms, harness_calls=harness_calls)
         config = BootstrapConfig.from_thresholds()
         rows: list[dict[str, object]] = []
         stats: dict[str, dict[str, dict[str, object]]] = {}
         pairs: dict[str, dict[str, dict[str, object]]] = {}
         no_verdict: dict[str, int] = {}
-        judged = sum(1 for p in probes if p.kind != "taste_ab")
-        for name, first, second, found in _judged(probes, replies, judge, calls):
+        comparisons = _comparisons(replies)
+        harness_comparisons = [c for c in comparisons if HARNESS_ARM in (c[1], c[2])]
+        registered_comparisons = [c for c in comparisons if HARNESS_ARM not in (c[1], c[2])]
+        registered_found = _judged(
+            probes, replies, judge, calls, comparisons=registered_comparisons) if registered_comparisons else []
+        try:
+            harness_found = _judged(
+                probes, replies, harness_judge if harness_judge is not None else judge,
+                harness_calls if harness_calls is not None else calls,
+                comparisons=harness_comparisons) if harness_comparisons else []
+        except Cancelled:  # a cancelled night stops; only the harness's own failure is swallowed
+            raise
+        except HARNESS_FAILURES:
+            # 2H is reported only: a judge call that fails (a provider error, the per-call hold's
+            # BudgetStop, an unreadable answer past its retries) drops it with a code, never the
+            # morning. A BudgetStop from the registered pass above still stops the run: only one
+            # raised in this pass is caught, and what it settled stays settled.
+            harness_found = []
+            unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
+        harness_names = {name for name, first, second in comparisons if HARNESS_ARM in (first, second)}
+        harness_dropped = False
+        for name, first, second, found in (*registered_found, *harness_found):
+            if harness_dropped and HARNESS_ARM in (first, second):
+                continue
             kept = [(p, f) for p, f in zip(probes, found, strict=True) if f is not None]
             if missing := len(found) - len(kept):
+                if (HARNESS_ARM in (first, second)
+                        and missing > NO_VERDICT_MAX_SHARE * judged):
+                    # 2H is reported only: a judge that can't read its comparisons drops it, not
+                    # the morning, and leaves the registered comparisons untouched.
+                    unavailable[HARNESS_ARM] = HARNESS_UNAVAILABLE
+                    harness_dropped = True
+                    continue
                 no_verdict[name] = missing
                 if missing > NO_VERDICT_MAX_SHARE * judged:
                     raise TooManyNoVerdicts(
@@ -552,6 +635,14 @@ def _run_morning(
             else:
                 pairs[name] = scored
             rows.extend(_rows(name, probes, found))
+    if HARNESS_ARM in unavailable:
+        # However 2H was dropped, no 2H comparison's count, stat, pair or row stands: the file is the
+        # switch-off run's but for its code in ``unavailable``, and only the registered sum is reported.
+        for harness_name in harness_names:
+            no_verdict.pop(harness_name, None)
+        stats.pop(HARNESS_ARM, None)
+        pairs.pop(HARNESS_PAIR, None)
+        rows[:] = [row for row in rows if row["pair"] not in harness_names]
     if stats:  # arm 1 against itself takes the shape of an arm that was scored
         stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
@@ -575,9 +666,9 @@ def _run_morning(
     pending.write_text(json.dumps(record, sort_keys=True, indent=1), encoding="utf-8")
     os.replace(pending, target)
     judge_usd, estimated = spend()
-    return MorningResult(target, sum(len(r) for r in replies.values()), judge.calls, sum(no_verdict.values()),
+    return MorningResult(target, sum(len(r) for r in replies.values()), judge_calls(), sum(no_verdict.values()),
                          judge_usd, estimated, None if subset is None else subset.name)
 
 
-__all__ = ["ARMS", "DAILY", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts", "run_morning",
-           "subset_probes"]
+__all__ = ["ARMS", "DAILY", "HARNESS_PAIR", "Morning", "MorningError", "MorningResult", "ProbeSubset", "TooManyNoVerdicts",
+           "run_morning", "subset_probes"]

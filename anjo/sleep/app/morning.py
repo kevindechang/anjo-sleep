@@ -40,6 +40,7 @@ from anjo.sleep.app.storage import (
     checkpoint_registry,
     data_root,
     evidence_store,
+    strategy_store,
     workspace_log,
 )
 from anjo.sleep.budget import LEDGER_NAME, Ledger
@@ -135,7 +136,8 @@ def build(user_id: str, persona: str, night: date) -> Morning:
     arms = ArmDeps(
         model=client, adapters=checkpoint_registry(), contexts=anjo_context_builder(
             ServedBriefs(brief_store), until=night, settings=RECALL),
-        evidence=evidence_store, logprobs=client, donors=donors(), until=night, mind_notes=mind_notes)
+        evidence=evidence_store, logprobs=client, donors=donors(), until=night, mind_notes=mind_notes,
+        strategies=lambda uid, until: strategy_store(uid).lines(until=until))
     resent = _Resent()
     tokens = JudgeTokens()  # the judge settles at its tokens, priced at ANJO_SLEEP_PRICES' Spark lines
     judge = make_judge(persona, tokens, resent)
