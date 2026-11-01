@@ -151,7 +151,7 @@ def test_the_switch_rides_only_on_the_seed_objective_and_never_in_a_matched_cont
 def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: Path) -> None:
     data, receipt = _night(tmp_path, on=True)
     assert receipt["sdft"] == {"rows": {"tone": 2, "taste": 2}, "sources": 2,
-                               "dropped": dict.fromkeys(terms.SDFT_DROPS, 0)}
+                               "dropped": dict.fromkeys(terms.SDFT_DROPS, 0), "demonstrations": 2}
     assert {k: v for k, v in receipt.items() if k != "sdft"} == TODAYS_RECEIPT  # the seeding rows are today's
     by_source = {row.id: row for row in data.seeds}
     for row in data.sdft:
@@ -162,12 +162,17 @@ def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: 
         frames = terms.SDFT_FRAMES[row.kind]
         assert row.query == terms.sdft_query(source.message, row.kind, source.id, 20261028)
         assert (row.query == source.message) == (row.kind == "tone") and any(row.query.endswith(f) for f in frames)
+        demo = f"{row.query}\n\n{terms.SDFT_DEMO_HEAD}\n{source.reply}\n\n{terms.SDFT_DEMO_TAIL}"
+        assert row.teacher_query == (demo if row.kind == "tone" else None)  # her practice reply, tone rows only
     written = [json.loads(line) for line in data.to_jsonl(pairs=True, terms=True).splitlines()]
     rows = [row for row in written if row.get("kind") == "sdft"]
     assert len(rows) == 4 and all("completion" not in row for row in rows)  # the job samples every reply
     for row in rows:
         assert [m["role"] for m in row["teacher"]] == ["system", "user"] and TONE in row["teacher"][0]["content"]
-        assert [m["role"] for m in row["prompt"]] == ["user"] and row["teacher"][1] == row["prompt"][0]
+        assert [m["role"] for m in row["prompt"]] == ["user"]
+        taught = row["teacher"][1]["content"]
+        assert (taught == row["prompt"][0]["content"]) == (row["sdft_kind"] != "tone")  # the student never sees it
+        assert taught.startswith(row["prompt"][0]["content"]) and terms.SDFT_DEMO_HEAD not in json.dumps(row["prompt"])
         assert TONE not in json.dumps(row["prompt"]) and row["sdft_kind"] in terms.SDFT_KINDS
     # Today's split never reads them; the job reads them only when the recipe asks.
     assert colab_train.split_rows(written) == colab_train.split_rows([r for r in written if r.get("kind") != "sdft"])
@@ -177,7 +182,7 @@ def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: 
     cfg = {"max_seq_length": 8192, "terms": {"fold_rank": None, "dreams": False, "sdft": True}}
     batch, too_long = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [], [], by_kind, cfg, template)
     assert len(batch.sdft) == 4 and too_long == {"seed": 0, "dream": 0, "sdft": 0}
-    first = batch.sdft[0]
+    first = next(seq for seq in batch.sdft if seq.kind == "taste")  # no demonstration: the same query
     assert first.prompt[:2] == (1, 8) and first.teacher[:2] == (1, 7) and first.teacher[-len(first.prompt) + 1:] == first.prompt[1:]
     assert {seq.kind for seq in batch.sdft} == set(sleep_loss.SDFT_KINDS) and first.state is None
     off, too_long = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [], [], by_kind,
@@ -245,6 +250,31 @@ def test_the_guard_refuses_probe_held_out_set_and_cue_text_exact_and_near() -> N
     assert guard.refusal(f"{PREFERENCE} What's weak here?") is not None  # a persona's own line is a set item too
 
 
+def test_the_demonstration_is_her_practice_reply_and_never_a_dream_or_a_flagged_reply() -> None:
+    guard = _guard()
+    practice = SeedRow(id="t0", context="Notes.", message="Which lens for scene 9?", reply="The 35, for the faces.",
+                       tokens=5)
+    taught = terms.sdft_demo(practice, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192)
+    assert taught == ("Which lens for scene 9?\n\nThis is an example for a response to the question:\n"
+                      "The 35, for the faces.\n\nNow answer with a response of your own, including the thinking process:")
+    assert terms.sdft_demo(practice, "taste", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192) is None
+    dreamt = replace(practice, group="dream")  # a day dream's reply is no practice reply
+    assert terms.sdft_demo(dreamt, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192) is None
+    for leak in (f"Try: {PROBE.prompt}", f"Recall: {HELD.text}", load_general()[0].question):
+        leaky = replace(practice, reply=leak)
+        assert terms.sdft_demo(leaky, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192) is None
+
+    class Flags:
+        def check(self, texts: Any, sealed: Any) -> tuple[bool, ...]:
+            return tuple("35" in text for text in texts)
+
+    assert terms.sdft_demo(practice, "tone", practice.message, guard, [PROBE], Flags(), max_seq_tokens=8192) is None
+    assert terms.sdft_demo(practice, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=200) is None
+    made, _ = terms.sdft_rows([practice], frozenset(), guard, [], _NoLeak(), seed=1)
+    assert [row.teacher_query is not None for row in made] == [kind == "tone" for kind in terms.SDFT_KINDS]
+    assert all(row.tokens > terms.SDFT_REPLY_TOKENS for row in made)
+
+
 def test_a_row_carrying_a_probe_or_held_out_text_is_refused_and_counted(tmp_path: Path) -> None:
     leaky = [replace(_transcript(0), message=f"Before the edit: {HELD.text}"), _transcript(1),
              replace(_transcript(2), message=f"Help: {PROBE.prompt}")]
@@ -270,7 +300,7 @@ def test_the_night_logs_the_rows_in_its_dataset_receipt(tmp_path: Path) -> None:
     deps = replace(world.deps(), terms=Terms(seed=True, sdft=True))
     result = run_night_batch_with(deps, {"p1": NIGHT}, windows={"p1": window(NIGHT)})
     receipt = step(result["p1"].log_path, "dataset")["terms"]
-    assert set(receipt["sdft"]) == {"rows", "sources", "dropped"} and set(receipt["sdft"]["rows"]) == set(terms.SDFT_KINDS)
+    assert set(receipt["sdft"]) == {"rows", "sources", "dropped", "demonstrations"} and set(receipt["sdft"]["rows"]) == set(terms.SDFT_KINDS)
     assert (sum(receipt["sdft"]["rows"].values()) + sum(receipt["sdft"]["dropped"].values())
             == len(terms.SDFT_KINDS) * receipt["seeds"])
 

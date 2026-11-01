@@ -50,7 +50,12 @@ tonight's practice first, then her day dreams, then replay, at most ``SDFT_SOURC
 in two forms (``SDFT_FRAMES``): bare (``tone``: the work message as it came, as a ``tone_hold`` probe is
 an ordinary work message, so length, opening and hedging show unasked; the day's new work is asked the
 same way) and asking for a choice (``taste``: where her preferences decide). No frame names a preference,
-a tone or a style, so the student learns to hold them unasked; the job samples every reply (``sleep_loss.py``). A row is refused, and
+a tone or a style, so the student learns to hold them unasked; the job samples every reply (``sleep_loss.py``).
+Where the source is a practice row (tonight's or replay's, not a day dream), a tone row's teacher also sees
+her own practice reply after the query as a demonstration, between the paper's two fixed lines
+(``SDFT_DEMO_HEAD``, ``SDFT_DEMO_TAIL``): its best teacher read the text and the answer together. A reply
+that carries a probe, a held-out item or a set item, that the decontaminator flags or that would make the
+row too long is left out of the teacher, and the row keeps the day alone. A row is refused, and
 counted, when its query carries (``OverlapGuard``) a sealed probe, a held-out item, an item of a gate,
 anchor or knowledge set, or her own preference or tone request (a cue would teach the request, not its
 hold); when the decontaminator flags it; or when it is longer than the training sequence.
@@ -113,6 +118,10 @@ SDFT_FRAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({
 # minutes of tone rows at one epoch, inside the term's 15 (``sleep_loss.SDFT_BUDGET_S``); past it a
 # visit draws nothing.
 SDFT_SOURCES_MAX: Final = 24
+# The paper's two fixed lines around a demonstration in the teacher's prompt (Shenfeld et al.), verbatim.
+SDFT_DEMO_HEAD: Final = "This is an example for a response to the question:"
+SDFT_DEMO_TAIL: Final = "Now answer with a response of your own, including the thinking process:"
+DEMO_REFUSED: Final = ("probe", "held_out", "gate_set")  # a guard label that keeps a reply out of the teacher
 SDFT_REPLY_TOKENS: Final = 192  # the student's sample, which the length counts (``sleep_loss.SDFT_TOKENS``)
 SDFT_DROPS: Final = ("probe", "held_out", "gate_set", "cue", "truncated")
 CUE_KINDS: Final = ("preference", "tone_request")  # her own requests: a query never carries one
@@ -380,7 +389,8 @@ def sdft_rows(
 ) -> tuple[tuple[SdftRow, ...], dict[str, int]]:
     """The self-distillation rows from the seeding rows' messages, and the refusals by reason. Sources:
     tonight's rows, then her day dreams, then replay (``replay_ids``), each message once, the first
-    ``SDFT_SOURCES_MAX``; each gives one row a kind, with its seeding row's context and core."""
+    ``SDFT_SOURCES_MAX``; each gives one row a kind, with its seeding row's context and core, and a tone
+    row from a practice source its reply as the teacher's demonstration (``sdft_demo``)."""
     dropped = dict.fromkeys(SDFT_DROPS, 0)
     order = sorted(range(len(seeds)), key=lambda i: (
         2 if seeds[i].id in replay_ids else 1 if seeds[i].group == DAY_DREAM_GROUP else 0, i))
@@ -401,9 +411,26 @@ def sdft_rows(
         if reason is not None:
             dropped[reason] += 1
             continue
+        taught = sdft_demo(row, kind, query, guard, sealed, decontam, max_seq_tokens=max_seq_tokens)
         rows.append(SdftRow(id=f"{row.id}:{kind}", kind=kind, source=row.id, context=row.context, query=query,
-                            tokens=tokens, core=row.core))
+                            tokens=tokens if taught is None else _tokens(row.context, taught) + SDFT_REPLY_TOKENS,
+                            core=row.core, teacher_query=taught))
     return tuple(rows), dropped
+
+
+def sdft_demo(row: SeedRow, kind: str, query: str, guard: OverlapGuard, sealed: Sequence[Probe],
+              decontam: Decontaminator, *, max_seq_tokens: int) -> str | None:
+    """The teacher's query with ``row``'s practice reply as the paper's demonstration, for a tone row from a
+    practice source; None (the teacher reads the query alone) for any other row, or when the reply carries
+    a probe, a held-out item or a set item, the decontaminator flags it, or the row would be too long."""
+    if kind != "tone" or row.group == DAY_DREAM_GROUP or not row.reply.strip():
+        return None
+    taught = f"{query}\n\n{SDFT_DEMO_HEAD}\n{row.reply.strip()}\n\n{SDFT_DEMO_TAIL}"
+    flags = decontam.check([row.reply], list(sealed))
+    if (guard.refusal(row.reply) in DEMO_REFUSED or any(flags)
+            or _tokens(row.context, taught) + SDFT_REPLY_TOKENS > max_seq_tokens):
+        return None
+    return taught
 
 
 def anchor_rows(seed: int, n: int = ANCHORS) -> tuple[AnchorRow, ...]:
@@ -476,5 +503,6 @@ def attach_night_terms(
         replay = frozenset(example.id for example in data.examples if not example.new)
         sdft, refused = sdft_rows(seeds, replay, guard, sealed, deps.decontam, seed=deps.settings.seed)
         done["sdft"] = {"rows": {kind: sum(row.kind == kind for row in sdft) for kind in SDFT_KINDS},
-                        "sources": len({row.source for row in sdft}), "dropped": refused}
+                        "sources": len({row.source for row in sdft}), "dropped": refused,
+                        "demonstrations": sum(row.teacher_query is not None for row in sdft)}
     return replace(data, seeds=seeds, dreams=dreams, anchors=anchors, sdft=sdft), done

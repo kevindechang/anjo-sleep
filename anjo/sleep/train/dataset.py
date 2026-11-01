@@ -138,7 +138,9 @@ class SdftRow:
     """One self-distillation row: the teacher reads ``context`` (the consolidated day) before ``query``,
     the student ``query`` alone, and the job scores both on a fresh sample of the student. ``kind`` is
     what the query asks for (``tone``, the bare message, or ``taste``, ``terms.SDFT_KINDS``) and ``source``
-    the seeding row its message came from, so the job holds out a source's rows together."""
+    the seeding row its message came from, so the job holds a source's rows from distillation together. ``teacher_query``
+    is what the teacher reads after the day in place of ``query`` (the query with her practice reply as a
+    demonstration, ``terms.sdft_demo``); None, the query itself."""
 
     id: str
     kind: str
@@ -147,6 +149,7 @@ class SdftRow:
     query: str
     tokens: int
     core: str | None = None  # its source's core state (JSON), channel on: student and teacher both read it
+    teacher_query: str | None = None  # the teacher's query with a demonstration; None: ``query`` itself
 
 
 @dataclass(frozen=True)
@@ -254,7 +257,7 @@ class Dataset:
                     "choices": [framing.clean_text(choice) for choice in row.choices], "answer": row.answer}
                    for row in self.anchors]
         sdft: list[dict[str, object]] = [{"id": row.id, "kind": "sdft", "sdft_kind": row.kind, "source": row.source,
-                 "teacher": _messages((("system", row.context), ("user", row.query))),
+                 "teacher": _messages((("system", row.context), ("user", row.teacher_query or row.query))),
                  "prompt": _messages((("user", row.query),)), **_core(row.core)} for row in self.sdft]
         return [*seeds, *dreams, *anchors, *sdft]
 
