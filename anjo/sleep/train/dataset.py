@@ -43,6 +43,8 @@ checks the length again with the real tokenizer.
 
 Under ``sft_dpo_seed`` the dataset also carries the seeding, dream and anchor rows ``train/terms.py``
 builds (``to_jsonl(terms=True)``, each row named by its ``kind``); any other objective never writes them.
+With ``ANJO_SLEEP_SDFT`` it carries the self-distillation rows too (``SdftRow``, kind ``sdft``): a teacher
+prompt and a student prompt and no reply, since the job scores each on the student's own sample.
 """
 from __future__ import annotations
 
@@ -132,6 +134,25 @@ class SeedRow:
 
 
 @dataclass(frozen=True)
+class SdftRow:
+    """One self-distillation row: the teacher reads ``context`` (the consolidated day) before ``query``,
+    the student ``query`` alone, and the job scores both on a fresh sample of the student. ``kind`` is
+    what the query asks for (``tone``, the bare message, or ``taste``, ``terms.SDFT_KINDS``) and ``source``
+    the seeding row its message came from, so the job holds a source's rows from distillation together. ``teacher_query``
+    is what the teacher reads after the day in place of ``query`` (the query with her practice reply as a
+    demonstration, ``terms.sdft_demo``); None, the query itself."""
+
+    id: str
+    kind: str
+    source: str
+    context: str
+    query: str
+    tokens: int
+    core: str | None = None  # its source's core state (JSON), channel on: student and teacher both read it
+    teacher_query: str | None = None  # the teacher's query with a demonstration; None: ``query`` itself
+
+
+@dataclass(frozen=True)
 class DreamRow:
     """One dream candidate: ``thread`` (MIND's state as text) is her system turn, the loss is on ``reply``.
     ``kind`` is its seed's (``boundary``, ``picked`` or ``random``), for the job's keep rate by kind."""
@@ -183,6 +204,7 @@ class Dataset:
     seeds: tuple[SeedRow, ...] = ()  # sft_dpo_seed's rows (train/terms.py); written only with terms=True
     dreams: tuple[DreamRow, ...] = ()
     anchors: tuple[AnchorRow, ...] = ()
+    sdft: tuple[SdftRow, ...] = ()  # ANJO_SLEEP_SDFT's rows (train/terms.py); written only with terms=True
 
     def __post_init__(self) -> None:
         counts: dict[str, int] = {reason: 0 for reason in DROP_REASONS}
@@ -234,7 +256,10 @@ class Dataset:
         anchors: list[dict[str, object]] = [{"id": row.id, "kind": "anchor", "prompt": _messages((("user", row.question),)),
                     "choices": [framing.clean_text(choice) for choice in row.choices], "answer": row.answer}
                    for row in self.anchors]
-        return [*seeds, *dreams, *anchors]
+        sdft: list[dict[str, object]] = [{"id": row.id, "kind": "sdft", "sdft_kind": row.kind, "source": row.source,
+                 "teacher": _messages((("system", row.context), ("user", row.teacher_query or row.query))),
+                 "prompt": _messages((("user", row.query),)), **_core(row.core)} for row in self.sdft]
+        return [*seeds, *dreams, *anchors, *sdft]
 
 
 def quotes_url_or_date(text: str) -> bool:

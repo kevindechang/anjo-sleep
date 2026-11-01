@@ -18,6 +18,12 @@ More switches ride on ``sft_dpo_seed`` and are refused with any other objective:
   the held-out seeding KL without dropping the anchor score (``sleep_loss.py``). Allowed with capacity,
   which is where their volume pays.
 
+- ``ANJO_SLEEP_SDFT=1``: self-distillation (Shenfeld, Damani, Hübotter and Agrawal, "Self-Distillation
+  Enables Continual Learning", arXiv 2601.19897): queries built on the host from the seeding rows' own
+  messages, bare (``tone``, as a tone_hold probe is) or asking for a choice (``taste``), whose teacher
+  reads the consolidated day before the query and whose student reads the query alone, scored on the
+  student's own samples (``train/terms.py``, ``sleep_loss.py``). Never in a matched control.
+
 ``ANJO_SLEEP_PROTECT`` (``anchors``, ``random`` or ``off``) rides on the fold too, and is refused without it:
 tonight's slot trains off the forgetting anchors' activation basis, or a random basis of the same shape
 (the ablation), and the fold keeps the projection (``sleep_protect.py``). The night ships the anchor rows.
@@ -48,6 +54,7 @@ DREAMS_ENV: Final = "ANJO_SLEEP_DREAMS"
 DAY_DREAMS_ENV: Final = SWITCH_ENV  # the app wires her day dreams by the same name (``night/day_dreams``)
 PROTECT_ENV: Final = "ANJO_SLEEP_PROTECT"
 CAPACITY_ENV: Final = "ANJO_SLEEP_CAPACITY"
+SDFT_ENV: Final = "ANJO_SLEEP_SDFT"
 CAPACITY_PASSES: Final = 3
 OBJECTIVES: Final[tuple[Objective, ...]] = ("sft_dpo", "sft", "sft_dpo_seed")
 DEFAULT_OBJECTIVE: Final[Objective] = "sft_dpo"
@@ -96,9 +103,12 @@ def night_cfg(environ: Mapping[str, str]) -> LoraCfg:
     capacity = _on(environ, CAPACITY_ENV)
     if capacity and fold:
         raise ObjectiveError(f"{CAPACITY_ENV} runs without {FOLD_ENV}: the fold's adapter is at the server's rank already")
+    sdft = _on(environ, SDFT_ENV)
+    if sdft and chosen != SEED_OBJECTIVE:
+        raise ObjectiveError(f"{SDFT_ENV} runs only with {OBJECTIVE_ENV}={SEED_OBJECTIVE}: its KL is the seeding term's")
     try:
         cfg = LoraCfg(objective=chosen, fold_rank=FOLD_RANK if fold else None, dreams=dreams, day_dreams=day_dreams,
-                      protect=protect)
+                      protect=protect, sdft=sdft)
         return replace(cfg, r=MAX_LORA_RANK, passes=CAPACITY_PASSES) if capacity else cfg
     except LoraCfgError as error:
         raise ObjectiveError(str(error)) from None
@@ -108,4 +118,4 @@ def night_terms(environ: Mapping[str, str]) -> Terms:
     """Which extra rows the night builds for the recipe ``environ`` names: none unless ``sft_dpo_seed``."""
     cfg = night_cfg(environ)
     return Terms(seed=cfg.objective == SEED_OBJECTIVE, dreams=cfg.dreams, protect=cfg.protect != "off",
-                 day_dreams=cfg.day_dreams)
+                 day_dreams=cfg.day_dreams, sdft=cfg.sdft)
