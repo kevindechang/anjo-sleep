@@ -32,7 +32,7 @@ CONNECT_RETRIES: Final = 2
 REPLY_ATTEMPTS: Final = 2
 # A 503 from Fireworks on 2026-10-31 outlasted the shared schedule (2 s, then 4 s) and ended a whole
 # accelerated life on day 1. The night's Spark Open call now waits this schedule between busy
-# replies, honouring a Retry-After first as always: six tries over about four minutes before a day
+# replies, or a longer Retry-After (never a shorter one, 2026-11-02): six tries over about four minutes before a day
 # counts as failed. A 429 or 5xx was charged nothing, so these waits cost wall time, not the ledger:
 # only the reply that came is metered.
 SPARK_BUSY_BACKOFF_S: Final = (2.0, 5.0, 15.0, 30.0, 60.0, 120.0)

@@ -323,6 +323,16 @@ def test_a_policy_can_name_its_own_wait_between_busy_replies() -> None:
     assert retries.pause(2, httpx.Response(503)) is None
 
 
+def test_a_short_retry_after_never_cuts_a_longer_schedule_short() -> None:
+    # 2026-11-02: a 429 failed a night's practice although its schedule waits about four minutes;
+    # a Retry-After of a second stood in for each entry, so all its tries went in seconds.
+    schedule = (2.0, 5.0, 15.0, 30.0, 60.0, 120.0)
+    retries = Retries(backoff_s=schedule)
+    short = httpx.Response(429, headers={"Retry-After": "1"})
+    assert [retries.pause(n, short) for n in range(len(schedule) + 1)] == [*schedule, None]
+    assert retries.pause(0, httpx.Response(429, headers={"Retry-After": "9"})) == 9.0  # a longer one still wins
+
+
 @pytest.mark.parametrize("status", [400, 401, 404])
 def test_judge_retries_stop_at_three_and_never_send_another_status_again(status: int) -> None:
     seen: list[httpx.Request] = []

@@ -8,8 +8,8 @@ key.
 
 There are no retries unless the caller passes ``Retries``: then a reply of 429 or 5xx (the
 provider was busy, and charged nothing) is asked for again, one attempt per entry in the policy's
-``backoff_s`` (``BACKOFF_S`` unless the caller names its own schedule), after the provider's
-``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) or that entry. A call whose one failure
+``backoff_s`` (``BACKOFF_S`` unless the caller names its own schedule), after the longer of the
+provider's ``Retry-After`` (seconds, at most ``RETRY_AFTER_MAX_S``) and that entry. A call whose one failure
 costs a whole night may wait longer than the shared schedule (the night's Spark Open call does).
 A connection that never opened (``httpx.ConnectError`` or ``ConnectTimeout``) is sent again too, up
 to ``Retries.connect_attempts`` in all: the request never reached the provider, so nothing was
@@ -113,7 +113,8 @@ class Retries:
         """The wait before sending again after ``response`` on ``attempt`` (from 0); None: never again."""
         if response.status_code not in RETRY_STATUSES or attempt >= len(self.backoff_s):
             return None
-        return _retry_after(response.headers.get("retry-after")) or self.backoff_s[attempt]
+        server = _retry_after(response.headers.get("retry-after")) or 0.0
+        return max(server, self.backoff_s[attempt])  # a short Retry-After never cuts the schedule short
 
 
 def _retry_after(value: str | None) -> float | None:
