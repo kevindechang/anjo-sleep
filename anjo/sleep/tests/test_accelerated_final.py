@@ -6,6 +6,7 @@ failed night stops the run before any morning, and ``resume`` continues it witho
 twice. Fakes only: no model, judge, GPU or network."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from dataclasses import replace
@@ -65,7 +66,7 @@ def _rig(fake: FakeAccelerated, scored: Scored, simulated: list[tuple[str, int]]
         seen.append((uid, i))
         return fake.simulate(uid, person, i, seed)
 
-    return replace(rig, score=scored, simulate=simulate, logs=fake.world.logs)
+    return replace(rig, score=scored, simulate=simulate, logs=fake.world.logs, scores=fake.scores_dir)
 
 
 def _scores(fake: FakeAccelerated, uid: str) -> list[dict[str, Any]]:
@@ -150,6 +151,18 @@ def test_a_last_night_that_napped_is_still_scored_on_the_checkpoint_serving(tmp_
     assert record["checkpoint"] == out["u1"][0].checkpoint.id  # type: ignore[union-attr]  # its last promoted
 
 
+def test_a_napped_last_night_whose_final_morning_failed_exits_unscored(tmp_path: Path) -> None:
+    from anjo.sleep.night.sleep_pressure import SleepPolicy
+
+    fake = FakeAccelerated(tmp_path)
+    rig = _rig(fake, Scored(fake, fail={"u1": TimeoutError("the judge timed out")}))
+    naps = replace(rig, deps_for=lambda night: replace(rig.deps_for(night), sleep_policy=SleepPolicy(
+        base_threshold=0.0 if night == START else 1.0)))
+    out = run_accelerated_batch(LIVES, 2, START, rig=naps, label="final")
+    assert out["u1"][1].status == "napped" and morning_outcome(out["u1"][1]).startswith("failed (")
+    assert accelerated._exit([r for v in out.values() for r in v]) == UNSCORED_EXIT  # never a clean 0
+
+
 def test_the_development_path_still_scores_every_night_as_it_runs(tmp_path: Path) -> None:
     fake = FakeAccelerated(tmp_path)
     scored = Scored(fake)
@@ -205,6 +218,90 @@ def test_a_failed_night_stops_the_final_run_before_any_morning_and_a_resume_cont
     assert all(len(_scores(fake, uid)) == 1 for uid in DONORS)
 
 
+def test_a_night_failing_on_the_last_day_puts_off_the_others_so_no_backfill_scores_one_early(
+    tmp_path: Path,
+) -> None:
+    """The review's case: on the last day u1 promotes and u2 fails. u1's last night is put off, so a
+    backfill can't score it on u2's first-night adapter; the resume scores both, after u2's last night."""
+    from anjo.sleep.budget import Ledger
+    from anjo.sleep.tools import morning_backfill as backfill_tool
+
+    fake = FakeAccelerated(tmp_path)
+    scored = Scored(fake)
+    rig = _rig(fake, scored)
+    inner = rig.simulate
+
+    def simulate(uid: str, person: Any, i: int, seed: int) -> DayRun:
+        if (uid, i) == ("u2", 1):
+            fake.world.train_fails["u2"] = RuntimeError("Modal is down")
+        return inner(uid, person, i, seed)
+
+    with pytest.raises(FinalStopped) as stopped:
+        run_accelerated_batch(LIVES, 2, START, rig=replace(rig, simulate=simulate), label="final")
+    assert [r.status for r in stopped.value.done["u1"]] == ["promoted", "promoted"]
+    del fake.world.train_fails["u2"]
+    last = fake.world.logs("u1") / LAST.isoformat()
+    assert [(s["status"], s.get("why")) for s in steps(last / "log.jsonl") if s["step"] == "morning"] == [
+        ("skipped", final_batch.DEFERRED)]
+    ports = backfill_tool.Ports(morning=lambda uid, persona, night: replace(
+        fake.morning(uid), judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH), is_synthetic=lambda uid: True,
+        logs=fake.world.logs, registry=fake.world.registry, ledger=Ledger(tmp_path / "budget.jsonl"))
+    with pytest.raises(backfill_tool.Refused, match="put off"):
+        backfill_tool.plan("u1", "founder", LAST, ports)
+    assert scored.calls == [] and not any(_scores(fake, uid) for uid in DONORS)
+
+    run_accelerated_batch(LIVES, 2, START, rig=rig, label="final", resume=True)
+    assert [(c["uid"], c["night"], c["donor_night"]) for c in scored.calls] == [("u1", LAST, LAST), ("u2", LAST, LAST)]
+
+
+def test_a_resume_as_another_command_is_refused_before_anything_runs(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    scored, simulated = Scored(fake), []
+    rig = _rig(fake, scored, simulated)
+    fake.world.train_fails["u2"] = RuntimeError("Modal is down")
+    with pytest.raises(FinalStopped):  # night 1 stops the run: nothing scored yet
+        run_accelerated_batch(LIVES, 2, START, rig=rig, label="final")
+    del fake.world.train_fails["u2"]
+    ran = len(simulated)
+    for changed, kw in (("days", {"days": 3}), ("start", {"start": START - timedelta(days=1)}),
+                        ("practice_scenes", {"rig": replace(rig, shape={"practice_scenes": 18})}),
+                        ("lives", {"lives": LIVES[::-1]})):
+        args: dict[str, Any] = {"lives": LIVES, "days": 2, "start": START, "rig": rig, **kw}
+        with pytest.raises(final_batch.ResumeRefused, match=changed if changed != "start" else "isn't this final"):
+            run_accelerated_batch(args["lives"], args["days"], args["start"], rig=args["rig"], label="final",
+                                  resume=True)
+    assert len(simulated) == ran and scored.calls == []  # refused before any day, night or morning
+
+
+def test_a_life_is_never_scored_twice_by_a_changed_resume_or_a_fresh_run(tmp_path: Path) -> None:
+    """The review's case: a finished 2-day run, then ``--resume --days 3``, would score every life again
+    on a third night, and ``reports/final.py`` would read only the newer score."""
+    fake = FakeAccelerated(tmp_path)
+    scored, simulated = Scored(fake), []
+    rig = _rig(fake, scored, simulated)
+    run_accelerated_batch(LIVES, 2, START, rig=rig, label="final")
+    ran = len(simulated)
+    with pytest.raises(final_batch.ResumeRefused, match="already has a final score"):
+        run_accelerated_batch(LIVES, 3, START, rig=rig, label="final", resume=True)
+    with pytest.raises(final_batch.ResumeRefused, match="already has a final score"):  # a fresh run on the lives
+        run_accelerated_batch(LIVES, 2, START + timedelta(days=2), rig=rig, label="final")
+    assert len(simulated) == ran and len(scored.calls) == 2
+    assert all(len(_scores(fake, uid)) == 1 for uid in DONORS)
+    run_accelerated_batch(LIVES, 2, START, rig=rig, label="final", resume=True)  # the same command: a no-op
+    assert len(simulated) == ran and len(scored.calls) == 2
+
+
+def test_every_final_night_records_the_command_it_ran_as(tmp_path: Path) -> None:
+    fake = FakeAccelerated(tmp_path)
+    rig = replace(_rig(fake, Scored(fake)), shape={"practice_scenes": 16, "mind": False})
+    out = run_accelerated_batch(LIVES, 2, START, rig=rig, label="final", seed=5)
+    for result in (r for v in out.values() for r in v):
+        summary = json.loads((result.log_path.parent / "summary.json").read_text(encoding="utf-8"))
+        assert summary[final_batch.RUN] == {"days": 2, "start": START.isoformat(), "seed": 5, "alone_from": None,
+                                            "lives": [["u1", "founder"], ["u2", "founder_donor"]],
+                                            "practice_scenes": 16, "mind": False}
+
+
 def test_a_resume_scores_only_the_life_whose_final_morning_failed(tmp_path: Path) -> None:
     fake = FakeAccelerated(tmp_path)
     scored = Scored(fake, fail={"u1": TimeoutError("the judge timed out")})
@@ -258,6 +355,64 @@ def test_a_final_run_with_an_unregistered_judge_is_refused_before_any_day(tmp_pa
     assert simulated == [] and fake.world.events == []
     run_accelerated_batch(LIVES, 1, START, rig=rig)  # a development run is never checked here
     assert simulated == [("u1", 0), ("u2", 0)]
+
+
+def test_a_bad_token_for_any_life_stops_the_final_run_before_any_lifes_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real run's preflight checks each life's judge, then its sim token against its account
+    (``app.sim_transport.check_day``), for every life before any day: a bad token for the last life
+    leaves no earlier life's day posted."""
+    from contextlib import contextmanager, nullcontext
+    from types import SimpleNamespace
+
+    from anjo.sleep.app.sim_transport import TokenRefused
+    from anjo.sleep.night import __main__ as night_command
+
+    @contextmanager
+    def sweep(ledger: object, stop: object) -> Any:
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("anjo.sleep.night.sweep.swept_night", sweep)
+    monkeypatch.setattr("anjo.sleep.serving.backend.phase", nullcontext)
+    monkeypatch.setattr("anjo.sleep.train.trainer.LoraTrainer", lambda *a, **k: object())
+    monkeypatch.setattr(night_command, "night_cfg", lambda: object())
+    monkeypatch.setattr(night_command, "_publisher", lambda name: (lambda *a, **k: None))
+    monkeypatch.setattr(night_command, "chosen_runner",
+                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal"))
+    monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
+    checked: list[str] = []
+
+    def check_day(uid: str) -> None:
+        checked.append(uid)
+        if uid == "u2":
+            raise TokenRefused("the sim token belongs to another account than the day's: no line is posted")
+
+    built = SimpleNamespace(judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH, root=tmp_path / "results")
+    named = {"t:wiring": print, "t:simulate": print, "t:morning": lambda uid, persona, night: built,
+             accelerated.SIM_CHECK: check_day, accelerated.NIGHT_LOGS: lambda uid: tmp_path / "logs" / uid}
+    monkeypatch.setattr(accelerated, "_named", named.__getitem__)
+    seen: dict[str, Any] = {}
+
+    def batch(people: Any, days: int, start: date, *, rig: Rig, **kw: Any) -> Any:
+        seen["scores"], seen["shape"] = rig.scores("u1") if rig.scores else None, rig.shape
+        return run_accelerated_batch(people, days, start, rig=replace(rig, simulate=simulate), **kw)
+
+    days: list[str] = []
+
+    def simulate(uid: str, person: Any, i: int, seed: int) -> DayRun:
+        days.append(uid)
+        raise AssertionError("a day ran")
+
+    monkeypatch.setattr(accelerated, "run_accelerated_batch", batch)
+    args = argparse.Namespace(wiring="t:wiring", simulate="t:simulate", morning="t:morning", users=["u1", "u2"],
+                              personas=["founder", "founder_donor"], label="final", require_sha=accelerated.git_sha(),
+                              days=2, start=START, seed=1, mind=False, match_file=None, alone_from=None,
+                              resume=False, practice_scenes=17)
+    with pytest.raises(TokenRefused, match="another account"):
+        accelerated._real(args, argparse.ArgumentParser())
+    assert checked == ["u1", "u2"] and days == []
+    assert seen == {"scores": tmp_path / "results" / "u1" / "scores", "shape": {"practice_scenes": 17, "mind": False}}
 
 
 def test_the_morning_scorer_refuses_a_final_morning_under_an_unregistered_judge(tmp_path: Path) -> None:

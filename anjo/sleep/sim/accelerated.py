@@ -46,10 +46,12 @@ default, one call a night, or Colab, one VM per life (``ColabLives``).
 **A final run** (``--label final``, ``sim/final_batch.py``) scores each life once, on its last night,
 after every life's last night, so every 3x donor has trained its last: the earlier nights' mornings are
 logged ``skipped``, a failed night stops the run before any morning (``FinalStopped``), and the same
-command with ``--resume`` keeps the nights that finished and never scores a life twice. Its mornings
-run only under the registered judge (``probes/registered_judge.py``), checked for every life before
-the first day, and its nights and mornings record the recipe they ran under. The final test's three
-lives, each day posting as its own account (``ANJO_SLEEP_SIM_TOKEN_FILES``, ``app/sim_transport.py``):
+command with ``--resume`` keeps the nights that finished and never scores a life twice (one under another
+command, or a life with a final score it can't place, is refused before any day). Its mornings run only
+under the registered judge (``probes/registered_judge.py``), and each life's sim token is checked against
+its account (``app.sim_transport.check_day``), for every life before the first day; its nights and
+mornings record the recipe and the command they ran under. The final test's three lives, each day
+posting as its own account (``ANJO_SLEEP_SIM_TOKEN_FILES``, ``app/sim_transport.py``):
 
     ANJO_SLEEP_HOST=1 python -m anjo.sleep.sim.accelerated --label final --require-sha <frozen sha> \\
         --wiring anjo.sleep.app.night:build --simulate anjo.sleep.app.sim_transport:simulate \\
@@ -83,6 +85,7 @@ from anjo.sleep.personas.model import Persona, load_person_file
 from anjo.sleep.practice.full import MAX_SCENES, MIN_SCENES
 from anjo.sleep.probes.morning import (
     MORNING_PROBES,
+    SCORES,
     Morning,
     MorningError,
     ProbeSubset,
@@ -106,6 +109,7 @@ LIFE_NIGHTS_HELD: Final = 3  # a life's VM hold covers this many nights at the j
 FAKE_PERSONA: Final = "film_founder"
 FAKE_USER: Final = "fake-life"
 NIGHT_LOGS: Final = "anjo.sleep.app.ownership:night_logs"  # a person's night log folders, read by --resume
+SIM_CHECK: Final = "anjo.sleep.app.sim_transport:check_day"  # a final life's sim token, against its account
 
 
 class AcceleratedError(RuntimeError):
@@ -148,10 +152,14 @@ class Rig:
     subset: ProbeSubset | None = None  # the set ``score`` asks, recorded in each night's summary and a failed morning
     timer: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # the wall clock, read as the run starts
-    # A final run's: each life's night log folders (what a resumed run finished), and the check of each
-    # life's morning before its first day (the registered judge, ``probes.registered_judge``).
+    # A final run's: each life's night log folders (what a resumed run finished), the check of each
+    # life before its first day (its morning's registered judge, ``probes.registered_judge``, and its sim
+    # token), each life's scores folder (a final score already there) and the command-line choices its
+    # nights record beside the batch's own (``final_batch.run_shape``: ``--practice-scenes``, ``--mind``).
     logs: Callable[[str], Path] | None = None
     preflight: Callable[[str], None] | None = None
+    scores: Callable[[str], Path] | None = None
+    shape: Mapping[str, Any] | None = None
 
 
 def latest_start(now: datetime, days: int) -> date:
@@ -223,14 +231,17 @@ def _check_window(user_id: str, day: DayRun, last_end: datetime | None) -> None:
 
 
 def _stamp(result: NightResult, *, sha: str, label: Label, day_index: int, vm: Mapping[str, Any] | None,
-           probes: str | None = None, alone: bool = False, recipe: Mapping[str, str | None] | None = None) -> None:
+           probes: str | None = None, alone: bool = False, recipe: Mapping[str, str | None] | None = None,
+           run: Mapping[str, Any] | None = None) -> None:
     """Add the run's labels to the night's summary, atomically, the probe set its morning asks and, on a
-    final run, the recipe it trained under."""
+    final run, the recipe it trained under and the command it ran as."""
     path = result.log_path.parent / SUMMARY
     summary = json.loads(path.read_text(encoding="utf-8"))
     summary.update({"accelerated": True, "git_sha": sha, "label": label, "day_index": day_index, "alone": alone})
     if recipe is not None:
         summary[final_batch.RECIPE] = dict(recipe)
+    if run is not None:
+        summary[final_batch.RUN] = dict(run)
     if probes is not None:
         summary[MORNING_PROBES] = probes
     if vm is not None:
@@ -267,9 +278,10 @@ def _morning(rig: Rig, uid: str, night: date, label: Label, result: NightResult,
 def _close_final_day(rig: Rig, night: date, last: bool, results: Mapping[str, NightResult],
                      out: Mapping[str, list[NightResult]]) -> None:
     """A final run's day after its nights: an earlier night's morning is put off to the end of the batch,
-    and a failed night stops the run before any morning, saying what ran and how to go on."""
+    and a failed night stops the run before any morning, saying what ran and how to go on. The day's other
+    nights, the last day's too, are put off then: no backfill scores a life before every last night ran."""
     failed = {uid: r for uid, r in results.items() if r.status == "failed"}
-    if rig.score is not None and not last:
+    if rig.score is not None and (failed or not last):
         for result in (r for uid, r in results.items() if uid not in failed):
             final_batch.defer(result, night)
     if failed:
@@ -290,6 +302,18 @@ def _final_mornings(rig: Rig, lives: Sequence[tuple[str, Persona]], night: date,
         result = out[uid][-1]
         if not final_batch.scored(result):
             _morning(rig, uid, night, "final", result, extra={final_batch.RECIPE: dict(recipe)})
+
+
+def _check_final(rig: Rig, lives: Sequence[tuple[str, Persona]], days: int, start: date, sha: str,
+                 recipe: Mapping[str, str | None], run: Mapping[str, Any], resume: bool) -> None:
+    """Before a final run's first day: a life with a final score it can't place, or a resumed night that
+    another recipe or command ran (``final_batch``), stops it before any day, night or morning."""
+    for uid, _ in lives:
+        if rig.scores is not None:
+            final_batch.check_scores(uid, rig.scores(uid), start + timedelta(days=days - 1), resume=resume)
+        if resume and rig.logs is not None:
+            for i in range(days):
+                final_batch.finished(uid, rig.logs(uid), start + timedelta(days=i), i, sha, recipe, run)
 
 
 def run_accelerated_batch(
@@ -314,6 +338,10 @@ def run_accelerated_batch(
     sha = _resolve_sha(rig.sha, require_sha if require_sha is not None else rig.require_sha, kind)
     check_dates(start, days, rig.now())
     recipe = final_batch.recipe(os.environ) if kind == "final" else None
+    run = final_batch.run_shape(days, start, [(uid, person.person_id) for uid, person in lives], seed, alone_from,
+                                rig.shape) if kind == "final" else None
+    if recipe is not None and run is not None:
+        _check_final(rig, lives, days, start, sha, recipe, run, resume)
     if kind == "final" and rig.preflight is not None:
         for uid, _ in lives:  # the registered judge, for every life before any day: a wrong one costs no night
             rig.preflight(uid)
@@ -326,8 +354,8 @@ def run_accelerated_batch(
         kept: dict[str, NightResult] = {}  # a resumed run's finished nights: neither simulated nor run again
         again: dict[str, final_batch.Window] = {}  # its failed nights whose day ran: run again on that day
         for uid, person in lives:
-            if resume and rig.logs is not None and recipe is not None:
-                if (done := final_batch.finished(uid, rig.logs(uid), night, i, sha, recipe)) is not None:
+            if resume and rig.logs is not None and recipe is not None and run is not None:
+                if (done := final_batch.finished(uid, rig.logs(uid), night, i, sha, recipe, run)) is not None:
                     kept[uid] = done
                     continue
                 if (window := final_batch.logged_window(rig.logs(uid), night)) is not None:
@@ -358,7 +386,7 @@ def run_accelerated_batch(
         for uid, result in results.items():
             vm = rig.vm_record(uid, night.isoformat()) if rig.vm_record is not None else None
             _stamp(result, sha=sha, label=kind, day_index=i, vm=vm,
-                   probes=None if rig.score is None else probe_set(rig.subset), alone=alone, recipe=recipe)
+                   probes=None if rig.score is None else probe_set(rig.subset), alone=alone, recipe=recipe, run=run)
         for uid, _ in lives:
             out[uid].append(kept[uid] if uid in kept else results[uid])
         if kind == "final":
@@ -522,6 +550,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from anjo.sleep.checkpoints import DATA_DIR_ENV
     from anjo.sleep.night import __main__ as night_command
     from anjo.sleep.night.sweep import NightBusy, swept_night
+    from anjo.sleep.reports.results import results_root
     from anjo.sleep.serving.backend import phase
     from anjo.sleep.serving.config import REVISION_ENV
     from anjo.sleep.train import objective
@@ -563,8 +592,12 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     score = morning_scorer(morning, personas, subset)
     final, last = args.label == "final", start + timedelta(days=args.days - 1)
 
-    def preflight(uid: str) -> None:  # each life's final morning as it will be built, before any day
+    def preflight(uid: str) -> None:  # each life's final morning as it will be built, and its token, before any day
         require_registered(morning(uid, personas[uid], last).judge_model, args.label)
+        _named(SIM_CHECK)(uid)  # a bad token for any life stops the run before any life's day posts a line
+
+    def scores(uid: str) -> Path:
+        return results_root(morning(uid, personas[uid], last).root) / uid / SCORES
 
     halted: str | None = None
     try:
@@ -576,7 +609,9 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 night=night, personas=personas, mind_inquiry=args.mind, practice_scenes=args.practice_scenes)), terms),
                       simulate=lambda uid, person, i, seed: simulate(uid, personas[uid], i, seed),
                       score=score, subset=subset, require_sha=args.require_sha,
-                      logs=_named(NIGHT_LOGS) if final else None, preflight=preflight if final else None, **hooks)
+                      logs=_named(NIGHT_LOGS) if final else None, preflight=preflight if final else None,
+                      scores=scores if final else None,
+                      shape={"practice_scenes": args.practice_scenes, "mind": args.mind} if final else None, **hooks)
             with phase():  # each day, night and morning follows the last: Glimmer sleeps once, at the end
                 results = run_accelerated_batch(people, args.days, start, rig=rig, seed=args.seed,
                                                 label=args.label, sweep=swept, alone_from=args.alone_from,

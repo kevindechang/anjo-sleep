@@ -21,7 +21,9 @@ or can't be checked, refuses the day (``TokenRefused``): no hold, no wake, no li
 (``account=path,account=path``, the files ``obj_accounts.py`` writes), so each day posts as its own
 account (``sim_token``). Paths only: no token sits in the environment or a command line. An account
 the map doesn't name uses ``ANJO_SLEEP_SIM_TOKEN``, as one life always has. No message names a
-token, an account or a token file.
+token, an account or a token file. The final batch checks every life's token against its account
+(``check_day``) before any life's first day, so one bad token can't stop the run after another life's
+day posted.
 """
 from __future__ import annotations
 
@@ -152,6 +154,9 @@ class DevApiTransport:
         if _body(response).get("user_id") != user_id:
             raise TokenRefused("the sim token belongs to another account than the day's: no line is posted")
 
+    def close(self) -> None:
+        self._http.close()
+
     def send(self, session_id: str, text: str, *, cleared: bool) -> str:
         if not cleared:
             raise ValueError("the simulator's sessions are cleared")
@@ -185,6 +190,17 @@ def sim_token(user_id: str) -> str:
     if not token:
         raise TokenRefused("the day's account's sim token file is empty")
     return token
+
+
+def check_day(user_id: str, *, transport: httpx.BaseTransport | None = None) -> None:
+    """``user_id``'s sim token, read and checked against its account as its day would (``TokenRefused``:
+    a token file missing, empty or another account's), posting nothing and holding nothing."""
+    require_sleep_host()
+    checking = DevApiTransport(os.environ[DEV_URL_ENV], sim_token(user_id), transport=transport)
+    try:
+        checking.check_account(user_id)
+    finally:
+        checking.close()
 
 
 def simulate(user_id: str, persona: str, day_index: int, seed: int) -> DayRun:

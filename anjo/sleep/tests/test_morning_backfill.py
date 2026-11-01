@@ -423,9 +423,21 @@ def test_a_rescore_is_refused_before_any_call_or_write(tmp_path: Path, rule: str
 # ── a final night (Task 12b): scored once, on its last night, under the registered judge ─
 
 
-def _final_night(world: World, night: date, morning: dict[str, Any]) -> None:
+DONOR = "syn-donor"
+RUN = {"days": 3, "start": NIGHTS[0].isoformat(), "lives": [[USER, "film_founder"], [DONOR, "founder_donor"]],
+       "seed": 1, "alone_from": None}  # the final run the nights ran in: USER and its 3x donor, NIGHTS[2] the last
+
+
+def _final_night(world: World, night: date, morning: dict[str, Any], *, donor: str | None = "promoted") -> None:
+    from anjo.sleep.sim.final_batch import RUN as RUN_KEY
+
     folder = world.night(night, {"status": "promoted", "checkpoint": ref_record(_ckpt(NIGHTS.index(night) + 1)),
-                                 "accelerated": True, "label": "final", "cost_usd": 1.0})
+                                 "accelerated": True, "label": "final", "cost_usd": 1.0, RUN_KEY: RUN})
+    if donor is not None:  # the donor's own night, in the same run
+        theirs = world.root / DONOR / "nights" / night.isoformat()
+        theirs.mkdir(parents=True, exist_ok=True)
+        (theirs / "summary.json").write_text(json.dumps({"status": donor, "label": "final", RUN_KEY: RUN}),
+                                             encoding="utf-8")
     (folder / "log.jsonl").write_text(json.dumps({"step": "morning", "uses": "new", "system": None, **morning}) + "\n",
                                       encoding="utf-8")
 
@@ -453,3 +465,34 @@ def test_a_final_backfill_runs_only_under_the_registered_judge(tmp_path: Path) -
     assert chosen.label == "final" and chosen.judge == "deepseek"
     record = json.loads(backfill_tool.backfill(chosen, deepseek).path.read_text(encoding="utf-8"))
     assert (record["label"], record["judge"], record["pinned"]) == ("final", "deepseek", True)
+
+
+def test_a_final_backfill_waits_for_every_lifes_last_night_in_its_run(tmp_path: Path) -> None:
+    """The review's case: a run stopped on its last day with the donor's night failed; a backfill would
+    score this life's 3x on the donor's earlier adapter. Refused until the donor's last night ran."""
+    world = World(tmp_path)
+    deepseek = replace(world.ports, morning=lambda *a: replace(world.morning(*a),
+                                                               judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH))
+    _final_night(world, NIGHTS[2], {"status": "failed", "why": "morning failed: TimeoutError"}, donor=None)
+    with pytest.raises(backfill_tool.Refused, match=f"the last night of {DONOR} didn't run"):  # no donor night yet
+        backfill_tool.plan(USER, "film_founder", NIGHTS[2], deepseek)
+    _final_night(world, NIGHTS[2], {"status": "failed", "why": "morning failed: TimeoutError"}, donor="failed")
+    with pytest.raises(backfill_tool.Refused, match=f"the last night of {DONOR} didn't run"):
+        backfill_tool.plan(USER, "film_founder", NIGHTS[2], deepseek)
+    _final_night(world, NIGHTS[2], {"status": "failed", "why": "morning failed: TimeoutError"}, donor="napped")
+    assert backfill_tool.plan(USER, "film_founder", NIGHTS[2], deepseek).label == "final"  # a nap ran: it serves
+    assert world.model.calls == [] and world.judge.calls == 0
+
+
+def test_a_final_backfill_scores_only_its_runs_last_night_and_needs_the_run_recorded(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    deepseek = replace(world.ports, morning=lambda *a: replace(world.morning(*a),
+                                                               judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH))
+    _final_night(world, NIGHTS[1], {"status": "failed", "why": "morning failed: TimeoutError"})
+    with pytest.raises(backfill_tool.Refused, match="isn't its final run's last night"):
+        backfill_tool.plan(USER, "film_founder", NIGHTS[1], deepseek)
+    world.night(NIGHTS[2], {"status": "promoted", "checkpoint": ref_record(_ckpt(3)), "accelerated": True,
+                            "label": "final", "cost_usd": 1.0})  # stamped before the run was recorded
+    with pytest.raises(backfill_tool.Refused, match="records no run"):
+        backfill_tool.plan(USER, "film_founder", NIGHTS[2], deepseek)
+    assert world.model.calls == [] and world.judge.calls == 0

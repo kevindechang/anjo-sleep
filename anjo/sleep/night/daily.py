@@ -253,10 +253,13 @@ def morning_receipt(done: object, seconds: float) -> dict[str, Any]:
 
 def morning_outcome(result: NightResult) -> str:
     """How the night's morning went, from its log: ``ok``, ``failed (<reason>)``, ``skipped (nap)`` or
-    ``skipped (night failed)``."""
-    if result.status in ("failed", "napped"):
-        return "skipped (night failed)" if result.status == "failed" else "skipped (nap)"
+    ``skipped (night failed)``. A nap runs no morning, unless a final run scored its life's last night on
+    it (``sim.final_batch``): then that morning's ``ok`` or ``failed`` is how it went."""
+    if result.status == "failed":
+        return "skipped (night failed)"
     steps = [step for step in NightLog(result.log_path.parent).steps() if step.get("step") == "morning"]
+    if result.status == "napped" and not any(step["status"] in ("ok", "failed") for step in steps):
+        return "skipped (nap)"
     if not steps:
         return "skipped (not logged)"  # the log was removed (a delete), or never written
     last = steps[-1]

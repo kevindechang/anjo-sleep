@@ -50,8 +50,9 @@ the person's promoted history, an account not registered synthetic unless ``--re
 builder refuses a real account itself), and whenever the night lock is held: the run holds it
 throughout, so no night or simulated day starts under it. A final night is refused when its morning
 was put off (``sim.final_batch.DEFERRED``: a final run scores each life once, on its last night, and
-``sim.accelerated --resume`` scores what is owed) and under any judge but the registered one
-(``probes.registered_judge``).
+``sim.accelerated --resume`` scores what is owed), when it isn't its run's last night, until every
+life's last night in its run ran (``final_batch.last_night_ran``: no life is scored before its 3x
+donor's last night trained), and under any judge but the registered one (``probes.registered_judge``).
 
 The engine never imports the app: the sleep host's ports are named here and imported when the
 command runs (``app_ports``), as the accelerated runner names its builders.
@@ -66,7 +67,7 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -98,7 +99,7 @@ from anjo.sleep.probes.morning import (
 )
 from anjo.sleep.probes.registered_judge import require_registered
 from anjo.sleep.reports.results import FULL_SET, results_root
-from anjo.sleep.sim.final_batch import DEFERRED
+from anjo.sleep.sim.final_batch import DEFERRED, RUN, last_night_ran
 from anjo.sleep.serving.config import SCALEDOWN_S
 from anjo.sleep.types import CheckpointRef
 
@@ -176,6 +177,22 @@ def _deferred(folder: Path) -> bool:
     return any(step.get("step") == "morning" and step.get("why") == DEFERRED for step in steps)
 
 
+def _final_ready(summary: dict[str, Any], night: date, ports: Ports) -> None:
+    """A final night is scored only as its run's last night, once every life's last night in that run ran:
+    no life is scored before its 3x donor's last night trained (``sim.final_batch``)."""
+    run = summary.get(RUN)
+    if not isinstance(run, dict):
+        raise Refused("the final night records no run (final_run): which lives' last nights it waits on is unknown")
+    last = date.fromisoformat(str(run["start"])) + timedelta(days=int(run["days"]) - 1)
+    if night != last:
+        raise Refused(f"{night.isoformat()} isn't its final run's last night ({last.isoformat()}): "
+                      "a final run scores each life once, on its last night")
+    waiting = [str(uid) for uid, _ in run["lives"] if not last_night_ran(ports.logs(str(uid)), last, run)]
+    if waiting:
+        raise Refused(f"the last night of {', '.join(waiting)} didn't run in this final run: no life is scored "
+                      "before every life's last night (sim.accelerated --label final --resume)")
+
+
 def _checkpoint(summary: dict[str, Any], user: str, registry: CheckpointRegistry) -> CheckpointRef:
     record = summary.get("checkpoint")
     if not isinstance(record, dict):
@@ -238,6 +255,8 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
     if label == "final" and _deferred(folder):
         raise Refused(f"the final morning of {night.isoformat()} was put off: a final run scores each life once, "
                       "on its last night (sim.accelerated --label final --resume)")
+    if label == "final":
+        _final_ready(summary, night, ports)
     own, basis = _own(summary, label)
     if subset is not None and subset != FULL_SET and subset not in SUBSETS:
         raise Refused(f"the probe set is {FULL_SET} or {', '.join(SUBSETS)}, not {subset!r}")

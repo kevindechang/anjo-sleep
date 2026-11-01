@@ -189,3 +189,30 @@ def test_a_token_file_that_is_missing_or_empty_refuses_the_day_naming_no_path(
         with pytest.raises(sim_transport.TokenRefused) as raised:
             sim_transport.sim_token("syn-a")
         assert str(tmp_path) not in str(raised.value) and "syn-a" not in str(raised.value)
+
+
+def test_check_day_checks_each_accounts_token_file_against_its_account_posting_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The final batch's preflight: every life's token, before any life's day (``check_day``)."""
+    owner = {"tok-a": "syn-a", "tok-b": "syn-b", "tok-x": "syn-x"}
+    for name, token in (("a", "tok-a"), ("b", "tok-b"), ("s", "tok-x"), ("empty", " \n")):
+        (tmp_path / name).write_text(token, encoding="utf-8")
+    seen: list[tuple[str, str]] = []
+
+    def whoami(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"user_id": owner[request.headers["Authorization"].removeprefix("Bearer ")]})
+
+    monkeypatch.setattr(sim_transport, "require_sleep_host", lambda: None)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    files = {"syn-a": "a", "syn-b": "b", "syn-s": "s", "syn-e": "empty", "syn-m": "missing"}
+    _env(monkeypatch, SIM_TOKEN_FILES_ENV=",".join(f"{uid}={tmp_path / name}" for uid, name in files.items()))
+    for uid in ("syn-a", "syn-b"):
+        sim_transport.check_day(uid, transport=httpx.MockTransport(whoami))
+    assert seen == [("GET", sim_transport.WHOAMI)] * 2  # an authenticated read only: no session, no line
+    for uid, refused in (("syn-s", "another account"), ("syn-e", "empty"), ("syn-m", "can't be read")):
+        with pytest.raises(sim_transport.TokenRefused, match=refused) as raised:
+            sim_transport.check_day(uid, transport=httpx.MockTransport(whoami))
+        assert "tok-" not in str(raised.value) and uid not in str(raised.value) and str(tmp_path) not in str(raised.value)
+    assert len(seen) == 3  # a file missing or empty is refused before any call

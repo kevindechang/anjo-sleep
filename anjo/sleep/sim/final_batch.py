@@ -14,12 +14,18 @@ donor's last night would read 3x off an adapter its donor no longer serves, or n
   else the one serving (its last promoted). A nap or a night that kept nothing is scored too: the
   final test scores every life once. A morning that fails is logged and the next life's still runs.
 - **A night that fails stops the run** after that day's nights, before any morning (``FinalStopped``
-  in ``sim.accelerated``): no life is scored on a batch whose donors aren't all trained.
+  in ``sim.accelerated``): no life is scored on a batch whose donors aren't all trained. That day's other
+  nights, the last day's too, log their morning ``skipped`` (``DEFERRED``), so no backfill scores them.
 - **Resume** (``--resume``, the same command again): a night this final run finished (``finished``:
   stamped final, on the frozen sha, its day index, under the same recipe) is kept, neither simulated
   nor run again; a night that failed after its day ran runs again on that day's logged window
   (``logged_window``), as the daily runner's ``--for-date`` rerun does; any other day is simulated.
-  A life whose last night already has a scored morning (``scored``) is never scored again.
+  A life whose last night already has a scored morning (``scored``) is never scored again. A resume
+  repeats the command its nights ran as (``RUN``: ``run_shape``), adding only ``--resume``: one under
+  another ``--days``, ``--start``, life list or ``--practice-scenes`` is refused before any day.
+- **One final score per life** (``check_scores``): a final run, fresh or resumed, refuses a life whose
+  scores folder already holds a final score it can't place (any, on a fresh run; one for a night but this
+  run's last, on a resume), before any day: ``reports/final.py`` reads only a life's newest score.
 - **The recipe** (``RECIPE_ENV``): the switches that decide what a night trains and what its morning
   asks, as this process has them (flags, never a token). Each final night's summary and each final
   morning's log step record them, and a resume under another recipe is refused.
@@ -28,7 +34,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final, cast
@@ -39,6 +45,7 @@ from anjo.sleep.types import NightResult, NightStatus
 
 DEFERRED: Final = "final: each life is scored once, on its last night, after every life's last night"
 RECIPE: Final = "recipe"  # the key a final night's summary and a final morning's log step record it under
+RUN: Final = "final_run"  # the key a final night's summary records the command it ran as under (``run_shape``)
 # What decides a night's training and its morning's shape (train.objective, probes.morning, night.sleep_pressure,
 # the runner and serving choices, app.morning's judge), by name: flags and choices only, never a token or a key.
 RECIPE_ENV: Final = (
@@ -53,12 +60,26 @@ Window = tuple[datetime, datetime]
 
 
 class ResumeRefused(RuntimeError):
-    """A resumed final run found a night it can't place: it stops before any day, night or morning."""
+    """A resumed final run found a night it can't place, or a final run a score it can't: it stops before
+    any day, night or morning."""
 
 
 def recipe(environ: Mapping[str, str]) -> dict[str, str | None]:
     """Each recipe switch as ``environ`` has it, stripped; None when unset or blank."""
     return {name: (environ.get(name, "").strip() or None) for name in RECIPE_ENV}
+
+
+def run_shape(days: int, start: date, lives: Sequence[tuple[str, str]], seed: int, alone_from: int | None,
+              extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The command a final run ran as: ``--days``, ``--start``, each ``--user`` with its persona, the seed,
+    ``--alone-from`` and ``extra`` (the command line's own, ``--practice-scenes`` among them), shaped as a
+    summary reads it back, so a night's record and a resume's compare equal."""
+    return {"days": days, "start": start.isoformat(), "lives": [[uid, person] for uid, person in lives],
+            "seed": seed, "alone_from": alone_from, **dict(extra or {})}
+
+
+def _changed(stamped: Mapping[str, Any], now: Mapping[str, Any]) -> list[str]:
+    return sorted(name for name in {*stamped, *now} if stamped.get(name) != now.get(name))
 
 
 def _attempts(logs: Path, night: date) -> list[Path]:
@@ -93,10 +114,11 @@ def _result(folder: Path, summary: Mapping[str, Any]) -> NightResult:
 
 
 def finished(user_id: str, logs: Path, night: date, day_index: int, sha: str,
-             now: Mapping[str, str | None]) -> NightResult | None:
+             now: Mapping[str, str | None], run: Mapping[str, Any]) -> NightResult | None:
     """The night's finished attempt in this final run, or None. A finished attempt this run didn't
-    stamp (another label, other code, another day, never stamped) or one under another recipe than
-    ``now`` refuses the resume: which night stands is for the operator to decide, by hand."""
+    stamp (another label, other code, another day, never stamped), one under another recipe than
+    ``now`` or one another command ran (``run``) refuses the resume: which night stands is for the
+    operator to decide, by hand."""
     done = None
     for folder in _attempts(logs, night):
         summary = _summary(folder)
@@ -106,12 +128,36 @@ def finished(user_id: str, logs: Path, night: date, day_index: int, sha: str,
                 and summary.get("git_sha") == sha and summary.get("day_index") == day_index):
             raise ResumeRefused(f"{user_id}: night {folder.name} finished but isn't this final run's (label, sha "
                                 "and day index): check it by hand before resuming")
-        stamped = summary.get(RECIPE) or {}
-        if changed := sorted(name for name in {*stamped, *now} if stamped.get(name) != now.get(name)):
+        if changed := _changed(summary.get(RECIPE) or {}, now):
             raise ResumeRefused(f"{user_id}: night {folder.name} ran under another recipe ({', '.join(changed)}): "
                                 "a resumed final run runs under the recipe its nights were stamped with")
+        if changed := _changed(summary.get(RUN) or {}, run):
+            raise ResumeRefused(f"{user_id}: night {folder.name} ran as another command ({', '.join(changed)}): "
+                                "a resume repeats the command its nights ran as, adding only --resume")
         done = _result(folder, summary)
     return done
+
+
+def last_night_ran(logs: Path, night: date, run: Mapping[str, Any]) -> bool:
+    """Whether a life's ``night`` finished (promoted, kept nothing or napped; never failed) in the final run
+    ``run`` names: a donor whose last night ran serves its last adapter, the one its 3x reads."""
+    for folder in _attempts(logs, night):
+        summary = _summary(folder)
+        if (summary is not None and summary.get("status") not in (None, "failed") and summary.get("label") == "final"
+                and summary.get(RUN) == run):
+            return True
+    return False
+
+
+def check_scores(user_id: str, folder: Path, last: date, *, resume: bool) -> None:
+    """Refuse a life whose scores folder (``probes.morning``'s ``night-NN.json``) holds a final score this
+    run can't place: any, on a fresh run; one for a night but ``last``, on a resume (a changed command).
+    A life is scored once, and ``reports/final.py`` reads only its newest score."""
+    for path in sorted(folder.glob("night-*.json")) if folder.is_dir() else ():
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("label") == "final" and not (resume and record.get("night") == last.isoformat()):
+            raise ResumeRefused(f"{user_id} already has a final score for {record.get('night')} ({path.name}): each "
+                                "life is scored once, so resume the run that scored it, as the command it ran as")
 
 
 def logged_window(logs: Path, night: date) -> Window | None:
