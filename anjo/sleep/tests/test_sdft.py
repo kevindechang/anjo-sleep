@@ -4,8 +4,8 @@
 switch and its refusals, today's night byte for byte with it off, the rows built from the seeding rows'
 messages (the teacher reads her day, the student the query alone), the overlap guard against probes,
 held-out items, the gate, anchor and knowledge sets and her own requests, the rows' round trip into the
-job, and the term itself: the seeding KL on the student's own sample, its held-out before-and-after
-reading and its budget. CPU only, on the objective tests' tiny torch model; torch tests skip without it."""
+job, and the term itself: the seeding KL on the student's own sample, its SDFT-held (seeded, not
+distilled) before-and-after reading and its budget. CPU only, on the objective tests' tiny torch model; torch tests skip without it."""
 from __future__ import annotations
 
 import hashlib
@@ -312,7 +312,7 @@ def _sdft_rows(sources: int) -> tuple[Any, ...]:
                  for i in range(sources) for k, kind in enumerate(sleep_loss.SDFT_KINDS))
 
 
-def test_the_job_trains_sdft_rows_on_fresh_samples_and_reads_the_held_out_kl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_job_trains_sdft_rows_on_fresh_samples_and_reads_the_sdft_held_kl(monkeypatch: pytest.MonkeyPatch) -> None:
     torch = _torch()
     model = _tiny(torch)
     rows = _sdft_rows(5)
@@ -331,19 +331,34 @@ def test_the_job_trains_sdft_rows_on_fresh_samples_and_reads_the_held_out_kl(mon
     sdft = got["sdft"]
     held, trained = sleep_loss.sdft_split(rows, _plan().seed)
     assert len(held) == 3 * sleep_loss.SDFT_HELD and len({rows[i].source for i in held}) == sleep_loss.SDFT_HELD
-    assert not {rows[i].source for i in held} & {rows[i].source for i in trained}  # a held message never trains
-    assert sdft["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 3) and sdft["held"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 2)
+    assert not {rows[i].source for i in held} & {rows[i].source for i in trained}  # a held message is never distilled
+    reading = sdft["seeded_not_distilled"]
+    assert reading["label"] == sleep_loss.SDFT_HELD_LABEL == "SDFT-held (seeded, not distilled)"
+    assert sdft["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 3) and reading["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 2)
+    assert "held_out" not in json.dumps(sdft) and "held-out" not in json.dumps(sdft)  # no held-out claim anywhere
     visits = 9 * got["epochs"]
-    assert sdft["on_policy_samples"] == visits and sdft["held_samples"] == 6 and sdft["skipped_late"] == 0
+    assert sdft["on_policy_samples"] == visits and reading["samples"] == 6 and sdft["skipped_late"] == 0
     assert len(drawn) == visits + 6  # every visit drew its own sample, and each held row one
     assert set(drawn[:6]) == {rows[i].prompt for i in held}  # the held slice first, at the night's start
-    assert math.isfinite(sdft["kl_before"]) and sdft["kl_after"] != sdft["kl_before"]
-    assert set(sdft["kl_by_kind"]) == set(sleep_loss.SDFT_KINDS) and sdft["weight"] == sleep_loss.SDFT_WEIGHT
+    assert math.isfinite(reading["kl_before"]) and reading["kl_after"] != reading["kl_before"]
+    assert set(reading["kl_by_kind"]) == set(sleep_loss.SDFT_KINDS) and sdft["weight"] == sleep_loss.SDFT_WEIGHT
     assert got["weights"] == sleep_loss.WEIGHTS and got["loss"]["sdft"] is not None and "sdft" in got["minutes"]
     assert got["teacher_drift"] == 0.0 and got["grads_adapter_only"]
     assert set(got) == TODAYS_LOSS_KEYS | {"sdft"}
     few = sleep_loss.train_terms(_tiny(torch), _loss_batch(_sdft_rows(2)), _plan(), timer=lambda: 0.0)["sdft"]
-    assert few["held_samples"] == 0 and few["kl_before"] is None and few["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 2)
+    assert few["seeded_not_distilled"]["samples"] == 0 and few["seeded_not_distilled"]["kl_before"] is None
+    assert few["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 2)
+
+
+def test_the_held_sources_seed_rows_still_train_under_the_seed_term() -> None:
+    torch = _torch()
+    seeds = tuple(sleep_loss.SeedSeq((1, 2 + i), (9, 8, 1, 2 + i), (4, 5, 11)) for i in range(5))
+    rows = tuple(sleep_loss.SdftSeq(seq.prompt, seq.teacher, "knowledge", f"s{i}") for i, seq in enumerate(seeds))
+    batch = replace(_loss_batch(rows), seeds=seeds)
+    held, _ = sleep_loss.sdft_split(rows, _plan().seed)
+    got = sleep_loss.train_terms(_tiny(torch), batch, _plan(), timer=lambda: 0.0)
+    assert len(held) == sleep_loss.SDFT_HELD and got["rows"]["seed"] == len(seeds)  # held from distillation only
+    assert got["sdft"]["seeded_not_distilled"]["rows"]["knowledge"] == sleep_loss.SDFT_HELD
 
 
 def test_past_its_budget_the_term_draws_nothing_and_a_matched_control_refuses_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -351,7 +366,7 @@ def test_past_its_budget_the_term_draws_nothing_and_a_matched_control_refuses_it
     monkeypatch.setattr(sleep_loss, "SDFT_BUDGET_S", -1.0)
     got = sleep_loss.train_terms(_tiny(torch), _loss_batch(_sdft_rows(5)), _plan(), timer=lambda: 0.0)
     assert got["sdft"]["on_policy_samples"] == 0 and got["sdft"]["skipped_late"] == 9 * got["epochs"]
-    assert got["loss"]["sdft"] is None and got["sdft"]["held_samples"] == 6  # the receipt still reads the slice
+    assert got["loss"]["sdft"] is None and got["sdft"]["seeded_not_distilled"]["samples"] == 6  # still read
     with pytest.raises(ValueError, match="matched control"):
         sleep_loss.train_terms(_tiny(torch), _loss_batch(_sdft_rows(1)), _plan(stretch_s=60.0))
     with pytest.raises(ValueError, match="ask for"):

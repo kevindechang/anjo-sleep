@@ -71,9 +71,10 @@ is an EMA of the student (the reference code syncs it every step at 0.01); here 
 the adapter the night starts from: the paper's stable frozen-teacher ablation within a night (an EMA at
 0.01 moves 1 - 0.99^n of the way, a quarter over a step plan's thirty updates), the EMA across nights,
 and ``teacher_drift`` stays zero. Reverse, as the seeding term: the paper's analysis argues for it, though its code now defaults to
-the forward KL. The rows of ``SDFT_HELD`` sources, fixed by the plan seed, never train: each is sampled once
-from the night-start student, and the receipt's ``sdft`` reads the KL on those same replies before and
-after training. The term draws nothing once its own seconds pass ``SDFT_BUDGET_S`` or the deadline passes
+the forward KL. The rows of ``SDFT_HELD`` sources, fixed by the plan seed, are never distilled, but their
+seeding rows train under ``seed`` as every other's do: the reading on them is SDFT-held (seeded, not
+distilled), never a held-out one. Each is sampled once from the night-start student, and the receipt's
+``sdft.seeded_not_distilled`` reads the KL on those same replies before and after training. The term draws nothing once its own seconds pass ``SDFT_BUDGET_S`` or the deadline passes
 (``skipped_late`` counts the visits), so its cost is bounded whatever the step plan; never in a matched
 control.
 
@@ -133,8 +134,9 @@ SDFT_TERM: Final = "sdft"  # self-distillation's term, apart from ``WEIGHTS``: o
 SDFT_WEIGHT: Final = 1.0  # the seeding KL on the student's own sample: one row weighs as one seed row
 SDFT_KINDS: Final = ("knowledge", "tone", "taste")  # what a query asks for (``terms.SDFT_KINDS``)
 SDFT_TOKENS: Final = FRESH_TOKENS  # the student's sample a visit scores (``terms.SDFT_REPLY_TOKENS``)
-SDFT_HELD: Final = 2  # sources whose rows never train: the receipt's before-and-after KL is read on them
-SDFT_HELD_MIN: Final = 4  # with fewer sources nothing is held out, and the receipt's KL is None
+SDFT_HELD: Final = 2  # sources never distilled (their seed rows still train): the SDFT-held reading's rows
+SDFT_HELD_MIN: Final = 4  # with fewer sources no source is held from distillation, and the reading is None
+SDFT_HELD_LABEL: Final = "SDFT-held (seeded, not distilled)"  # what the receipt's reading is, in its own words
 SDFT_BUDGET_S: Final = 15 * 60.0  # the term's seconds a night; past them a visit draws nothing
 
 Ids = tuple[int, ...]
@@ -444,8 +446,9 @@ def sdft_kl(model: Any, row: SdftSeq, teacher: Teacher, plan: Plan, soft: Splice
 
 
 def sdft_split(rows: Sequence[SdftSeq], seed: int) -> tuple[list[int], list[int]]:
-    """The held-out slice and the rows that train: every row of ``SDFT_HELD`` sources fixed by the run's
-    seed, so no held query's message trains under another kind; none with fewer than ``SDFT_HELD_MIN``."""
+    """The SDFT-held rows and the rows distilled: every row of ``SDFT_HELD`` sources fixed by the run's seed,
+    so no held query's message is distilled under another kind; none with fewer than ``SDFT_HELD_MIN``.
+    The held sources' seeding rows still train under ``seed``: held from distillation, not from seeding."""
     sources = sorted({row.source for row in rows})
     held = set(random.Random(seed).sample(sources, SDFT_HELD)) if len(sources) >= SDFT_HELD_MIN else set()
     return ([i for i, row in enumerate(rows) if row.source in held],
@@ -603,8 +606,8 @@ def mean_seed_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: So
 
 
 def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None = None) -> list[tuple[str, SeedSeq]]:
-    """One sample of the student per held-out row, each with its kind: the replies the receipt's KL is read
-    on before and after training, the same both times (an empty sample is left out)."""
+    """One sample of the student per SDFT-held row (seeded, not distilled), each with its kind: the replies
+    the receipt's KL is read on before and after training, the same both times (an empty sample is left out)."""
     held = []
     for row in rows:
         reply = sample(model, row.prompt, SDFT_TOKENS, plan, _tokens(soft, row.state, detach=True))
@@ -615,7 +618,7 @@ def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None
 
 def sdft_kl_by_kind(model: Any, held: Sequence[tuple[str, SeedSeq]], teacher: Teacher,
                     soft: Soft | None = None) -> dict[str, float | None]:
-    """The seeding KL on the held-out samples, over all of them (``all``) and by kind; None where there are none."""
+    """The seeding KL on the SDFT-held samples, over all of them (``all``) and by kind; None where there are none."""
     groups = {"all": [seq for _, seq in held], **{kind: [seq for k, seq in held if k == kind] for kind in SDFT_KINDS}}
     return {name: mean_seed_kl(model, rows, teacher, soft) if rows else None for name, rows in groups.items()}
 
@@ -1037,14 +1040,16 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
 
 def _sdft_receipt(rows: Sequence[SdftSeq], held: Sequence[int], trained: Sequence[int], run: _Run, sampled: int,
                   before: Mapping[str, float | None] | None, after: Mapping[str, float | None] | None) -> dict[str, Any]:
-    """Self-distillation's part of the receipt: rows trained and held out by kind, the on-policy samples
-    drawn in training and for the held-out slice, the visits the budget or the deadline skipped, and the
-    seeding KL on the held-out samples before and after training, over all and by kind. Counts only."""
+    """Self-distillation's part of the receipt: rows distilled by kind, the on-policy samples drawn in
+    training, the visits the budget or the deadline skipped, and ``seeded_not_distilled``: the SDFT-held
+    rows by kind (their seeding rows trained, so this is no held-out reading), their samples, and the
+    seeding KL on them before and after training, over all and by kind. Counts only."""
     def by_kind(indices: Sequence[int]) -> dict[str, int]:
         return {kind: sum(rows[i].kind == kind for i in indices) for kind in SDFT_KINDS}
 
-    return {"weight": SDFT_WEIGHT, "rows": by_kind(trained), "held": by_kind(held), "on_policy_samples": run.sdft_sampled,
-            "held_samples": sampled, "skipped_late": run.sdft_late, "budget_minutes": SDFT_BUDGET_S / 60.0,
-            "kl_before": None if before is None else before["all"], "kl_after": None if after is None else after["all"],
-            "kl_by_kind": {kind: {"before": None if before is None else before[kind],
-                                  "after": None if after is None else after[kind]} for kind in SDFT_KINDS}}
+    reading = {"label": SDFT_HELD_LABEL, "rows": by_kind(held), "samples": sampled,
+               "kl_before": None if before is None else before["all"], "kl_after": None if after is None else after["all"],
+               "kl_by_kind": {kind: {"before": None if before is None else before[kind],
+                                     "after": None if after is None else after[kind]} for kind in SDFT_KINDS}}
+    return {"weight": SDFT_WEIGHT, "rows": by_kind(trained), "on_policy_samples": run.sdft_sampled,
+            "skipped_late": run.sdft_late, "budget_minutes": SDFT_BUDGET_S / 60.0, "seeded_not_distilled": reading}
