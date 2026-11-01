@@ -268,7 +268,7 @@ def test_the_demonstration_is_her_practice_reply_and_never_a_dream_or_a_flagged_
                        tokens=5)
     taught = terms.sdft_demo(practice, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192)
     assert taught == ("Which lens for scene 9?\n\nThis is an example for a response to the question:\n"
-                      "The 35, for the faces.\n\nNow answer with a response of your own, including the thinking process:")
+                      "The 35, for the faces.\n\nNow answer with a response of your own:")
     assert terms.sdft_demo(practice, "taste", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192) is None
     dreamt = replace(practice, group="dream")  # a day dream's reply is no practice reply
     assert terms.sdft_demo(dreamt, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=8192) is None
