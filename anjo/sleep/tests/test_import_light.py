@@ -36,6 +36,7 @@ CORE = (
     "anjo.sleep.train.runners.colab",
     "anjo.sleep.train.runners.modal",
     "anjo.sleep.train.runners.choice",
+    "anjo.sleep.train.runners.fallback",
     "anjo.sleep.train.modal_job",
     "anjo.sleep.train.colab_train",
     "anjo.sleep.train.latent_job",

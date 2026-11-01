@@ -21,7 +21,8 @@ A second command while one is live stops before it touches anything.
 
 This is the composition root. The engine core never imports the app (the import contract), so the
 app's wiring is named here and loaded by name. The trainer is built here, on the runner
-``ANJO_SLEEP_TRAIN_RUNNER`` names (``runners/choice.py``): Modal by default, Colab on request. It
+``ANJO_SLEEP_TRAIN_RUNNER`` names (``runners/choice.py``): Modal by default, Colab on request, or
+Colab with Modal as its fallback (``colab_modal``). It
 trains synthetic people, and with ``--allow-real`` the real people named (Kevin's own). Each finished
 adapter reaches the serving backend (``serving.backend``: SageMaker's bucket, or Modal's volume),
 which refuses a name that exists; one Modal trained is on Modal's volume already.
@@ -32,7 +33,7 @@ import argparse
 import importlib
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
@@ -82,11 +83,12 @@ def _publish(folder: Path, name: str) -> None:
     backend.from_env().upload_adapter(folder, name)
 
 
-def _publisher(runner: str) -> AdapterPublisher:
-    """``_publish``, unless the runner landed the adapter where the backend serves it already."""
+def _publisher(runner: str, landed: Callable[[str], bool] | None = None) -> AdapterPublisher:
+    """``_publish``, unless the runner landed the adapter where the backend serves it already
+    (``landed``: the adapters Modal trained on ``colab_modal``)."""
     from anjo.sleep.serving import backend
 
-    return choice.publisher(runner, _publish, serving=backend.backend_name())
+    return choice.publisher(runner, _publish, serving=backend.backend_name(), landed=landed)
 
 
 def night_cfg() -> LoraCfg:
@@ -133,7 +135,8 @@ def execute(
     ledger = default_ledger()
     real = [user for user in users if user not in personas] if allow_real else []
     chosen = chosen_runner(data_dir, ledger, personas, real)
-    trainer = LoraTrainer(chosen.runner, root=data_dir / "sleep" / "training", publish=_publisher(chosen.name),
+    trainer = LoraTrainer(chosen.runner, root=data_dir / "sleep" / "training",
+                          publish=_publisher(chosen.name, chosen.landed),
                           revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
     try:
         with swept_night(ledger, chosen.sweep) as swept:

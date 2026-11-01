@@ -263,6 +263,28 @@ def test_a_job_that_returns_no_adapter_fails_after_settling(tmp_path: Path) -> N
     assert [e["op"] for e in _events(ledger)] == ["reserve", "settle"]
 
 
+@pytest.mark.parametrize(("deployed", "matches"), [
+    ("checkout", True),  # the app was deployed with this checkout's training files
+    (None, True),  # an app deployed before the digest existed sends none: not checked, as before
+    ("0" * 64, False),  # a training file changed since the deploy
+])
+def test_a_training_app_deployed_with_other_files_fails_the_night(
+    tmp_path: Path, deployed: str | None, matches: bool,
+) -> None:
+    ledger, calls = Ledger(tmp_path / "budget.jsonl"), FakeCalls()
+    digest = modal_job.files_digest() if deployed == "checkout" else deployed
+    sent = {} if digest is None else {modal_job.DIGEST_KEY: digest}
+    calls.wait = lambda call_id, timeout_s: {**finished(calls.spawned[-1]), **sent}  # type: ignore[method-assign]
+    runner = _runner(calls, ledger, CallRecords(tmp_path / "calls"))
+    if matches:
+        outputs = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+        assert outputs["steps"] == 9 and modal_job.DIGEST_KEY not in outputs  # the receipt as before
+    else:
+        with pytest.raises(ModalTrainError, match="redeploy"):
+            runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert [e["op"] for e in _events(ledger)] == ["reserve", "settle"] and calls.cancelled == []
+
+
 def test_the_sweep_cancels_every_call_a_killed_run_left(tmp_path: Path) -> None:
     records = CallRecords(tmp_path / "calls")
     assert not records.used() and cancel_leftover_calls(records, FakeCalls()) == (0, 0)

@@ -266,6 +266,8 @@ class TrainReceipt:
     match: Mapping[str, object] | None = None  # a matched control's budget, the minutes it used and its steps
     projector: str = ""  # the thought channel's projector this night trained, kept beside the adapter ("": off)
     channel_receipt: str = ""  # the channel's counts and margins (JSON), as the job reported them ("": off)
+    runner: str = ""  # which runner trained, colab or modal, on colab_modal only ("": the setting names it)
+    fallback_reason: str = ""  # why colab_modal's night fell back to Modal: the Colab call and its failure
 
 
 AdapterPublisher = Callable[[Path, str], None]
@@ -406,6 +408,7 @@ def train_lora_with_receipt(
         surprise_weights=str(outputs["surprise_weights"]) if outputs.get("surprise_weights") else None,
         match=dict(match) if cfg.match_by_night and isinstance(match := outputs.get("match"), Mapping) else None,
         channel_receipt=json.dumps(outputs["channel"], sort_keys=True) if isinstance(outputs.get("channel"), dict) else "",
+        runner=str(outputs.get("runner") or ""), fallback_reason=str(outputs.get("fallback_reason") or ""),
     )
     ckpt = CheckpointRef(
         id=name, person_id=person_id, night=night, uri=f"{VOLUME_URI}/{name}",

@@ -24,8 +24,10 @@ from anjo.sleep.types import CheckpointRef
 
 
 # The receipt's keys that only a switch fills: the sleep objective's, the surprise weights', a matched
-# control's and the thought channel's. Left out when empty.
-OPTIONAL_KEYS: Final = ("terms", "surprise_weights", "match", "projector", "channel_receipt")
+# control's, the thought channel's and colab_modal's (which runner trained, and why it fell back).
+# Left out when empty.
+OPTIONAL_KEYS: Final = ("terms", "surprise_weights", "match", "projector", "channel_receipt", "runner",
+                        "fallback_reason")
 
 
 class LoraTrainer:
