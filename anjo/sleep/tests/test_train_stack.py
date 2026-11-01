@@ -51,7 +51,7 @@ def test_the_colab_runner_installs_the_pins_and_never_names_a_smoke_model(tmp_pa
     calls: list[list[str]] = []
 
     def fake(args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        calls.append(list(args))
+        calls.append([*args[:3], colab.command_label(list(args)[3:]), *args[4:]])
         if args[3] == "download" and Path(args[-1]).name == colab_train.RECEIPT:
             Path(args[-1]).write_text(json.dumps({"steps": 1}))
         elif args[3] == "download":

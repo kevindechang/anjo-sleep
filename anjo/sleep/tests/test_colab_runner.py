@@ -23,6 +23,7 @@ from anjo.sleep.train import modal_job
 from anjo.sleep.train.lora import DATASET_FILE, JOB, adapter_name
 from anjo.sleep.train.runners import colab
 from anjo.sleep.train.runners.colab import (
+    command_label,
     A100_CU_PER_HOUR,
     SEED_TIMEOUT_S,
     ColabCli,
@@ -49,6 +50,7 @@ class FakeColab:
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
         args = list(args)
+        args[3] = command_label(args[3:])  # the remote folders' exec counts as mkdir
         self.calls.append((args, timeout_s))
         command = args[3]
         if command == "exec":
@@ -189,7 +191,7 @@ def test_every_runner_call_passes_a_finite_timeout(tmp_path: Path) -> None:
     fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
     _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert all(0 < timeout < math.inf for _, timeout in fake.calls)
-    assert fake.commands() == ["new", "install", "upload", "exec", "download", "download", "download", "stop"]
+    assert fake.commands() == ["new", "install", "mkdir", "upload", "exec", "download", "download", "download", "stop"]
 
 
 class Both(FakeColab):
@@ -382,7 +384,7 @@ def test_a_warm_seed_night_leaves_at_least_100_minutes_to_train(tmp_path: Path) 
     executed = next(args for args, _ in fake.calls if args[3] == "exec")
     exec_s = float(executed[executed.index("--timeout") + 1])
     assert exec_s >= 6000.0  # the base weights' download and 4-bit load, then a 27-minute night
-    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0
+    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 120.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0  # 120: mkdir
 
 
 def test_the_seed_archive_refuses_a_file_outside_the_shared_list(tmp_path: Path) -> None:
@@ -423,3 +425,27 @@ def test_a_runner_names_its_sessions_with_its_own_prefix(tmp_path: Path) -> None
     with pytest.raises(ValueError, match="prefix"):
         ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger, is_synthetic=bool,
                     session_prefix="voice-")
+
+
+def test_a_new_vm_makes_the_remote_folders_before_any_upload(tmp_path: Path) -> None:
+    # 2026-11-02: the first real Colab night failed at its first upload: a new VM has no /content/anjo,
+    # and an upload into a missing folder fails (HTTP 500 from the VM's contents API).
+    seen: list[str] = []
+
+    class Reads(FakeColab):
+        def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+            if command_label(list(args)[3:]) == colab.MKDIR:
+                seen.append(Path(args[args.index("-f") + 1]).read_text(encoding="utf-8"))
+            return super().__call__(args, timeout_s)
+
+    fake, ledger = Reads(), Ledger(tmp_path / "budget.jsonl")
+    _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    commands = fake.commands()
+    assert commands.index("install") < commands.index("mkdir") < commands.index("upload")
+    assert seen == [colab.MKDIR_SCRIPT]
+    local = tmp_path / "vm" / "content" / "anjo"  # the same script, its folders moved under tmp_path
+    exec(compile(colab.MKDIR_SCRIPT.replace(colab.REMOTE_DIR, str(local)), "mkdir", "exec"), {})
+    assert local.is_dir() and (local / "prev").is_dir()
+    assert all(remote.startswith(f"{colab.REMOTE_DIR}/") for remote in
+               (args[-1] for args, _ in fake.calls if args[3] == "upload"))
+    assert not (tmp_path / colab.MKDIR_FILE).exists()  # the script never stays in the night's folder

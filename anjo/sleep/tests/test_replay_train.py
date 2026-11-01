@@ -33,7 +33,7 @@ from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train, thinker
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import LoraCfg, TrainError, plan_steps, training_config
-from anjo.sleep.train.runners.colab import SESSION_PREFIX, ColabCli, RealPersonRefused
+from anjo.sleep.train.runners.colab import SESSION_PREFIX, ColabCli, RealPersonRefused, command_label
 
 BRIEF = load_brief()
 LAMBDA = settings.token_penalty()
@@ -199,7 +199,7 @@ class FakeColab:
         self.calls: list[list[str]] = []
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        self.calls.append(list(args))
+        self.calls.append([*args[:3], command_label(list(args)[3:]), *args[4:]])
         if args[3] == "download":
             local = Path(args[-1])
             if local.name == colab_train.RECEIPT:

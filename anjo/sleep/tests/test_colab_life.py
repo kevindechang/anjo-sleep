@@ -21,6 +21,7 @@ from anjo.sleep.stops import BudgetStop
 from anjo.sleep.tests.test_colab_runner import FakeColab
 from anjo.sleep.train.lora import DATASET_FILE, JOB, adapter_name
 from anjo.sleep.train.runners.colab import (
+    command_label,
     A100_CU_PER_HOUR,
     MAX_IDLE_BETWEEN_NIGHTS_S,
     ColabCli,
@@ -85,7 +86,7 @@ class FailNth(FakeColab):
         self.command, self.nth, self.seen = command, nth, 0
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        if list(args)[3] == self.command:
+        if command_label(list(args)[3:]) == self.command:
             self.seen += 1
             if self.seen == self.nth:
                 self.calls.append((list(args), timeout_s))

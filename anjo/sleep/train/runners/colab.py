@@ -98,6 +98,15 @@ CLI_NOTE: Final = "[colab] "  # the CLI's own messages, such as an update notice
 NO_SESSIONS: Final = "No active sessions"
 _SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
 EXEC_MARGIN_S: Final = 60.0  # the CLI's own wait past the kernel's timeout
+# 2026-11-02: an upload into a folder the VM lacks fails (HTTP 500 from its contents API), and a
+# new VM has no REMOTE_DIR: the first real Colab night failed at its first upload. Each VM makes
+# the night's remote folders once, right after its packages, with this script (``colab exec``
+# runs a file; the CLI has no mkdir); its call counts as ``mkdir`` (``command_label``).
+MKDIR: Final = "mkdir"
+MKDIR_FILE: Final = ".anjo-remote-dirs.py"
+MKDIR_TIMEOUT_S: Final = 60.0
+REMOTE_DIRS: Final = (REMOTE_DIR, f"{REMOTE_DIR}/prev")
+MKDIR_SCRIPT: Final = f"import os\nfor path in {REMOTE_DIRS!r}:\n    os.makedirs(path, exist_ok=True)\n"
 MIN_EXEC_S: Final = 1800.0
 _OUTPUT_FILES: Final = (*config.ADAPTER_FILES, colab_train.RECEIPT)
 
@@ -129,7 +138,7 @@ class ColabCli:
             raise ValueError("every colab call has a finite timeout")
         done = self._run([str(self._binary), *AUTH, *args], timeout_s)
         if done.returncode != 0:
-            raise ColabError(f"colab {args[0]} failed with exit {done.returncode}")
+            raise ColabError(f"colab {command_label(args)} failed with exit {done.returncode}")
         return done.stdout
 
 
@@ -238,8 +247,25 @@ def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
 
 
 def _setup_s(uploads: int) -> float:
-    return (NEW_TIMEOUT_S + INSTALL_TIMEOUT_S + uploads * UPLOAD_TIMEOUT_S
+    return (NEW_TIMEOUT_S + INSTALL_TIMEOUT_S + MKDIR_TIMEOUT_S + EXEC_MARGIN_S + uploads * UPLOAD_TIMEOUT_S
             + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S + EXEC_MARGIN_S)
+
+
+def command_label(args: Sequence[str]) -> str:
+    """A CLI call's command (``args[0]``), or ``MKDIR`` for the ``exec`` that makes the remote folders."""
+    if args and args[0] == "exec" and "-f" in args and Path(args[list(args).index("-f") + 1]).name == MKDIR_FILE:
+        return MKDIR
+    return args[0]
+
+
+def _make_remote_dirs(cli: ColabCli, session: str, workdir: Path) -> None:
+    script = workdir / MKDIR_FILE
+    script.write_text(MKDIR_SCRIPT, encoding="utf-8")
+    try:
+        cli.call("exec", "-s", session, "-f", str(script), "--timeout", str(MKDIR_TIMEOUT_S),
+                 timeout_s=MKDIR_TIMEOUT_S + EXEC_MARGIN_S)
+    finally:
+        script.unlink(missing_ok=True)
 
 
 def _exec_script(workdir: Path, seed: bool) -> Path:
@@ -316,11 +342,11 @@ class ColabRunner:
         self, vm: _Vm, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object],
         out: Path, exec_s: float,
     ) -> dict[str, object]:
-        self._boot(vm, session)
+        self._boot(vm, session, Path(str(inputs["workdir"])))
         return self._night(session, uploads, inputs, out, exec_s)
 
-    def _boot(self, vm: _Vm, session: str) -> None:
-        """Make the VM and install the pinned packages."""
+    def _boot(self, vm: _Vm, session: str, workdir: Path) -> None:
+        """Make the VM, install the pinned packages and make the remote folders the uploads go to."""
         cli = self._cli
         vm.state = "maybe"  # a `new` that times out may still have made the VM
         try:
@@ -330,6 +356,7 @@ class ColabRunner:
             raise
         vm.state = "up"
         cli.call("install", "-s", session, *self._packages, timeout_s=INSTALL_TIMEOUT_S)
+        _make_remote_dirs(cli, session, workdir)
 
     def _night(
         self, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object], out: Path,
@@ -483,7 +510,7 @@ class ColabLives:
         idle = None if first or life.idle_since is None else night_started - life.idle_since
         try:
             if first:
-                runner._boot(life.vm, life.session)
+                runner._boot(life.vm, life.session, Path(str(inputs["workdir"])))
             receipt = runner._night(life.session, uploads, inputs, out, exec_s)
         except BaseException:
             self._stop(person)  # a failed night stops the life's VM; the error is the one that propagates

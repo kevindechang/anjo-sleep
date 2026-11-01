@@ -29,7 +29,14 @@ from anjo.sleep.tests.test_modal_runner import NAME, RENDERING, Clock, FakeCalls
 from anjo.sleep.tests.test_train_runner_choice import NoColab, _EmptyColab, _FlakyColab
 from anjo.sleep.train.lora import JOB, TrainReceipt, adapter_name
 from anjo.sleep.train.runners import choice
-from anjo.sleep.train.runners.colab import A100_CU_PER_HOUR, ColabCli, ColabError, ColabRunner, RealPersonRefused
+from anjo.sleep.train.runners.colab import (
+    A100_CU_PER_HOUR,
+    ColabCli,
+    ColabError,
+    ColabRunner,
+    RealPersonRefused,
+    command_label,
+)
 from anjo.sleep.train.runners.fallback import ColabModalLives, ColabModalRunner
 from anjo.sleep.train.runners.modal import A100_USD_PER_HOUR, CALLS_DIR, CallRecords, ModalRunner
 from anjo.sleep.train.trainer import OPTIONAL_KEYS, LoraTrainer
@@ -58,6 +65,7 @@ class TimedColab(FakeColab):
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
         args = list(args)
+        args[3] = command_label(args[3:])  # the remote folders' exec counts as mkdir
         command = args[3]
         hangs = command == self.fail and self.timeout
         self.clock.now += timeout_s if hangs else self.exec_s if command == "exec" else MINUTE_S
@@ -114,7 +122,7 @@ def test_a_night_colab_trains_never_reaches_modal_and_makes_the_colab_settings_c
     assert out["runner"] == "colab" and "fallback_reason" not in out and out["steps"] == 9
     assert calls.spawned == [] and not runner.landed(NAME)
     assert ledger.open_holds() == () and ledger.used("modal_usd") == 0.0
-    assert ledger.used("colab_cu") == pytest.approx(_cu(7 * MINUTE_S + 600.0))  # what the VM ran for
+    assert ledger.used("colab_cu") == pytest.approx(_cu(8 * MINUTE_S + 600.0))  # what the VM ran for (mkdir: a minute)
     # The same calls, in the same order with the same timeouts, and the same outputs as on ``colab``.
     alone = TimedColab()
     assert dict(_colab_alone(tmp_path / "alone", alone).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)) == {
@@ -129,7 +137,8 @@ def test_a_night_colab_trains_never_reaches_modal_and_makes_the_colab_settings_c
     ("new", False, "colab new failed with exit 1", 2 * MINUTE_S),  # no A100 to assign: no VM, the time spent
     ("new", True, "colab new timed out", TIMEOUT_S),  # it may have made one: stopped, the whole hold settled
     ("install", False, "colab install failed with exit 1", 3 * MINUTE_S),
-    ("upload", True, "colab upload timed out", 3 * MINUTE_S + 300.0),
+    ("mkdir", False, "colab mkdir failed with exit 1", 4 * MINUTE_S),
+    ("upload", True, "colab upload timed out", 4 * MINUTE_S + 300.0),  # new, install, mkdir, stop
 ])
 def test_a_colab_failure_before_training_trains_the_same_job_on_modal(
     tmp_path: Path, fail: str, timeout: bool, reason: str, colab_s: float,
@@ -187,7 +196,7 @@ def test_a_training_failure_on_colab_fails_the_night_without_modal(tmp_path: Pat
 
 
 @pytest.mark.parametrize("error", [Cancelled("the night was cancelled"), KeyboardInterrupt()])
-@pytest.mark.parametrize("fail", ["new", "upload"])
+@pytest.mark.parametrize("fail", ["new", "mkdir", "upload"])
 def test_a_cancelled_night_never_falls_back(tmp_path: Path, fail: str, error: BaseException) -> None:
     colab = TimedColab(fail, error=error)
     runner, calls, ledger = _rig(tmp_path, colab)

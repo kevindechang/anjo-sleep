@@ -48,13 +48,14 @@ from typing import Final
 from anjo.sleep.budget import Ledger
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config
-from anjo.sleep.train.runners.colab import ColabCli, ColabError, ColabLives, ColabRunner
+from anjo.sleep.train.runners.colab import MKDIR, ColabCli, ColabError, ColabLives, ColabRunner, command_label
 from anjo.sleep.train.runners.modal import ModalRunner
 
 # What one Colab CLI call raises when Colab fails: an exit code, a hang past its hard timeout, no CLI.
 CLI_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
-# The calls before the training script starts: the VM (an A100 to assign), its packages, the night's files.
-BEFORE_TRAINING: Final = ("new", "install", "upload")
+# The calls before the training script starts: the VM (an A100 to assign), its packages, its remote
+# folders, the night's files.
+BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload")
 EXEC: Final = "exec"
 STOP: Final = "stop"
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ class TracedCli(ColabCli):
         try:
             return self._cli.call(*args, timeout_s=timeout_s)
         except CLI_FAILURES as error:
-            self.failed.append(Failed(args[0], error, self._clock() - started, _kernel_timeout(args)))
+            self.failed.append(Failed(command_label(args), error, self._clock() - started, _kernel_timeout(args)))
             raise
 
 
