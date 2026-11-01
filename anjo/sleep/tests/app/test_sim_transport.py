@@ -5,6 +5,7 @@ with the adapter tests the public repo doesn't collect."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -140,3 +141,51 @@ def test_the_account_check_passes_only_its_own_token() -> None:
 
 def test_the_live_comparison_sets_the_token_simulate_reads() -> None:
     assert sleep_objective_live.SIM_TOKEN_ENV == sim_transport.SIM_TOKEN_ENV
+
+
+# ── several lives in one process: each account's own token (the final test's batch) ─
+
+
+def _env(monkeypatch: pytest.MonkeyPatch, **names: str) -> None:
+    for name in (sim_transport.SIM_TOKEN_FILES_ENV, sim_transport.SIM_TOKEN_ENV):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in names.items():
+        monkeypatch.setenv(getattr(sim_transport, name), value)
+
+
+def test_each_account_named_in_the_token_map_reads_its_own_token_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "a").write_text("tok-a", encoding="utf-8")
+    (tmp_path / "b").write_text("tok-b\n", encoding="utf-8")
+    _env(monkeypatch, SIM_TOKEN_FILES_ENV=f"syn-a={tmp_path / 'a'}, syn-b={tmp_path / 'b'},",
+         SIM_TOKEN_ENV="tok-single")
+    assert [sim_transport.sim_token(uid) for uid in ("syn-a", "syn-b")] == ["tok-a", "tok-b"]
+    assert sim_transport.sim_token("syn-c") == "tok-single"  # an account the map doesn't name: as before
+
+
+def test_one_life_reads_the_single_token_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    _env(monkeypatch, SIM_TOKEN_ENV="tok")
+    assert sim_transport.sim_token("syn-a") == "tok"
+    _env(monkeypatch)
+    with pytest.raises(KeyError):  # unset, as it always was: no day starts
+        sim_transport.sim_token("syn-a")
+
+
+@pytest.mark.parametrize("mapping", ["syn-a", "syn-a=", "=/x", "syn-a=/x,syn-a=/y"])
+def test_a_token_map_it_cant_read_refuses_the_day_quoting_nothing(mapping: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    _env(monkeypatch, SIM_TOKEN_FILES_ENV=mapping, SIM_TOKEN_ENV="t")
+    with pytest.raises(sim_transport.TokenRefused) as raised:
+        sim_transport.sim_token("syn-a")
+    assert "syn-a" not in str(raised.value) and "/x" not in str(raised.value)
+
+
+def test_a_token_file_that_is_missing_or_empty_refuses_the_day_naming_no_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "empty").write_text("\n", encoding="utf-8")
+    for path in (tmp_path / "missing", tmp_path / "empty"):
+        _env(monkeypatch, SIM_TOKEN_FILES_ENV=f"syn-a={path}", SIM_TOKEN_ENV="tok-single")
+        with pytest.raises(sim_transport.TokenRefused) as raised:
+            sim_transport.sim_token("syn-a")
+        assert str(tmp_path) not in str(raised.value) and "syn-a" not in str(raised.value)

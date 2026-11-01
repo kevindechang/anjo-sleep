@@ -15,6 +15,13 @@ ends with Glimmer put back to sleep.
 Before any of that, the token is checked against the day's account: ``GET /api/billing/config``, an
 authenticated read with no side effects, echoes the caller's user id. A token that isn't ``user_id``'s,
 or can't be checked, refuses the day (``TokenRefused``): no hold, no wake, no line posted as anyone.
+
+**Several lives in one process** (the final test's batch, ``sim.accelerated --user A --user B ...``):
+``ANJO_SLEEP_SIM_TOKEN_FILES`` maps each account to the file holding its own token
+(``account=path,account=path``, the files ``obj_accounts.py`` writes), so each day posts as its own
+account (``sim_token``). Paths only: no token sits in the environment or a command line. An account
+the map doesn't name uses ``ANJO_SLEEP_SIM_TOKEN``, as one life always has. No message names a
+token, an account or a token file.
 """
 from __future__ import annotations
 
@@ -22,6 +29,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -39,6 +47,7 @@ from anjo.sleep.sim.persona_sim import MAX_TURNS
 
 DEV_URL_ENV: Final = "ANJO_SLEEP_DEV_URL"  # the sleep host's own address, e.g. http://127.0.0.1:8000
 SIM_TOKEN_ENV: Final = "ANJO_SLEEP_SIM_TOKEN"  # a signed-in token for the synthetic account
+SIM_TOKEN_FILES_ENV: Final = "ANJO_SLEEP_SIM_TOKEN_FILES"  # account=path,...: each account's own token file
 TURN_TIMEOUT_S: Final = 180.0
 DEFAULT_RETRY_AFTER_S: Final = 1.0  # a busy refusal without a usable ``Retry-After``
 MIN_RETRY_AFTER_S: Final = 0.1  # so the total wait always grows and the loop ends
@@ -151,9 +160,36 @@ class DevApiTransport:
         return reply_text(self._post(f"/api/chat/{self._session}/message", {"text": text}).text)
 
 
+def _token_files(text: str) -> dict[str, str]:
+    """``account=path,account=path`` as a map; anything else is refused, quoting none of it."""
+    named: dict[str, str] = {}
+    for part in (p.strip() for p in text.split(",") if p.strip()):
+        account, _, path = part.partition("=")
+        if not account.strip() or not path.strip() or account.strip() in named:
+            raise TokenRefused(f"{SIM_TOKEN_FILES_ENV} is account=path pairs, comma-separated, each account once")
+        named[account.strip()] = path.strip()
+    return named
+
+
+def sim_token(user_id: str) -> str:
+    """The token ``user_id``'s day posts with: the file ``ANJO_SLEEP_SIM_TOKEN_FILES`` names for the
+    account, else ``ANJO_SLEEP_SIM_TOKEN`` (one life's run, unchanged). ``check_account`` still checks it."""
+    files = os.environ.get(SIM_TOKEN_FILES_ENV, "").strip()
+    path = _token_files(files).get(user_id) if files else None
+    if path is None:
+        return os.environ[SIM_TOKEN_ENV]
+    try:
+        token = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise TokenRefused(f"the day's account's sim token file can't be read ({type(error).__name__})") from None
+    if not token:
+        raise TokenRefused("the day's account's sim token file is empty")
+    return token
+
+
 def simulate(user_id: str, persona: str, day_index: int, seed: int) -> DayRun:
     require_sleep_host()
-    transport = DevApiTransport(os.environ[DEV_URL_ENV], os.environ[SIM_TOKEN_ENV])
+    transport = DevApiTransport(os.environ[DEV_URL_ENV], sim_token(user_id))
     transport.check_account(user_id)  # before the hold and the wake: a wrong pairing posts nothing
     from anjo.sleep.app.night import PERSONAS, prices
 

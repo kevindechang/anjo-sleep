@@ -521,3 +521,38 @@ def test_her_day_dreams_are_wired_only_with_their_switch(
     assert isinstance(deps.day_dreams, GlimmerDayDreams)  # on: her Glimmer at night's client
     source: Any = deps.day_dreams
     assert source._client is deps.note_writer._client  # type: ignore[attr-defined]
+
+
+def test_two_lives_in_one_process_each_post_as_their_own_account(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The final test's batch: one process simulates every life's day, and each day's token passes the
+    account check only because it is that account's own (``ANJO_SLEEP_SIM_TOKEN_FILES``)."""
+    import httpx
+
+    from anjo.sleep.app import sim_transport
+
+    tokens = {"synthetic-a": "tok-a", "synthetic-b": "tok-b"}
+    owner = {token: uid for uid, token in tokens.items()}
+    for uid, token in tokens.items():
+        (tmp_path / f"{uid}.token").write_text(token, encoding="utf-8")
+    _night_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(sim_transport.DEV_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.delenv(sim_transport.SIM_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(sim_transport.SIM_TOKEN_FILES_ENV, ",".join(f"{uid}={tmp_path / f'{uid}.token'}" for uid in tokens))
+
+    def whoami(request: httpx.Request) -> httpx.Response:  # the dev API echoes whose token it was given
+        return httpx.Response(200, json={"user_id": owner[request.headers["Authorization"].removeprefix("Bearer ")]})
+
+    real = sim_transport.DevApiTransport
+    monkeypatch.setattr(sim_transport, "DevApiTransport",
+                        lambda url, token: real(url, token, transport=httpx.MockTransport(whoami)))
+    posted: list[str] = []
+
+    def run_day(person: Any, day_index: int, seed: int, **kw: Any) -> str:
+        posted.append(kw["transport"]._http.headers["Authorization"])
+        return "day"
+
+    monkeypatch.setattr(sim_transport, "run_day", run_day)
+    for uid in tokens:
+        assert sim_transport.simulate(uid, "founder", 0, 7) == "day"
+    assert posted == ["Bearer tok-a", "Bearer tok-b"]
+
