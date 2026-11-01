@@ -418,3 +418,38 @@ def test_a_rescore_is_refused_before_any_call_or_write(tmp_path: Path, rule: str
     assert code == 1 and said[-1].startswith("refused: ") and expected in said[-1]
     assert world.model.calls == [] and world.judge.calls == 0
     assert _tree(world.root) == before and not (folder / USER / "scores" / "night-02.json").exists()
+
+
+# ── a final night (Task 12b): scored once, on its last night, under the registered judge ─
+
+
+def _final_night(world: World, night: date, morning: dict[str, Any]) -> None:
+    folder = world.night(night, {"status": "promoted", "checkpoint": ref_record(_ckpt(NIGHTS.index(night) + 1)),
+                                 "accelerated": True, "label": "final", "cost_usd": 1.0})
+    (folder / "log.jsonl").write_text(json.dumps({"step": "morning", "uses": "new", "system": None, **morning}) + "\n",
+                                      encoding="utf-8")
+
+
+def test_a_final_night_whose_morning_was_put_off_is_never_backfilled(tmp_path: Path) -> None:
+    from anjo.sleep.sim.final_batch import DEFERRED
+
+    world = World(tmp_path)
+    _final_night(world, NIGHTS[0], {"status": "skipped", "why": DEFERRED})
+    world_deepseek = replace(world.ports, morning=lambda *a: replace(world.morning(*a),
+                                                                       judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH))
+    with pytest.raises(backfill_tool.Refused, match="put off"):
+        backfill_tool.plan(USER, "film_founder", NIGHTS[0], world_deepseek)
+    assert world.model.calls == [] and world.judge.calls == 0 and not (world.root / USER / "scores").exists()
+
+
+def test_a_final_backfill_runs_only_under_the_registered_judge(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    _final_night(world, NIGHTS[2], {"status": "failed", "why": "morning failed: TimeoutError"})
+    code, said = world.run(NIGHTS[2], "--go")  # the fake builder's judge is no registered one
+    assert code == 1 and "registered judge" in said[-1] and world.judge.calls == 0
+    deepseek = replace(world.ports, morning=lambda *a: replace(world.morning(*a),
+                                                               judge_model=fireworks_api.DEEPSEEK_V4P1_FLASH))
+    chosen = backfill_tool.plan(USER, "film_founder", NIGHTS[2], deepseek)
+    assert chosen.label == "final" and chosen.judge == "deepseek"
+    record = json.loads(backfill_tool.backfill(chosen, deepseek).path.read_text(encoding="utf-8"))
+    assert (record["label"], record["judge"], record["pinned"]) == ("final", "deepseek", True)

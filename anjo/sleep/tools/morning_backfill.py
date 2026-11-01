@@ -48,7 +48,10 @@ it: a full backfill may follow a daily-v1 morning, never a second daily-v1 one; 
 neither, and by an existing file in its own folder instead), a checkpoint that isn't in
 the person's promoted history, an account not registered synthetic unless ``--real`` (the default
 builder refuses a real account itself), and whenever the night lock is held: the run holds it
-throughout, so no night or simulated day starts under it.
+throughout, so no night or simulated day starts under it. A final night is refused when its morning
+was put off (``sim.final_batch.DEFERRED``: a final run scores each life once, on its last night, and
+``sim.accelerated --resume`` scores what is owed) and under any judge but the registered one
+(``probes.registered_judge``).
 
 The engine never imports the app: the sleep host's ports are named here and imported when the
 command runs (``app_ports``), as the accelerated runner names its builders.
@@ -93,7 +96,9 @@ from anjo.sleep.probes.morning import (
     run_morning,
     subset_probes,
 )
+from anjo.sleep.probes.registered_judge import require_registered
 from anjo.sleep.reports.results import FULL_SET, results_root
+from anjo.sleep.sim.final_batch import DEFERRED
 from anjo.sleep.serving.config import SCALEDOWN_S
 from anjo.sleep.types import CheckpointRef
 
@@ -165,6 +170,12 @@ def _scored(folder: Path, asked: str | None, own: str | None) -> bool:
                for step in steps)
 
 
+def _deferred(folder: Path) -> bool:
+    """A final night whose morning the run put off to its last night (``sim.final_batch``)."""
+    steps = NightLog(folder).steps() if (folder / LOG).is_file() else []
+    return any(step.get("step") == "morning" and step.get("why") == DEFERRED for step in steps)
+
+
 def _checkpoint(summary: dict[str, Any], user: str, registry: CheckpointRegistry) -> CheckpointRef:
     record = summary.get("checkpoint")
     if not isinstance(record, dict):
@@ -224,6 +235,9 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
         raise Refused("the account isn't registered synthetic (--real to score a real person's night)")
     folder, summary = _night(ports.logs(user), night)
     label = str(summary.get("label") or "development")
+    if label == "final" and _deferred(folder):
+        raise Refused(f"the final morning of {night.isoformat()} was put off: a final run scores each life once, "
+                      "on its last night (sim.accelerated --label final --resume)")
     own, basis = _own(summary, label)
     if subset is not None and subset != FULL_SET and subset not in SUBSETS:
         raise Refused(f"the probe set is {FULL_SET} or {', '.join(SUBSETS)}, not {subset!r}")
@@ -235,6 +249,7 @@ def plan(user: str, persona: str, night: date, ports: Ports, *, real: bool = Fal
     checkpoint = _checkpoint(summary, user, ports.registry)
     try:
         morning = ports.morning(user, persona, night)
+        require_registered(morning.judge_model, label)
         results = results_root(morning.root) / user / SCORES
         if score_root is None:
             target = _next_file(results, night, name, any_set=False)

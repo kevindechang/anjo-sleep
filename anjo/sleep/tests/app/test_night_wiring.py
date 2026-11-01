@@ -556,3 +556,9 @@ def test_two_lives_in_one_process_each_post_as_their_own_account(monkeypatch: py
         assert sim_transport.simulate(uid, "founder", 0, 7) == "day"
     assert posted == ["Bearer tok-a", "Bearer tok-b"]
 
+
+def test_the_final_recipe_records_the_judge_the_app_selects() -> None:
+    from anjo.sleep.app.morning import JUDGE_ENV
+    from anjo.sleep.sim.final_batch import RECIPE_ENV
+
+    assert JUDGE_ENV in RECIPE_ENV

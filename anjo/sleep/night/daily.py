@@ -26,7 +26,8 @@ after midnight, and the morning probe run right after the night, in the same pro
   took (``morning`` and ``dailies``), which the Dailies card reads as the morning's GPU time, and the
   morning how many requests it sent again (``retries``), when any. A development night's morning
   runs the committed daily subset (``probes.morning.DAILY``: arms 1 and 3, 14 probes) and logs its
-  name, replies and judge calls; ``--label final`` runs the full set.
+  name, replies and judge calls; ``--label final`` runs the full set, under the registered judge only
+  (``probes.registered_judge``: any other fails the morning before a call).
 
 MIND's inquiry runs in the demo person's night phase by default (``DEFAULT_PERSONA``) and is off for
 anyone else: ``ANJO_SLEEP_DAILY_MIND=1`` or ``0`` sets it for every persona, and ``--mind`` or
@@ -65,7 +66,8 @@ from anjo.sleep.night.sleep_night import NAP_WHY
 from anjo.sleep.night.state import safe_error
 from anjo.sleep.personas import DEMO_PERSONA
 from anjo.sleep.night.story import MORNING_FAILED
-from anjo.sleep.probes.morning import DAILY, MorningResult, ProbeSubset, TooManyNoVerdicts, run_morning
+from anjo.sleep.probes.morning import DAILY, Morning, MorningResult, ProbeSubset, TooManyNoVerdicts, run_morning
+from anjo.sleep.probes.registered_judge import require_registered
 from anjo.sleep.serving.backend import phase
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.types import NightResult
@@ -209,6 +211,8 @@ def _score_morning(
     subset = DAILY if label == "development" else None  # the final runs ask every probe and arm
     try:
         ports = (morning or _morning())(user, persona, night)
+        if isinstance(ports, Morning):  # a final morning runs under the registered judge or not at all
+            require_registered(ports.judge_model, label)
         sent_again = _retries(ports)
         done = score(user, night, result.checkpoint, morning=ports, label=label,
                      promoted=result.status == "promoted", subset=subset)
