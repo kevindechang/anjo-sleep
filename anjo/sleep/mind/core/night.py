@@ -39,6 +39,10 @@ serve or a night it skipped. Asked before that night's dream step, it refuses (`
 ``dreams`` or ``boundaries``), read back from her store, with the core's predictions on it and
 tonight's projector, for the dreams through the thought channel; any other id is refused.
 
+**The continuum memory.** ``ANJO_SLEEP_MIND_CMS=1`` runs a core trained with it (``cms``), and
+only then; the switch and the saved core must agree (``from_env`` refuses either alone). Its night
+level steps only here, at her consolidation.
+
 **Keep.** The night's unit: the state, the core's model id, the thought channel's projector version
 and the adapter serving her (``MindStore.keep``). Nothing is written once the night is cancelled.
 """
@@ -54,7 +58,7 @@ from typing import Any, Final, cast
 
 import numpy as np
 
-from anjo.sleep.mind.core import bridge, curriculum, latents, store
+from anjo.sleep.mind.core import bridge, cms, curriculum, latents, store
 from anjo.sleep.mind.core import state as core_state
 from anjo.sleep.mind.core.api import Core, Dream, DreamState
 from anjo.sleep.mind.core.evaluate import DREAM_STEPS
@@ -89,6 +93,9 @@ def from_env(
     ``<sleep root>/mind_state/``, opening questions in each one's ``workspace`` log, reading
     evidence through the fake encoder (of the core's width) until the live one serves."""
     core = Core.load(model)
+    if core.config.cms != cms.cms_on(env):
+        raise ValueError(f"the core at {model} was trained {'with' if core.config.cms else 'without'} the continuum "
+                         f"memory; {cms.CMS_ENV} must say the same ({'1' if core.config.cms else 'unset'})")
     return CoreNight(core, sleep_root / store.STORE_DIR, latents.FakeEncoder(core.config.dim_in),
                      curriculum=curriculum_on(env), people=people, workspace=workspace, synthetic=synthetic,
                      fake_for_anyone=env.get(FAKE_LATENTS_ENV, "").strip() == "1",

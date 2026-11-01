@@ -18,6 +18,9 @@ slot answers for a thread). The losses:
   open must beat its twin's by ``CONTRAST_MARGIN``. Counterfactual supervision: nothing else in
   the pair differs, so nothing else can explain the difference.
 
+With the continuum memory (``cfg.cms``) the unroll sleeps between each day and the next
+(``nights``, ``CoreNet.sleep``), as the night does each night, so the night level learns where it acts.
+
 Validation keeps the best epoch; training stops once ``patience`` epochs pass without a better
 validation loss, or at the ``epochs`` cap. The speak threshold is then locked on validation
 (``evaluate.lock_threshold``), and the dream's own ignition threshold on the same lives
@@ -146,11 +149,22 @@ class Unrolled(NamedTuple):
     encoded: Tensor  # (B, T, d)
 
 
+def nights(data: Batch) -> Tensor:
+    """(B, T): 1 where an event is the first of a new day (days on the core's clock), so a night
+    falls before it."""
+    day = torch.floor(data.now.double())
+    new = torch.cat([torch.zeros_like(data.mask[:, :1]), (day[:, 1:] > day[:, :-1]).to(data.mask.dtype)], dim=1)
+    return new * data.mask
+
+
 def unroll(net: CoreNet, data: Batch) -> Unrolled:
     encoded = net.encode(data.vec, data.kind, data.gap)
     st = net.initial(data.vec.shape[0], data.now[:, 0])
     heads, writes, usages = [], [], []
+    slept = nights(data) if net.cfg.cms and net.cfg.memory else None
     for step in range(data.vec.shape[1]):
+        if slept is not None:
+            st = blend(slept[:, step], net.sleep(st), st)
         start = net.initial(data.vec.shape[0], data.now[:, step]) if not net.cfg.memory else st
         new, written = net.step(start, encoded[:, step], data.gap[:, step], data.now[:, step])
         st = blend(data.mask[:, step], new, st)

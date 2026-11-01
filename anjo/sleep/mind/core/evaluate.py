@@ -217,10 +217,10 @@ def _tally(matched: _Matched, threshold: float) -> Headline:
         for call, match in calls:
             if call.p_speak < threshold:
                 continue
-            fresh = [label for label in match if label.id not in found]
-            if fresh:
-                found.add(fresh[0].id)
-                caught += 1
+            fresh = {label.id for label in match} - found
+            if fresh:  # one call citing two threads not yet caught catches both
+                found.update(fresh)
+                caught += len(fresh)
             elif match:
                 repeats += 1
             else:

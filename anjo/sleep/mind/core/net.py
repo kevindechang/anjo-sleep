@@ -23,7 +23,9 @@ with its kind and the gap since the event before (``encode``). Then:
 3. **Global state:** a GRU cell over the event, the memory read and what was written.
 
 A person's **slow memory** (``slow``, from her nights: ``api.Core.consolidate``) is read with the
-fast one and enters the surprise, but only the fast one learns and forgets.
+fast one and enters the surprise, but only the fast one learns and forgets. With the continuum
+memory (``cfg.cms``, the ``cms`` module) a session level and a night level take its place, each
+read with the fast one and stepped at its own period (``_session_end``, ``_accumulate``, ``sleep``).
 4. **The stance probe** (``stance``, for contradictions). A plain key is a projection of the whole
    event, so a constraint that flips a plan's attribute cancels the very part of the key it
    shares with the plan, and recalls nothing of it. With ``stance`` the key is the centered square
@@ -47,6 +49,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F  # noqa: N812
 
+from anjo.sleep.mind.core import cms
 from anjo.sleep.mind.core.types import KINDS, CoreConfig
 
 _EPS: Final = 1e-6
@@ -68,6 +71,7 @@ class Tensors(NamedTuple):
     momentum: Tensor  # (B, d, d)
     glob: Tensor  # (B, d)
     now: Tensor  # (B,) the latest event's time
+    levels: Tensor  # (B, cms.LEVELS, d, d) the continuum memory's slow levels and their pending steps; (B, 0, d, d) off
 
 
 class Written(NamedTuple):
@@ -140,6 +144,11 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
             self.new.bias.fill_(1.0)  # start: an event rather opens a thread than joins one
             self.speak.bias.fill_(-2.0)
             self.hazard.bias.fill_(-3.0)
+        if cfg.cms:  # built last, so the weights a core shares with the switch off are drawn as they were
+            self.cms_rates = nn.Linear(d + 1, 2)  # the session's and the night's rates, from the event
+            self.cms_mix = nn.Parameter(torch.ones(2))  # their weights in the read (eq. 74's weighted sum)
+            with torch.no_grad():
+                self.cms_rates.bias.fill_(cms.RATE_BIAS)
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -150,6 +159,7 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
             slots=self.slot_init.expand(batch, k, d).clone(), usage=torch.zeros(batch, k),
             opened=when[:, None].expand(batch, k).clone(), memory=torch.zeros(batch, d, d),
             momentum=torch.zeros(batch, d, d), glob=torch.zeros(batch, d), now=when.clone(),
+            levels=torch.zeros(batch, cms.LEVELS if self.cfg.cms else 0, d, d),
         )
 
     # ── one event ────────────────────────────────────────────────────────────
@@ -172,7 +182,10 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         slots = st.slots * (1.0 - fresh[:, :, None]) + self.slot_init * fresh[:, :, None]
         opened = st.opened * (1.0 - fresh) + now[:, None] * fresh
         write = address[:, : cfg.slots] + address[:, cfg.slots:] * free
+        if cfg.cms:
+            st = st._replace(levels=self._session_end(st.levels, gap))
         memory, momentum, surprise, read = self._remember(st, e, gap, slow)
+        levels = self._accumulate(st.levels, e, gap, read) if cfg.cms else st.levels
         parts = [e, self.read_norm(read)]
         if self.stance_norm is not None:
             parts.append(self.stance_norm(read * self.wv(e)))
@@ -184,7 +197,7 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         usage = usage * (1.0 - write * closing)
         written = (write[:, :, None] * slots).sum(dim=1)
         glob = self.glob_cell(torch.cat([e, read, written], dim=-1), st.glob)
-        out = Tensors(slots, usage, opened, memory, momentum, glob, now)
+        out = Tensors(slots, usage, opened, memory, momentum, glob, now, levels)
         return out, Written(write, fresh, surprise, address)
 
     def _remember(
@@ -194,6 +207,10 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         then one surprise step of the fast one."""
         cfg = self.cfg
         k = self._key(e)
+        if cfg.cms:
+            if slow is not None:
+                raise ValueError("a core with the continuum memory keeps its night level in the state, not a slow memory")
+            slow = self._slow_levels(st.levels)
         read = torch.bmm(st.memory if slow is None else st.memory + slow, k[:, :, None])[:, :, 0]
         if not cfg.fast:
             return st.memory, st.momentum, torch.zeros(e.shape[0]), torch.zeros_like(read)
@@ -201,6 +218,41 @@ class CoreNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fo
         memory, momentum, surprise = fast_update(
             st.memory, st.momentum, k, self.wv(e), g[:, 0] * cfg.theta_max, g[:, 1], g[:, 2], slow)
         return memory, momentum, surprise, read
+
+    # ── the continuum memory (``cms``) ───────────────────────────────────────
+
+    def _slow_levels(self, levels: Tensor) -> Tensor:
+        """The session and night levels as the read weighs them, beside the fast weights (B, d, d)."""
+        return self.cms_mix[0] * levels[:, cms.SESSION] + self.cms_mix[1] * levels[:, cms.NIGHT]
+
+    def _session_end(self, levels: Tensor, gap: Tensor) -> Tensor:
+        """The session level's step, where ``gap`` ends a session: its pending sum is applied and cleared."""
+        ended = (gap >= cms.SESSION_GAP_DAYS).to(levels.dtype)[:, None, None]
+        return torch.stack([levels[:, cms.SESSION] - ended * levels[:, cms.SESSION_PENDING],
+                            (1.0 - ended) * levels[:, cms.SESSION_PENDING], levels[:, cms.NIGHT],
+                            levels[:, cms.NIGHT_PENDING]], dim=1)
+
+    def _accumulate(self, levels: Tensor, e: Tensor, gap: Tensor, read: Tensor) -> Tensor:
+        """Each slow level's rated gradient of the event's error (the read before the write, against
+        its value), added to that level's pending sum; neither level moves (eq. 71 between steps)."""
+        err = read - self.wv(e)
+        grad = 2.0 * err[:, :, None] * self._key(e)[:, None, :]  # d/dM of |M k - v|^2, for the read's M
+        rates = torch.sigmoid(self.cms_rates(torch.cat([e, torch.log1p(gap.clamp(min=0.0))[:, None]], dim=-1)))
+        rates = rates * self.cfg.theta_max * self.cms_mix  # the chain rule through each level's weight
+        return torch.stack([levels[:, cms.SESSION], levels[:, cms.SESSION_PENDING] + rates[:, 0, None, None] * grad,
+                            levels[:, cms.NIGHT], levels[:, cms.NIGHT_PENDING] + rates[:, 1, None, None] * grad],
+                           dim=1)
+
+    def sleep(self, st: Tensors, residue: float = 0.0) -> Tensors:
+        """Sleep under the continuum memory: the session and the night take their pending steps, and
+        the fast level keeps ``residue`` of itself and no momentum (consolidate, then reset)."""
+        if not self.cfg.cms:
+            raise ValueError("only a core with the continuum memory sleeps through its levels")
+        lv = st.levels
+        zero = torch.zeros_like(lv[:, cms.SESSION])
+        levels = torch.stack([lv[:, cms.SESSION] - lv[:, cms.SESSION_PENDING], zero,
+                              lv[:, cms.NIGHT] - lv[:, cms.NIGHT_PENDING], zero], dim=1)
+        return st._replace(memory=residue * st.memory, momentum=torch.zeros_like(st.momentum), levels=levels)
 
     def _key(self, e: Tensor) -> Tensor:
         """The memory's key: the event's projection, or under ``stance`` its centered square (its topic)."""
