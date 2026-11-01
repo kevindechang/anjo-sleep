@@ -273,6 +273,31 @@ def test_a_resume_as_another_command_is_refused_before_anything_runs(tmp_path: P
     assert len(simulated) == ran and scored.calls == []  # refused before any day, night or morning
 
 
+def test_a_stopped_final_run_rerun_without_resume_is_refused_before_any_life_trains_again(tmp_path: Path) -> None:
+    """The review's case: night 2 fails and the run stops; run again without ``--resume``, every life
+    would train both nights again (``<date>.2``) and then be scored. Refused before any day."""
+    fake = FakeAccelerated(tmp_path)
+    scored, simulated = Scored(fake), []
+    rig = _rig(fake, scored, simulated)
+    inner = rig.simulate
+
+    def simulate(uid: str, person: Any, i: int, seed: int) -> DayRun:
+        if (uid, i) == ("u2", 1):
+            fake.world.train_fails["u2"] = RuntimeError("Modal is down")
+        return inner(uid, person, i, seed)
+
+    with pytest.raises(FinalStopped):
+        run_accelerated_batch(LIVES, 2, START, rig=replace(rig, simulate=simulate), label="final")
+    del fake.world.train_fails["u2"]
+    ran, events = len(simulated), len(fake.world.events)
+    with pytest.raises(final_batch.ResumeRefused, match="u1 already has a final night .*--resume"):
+        run_accelerated_batch(LIVES, 2, START, rig=rig, label="final")
+    assert len(simulated) == ran and len(fake.world.events) == events and scored.calls == []
+    assert not any(p.name.endswith(".2") for uid in DONORS for p in fake.world.logs(uid).iterdir())
+    run_accelerated_batch(LIVES, 2, START, rig=rig, label="final", resume=True)  # the way on
+    assert [c["uid"] for c in scored.calls] == ["u1", "u2"] and all(len(_scores(fake, uid)) == 1 for uid in DONORS)
+
+
 def test_a_life_is_never_scored_twice_by_a_changed_resume_or_a_fresh_run(tmp_path: Path) -> None:
     """The review's case: a finished 2-day run, then ``--resume --days 3``, would score every life again
     on a third night, and ``reports/final.py`` would read only the newer score."""

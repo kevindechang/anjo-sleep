@@ -26,6 +26,8 @@ donor's last night would read 3x off an adapter its donor no longer serves, or n
 - **One final score per life** (``check_scores``): a final run, fresh or resumed, refuses a life whose
   scores folder already holds a final score it can't place (any, on a fresh run; one for a night but this
   run's last, on a resume), before any day: ``reports/final.py`` reads only a life's newest score.
+  A fresh run also refuses a life that already has a final night (``check_fresh``): the same command
+  with ``--resume`` continues it, where a fresh run would train its lives' nights again.
 - **The recipe** (``RECIPE_ENV``): the switches that decide what a night trains and what its morning
   asks, as this process has them (flags, never a token). Each final night's summary and each final
   morning's log step record them, and a resume under another recipe is refused.
@@ -158,6 +160,16 @@ def check_scores(user_id: str, folder: Path, last: date, *, resume: bool) -> Non
         if record.get("label") == "final" and not (resume and record.get("night") == last.isoformat()):
             raise ResumeRefused(f"{user_id} already has a final score for {record.get('night')} ({path.name}): each "
                                 "life is scored once, so resume the run that scored it, as the command it ran as")
+
+
+def check_fresh(user_id: str, logs: Path) -> None:
+    """Refuse a fresh final run on a life whose night logs already hold a final night (stamped ``final``,
+    finished or failed): run without ``--resume``, it would train every night again and score the result."""
+    for folder in sorted(logs.iterdir()) if logs.is_dir() else ():
+        summary = _summary(folder) if folder.is_dir() else None
+        if summary is not None and summary.get("label") == "final":
+            raise ResumeRefused(f"{user_id} already has a final night ({folder.name}): continue that run with the "
+                                "same command and --resume; a fresh final run would train its nights again")
 
 
 def logged_window(logs: Path, night: date) -> Window | None:

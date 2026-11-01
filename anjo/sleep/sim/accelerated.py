@@ -306,11 +306,14 @@ def _final_mornings(rig: Rig, lives: Sequence[tuple[str, Persona]], night: date,
 
 def _check_final(rig: Rig, lives: Sequence[tuple[str, Persona]], days: int, start: date, sha: str,
                  recipe: Mapping[str, str | None], run: Mapping[str, Any], resume: bool) -> None:
-    """Before a final run's first day: a life with a final score it can't place, or a resumed night that
-    another recipe or command ran (``final_batch``), stops it before any day, night or morning."""
+    """Before a final run's first day: a life with a final score it can't place, a fresh run on a life
+    with final nights (``--resume`` continues them), or a resumed night that another recipe or command
+    ran (``final_batch``), stops it before any day, night or morning."""
     for uid, _ in lives:
         if rig.scores is not None:
             final_batch.check_scores(uid, rig.scores(uid), start + timedelta(days=days - 1), resume=resume)
+        if not resume and rig.logs is not None:
+            final_batch.check_fresh(uid, rig.logs(uid))
         if resume and rig.logs is not None:
             for i in range(days):
                 final_batch.finished(uid, rig.logs(uid), start + timedelta(days=i), i, sha, recipe, run)
