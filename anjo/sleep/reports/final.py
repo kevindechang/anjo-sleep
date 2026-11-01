@@ -2,10 +2,13 @@
 
 Reads each life's last ``final`` morning score under ``<results_root>/<life>/scores/night-NN.json``,
 never a earlier night (serving checkpoint after the last night, not the best-scoring night). Writes
-``<results_root>/<life>/scores/final.json`` once; a second run refuses unless it names its
-``rerun_reason``, and then it is written beside the first as ``final-rerun-NN.json`` with that reason:
-the first score stands and is never replaced. The git commit must match ``freeze_tag``
-(``sleep-freeze``). No live judging: aggregates registered rules only.
+``<results_root>/<life>/scores/final.json`` once. The registered rerun rule (``thresholds.json``
+``checkpoint_rule.rerun``): once any of the lives has a ``final.json`` the refusal is absolute, with no
+override; a rerun is allowed only for an infrastructure failure while no score file exists, after an
+attempt the prereg ledger logged, and it names its ``rerun_reason``. Every attempt is logged to the
+ledger (kind ``final_run``) before anything is written, and each ``final.json`` it writes after
+(``final_score``); the reason is in ``final.json`` too and must be stated in the README. The git
+commit must match ``freeze_tag`` (``sleep-freeze``). No live judging: aggregates registered rules only.
 
     python -m anjo.sleep.reports.final --account <life id>=<account id> (x3) \
         (--draw <draw.json> | --pair <life> <life> --single <life> --donor <life>=<life> ...) \
@@ -15,9 +18,10 @@ scores the three accounts' folders (``<root>/<account>/scores``) on their sealed
 (``<sealed dir>/<life id>.jsonl``) and prints each dimension's claim row.
 
 Before it reads a score it refuses: a ``thresholds.json`` that differs from its registered copy beyond
-the allowed keys (``prereg.freeze_manifest.registered_comparable``); a missing freeze manifest, or a
-``thresholds.json``, ``judge_v1.md``, ``reports/final.py`` or sealed probe file whose sha256 is not the
-manifest's; a score file judged by any model but the registered judge (``thresholds.json``
+the allowed keys (``prereg.freeze_manifest.registered_comparable``); a missing freeze manifest
+(``$ANJO_DATA_DIR/sleep/freeze_manifest.json``), one whose sha256 is not the ledger's ``freeze_manifest``
+entry or whose commit is not the freeze tag's and HEAD's, or a ``thresholds.json``, ``judge_v1.md``,
+``reports/final.py`` or sealed probe file whose sha256 is not the manifest's; a score file judged by any model but the registered judge (``thresholds.json``
 ``judging.judge``: Muse scores are development-only); a ``second_judge`` from any model but the
 registered second judge (``judging.second_judge.model``). ``final.json`` carries each life's
 provenance from its score file (``synthetic``, ``accelerated``): these are synthetic people.
@@ -25,7 +29,9 @@ provenance from its score file (``synthetic``, ``accelerated``): these are synth
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -33,7 +39,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from anjo.sleep.prereg import freeze_manifest
+from anjo.sleep.prereg import freeze_manifest, ledger
 from anjo.sleep.probes import second_judge as second_judge_model
 from anjo.sleep.probes.generate import load_sealed
 from anjo.sleep.probes.morning import MORNING_PROBES, REGISTERED_JUDGE_MODEL, SUBSETS, subset_probes
@@ -48,7 +54,9 @@ REPO: Final = Path(__file__).parents[3]
 THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
 SCORES: Final = "scores"
 FINAL_NAME: Final = "final.json"
-RERUN_PREFIX: Final = "final-rerun-"
+RUN_KIND: Final = "final_run"  # the prereg ledger's record of each final attempt
+SCORE_KIND: Final = "final_score"  # and of each final.json it wrote
+_LIVES_NOTE: Final = re.compile(r"lives=(\S+)")
 SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"  # the app's name for the sealed probe files (anjo.sleep.app.ownership)
 NIGHT_PREFIX: Final = "night-"
 COMP_3V1: Final = "3_vs_1"
@@ -178,13 +186,15 @@ def check_second_judge(second_judge: Mapping[str, Any]) -> None:
                          "(thresholds.json judging.second_judge.model)")
 
 
-def check_frozen(manifest: Path, sealed_files: Sequence[Path]) -> dict[str, Any]:
-    """Refuse thresholds that drifted from the registered copy, or any frozen file off the manifest."""
+def check_frozen(manifest: Path, sealed_files: Sequence[Path], *, commit: str,
+                 ledger_file: Path | None = None) -> dict[str, Any]:
+    """Refuse thresholds that drifted from the registered copy, a manifest the ledger doesn't register
+    or written at another commit than ``commit``, or any frozen file off the manifest."""
     drift = freeze_manifest.thresholds_drift(THRESHOLDS)
     if drift is not None:
         raise FinalError(drift)
     try:
-        return freeze_manifest.check(manifest, sealed_files)
+        return freeze_manifest.check(manifest, sealed_files, commit=commit, ledger_file=ledger_file)
     except freeze_manifest.ManifestError as error:
         raise FinalError(str(error)) from None
 
@@ -207,12 +217,28 @@ def score_path(results_root: Path, life_id: str) -> Path:
     return results_root / life_id / SCORES / FINAL_NAME
 
 
-def rerun_path(results_root: Path, life_id: str) -> Path:
-    """The next ``final-rerun-NN.json`` beside a life's first ``final.json``."""
-    folder = results_root / life_id / SCORES
-    taken = [int(n) for path in folder.glob(f"{RERUN_PREFIX}*.json")
-             if (n := path.stem[len(RERUN_PREFIX):]).isdigit()]
-    return folder / f"{RERUN_PREFIX}{max(taken, default=0) + 1:02d}.json"
+def _ledger_entries(ledger_file: Path | None) -> list[ledger.LedgerEntry]:
+    try:
+        entries = ledger.read_entries(ledger_file)
+        ledger.verify_entries(entries)
+    except ledger.LedgerError as error:
+        raise FinalError(f"the prereg ledger can't be used: {error}") from None
+    return entries
+
+
+def logged_attempts(lives: Sequence[str], ledger_file: Path | None = None) -> int:
+    """How many final attempts the ledger logged for any of ``lives``."""
+    wanted = set(lives)
+    return sum(1 for entry in _ledger_entries(ledger_file) if entry.kind == RUN_KIND
+               and (m := _LIVES_NOTE.search(entry.note)) and wanted & set(m.group(1).split(",")))
+
+
+def _log(kind: str, body: Mapping[str, Any], note: str, ledger_file: Path | None) -> None:
+    raw = json.dumps(dict(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    try:
+        ledger.register(kind, hashlib.sha256(raw).hexdigest(), note, path=ledger_file)
+    except ledger.LedgerError as error:
+        raise FinalError(f"the prereg ledger can't log the final: {error}") from None
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -635,12 +661,14 @@ def run(
     style_neutral: Mapping[str, Outcome3 | None] | None = None,
     second_judge: Mapping[str, Any] | None = None,
     sealed_files: Mapping[str, Path] | None = None,
-    manifest: Path = freeze_manifest.MANIFEST,
+    manifest: Path | None = None,
+    ledger_file: Path | None = None,
 ) -> dict[str, Any]:
     """Score held-out lives once; refuse wrong code or an existing per-life ``final.json``.
 
-    ``sealed_files`` maps each life to its sealed probe file (``<persona>.jsonl``); each must match
-    the freeze ``manifest``, as must ``thresholds.json``, ``judge_v1.md`` and this file."""
+    ``sealed_files`` maps each life to its sealed probe file (``<life>.jsonl``); each must match the
+    freeze ``manifest`` (default ``$ANJO_DATA_DIR/sleep/freeze_manifest.json``), as must
+    ``thresholds.json``, ``judge_v1.md`` and this file. ``ledger_file`` defaults to the prereg ledger."""
     expected = freeze_sha(freeze_tag, repo)
     found = git if git is not None else git_sha(repo)
     if found != expected:
@@ -648,18 +676,28 @@ def run(
 
     if len(lives) != 3 or len(pair_lives) != 2 or single_life not in lives:
         raise FinalError("final test expects 3 lives, a pair of 2 and one single life")
-    scored = [life_id for life_id in lives if score_path(results_root, life_id).exists()]
-    if scored and rerun_reason is None:
-        raise FinalError(f"{scored[0]} already has {FINAL_NAME}; the first score stands "
-                         "(a rerun names its reason and is written beside it)")
-    if rerun_reason is not None and (not scored or not rerun_reason.strip()):
-        raise FinalError("a rerun reason is for a life already scored, and says why")
+    for life_id in lives:
+        if score_path(results_root, life_id).exists():
+            raise FinalError(f"{life_id} already has {FINAL_NAME}; the first score stands "
+                             "(the registered rule: once a score exists the refusal is absolute)")
 
     if sealed_files is None or set(sealed_files) != set(lives):
         raise FinalError("each life's sealed probe file is required to map score rows to bootstrap blocks")
-    frozen = check_frozen(manifest, [sealed_files[life_id] for life_id in lives])
+    if manifest is None:
+        try:
+            manifest = freeze_manifest.manifest_path()
+        except freeze_manifest.ManifestError as error:
+            raise FinalError(str(error)) from None
+    frozen = check_frozen(manifest, [sealed_files[life_id] for life_id in lives], commit=found,
+                          ledger_file=ledger_file)
     if second_judge is not None:
         check_second_judge(second_judge)
+    attempts = logged_attempts(lives, ledger_file)
+    if attempts and rerun_reason is None:
+        raise FinalError(f"the ledger logs {attempts} earlier final attempt(s) and no score: a rerun is allowed "
+                         "only for an infrastructure failure, and names it (rerun_reason)")
+    if rerun_reason is not None and (not attempts or not rerun_reason.strip()):
+        raise FinalError("a rerun reason is only for a logged attempt that wrote no score, and says why")
 
     life_records: dict[str, dict[str, Any]] = {}
     for life_id in lives:
@@ -730,18 +768,21 @@ def run(
         judge_model=registered_judge(),
         manifest_commit=str(frozen["git_commit"]),
     )
-    body = report.to_dict()
-    if rerun_reason is not None:
-        body = {**body, "rerun": True, "rerun_reason": rerun_reason}
+    body = {**report.to_dict(), "attempt": attempts + 1, "rerun_reason": rerun_reason}
+    note = f"lives={','.join(sorted(lives))} freeze={expected} attempt={attempts + 1}"
+    _log(RUN_KIND, {"lives": sorted(lives), "freeze_sha": expected, "donors": dict(donors),
+                    "attempt": attempts + 1, "rerun_reason": rerun_reason},
+         note + ("" if rerun_reason is None else f" rerun: {rerun_reason}"), ledger_file)
     for life_id in lives:
         folder = results_root / life_id / SCORES
         folder.mkdir(parents=True, exist_ok=True)
-        target = score_path(results_root, life_id) if rerun_reason is None else rerun_path(results_root, life_id)
+        target = score_path(results_root, life_id)
         pending = target.with_name(f".{target.name}.tmp")
-        pending.write_text(
-            json.dumps({**body, "life_id": life_id}, sort_keys=True, indent=1), encoding="utf-8"
-        )
+        text = json.dumps({**body, "life_id": life_id}, sort_keys=True, indent=1)
+        pending.write_text(text, encoding="utf-8")
         pending.replace(target)
+        _log(SCORE_KIND, {"life_id": life_id, "final": text}, f"{life_id} {FINAL_NAME} attempt={attempts + 1}",
+             ledger_file)
     return body
 
 
@@ -806,8 +847,10 @@ def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = prin
     parser.add_argument("--sealed-dir", type=Path, default=None, help=f"sealed probe files (default: ${SEALED_ENV})")
     parser.add_argument("--require-sha", required=True, help="the freeze commit's 40-hex sha")
     parser.add_argument("--tag", default="sleep-freeze", help="the freeze tag (default: sleep-freeze)")
-    parser.add_argument("--manifest", type=Path, default=freeze_manifest.MANIFEST, help="the freeze manifest")
-    parser.add_argument("--rerun-reason", help="required when a final.json already exists; written beside it")
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="the freeze manifest (default: $ANJO_DATA_DIR/sleep/freeze_manifest.json)")
+    parser.add_argument("--rerun-reason", help="the infrastructure failure, when an attempt is logged and no "
+                        "final.json exists (refused once one does)")
     args = parser.parse_args(argv)
     try:
         if args.draw is not None:
@@ -841,6 +884,8 @@ def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = prin
         f"{' (synthetic people)' if body['synthetic'] else ''}{', accelerated nights' if body['accelerated'] else ''}")
     for line in claim_lines(body):
         out(line)
+    if args.rerun_reason:
+        out(f"rerun (attempt {body['attempt']}): {args.rerun_reason}; logged to the prereg ledger: state it in the README")
     return 0
 
 
@@ -855,8 +900,8 @@ __all__ = [
     "git_sha",
     "registered_probes",
     "run",
+    "logged_attempts",
     "main",
-    "rerun_path",
     "score_path",
     "serving_morning_path",
 ]

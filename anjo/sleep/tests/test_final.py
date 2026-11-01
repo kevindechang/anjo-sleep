@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import pytest
 
 from anjo.sleep import fireworks_api
 from anjo.sleep.lives import draw as lives_draw
-from anjo.sleep.prereg import freeze_manifest
+from anjo.sleep.prereg import freeze_manifest, ledger
 from anjo.sleep.probes.generate import _line as sealed_line
 from anjo.sleep.probes.morning import MORNING_PROBES
 from anjo.sleep.reports import final
@@ -177,16 +178,23 @@ def _sealed_files(base: Path) -> dict[str, Path]:
 
 
 def _manifest(base: Path, sealed: dict[str, Path]) -> Path:
-    """A freeze manifest of this checkout's frozen files and the test's sealed files, in tmp."""
+    """A freeze manifest of this checkout's frozen files and the test's sealed files at the freeze sha,
+    in tmp, registered in the tmp ledger (``_ledger``)."""
     out = base / "freeze_manifest.json"
     if not out.exists():
-        freeze_manifest.write(freeze_manifest.build(list(sealed.values()), commit="c" * 40), out)
+        freeze_manifest.write(freeze_manifest.build(list(sealed.values()), commit=FREEZE_SHA), out,
+                              ledger_file=_ledger(base))
     return out
+
+
+def _ledger(base: Path) -> Path:
+    return base / "sleep" / "ledger.jsonl"  # where the prereg ledger is under ANJO_DATA_DIR=base
 
 
 def _run(root: Path, **kwargs: Any) -> dict[str, Any]:
     sealed = _sealed_files(root.parent)
-    kwargs = {"sealed_files": sealed, "manifest": _manifest(root.parent, sealed), "donors": DONORS, **kwargs}
+    kwargs = {"sealed_files": sealed, "manifest": _manifest(root.parent, sealed), "donors": DONORS,
+              "ledger_file": _ledger(root.parent), **kwargs}
     with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
         return final.run(
             TAG,
@@ -299,11 +307,19 @@ def test_donor_never_changes_after_draw(root: Path) -> None:
     _rig_all_wins(root)
     report = _run(root)
     assert report["donors"] == DONORS
-    first = final.score_path(root, PAIR[0]).read_bytes()
     alt = {**DONORS, SINGLE: "someone-else"}
-    rerun = _run(root, donors=alt, rerun_reason="infra")  # a rerun is written beside, never over
-    assert rerun["rerun_reason"] == "infra" and rerun["donors"] == alt
-    assert final.score_path(root, PAIR[0]).read_bytes() == first
+    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
+        with pytest.raises(final.FinalError, match="already has final.json"):
+            final.run(
+                TAG,
+                root,
+                LIVES,
+                donors=alt,
+                pair_lives=PAIR,
+                single_life=SINGLE,
+                git=FREEZE_SHA,
+                rerun_reason="infra",
+            )
     stored = json.loads(final.score_path(root, PAIR[0]).read_text(encoding="utf-8"))
     assert stored["donors"] == DONORS
 
@@ -311,27 +327,18 @@ def test_donor_never_changes_after_draw(root: Path) -> None:
 def test_rerun_reason_does_not_overwrite_existing_score(root: Path) -> None:
     _rig_all_wins(root)
     _run(root)
-    first = {life: final.score_path(root, life).read_bytes() for life in LIVES}
-    with pytest.raises(final.FinalError, match="already has final.json"):
-        _run(root)
-    with pytest.raises(final.FinalError, match="says why"):
-        _run(root, rerun_reason="  ")
-    _run(root, rerun_reason="infra")
-    _run(root, rerun_reason="infra again")
-    for life in LIVES:
-        assert final.score_path(root, life).read_bytes() == first[life]
-        folder = root / life / "scores"
-        assert sorted(p.name for p in folder.glob("final-rerun-*.json")) == ["final-rerun-01.json", "final-rerun-02.json"]
-        second = json.loads((folder / "final-rerun-02.json").read_text(encoding="utf-8"))
-        assert second["rerun"] is True and second["rerun_reason"] == "infra again"
-    assert final.serving_morning_path(root, SINGLE).name == "night-02.json"  # reruns are never read as a morning
-
-
-def test_rerun_reason_without_a_first_score_is_refused(root: Path) -> None:
-    _rig_all_wins(root)
-    with pytest.raises(final.FinalError, match="already scored"):
-        _run(root, rerun_reason="infra")
-    assert not final.score_path(root, SINGLE).exists()
+    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
+        with pytest.raises(final.FinalError, match="already has final.json"):
+            final.run(
+                TAG,
+                root,
+                LIVES,
+                donors=DONORS,
+                pair_lives=PAIR,
+                single_life=SINGLE,
+                git=FREEZE_SHA,
+                rerun_reason="infra",
+            )
 
 
 def test_loss_uses_ci_upper_bound() -> None:
@@ -591,13 +598,14 @@ def test_final_refuses_a_sealed_file_that_differs_from_the_manifest(root: Path) 
 def test_final_refuses_a_frozen_file_that_differs_from_the_manifest(root: Path) -> None:
     _rig_all_wins(root)
     sealed = _sealed_files(root.parent)
-    built = freeze_manifest.build(list(sealed.values()), commit="c" * 40)
+    built = freeze_manifest.build(list(sealed.values()), commit=FREEZE_SHA)
     for rel in freeze_manifest.FROZEN_FILES:
         tampered = {**built, "files": {**built["files"], rel: "0" * 64}}
-        out = root.parent / f"manifest-{rel.replace('/', '-')}"
-        freeze_manifest.write(tampered, out)
+        base = root.parent / rel.replace("/", "-")
+        out = base / "manifest.json"
+        freeze_manifest.write(tampered, out, ledger_file=_ledger(base))
         with pytest.raises(final.FinalError, match=f"{rel} differs from the manifest"):
-            _run(root, sealed_files=sealed, manifest=out)
+            _run(root, sealed_files=sealed, manifest=out, ledger_file=_ledger(base))
 
 
 def test_final_refuses_thresholds_that_drift_from_the_registered_copy(root: Path, tmp_path: Path) -> None:
@@ -621,9 +629,13 @@ def test_manifest_is_written_once_and_names_every_file(tmp_path: Path) -> None:
     record = json.loads(out.read_text(encoding="utf-8"))
     assert set(record["files"]) == set(freeze_manifest.FROZEN_FILES)
     assert set(record["sealed"]) == {f"{life}.jsonl" for life in LIVES}
-    assert record["git_commit"] == "c" * 40
+    assert record["git_commit"] == FREEZE_SHA
     with pytest.raises(freeze_manifest.ManifestError, match="already exists"):
-        freeze_manifest.write(record, out)
+        freeze_manifest.write(record, out, ledger_file=_ledger(tmp_path))
+    with pytest.raises(freeze_manifest.ManifestError, match="already registers a freeze manifest"):
+        freeze_manifest.write(record, tmp_path / "second.json", ledger_file=_ledger(tmp_path))
+    entries = ledger.read_entries(_ledger(tmp_path))
+    assert [(e.kind, e.sha256) for e in entries] == [("freeze_manifest", ledger.sha256_file(out))]
     with pytest.raises(freeze_manifest.ManifestError, match="pass --sealed"):
         freeze_manifest.build([], commit="c" * 40)
 
@@ -634,7 +646,8 @@ def test_final_json_carries_provenance(root: Path) -> None:
     assert report["synthetic"] is True and report["accelerated"] is True
     assert report["provenance"][SINGLE] == {"synthetic": True, "accelerated": True}
     assert report["judge_model"] == fireworks_api.DEEPSEEK_V4P1_FLASH
-    assert report["manifest_commit"] == "c" * 40
+    assert report["manifest_commit"] == FREEZE_SHA
+    assert report["attempt"] == 1 and report["rerun_reason"] is None
     stored = json.loads(final.score_path(root, SINGLE).read_text(encoding="utf-8"))
     assert stored["synthetic"] is True and stored["accelerated"] is True
 
@@ -661,7 +674,8 @@ def _cli(root: Path, sealed_dir: Path, manifest: Path, *extra: str, draw: list[s
             "--root", str(root), "--sealed-dir", str(sealed_dir), "--manifest", str(manifest),
             "--require-sha", FREEZE_SHA, *extra]
     with patch.object(final, "freeze_sha", return_value=FREEZE_SHA), \
-            patch.object(final, "git_sha", return_value=FREEZE_SHA):
+            patch.object(final, "git_sha", return_value=FREEZE_SHA), \
+            patch.dict(os.environ, {ledger.DATA_DIR_ENV: str(root.parent)}):
         code = final.main(argv, out=lines.append)
     return code, lines
 
@@ -678,9 +692,11 @@ def test_cli_scores_the_accounts_and_prints_the_claim_rows(root: Path) -> None:
     assert stored["donors"] == {"acct-1": "acct-2", "acct-2": "acct-1", "acct-3": "acct-1"}
     code, lines = _cli(root, sealed_dir, manifest)  # a second run without a reason is refused
     assert code == 1 and "already has final.json" in lines[0]
-    code, lines = _cli(root, sealed_dir, manifest, "--rerun-reason", "infra")
-    assert code == 0 and lines[0].startswith("final rerun:")
-    assert (root / "acct-1" / "scores" / "final-rerun-01.json").exists()
+    first = final.score_path(root, "acct-1").read_bytes()
+    code, lines = _cli(root, sealed_dir, manifest, "--rerun-reason", "infra")  # absolute once scored
+    assert code == 1 and "refusal is absolute" in lines[0]
+    assert final.score_path(root, "acct-1").read_bytes() == first
+    assert sorted(p.name for p in (root / "acct-1" / "scores").iterdir()) == ["final.json", "night-02.json"]
 
 
 def test_cli_reads_a_draw_file(root: Path, tmp_path: Path) -> None:
@@ -709,3 +725,92 @@ def test_cli_refuses_before_scoring(root: Path, tmp_path: Path) -> None:
     code, lines = _cli(root, sealed_dir, manifest)
     assert code == 1 and "not the registered judge" in lines[0]
     assert not any(final.score_path(root, account).exists() for account in ACCOUNTS.values())
+
+
+# ── the registered rerun rule and the freeze commit ───────────────────────────
+
+
+def _attempt_logged(root: Path) -> None:
+    """An earlier attempt the ledger logged that wrote no score (an infrastructure failure)."""
+    ledger.register(final.RUN_KIND, "e" * 64, f"lives={','.join(sorted(LIVES))} freeze={FREEZE_SHA} attempt=1",
+                    path=_ledger(root.parent))
+
+
+def test_every_attempt_and_score_is_logged_to_the_ledger(root: Path) -> None:
+    _rig_all_wins(root)
+    _run(root)
+    kinds = [e.kind for e in ledger.read_entries(_ledger(root.parent))]
+    assert kinds == ["freeze_manifest", final.RUN_KIND, *[final.SCORE_KIND] * 3]
+    run_note = ledger.read_entries(_ledger(root.parent))[1].note
+    assert run_note == f"lives={','.join(sorted(LIVES))} freeze={FREEZE_SHA} attempt=1"
+    assert final.logged_attempts(LIVES, _ledger(root.parent)) == 1
+
+
+def test_a_rerun_reason_without_a_logged_attempt_is_refused(root: Path) -> None:
+    _rig_all_wins(root)
+    with pytest.raises(final.FinalError, match="only for a logged attempt"):
+        _run(root, rerun_reason="infra")
+    assert not final.score_path(root, SINGLE).exists()
+
+
+def test_a_logged_attempt_with_no_score_needs_its_infrastructure_reason(root: Path) -> None:
+    _rig_all_wins(root)
+    _sealed_files(root.parent)
+    _manifest(root.parent, _sealed_files(root.parent))
+    _attempt_logged(root)
+    with pytest.raises(final.FinalError, match="earlier final attempt"):
+        _run(root)
+    with pytest.raises(final.FinalError, match="says why"):
+        _run(root, rerun_reason="  ")
+    report = _run(root, rerun_reason="the VM was preempted mid-write")
+    assert report["attempt"] == 2 and report["rerun_reason"] == "the VM was preempted mid-write"
+    stored = json.loads(final.score_path(root, SINGLE).read_text(encoding="utf-8"))
+    assert stored["rerun_reason"] == "the VM was preempted mid-write"
+    notes = [e.note for e in ledger.read_entries(_ledger(root.parent)) if e.kind == final.RUN_KIND]
+    assert notes[-1].endswith("attempt=2 rerun: the VM was preempted mid-write")
+    with pytest.raises(final.FinalError, match="refusal is absolute"):
+        _run(root, rerun_reason="again")
+
+
+def test_the_manifest_commit_must_be_the_freeze_sha_and_head(root: Path, tmp_path: Path) -> None:
+    _rig_all_wins(root)
+    sealed = _sealed_files(root.parent)
+    base = tmp_path / "other"
+    out = base / "manifest.json"
+    freeze_manifest.write(freeze_manifest.build(list(sealed.values()), commit="c" * 40), out, ledger_file=_ledger(base))
+    with pytest.raises(final.FinalError, match="not the freeze commit"):
+        _run(root, sealed_files=sealed, manifest=out, ledger_file=_ledger(base))
+
+
+def test_the_manifest_must_be_the_one_the_ledger_registers(root: Path, tmp_path: Path) -> None:
+    _rig_all_wins(root)
+    sealed = _sealed_files(root.parent)
+    manifest = _manifest(root.parent, sealed)
+    with pytest.raises(final.FinalError, match="registers 0 freeze manifests"):
+        _run(root, ledger_file=tmp_path / "empty.jsonl")
+    record = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest.write_text(json.dumps(record, indent=2), encoding="utf-8")  # same content, other bytes
+    with pytest.raises(final.FinalError, match="not the freeze manifest the ledger registers"):
+        _run(root)
+
+
+def test_the_manifest_lives_in_the_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ledger.DATA_DIR_ENV, str(tmp_path))
+    assert freeze_manifest.manifest_path() == tmp_path / "sleep" / "freeze_manifest.json"
+    monkeypatch.delenv(ledger.DATA_DIR_ENV)
+    with pytest.raises(freeze_manifest.ManifestError, match="ANJO_DATA_DIR is not set"):
+        freeze_manifest.manifest_path()
+
+
+def test_the_manifest_is_written_only_from_the_freeze_checkout() -> None:
+    answers = {("rev-parse", "HEAD"): "a" * 40 + "\n", ("rev-parse", "sleep-freeze^{commit}"): "b" * 40 + "\n"}
+
+    def git(repo: Path, *args: str) -> str:
+        return answers.get(args[:2], "")
+
+    with patch.object(freeze_manifest, "_git", side_effect=git):
+        with pytest.raises(freeze_manifest.ManifestError, match="HEAD is not the commit 'sleep-freeze' names"):
+            freeze_manifest.head_commit()
+    answers[("rev-parse", "sleep-freeze^{commit}")] = "a" * 40 + "\n"
+    with patch.object(freeze_manifest, "_git", side_effect=git):
+        assert freeze_manifest.head_commit() == "a" * 40
