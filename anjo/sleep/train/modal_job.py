@@ -49,7 +49,30 @@ STARTUP_TIMEOUT_S: Final = 15 * 60  # the container's start, before the call run
 RETURN_S: Final = 5 * 60  # landing the adapter and sending its files back
 CANCEL_S: Final = 60.0  # cancelling a call whose wait ran out: the runner stops waiting this much early
 MIN_EXEC_S: Final = 1800.0
-REMOTE_SCRIPT: Final = "/root/anjo/sleep/train/colab_train.py"
+TRAIN_ROOT: Final = "/root/anjo"
+REMOTE_SCRIPT: Final = f"{TRAIN_ROOT}/sleep/train/colab_train.py"
+_TRAIN: Final = Path(__file__).resolve().parent
+_SLEEP: Final = _TRAIN.parent
+# Every file a training job may load, at the path it loads it from: Modal's image and the Colab
+# runner both use this one list, so the two VMs cannot drift. The script loads its siblings by
+# path from its own folder, so ``sleep_job.py``, its loss, fold and protect files, and
+# ``channel_train.py`` sit beside it; the channel loads ``serving/projector_math.py``.
+TRAIN_FILES: Final[tuple[tuple[Path, str], ...]] = (
+    (_SLEEP / "__init__.py", f"{TRAIN_ROOT}/sleep/__init__.py"),
+    (_SLEEP / "serving" / "__init__.py", f"{TRAIN_ROOT}/sleep/serving/__init__.py"),
+    (_SLEEP / "serving" / "config.py", f"{TRAIN_ROOT}/sleep/serving/config.py"),
+    (_SLEEP / "serving" / "projector_math.py", f"{TRAIN_ROOT}/sleep/serving/projector_math.py"),
+    (_TRAIN / "__init__.py", f"{TRAIN_ROOT}/sleep/train/__init__.py"),
+    (_TRAIN / "colab_train.py", REMOTE_SCRIPT),
+    (_TRAIN / "sleep_job.py", f"{TRAIN_ROOT}/sleep/train/sleep_job.py"),  # sft_dpo_seed's run, beside the script
+    (_TRAIN / "sleep_loss.py", f"{TRAIN_ROOT}/sleep/train/sleep_loss.py"),  # its one loss
+    (_TRAIN / "sleep_fold.py", f"{TRAIN_ROOT}/sleep/train/sleep_fold.py"),  # its fold
+    (_TRAIN / "sleep_protect.py", f"{TRAIN_ROOT}/sleep/train/sleep_protect.py"),  # its protected slot
+    (_TRAIN / "channel_train.py", f"{TRAIN_ROOT}/sleep/train/channel_train.py"),  # beside the script, which loads it by path
+    (_TRAIN / "modal_job.py", f"{TRAIN_ROOT}/sleep/train/modal_job.py"),
+    (_TRAIN / "modal_app.py", f"{TRAIN_ROOT}/sleep/train/modal_app.py"),
+    (_TRAIN / "latent_job.py", f"{TRAIN_ROOT}/sleep/train/latent_job.py"),
+)
 BASE_ENV: Final = "ANJO_TRAIN_BASE"  # colab_train.BASE_ENV
 DATASET_FILE: Final = "dataset.jsonl"  # lora.DATASET_FILE
 OFFLINE: Final = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"}

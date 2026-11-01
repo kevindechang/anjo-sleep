@@ -84,6 +84,7 @@ def test_modal_train_image_pins_match_colab(monkeypatch: pytest.MonkeyPatch) -> 
     assert installs == [(colab_train.TORCH, *colab_train.TRAIN_PACKAGES)]  # the one list, nothing else
     assert (ColabRunner.__init__.__kwdefaults__ or {})["packages"] is colab_train.TRAIN_PACKAGES  # Colab installs the same
     files = {args[1]: Path(args[0]) for name, args, _ in image.calls if name == "add_local_file"}
+    assert files == {remote: local for local, remote in modal_job.TRAIN_FILES}  # one list for both VMs
     assert files[modal_job.REMOTE_SCRIPT] == Path(colab_train.__file__)  # the script the Colab VM runs
     assert modal_job.REMOTE_SCRIPT == "/root/anjo/sleep/train/colab_train.py"
 

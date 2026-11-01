@@ -38,25 +38,9 @@ from anjo.sleep.train import colab_train, latent_job, modal_job
 modal: Any = importlib.import_module("modal")  # only the deploying machine has the package
 
 REVISION: Final = config.ServeConfig.from_env().pinned_revision()  # at load: no deploy without a pinned revision
-_TRAIN = Path(__file__).resolve().parent
-_SLEEP = _TRAIN.parent
-# The same import paths as on the deploying machine; anjo itself stays a namespace package.
-_FILES: Final = (
-    (_SLEEP / "__init__.py", "/root/anjo/sleep/__init__.py"),
-    (_SLEEP / "serving" / "__init__.py", "/root/anjo/sleep/serving/__init__.py"),
-    (_SLEEP / "serving" / "config.py", "/root/anjo/sleep/serving/config.py"),
-    (_SLEEP / "serving" / "projector_math.py", "/root/anjo/sleep/serving/projector_math.py"),  # channel_train loads it by path
-    (_TRAIN / "__init__.py", "/root/anjo/sleep/train/__init__.py"),
-    (_TRAIN / "colab_train.py", modal_job.REMOTE_SCRIPT),
-    (_TRAIN / "sleep_job.py", "/root/anjo/sleep/train/sleep_job.py"),  # sft_dpo_seed's run, beside the script
-    (_TRAIN / "sleep_loss.py", "/root/anjo/sleep/train/sleep_loss.py"),  # its one loss
-    (_TRAIN / "sleep_fold.py", "/root/anjo/sleep/train/sleep_fold.py"),  # its fold
-    (_TRAIN / "sleep_protect.py", "/root/anjo/sleep/train/sleep_protect.py"),  # its protected slot
-    (_TRAIN / "channel_train.py", "/root/anjo/sleep/train/channel_train.py"),  # beside the script, which loads it by path
-    (_TRAIN / "modal_job.py", "/root/anjo/sleep/train/modal_job.py"),
-    (_TRAIN / "modal_app.py", "/root/anjo/sleep/train/modal_app.py"),
-    (_TRAIN / "latent_job.py", "/root/anjo/sleep/train/latent_job.py"),
-)
+# The same import paths as on the deploying machine; anjo itself stays a namespace package. The
+# one list lives in modal_job so the Colab runner ships exactly these files to the same paths.
+_FILES: Final = modal_job.TRAIN_FILES
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
