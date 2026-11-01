@@ -12,7 +12,9 @@ probes.
   night last worked;
 - ``empty``: the kernel's empty workspace, with its served prose ablated the way the week probe
   does it;
-- ``null``: ``own`` rendered and asked again, unchanged: the noise floor;
+- ``null``: ``own``'s state with one blank line added before its MIND block: the same state in
+  different bytes, the floor. At temperature 0 an unchanged re-ask returns the same reply, so a
+  byte-identical null would floor at 0 and credit any byte change to the state;
 - ``swapped``: another synthetic life's state, for the 2x2.
 
 **The measure.** A semantic distance between the two replies to a probe (MiniLM, the embedder
@@ -177,7 +179,7 @@ def conditions(source: Records, night: date, *, other: Records | None = None,
     empty_served = served_without_mind(source, ws)
     found = (
         Condition('own', own, kernel.digest(ws)),
-        Condition('null', own, kernel.digest(ws)),  # the same bytes, asked again: the floor
+        Condition('null', null_brief(own), kernel.digest(ws)),  # the same state, other bytes: the floor
         Condition('empty', probe_brief(kernel.fold(()), source.targets, source.expectations, as_of,
                                        empty_served), kernel.digest(kernel.fold(()))),
     )
@@ -200,6 +202,14 @@ def conditions(source: Records, night: date, *, other: Records | None = None,
     found += (Condition('swapped', probe_brief(swapped, source.targets, source.expectations, as_of, source.common),
                         kernel.digest(swapped)),)
     return found, skips
+
+
+def null_brief(brief: str) -> str:
+    """``brief`` with one blank line before its MIND block: no state changes, only bytes."""
+    fixed, marker, mind = brief.partition('<MIND>\n')
+    if not marker:
+        raise ValueError('a probe brief carries a MIND block')
+    return fixed + '\n' + marker + mind
 
 
 def scope(night: date) -> datetime:
