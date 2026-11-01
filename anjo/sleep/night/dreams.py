@@ -73,12 +73,14 @@ class Terms:
     """Which of ``sft_dpo_seed``'s extra rows the night builds: knowledge seeding's, dreams', and with
     ``protect`` the anchor rows the protected slot's basis is read from (``ANJO_SLEEP_PROTECT``).
     ``day_dreams`` (``ANJO_SLEEP_DAY_DREAMS``) adds earlier practice rows and her own day dreams
-    (``night/day_dreams.py``); off, the night is today's."""
+    (``night/day_dreams.py``); off, the night is today's. ``sdft`` (``ANJO_SLEEP_SDFT``) adds the
+    self-distillation rows built from the seeding rows' messages (``train/terms.py``, ``sdft_rows``)."""
 
     seed: bool = False
     dreams: bool = False
     protect: bool = False
     day_dreams: bool = False
+    sdft: bool = False
 
 
 SeedKind = Literal["boundary", "picked", "random"]

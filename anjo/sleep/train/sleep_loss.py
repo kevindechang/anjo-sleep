@@ -59,6 +59,24 @@ with ``DREAM_HELD`` dreams or fewer there is nothing to hold out: every dream tr
 row, untried. With the switch on, the dream block's rollback also restores the projector's params, and
 imitation samples ``IMITATION_SAMPLES_DAY`` times.
 
+**Self-distillation** (``Batch.sdft``, ``ANJO_SLEEP_SDFT``), after Shenfeld, Damani, Hübotter and Agrawal,
+"Self-Distillation Enables Continual Learning" (arXiv 2601.19897): the model with a demonstration in
+context teaches itself without it, on its own samples. Each ``SdftSeq`` is a query the host built from a
+seeding row's message (``train/terms.py``: bare, asking for a read, or asking for a choice) with the
+consolidated day before it in the teacher's prompt. Every visit draws a fresh sample of the student
+(``SDFT_TOKENS``, temperature 1, no top-p or top-k: fully on-policy, one rollout a visit, as the paper) and
+scores it with ``seed_kl``: the same per-token, full-vocabulary reverse KL to the same ``Teacher``, so the
+term is the seeding term's machinery on the student's own replies, at ``SDFT_WEIGHT``. The paper's teacher
+is an EMA of the student (the reference code syncs it every step at 0.01); here it syncs once a night, to
+the adapter the night starts from: the paper's stable frozen-teacher ablation within a night (an EMA at
+0.01 moves 1 - 0.99^n of the way, a quarter over a step plan's thirty updates), the EMA across nights,
+and ``teacher_drift`` stays zero. Reverse, as the seeding term: the paper's analysis argues for it, though its code now defaults to
+the forward KL. The rows of ``SDFT_HELD`` sources, fixed by the plan seed, never train: each is sampled once
+from the night-start student, and the receipt's ``sdft`` reads the KL on those same replies before and
+after training. The term draws nothing once its own seconds pass ``SDFT_BUDGET_S`` or the deadline passes
+(``skipped_late`` counts the visits), so its cost is bounded whatever the step plan; never in a matched
+control.
+
 **The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
 hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
 are tonight's fresh slot (B at zero: the reset, ``load_leading``); after training the job folds it.
@@ -82,7 +100,7 @@ import math
 import random
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -111,6 +129,13 @@ WARMUP: Final = 0.03
 MAX_ACCUMULATION: Final = 16
 MAX_EPOCHS: Final = 4
 TEMPERATURE: Final = 1.0
+SDFT_TERM: Final = "sdft"  # self-distillation's term, apart from ``WEIGHTS``: off, the receipt is today's
+SDFT_WEIGHT: Final = 1.0  # the seeding KL on the student's own sample: one row weighs as one seed row
+SDFT_KINDS: Final = ("knowledge", "tone", "taste")  # what a query asks for (``terms.SDFT_KINDS``)
+SDFT_TOKENS: Final = FRESH_TOKENS  # the student's sample a visit scores (``terms.SDFT_REPLY_TOKENS``)
+SDFT_HELD: Final = 2  # sources whose rows never train: the receipt's before-and-after KL is read on them
+SDFT_HELD_MIN: Final = 4  # with fewer sources nothing is held out, and the receipt's KL is None
+SDFT_BUDGET_S: Final = 15 * 60.0  # the term's seconds a night; past them a visit draws nothing
 
 Ids = tuple[int, ...]
 
@@ -145,6 +170,19 @@ class SeedSeq:
 
 
 @dataclass(frozen=True)
+class SdftSeq:
+    """A self-distillation row: the student's prompt (the query alone), the teacher's (the consolidated day,
+    then the same query), what the query asks for and the seeding row it was built from. It has no reply:
+    every visit scores a fresh sample of the student."""
+
+    prompt: Ids
+    teacher: Ids
+    kind: str
+    source: str
+    state: str | None = None
+
+
+@dataclass(frozen=True)
 class AnchorSeq:
     prompt: Ids
     choices: tuple[Ids, ...]
@@ -159,6 +197,7 @@ class Batch:
     dreams: tuple[Seq, ...] = ()
     anchors: tuple[AnchorSeq, ...] = ()
     dream_groups: tuple[str, ...] = ()  # each dream's seed kind, in order; empty means one group
+    sdft: tuple[SdftSeq, ...] = ()  # ANJO_SLEEP_SDFT's rows, each scored on a fresh student sample
 
 
 @dataclass(frozen=True)
@@ -388,6 +427,31 @@ def seed_kl(model: Any, row: SeedSeq, teacher: Teacher, soft: Spliced | None = N
     return (student.exp() * (student - target)).sum(dim=-1).mean()
 
 
+def _scored(row: SdftSeq, reply: Ids) -> SeedSeq:
+    """A self-distillation row with the sample it is scored on, as a seeding row."""
+    return SeedSeq(row.prompt, row.teacher, reply, row.state)
+
+
+def sdft_kl(model: Any, row: SdftSeq, teacher: Teacher, plan: Plan, soft: Spliced | None = None,
+            teacher_soft: Spliced | None = None) -> tuple[Any, Ids]:
+    """Self-distillation, one visit: a fresh sample of the student (tonight's adapter, the query alone),
+    then ``seed_kl`` on it, the teacher the night-start adapter with the day before the query. Returns the
+    loss (None for an empty sample) and the sample."""
+    reply = sample(model, row.prompt, SDFT_TOKENS, plan, soft)
+    if not reply:
+        return None, reply
+    return seed_kl(model, _scored(row, reply), teacher, soft, teacher_soft), reply
+
+
+def sdft_split(rows: Sequence[SdftSeq], seed: int) -> tuple[list[int], list[int]]:
+    """The held-out slice and the rows that train: every row of ``SDFT_HELD`` sources fixed by the run's
+    seed, so no held query's message trains under another kind; none with fewer than ``SDFT_HELD_MIN``."""
+    sources = sorted({row.source for row in rows})
+    held = set(random.Random(seed).sample(sources, SDFT_HELD)) if len(sources) >= SDFT_HELD_MIN else set()
+    return ([i for i, row in enumerate(rows) if row.source in held],
+            [i for i, row in enumerate(rows) if row.source not in held])
+
+
 @contextmanager
 def _evaluating(model: Any) -> Iterator[None]:
     """Sampling and the anchor check run without dropout (and with the cache), then training resumes."""
@@ -538,6 +602,24 @@ def mean_seed_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: So
     return sum(scores) / len(scores)
 
 
+def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None = None) -> list[tuple[str, SeedSeq]]:
+    """One sample of the student per held-out row, each with its kind: the replies the receipt's KL is read
+    on before and after training, the same both times (an empty sample is left out)."""
+    held = []
+    for row in rows:
+        reply = sample(model, row.prompt, SDFT_TOKENS, plan, _tokens(soft, row.state, detach=True))
+        if reply:
+            held.append((row.kind, _scored(row, reply)))
+    return held
+
+
+def sdft_kl_by_kind(model: Any, held: Sequence[tuple[str, SeedSeq]], teacher: Teacher,
+                    soft: Soft | None = None) -> dict[str, float | None]:
+    """The seeding KL on the held-out samples, over all of them (``all``) and by kind; None where there are none."""
+    groups = {"all": [seq for _, seq in held], **{kind: [seq for k, seq in held if k == kind] for kind in SDFT_KINDS}}
+    return {name: mean_seed_kl(model, rows, teacher, soft) if rows else None for name, rows in groups.items()}
+
+
 def _dream_trials(
     model: Any, batch: Batch, plan: Plan, teacher: Teacher, optimizer: Any, soft: Soft | None = None,
     timer: Callable[[], float] = time.monotonic,
@@ -654,6 +736,8 @@ class _Run:
     soft: Soft | None = None
     timer: Callable[[], float] = time.monotonic
     sampled: int = 0
+    sdft_sampled: int = 0
+    sdft_late: int = 0
     steps: int = 0
     projector_only: int = 0
     warmup_updates: int = 0
@@ -677,6 +761,15 @@ class _Run:
             if index in self.fresh and (fresh := sample(self.model, seq.prompt, FRESH_TOKENS, self.plan, student)):
                 seq, self.sampled = replace(seq, reply=fresh), self.sampled + 1
             return seed_kl(self.model, seq, self.teacher, student, self.tokens(seq.state, ref=True))
+        if term == SDFT_TERM:  # every visit a fresh sample; past the term's budget or the deadline, none
+            _, row = row
+            if self.clock.seconds.get(SDFT_TERM, 0.0) > SDFT_BUDGET_S or self.timer() > self.plan.deadline:
+                self.sdft_late += 1
+                return None
+            loss, reply = sdft_kl(self.model, row, self.teacher, self.plan, self.tokens(row.state, detach=True),
+                                  self.tokens(row.state, ref=True))
+            self.sdft_sampled += bool(reply)
+            return loss
         if term == "imitate":
             loss, reward = imitation_loss(self.model, row, self.rng, self.plan, self.tokens(row.state, detach=True))
             if reward is not None:
@@ -692,7 +785,7 @@ class _Run:
                 loss = self.loss(term, row)
                 if loss is not None:
                     surprise = row.weight if term in SURPRISE_TERMS else 1.0
-                    (WEIGHTS[term] * surprise * loss / len(chunk)).backward()
+                    (_weight(term) * surprise * loss / len(chunk)).backward()
                     self.losses[term].append(float(loss.detach()))
 
     def step(self, chunk: Sequence[tuple[str, Any]], optimizer: Any = None, rate: Any = None) -> None:
@@ -723,6 +816,10 @@ class _Run:
         self.grads_checked = True
 
 
+def _weight(term: str) -> float:
+    return SDFT_WEIGHT if term == SDFT_TERM else WEIGHTS[term]
+
+
 def _chunks(items: Sequence[Any], size: int) -> list[Sequence[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
@@ -733,6 +830,7 @@ def _stream(batch: Batch, rng: random.Random) -> tuple[list[tuple[str, Any]], in
     imitate = rng.sample(long_enough, min(IMITATION_ROWS, len(long_enough)))
     items: list[tuple[str, Any]] = [
         *(("sft", row) for row in batch.sft), *(("seed", (i, seq)) for i, seq in enumerate(batch.seeds)), *(("imitate", seq) for seq in imitate),
+        *((SDFT_TERM, (i, seq)) for i, seq in enumerate(batch.sdft)),
     ]
     rng.shuffle(items)
     return items, len(imitate)
@@ -860,6 +958,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         raise ValueError("a matched control trains a positive time budget, and no dreams or passes")
     if batch.dream_groups and len(batch.dream_groups) != len(batch.dreams):
         raise ValueError("each dream has one seed kind")
+    if batch.sdft and (plan.stretch_s or any(row.kind not in SDFT_KINDS for row in batch.sdft)):
+        raise ValueError(f"self-distillation rows ask for {', '.join(SDFT_KINDS)}, and never in a matched control")
     rng = random.Random(plan.seed)
     torch.manual_seed(plan.seed)
     params = [p for _, p in named]
@@ -879,7 +979,8 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
             keep = set(trialed)
             seeds = tuple(row for i, row in enumerate(batch.seeds)
                           if row.group != DREAM_KIND or i in keep)
-        items, imitating = _stream(replace(batch, seeds=seeds), rng)
+        held_sdft, trained_sdft = sdft_split(batch.sdft, plan.seed)
+        items, imitating = _stream(replace(batch, seeds=seeds, sdft=tuple(batch.sdft[i] for i in trained_sdft)), rng)
         fresh = set(rng.sample(range(len(seeds)), math.ceil(ON_POLICY_SHARE * len(seeds))))
         accumulation, epochs, per_epoch = step_plan(len(items), plan.min_steps) if items else (1, 0, 0)
         if items and plan.passes:  # capacity: every row its own step, each pass; the DPO block keeps its own plan
@@ -889,11 +990,16 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         if main + len(batch.pairs) + dream_steps == 0:
             raise ValueError("a night trains at least one row")
         run = _Run(model, plan, params, optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, schedule(main)),
-                   teacher, clock, rng, fresh, {term: [] for term in WEIGHTS}, [], soft=soft, timer=timer,
+                   teacher, clock, rng, fresh, {term: [] for term in (*WEIGHTS, *((SDFT_TERM,) if batch.sdft else ()))},
+                   [], soft=soft, timer=timer,
                    warmup_updates=int(soft.warmup_share * main) if soft else 0)
         run.out_of_time = bool(trials.get("out_of_time"))  # the deadline cut the trials before the main block
         probe = seeds[0] if seeds else None
         teacher_before, kl_before = _probe(model, probe, teacher, soft)
+        with clock("sdft_held") if batch.sdft else nullcontext():  # sampled once, at the night's start
+            sdft_samples = (sdft_held(model, [batch.sdft[i] for i in held_sdft], plan, soft)
+                            if batch.sdft and not run.late() else [])
+            sdft_before = sdft_kl_by_kind(model, sdft_samples, teacher, soft) if sdft_samples else None
         model.train()
         stretched = _stretched(run, items, accumulation, timer) if plan.stretch_s else None
         for chunk in [] if stretched else [c for _ in range(epochs) for c in _chunks(items, accumulation)]:
@@ -906,6 +1012,7 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         for hook in hooks:
             hook.remove()
     teacher_after, kl_after = _probe(model, probe, teacher, soft)
+    sdft_after = sdft_kl_by_kind(model, sdft_samples, teacher, soft) if sdft_samples else None
     drift = None if probe is None else float((teacher_after - teacher_before).abs().max())
     moved = max((float((now - was).abs().max()) for now, was in zip(leading(named, plan.long_term_rank), held,
                                                                      strict=True)), default=0.0) if held else None
@@ -922,4 +1029,22 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         "seed_kl_after": kl_after, "out_of_time": run.out_of_time, **({"stretch": stretched} if stretched else {}),
         **({"projector_only_updates": run.projector_only} if soft else {}),
         **({"dream_trials": trials} if trials else {}),
+        **({SDFT_TERM: _sdft_receipt(batch.sdft, held_sdft, trained_sdft, run, len(sdft_samples), sdft_before,
+                                     sdft_after)}
+           if batch.sdft else {}),
     }
+
+
+def _sdft_receipt(rows: Sequence[SdftSeq], held: Sequence[int], trained: Sequence[int], run: _Run, sampled: int,
+                  before: Mapping[str, float | None] | None, after: Mapping[str, float | None] | None) -> dict[str, Any]:
+    """Self-distillation's part of the receipt: rows trained and held out by kind, the on-policy samples
+    drawn in training and for the held-out slice, the visits the budget or the deadline skipped, and the
+    seeding KL on the held-out samples before and after training, over all and by kind. Counts only."""
+    def by_kind(indices: Sequence[int]) -> dict[str, int]:
+        return {kind: sum(rows[i].kind == kind for i in indices) for kind in SDFT_KINDS}
+
+    return {"weight": SDFT_WEIGHT, "rows": by_kind(trained), "held": by_kind(held), "on_policy_samples": run.sdft_sampled,
+            "held_samples": sampled, "skipped_late": run.sdft_late, "budget_minutes": SDFT_BUDGET_S / 60.0,
+            "kl_before": None if before is None else before["all"], "kl_after": None if after is None else after["all"],
+            "kl_by_kind": {kind: {"before": None if before is None else before[kind],
+                                  "after": None if after is None else after[kind]} for kind in SDFT_KINDS}}

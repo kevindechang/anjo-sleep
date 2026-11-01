@@ -23,6 +23,8 @@ compute) with Kevin's 2026-10-27 adjustments, each a dated ledger entry the coor
   person's long-term adapter at that rank, a fresh slot training beside it at ``r`` and the fresh rate.
   ``protect`` (``anchors`` or ``random``, with the fold only) trains that slot off the forgetting anchors'
   activation basis, or a random one of its shape (``sleep_protect.py``); ``off`` sends the recipe unchanged.
+  ``sdft`` (``objective.SDFT_ENV``) adds the self-distillation rows: her context in the teacher's prompt,
+  the query alone in the student's, scored on the student's own samples (``sleep_loss.py``).
 
 ``train_lora`` writes the dataset (with the pair rows only for ``sft_dpo``), runs the ``train_lora`` job on a ``GpuRunner`` (Modal for the
 night by default, or Colab) under the training hard timeout, copies the finished adapter into the local
@@ -104,6 +106,7 @@ class LoraCfg:
     dreams: bool = False  # sft_dpo_seed: train on the night's dream rows
     day_dreams: bool = False  # sft_dpo_seed: earlier practice rows and her day dreams (replay + dream trials)
     protect: Protection = "off"  # sft_dpo_seed with the fold: tonight's slot off the anchors' basis (or a random one)
+    sdft: bool = False  # sft_dpo_seed: self-distillation rows, her context distilled on the student's own samples
     # The live comparison's matched control only: each night's training budget in minutes (its reference
     # arm's, serving included), which the job fills by the clock; every real night leaves it empty.
     match_by_night: tuple[tuple[date, float], ...] = ()
@@ -135,6 +138,8 @@ class LoraCfg:
         seeded = self.objective == "sft_dpo_seed"
         if (self.fold_rank is not None or self.dreams or self.day_dreams) and not seeded:
             raise LoraCfgError("the fold, dreams and day dreams train only under sft_dpo_seed")
+        if self.sdft and (not seeded or self.match_by_night):
+            raise LoraCfgError("self-distillation trains only under sft_dpo_seed, and never in a matched control")
         if self.protect not in PROTECTIONS:
             raise LoraCfgError(f"protect is one of {', '.join(PROTECTIONS)}")
         if self.protect != "off" and (not seeded or self.fold_rank is None):
@@ -215,6 +220,7 @@ def training_config(
     if cfg.objective == "sft_dpo_seed":
         fixed |= {"terms": {"fold_rank": cfg.fold_rank, "dreams": cfg.dreams,
                             **({} if not cfg.day_dreams else {"day_dreams": True}),
+                            **({} if not cfg.sdft else {"sdft": True}),
                             **({} if cfg.protect == "off" else {"protect": cfg.protect}),
                             **({} if cfg.passes is None else {"passes": cfg.passes})}}
     # A folded night loads the long-term adapter frozen and trains a fresh slot, at the fresh rate.

@@ -37,6 +37,13 @@ dreams. The job hands the group to the one loss, which holds out four dream rows
 four in the loaded model, and trains only the groups that lower the held-out seeding KL without
 dropping the anchors (``sleep_loss._dream_trials``). One job, one loaded model: the trials need no
 second adapter and no second boot.
+
+**Self-distillation** (``ANJO_SLEEP_SDFT``, the recipe's ``terms.sdft``): the dataset's ``sdft`` rows carry a
+teacher prompt (the consolidated day, then the query), a student prompt (the query alone), their kind and
+their source, and no reply. Each becomes a ``sleep_loss.SdftSeq``, kept when its teacher prompt and a full
+sample (``SDFT_TOKENS``) fit the sequence; the one loss samples every reply. Off, the rows are never read.
+Their prompts are the served ids every seeding prompt is; with no reply there is no render to hold them
+against (``_check_seed_tokens``).
 """
 from __future__ import annotations
 
@@ -49,6 +56,8 @@ from pathlib import Path
 from typing import Any, Final
 
 KINDS: Final = ("seed", "dream", "anchor")
+SDFT_KIND: Final = "sdft"  # ANJO_SLEEP_SDFT's rows: read only when the recipe's terms ask for them
+ROW_KINDS: Final = (*KINDS, SDFT_KIND)
 FOLD_FILE: Final = "sleep_fold.py"
 PROTECT_FILE: Final = "sleep_protect.py"
 Kept = list[tuple[dict[str, Any], dict[str, str]]]
@@ -56,18 +65,23 @@ Kept = list[tuple[dict[str, Any], dict[str, str]]]
 
 def term_rows(ct: Any, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """The rows by kind, each checked as the host cleaned it."""
-    found: dict[str, list[dict[str, Any]]] = {kind: [] for kind in KINDS}
+    found: dict[str, list[dict[str, Any]]] = {kind: [] for kind in ROW_KINDS}
     for row in rows:
         if "kind" not in row:
             continue
-        if row["kind"] not in KINDS:
-            raise ValueError(f"row {row.get('id')}'s kind is one of {', '.join(KINDS)}")
+        if row["kind"] not in ROW_KINDS:
+            raise ValueError(f"row {row.get('id')}'s kind is one of {', '.join(ROW_KINDS)}")
         if row["kind"] == "anchor":
             ct.check_clean({"id": row.get("id"), "prompt": row["prompt"], "chosen": [], "rejected": []})
             choices, answer = row.get("choices"), row.get("answer")
             if (not isinstance(choices, list) or not all(isinstance(c, str) and not ct.SPECIAL_TOKEN.search(c) for c in choices)
                     or isinstance(answer, bool) or not isinstance(answer, int) or not 0 <= answer < len(choices)):
                 raise ValueError(f"anchor {row.get('id')} has clean choices and an answer among them")
+        elif row["kind"] == SDFT_KIND:  # no reply: the student's and the teacher's prompts are checked
+            for form in (row, {**row, "prompt": row.get("teacher")}):
+                ct.check_clean({**form, "completion": []})
+            if not isinstance(row.get("sdft_kind"), str) or not isinstance(row.get("source"), str):
+                raise ValueError(f"sdft {row.get('id')} names its kind and its source")
         else:
             ct.check_clean(row)
             if row["kind"] == "seed":
@@ -110,16 +124,21 @@ def seed_batch(ct: Any, loss: Any, tokenizer: Any, kept: Kept, pairs: Kept, term
     dreams = ([(loss.Seq(prompt(row), reply(row), state=state_key(row)), str(row.get("seed_kind", "")))
                for row in terms["dream"]] if cfg["terms"]["dreams"] else [])  # dream rows train only when asked for
     fit = [(seq, kind) for seq, kind in dreams if len(seq.prompt) + len(seq.reply) <= limit]
+    distilling = bool(cfg["terms"].get("sdft"))  # sdft rows train only when asked for
+    sdft = [loss.SdftSeq(prompt(row), prompt(row, "teacher"), row["sdft_kind"], row["source"], state_key(row))
+            for row in terms[SDFT_KIND]] if distilling else []
     batch = loss.Batch(
         sft=tuple(loss.Seq(prompt(row), reply(row), ct.row_weight(row), state_key(row)) for row, _ in kept),
         pairs=tuple(loss.PairSeq(prompt(row), reply(row, "chosen"), reply(row, "rejected"), ct.row_weight(row),
                                  state_key(row)) for row, _ in pairs),
         seeds=tuple(row for row in seeds if len(row.teacher) + len(row.reply) <= limit),
         dreams=tuple(seq for seq, _ in fit), dream_groups=tuple(kind for _, kind in fit),
+        sdft=tuple(seq for seq in sdft if len(seq.teacher) + loss.SDFT_TOKENS <= limit),
         anchors=tuple(loss.AnchorSeq(prompt(row), tuple(tuple(ct.reply_ids(tokenizer, c, end=False)) for c in row["choices"]),
                                      row["answer"]) for row in terms["anchor"]),
     )
-    return batch, {"seed": len(seeds) - len(batch.seeds), "dream": len(dreams) - len(batch.dreams)}
+    return batch, {"seed": len(seeds) - len(batch.seeds), "dream": len(dreams) - len(batch.dreams),
+                   **({SDFT_KIND: len(sdft) - len(batch.sdft)} if distilling else {})}
 
 
 def _seed_model(model: Any, settings: dict[str, Any], prev: str | None, fold: int | None, loss: Any,

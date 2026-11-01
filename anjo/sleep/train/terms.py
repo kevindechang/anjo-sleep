@@ -37,14 +37,34 @@ same refusals as tonight's, newest first, at most ``SEED_REPLAY_MAX``, because t
 replies are too few to fill the capacity point's steps; a refusal is counted only while that cap
 still leaves room, so rows past it never inflate the receipt. They stay ordinary seed rows; only the
 dreams carry a group.
+
+**Self-distillation** (``sdft_rows``, ``ANJO_SLEEP_SDFT=1``), after Shenfeld, Damani, Hübotter and Agrawal,
+"Self-Distillation Enables Continual Learning" (arXiv 2601.19897): the same model is the teacher with a
+demonstration in context and the student without it, trained on the student's own samples. Arm 2C holds
+what she needs (``probes/arms.py``: its system turn is ``ContextBuilder.build``, the brief, preferences
+and corrections since it, and recall for the message, before the probe's prompt), and arm 3 must hold it
+in her weights. So the teacher reads the seeding row's consolidated day, the same material (the
+snapshot of C, built as 2C's is, then today's lessons, corrections, preferences and tone requests), and
+the student the query alone. No model writes a query: each is one of the seeding rows' own messages,
+tonight's practice first, then her day dreams, then replay, at most ``SDFT_SOURCES_MAX`` distinct ones,
+in three forms (``SDFT_FRAMES``): bare (``knowledge``: the day's new work), asking for a read
+(``tone``: where length, opening and hedging show, as in a ``tone_hold`` reply) and asking for a choice
+(``taste``: where her preferences decide). No frame names a preference, a tone or a style, so the student
+learns to hold them unasked; the job samples every reply (``sleep_loss.py``). A row is refused, and
+counted, when its query carries (``OverlapGuard``) a sealed probe, a held-out item, an item of a gate,
+anchor or knowledge set, or her own preference or tone request (a cue would teach the request, not its
+hold); when the decontaminator flags it; or when it is longer than the training sequence.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
+from types import MappingProxyType
 from typing import Any, Final
 
 from anjo.sleep.context.recall_common import estimate_tokens
@@ -54,8 +74,9 @@ from anjo.sleep.night.dreams import SEED_KINDS, Dream
 from anjo.sleep.night.meter import SpendMeter
 from anjo.sleep.ports import Decontaminator, EvidenceStore
 from anjo.sleep.practice.transcripts import PracticeTranscript, TranscriptStore
+from anjo.sleep.probes.decontam import NGRAM, probe_texts, words
 from anjo.sleep.provenance import may_train, union
-from anjo.sleep.sets.loader import load_anchors
+from anjo.sleep.sets.loader import SETS_DIR, load_anchors, load_collapse, load_general
 from anjo.sleep.train.dataset import (
     DEFAULT_MAX_SEQ_TOKENS,
     ROLE_OVERHEAD_TOKENS,
@@ -63,6 +84,7 @@ from anjo.sleep.train.dataset import (
     Dataset,
     DreamRow,
     Example,
+    SdftRow,
     SeedRow,
     carries_verbatim,
 )
@@ -78,6 +100,20 @@ DAY_DREAMS_NOT_WIRED: Final = "not wired"  # the dataset receipt's day dreams wi
 DAY_DREAM_DROPS: Final = ("no_context", "uncleared", "probe", "truncated")
 NOTES_HEAD: Final = "What you know about them, from your notes:"
 TODAY_HEAD: Final = "What they told you today:"
+SDFT_KINDS: Final = ("knowledge", "tone", "taste")
+# What each kind adds to her message. None names a preference, a tone or a style (a probe's own rule).
+SDFT_FRAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({
+    "knowledge": ("",),
+    "tone": ("Where does this stand?", "What is your read on it?"),
+    "taste": ("Which way would you go, and why?", "What would you choose here?"),
+})
+SDFT_SOURCES_MAX: Final = 8  # distinct messages a night distils, three rows each: at most 24 rows
+SDFT_REPLY_TOKENS: Final = 192  # the student's sample, which the length counts (``sleep_loss.SDFT_TOKENS``)
+SDFT_DROPS: Final = ("probe", "held_out", "gate_set", "cue", "truncated")
+CUE_KINDS: Final = ("preference", "tone_request")  # her own requests: a query never carries one
+GUARD_EXACT_WORDS: Final = 3  # a needle this long or longer is refused whole wherever it appears
+GUARD_NEAR_NGRAM: Final = 5
+GUARD_NEAR_SHARE: Final = 0.5  # half of either side's word 5-grams in the other: a near duplicate
 
 
 def today_items(day: Sequence[Evidence]) -> list[Evidence]:
@@ -264,6 +300,107 @@ def dream_rows(
     return tuple(rows), dropped
 
 
+def _grams(tokens: Sequence[str], n: int) -> frozenset[tuple[str, ...]]:
+    return frozenset(tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1))
+
+
+class OverlapGuard:
+    """What no self-distillation query may carry, each needle labelled by where it comes from (``probe``,
+    ``held_out``, ``gate_set`` or ``cue``). After the decontaminator's folding (NFKC, case, letters and
+    digits only), a query is refused when it holds a needle of ``GUARD_EXACT_WORDS`` words or more whole,
+    shares a run of ``NGRAM`` (13) words with one (RF5's rule), or is a near duplicate of one: at least
+    ``GUARD_NEAR_SHARE`` of the needle's word 5-grams are in the query, or of the query's in the needle
+    (a query cut from a longer item). ``refusal`` names the first needle's label, probes first."""
+
+    def __init__(self, needles: Iterable[tuple[str, str]]) -> None:
+        self._needles = [(label, tokens, _grams(tokens, GUARD_NEAR_NGRAM), _grams(tokens, NGRAM))
+                         for label, text in needles if (tokens := tuple(words(text)))]
+
+    def refusal(self, text: str) -> str | None:
+        hay = words(text)
+        padded = " " + " ".join(hay) + " "
+        near, long = _grams(hay, GUARD_NEAR_NGRAM), _grams(hay, NGRAM)
+        for label, tokens, needle_near, needle_long in self._needles:
+            if len(tokens) >= GUARD_EXACT_WORDS and " " + " ".join(tokens) + " " in padded:
+                return label
+            if needle_long & long:
+                return label
+            shared = len(needle_near & near)
+            if shared and (shared >= GUARD_NEAR_SHARE * len(needle_near) or shared >= GUARD_NEAR_SHARE * len(near)):
+                return label
+        return None
+
+
+@functools.cache
+def set_texts() -> tuple[str, ...]:
+    """Every item text of the gate sets (general and collapse), the anchors and the frozen knowledge sets:
+    questions, prompts and choices. Read once a process; none of them is ever a training query."""
+    texts = [text for item in (*load_general(), *load_anchors()) for text in (item.question, *item.choices)]
+    texts += [item.prompt for item in load_collapse()]
+    for path in sorted(SETS_DIR.glob("knowledge_*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                texts += [str(row.get("prompt", "")), *(str(choice) for choice in row.get("choices", ()))]
+    return tuple(text for text in texts if text.strip())
+
+
+def held_out_items(store: EvidenceStore, night: date) -> list[Evidence]:
+    """The person's held-out items on every day her stored evidence spans, and tonight's."""
+    days = {item.day for item in store.stored(night)} | {night}
+    return [item for day in sorted(days) for item in store.held_out(day)]
+
+
+def sdft_guard(sealed: Sequence[Probe], held_out: Sequence[Evidence], said: Sequence[Evidence]) -> OverlapGuard:
+    """The night's guard: her sealed probes (prompts and options), her held-out items, every set item,
+    and her own preferences and tone requests (``said``'s, as cues)."""
+    return OverlapGuard([
+        *(("probe", text) for probe in sealed for text in probe_texts(probe)),
+        *(("held_out", item.text) for item in held_out),
+        *(("gate_set", text) for text in set_texts()),
+        *(("cue", item.text) for item in said if item.kind in CUE_KINDS),
+    ])
+
+
+def sdft_query(message: str, kind: str, source: str, seed: int) -> str:
+    """``message`` in ``kind``'s form: bare, or followed by one of its frames, picked by a seeded hash."""
+    frames = SDFT_FRAMES[kind]
+    frame = frames[int(hashlib.sha256(f"{seed}:sdft:{source}:{kind}".encode()).hexdigest()[:8], 16) % len(frames)]
+    return f"{message.strip()}\n\n{frame}" if frame else message.strip()
+
+
+def sdft_rows(
+    seeds: Sequence[SeedRow], replay_ids: frozenset[str], guard: OverlapGuard, sealed: Sequence[Probe],
+    decontam: Decontaminator, *, seed: int, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
+) -> tuple[tuple[SdftRow, ...], dict[str, int]]:
+    """The self-distillation rows from the seeding rows' messages, and the refusals by reason. Sources:
+    tonight's rows, then her day dreams, then replay (``replay_ids``), each message once, the first
+    ``SDFT_SOURCES_MAX``; each gives one row a kind, with its seeding row's context and core."""
+    dropped = dict.fromkeys(SDFT_DROPS, 0)
+    order = sorted(range(len(seeds)), key=lambda i: (
+        2 if seeds[i].id in replay_ids else 1 if seeds[i].group == DAY_DREAM_GROUP else 0, i))
+    sources: list[SeedRow] = []
+    seen: set[str] = set()
+    for i in order:
+        if len(sources) < SDFT_SOURCES_MAX and (message := seeds[i].message.strip()) not in seen:
+            seen.add(message)
+            sources.append(seeds[i])
+    candidates = [(row, kind, sdft_query(row.message, kind, row.id, seed)) for row in sources for kind in SDFT_KINDS]
+    flags = decontam.check([query for _, _, query in candidates], list(sealed)) if candidates else ()
+    if len(flags) != len(candidates):
+        raise ValueError("the decontaminator must return one flag per text")
+    rows: list[SdftRow] = []
+    for (row, kind, query), flag in zip(candidates, flags, strict=True):
+        tokens = _tokens(row.context, query) + SDFT_REPLY_TOKENS
+        reason = guard.refusal(query) or ("probe" if flag else "truncated" if tokens > max_seq_tokens else None)
+        if reason is not None:
+            dropped[reason] += 1
+            continue
+        rows.append(SdftRow(id=f"{row.id}:{kind}", kind=kind, source=row.id, context=row.context, query=query,
+                            tokens=tokens, core=row.core))
+    return tuple(rows), dropped
+
+
 def anchor_rows(seed: int, n: int = ANCHORS) -> tuple[AnchorRow, ...]:
     """A fixed, seeded ``n`` of the anchor set's items (disjoint from every gate): the same every night of a run."""
     ranked = sorted(load_anchors(), key=lambda item: hashlib.sha256(f"{seed}:anchor:{item.id}".encode()).hexdigest())
@@ -328,4 +465,11 @@ def attach_night_terms(
             done["dreams_in_channel"] = sum(row.core is not None for row in dreams)
     anchors = (anchor_rows(deps.settings.seed) if dreams or deps.terms.protect or deps.terms.day_dreams else ())
     done["anchors"] = len(anchors)
-    return replace(data, seeds=seeds, dreams=dreams, anchors=anchors), done
+    sdft: tuple[SdftRow, ...] = ()
+    if deps.terms.sdft:  # from the seeding rows above: no model is asked for anything
+        guard = sdft_guard(sealed, held_out_items(store, night), store.stored(night))
+        replay = frozenset(example.id for example in data.examples if not example.new)
+        sdft, refused = sdft_rows(seeds, replay, guard, sealed, deps.decontam, seed=deps.settings.seed)
+        done["sdft"] = {"rows": {kind: sum(row.kind == kind for row in sdft) for kind in SDFT_KINDS},
+                        "sources": len({row.source for row in sdft}), "dropped": refused}
+    return replace(data, seeds=seeds, dreams=dreams, anchors=anchors, sdft=sdft), done

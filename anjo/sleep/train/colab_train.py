@@ -48,7 +48,8 @@ objective), runs the one weighted loss over the SFT rows, the pairs and the data
 (the main block's passes at one row a step, in place of the step plan). ``match_minutes`` is the live comparison's matched control and nothing else: the SFT pass
 (or ``sft_dpo_seed``'s main block, dreams off) trains for that many minutes by the clock, one warmup and
 one cosine over them (``stretch``), and the DPO pass follows as today. The receipt's ``match`` gives the
-budget, the minutes used and the steps.
+budget, the minutes used and the steps. ``terms.sdft`` (``ANJO_SLEEP_SDFT``) trains the dataset's ``sdft`` rows
+on the student's own samples, and never with ``match_minutes``.
 
 The runner sets four environment variables: ``ANJO_TRAIN_CONFIG`` (the recipe as JSON),
 ``ANJO_TRAIN_DATASET`` (the dataset file), ``ANJO_TRAIN_OUT`` (where the adapter and
@@ -200,12 +201,13 @@ def _check_terms(cfg: dict[str, Any]) -> None:
         raise ValueError(f"terms come with the {SEED_OBJECTIVE} objective, and only with it")
     if seeded:
         fold = terms.get("fold_rank") if isinstance(terms, dict) else 0
-        if (not isinstance(terms, dict) or set(terms) - {"protect", "passes", "day_dreams"} != {"fold_rank", "dreams"}
+        if (not isinstance(terms, dict) or set(terms) - {"protect", "passes", "day_dreams", "sdft"} != {"fold_rank", "dreams"}
                 or not isinstance(terms["dreams"], bool)
                 or not isinstance(terms.get("day_dreams", False), bool)
+                or not isinstance(terms.get("sdft", False), bool)
                 or (fold is not None and (isinstance(fold, bool) or not isinstance(fold, int)
                                           or not cfg["r"] <= fold <= MAX_RANK))):
-            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}), dreams and day_dreams "
+            raise ValueError(f"terms are fold_rank (none, or from r to {MAX_RANK}), dreams, day_dreams and sdft "
                              "(true or false) and, with the fold, protect")
         if "protect" in terms and (terms["protect"] not in PROTECT_KINDS or fold is None):
             raise ValueError(f"protect is one of {', '.join(PROTECT_KINDS)}, and only with the fold")
@@ -214,11 +216,12 @@ def _check_terms(cfg: dict[str, Any]) -> None:
                 "passes" in terms and "match_minutes" in cfg):
             raise ValueError(f"passes (capacity: one row a step) are 1 to {MAX_EPOCHS}, never with match_minutes")
     if "match_minutes" in cfg and (
-            (seeded and bool(terms and (terms["dreams"] or terms.get("day_dreams", False))))
+            (seeded and bool(terms and (terms["dreams"] or terms.get("day_dreams", False) or terms.get("sdft", False))))
             or isinstance(cfg["match_minutes"], bool)
             or not isinstance(cfg["match_minutes"], int | float)
             or not 0 < cfg["match_minutes"] <= MAX_MATCH_MINUTES):
-        raise ValueError(f"match_minutes is a control's budget, up to {MAX_MATCH_MINUTES:g} minutes, never with dreams")
+        raise ValueError(f"match_minutes is a control's budget, up to {MAX_MATCH_MINUTES:g} minutes, never with dreams "
+                         "or self-distillation")
 
 
 def channel_module() -> Any:
