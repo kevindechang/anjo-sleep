@@ -63,13 +63,15 @@ CRITIC_HOME = "practice/critics.py"
 # name that module alone; MIND's causal-test tool (run by hand after --go) asks Sleep's selector the same
 # way. Fireworks, the provider's setting and MIND's pool stay forbidden there. The
 # morning's selectable DeepSeek judge (ANJO_SLEEP_JUDGE=deepseek, never Spark Open) may name Fireworks
-# in its wiring and scoring files and in the adapter-strength read that holds its per-call cost, and
-# nothing else on this list.
+# in its wiring and scoring files, in the adapter-strength read that holds its per-call cost and in the
+# final's registered-judge check (the model id a final morning must be judged by), and nothing else on
+# this list.
 ALLOWED: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {"tools/thought_channel.py": frozenset({"spark_provider"}),
      "tools/mind_causal.py": frozenset({"spark_provider"}),
      "app/morning.py": frozenset({"fireworks"}), "probes/morning.py": frozenset({"fireworks"}),
-     "probes/score.py": frozenset({"fireworks"}), "tools/adapter_scale.py": frozenset({"fireworks"})})
+     "probes/score.py": frozenset({"fireworks"}), "tools/adapter_scale.py": frozenset({"fireworks"}),
+     "probes/registered_judge.py": frozenset({"fireworks"})})
 
 
 def _ok(model: str) -> dict[str, Any]:
