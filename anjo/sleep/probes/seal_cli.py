@@ -4,16 +4,21 @@
 
 For each life of the ledger's one ``final_draw`` entry it reads the expanded persona file (which
 must match its ``final_persona`` entry), runs ``generate_probes`` (Muse Spark on the Meta API, the
-final test's probe writer, temperature 0) with the registered ``PROBE_SEED``, and seals them with
+final test's probe writer) with the registered ``PROBE_SEED``, and seals them with
 ``seal_probes`` into ``ANJO_SLEEP_SEALED_DIR`` (or ``--sealed-dir``) as ``<life id>.jsonl``: the file
 the night and the morning load for that persona. Each sealed file is a ``final_sealed`` entry (the
-file's sha256; its note: life, seed, probe counts per kind).
+file's sha256; its note: life, seed, attempt, temperature, probe counts per kind).
+
+**Temperature.** Attempt 1 runs ``generate_probes`` as registered: temperature 0 (``TEMPERATURE``),
+greedy. Attempts 2 and later send every call at ``RETRY_TEMPERATURE`` instead, since a greedy rerun
+with the same seed and inputs would return the reply that was refused. ``PROBE_SEED`` only orders the
+held-out items, and the Meta API takes no seed, so a retry's sample is new but not reproducible.
 
 **Never overwritten.** A sealed file that exists and matches its ``final_sealed`` entry is done and
 skipped; one that exists without a matching entry stops the run before any call.
 
 **Refusal.** ``generate_probes`` refuses output that breaks a rule (``ProbeGenError``). Each refusal
-is a ``final_probes_refused`` entry, and the life is tried again on the next run, at most
+is a ``final_probes_refused`` entry (life, seed, attempt, temperature, reason), and the life is tried again on the next run, at most
 ``PROBE_ATTEMPTS`` times in all, counted in the ledger. A life out of attempts exits 3 and is not
 sealed; no life is redrawn. A failed call is not an attempt: it stops the run.
 
@@ -39,7 +44,7 @@ from anjo.sleep.model_api import ChatResult
 from anjo.sleep.night.holds import SPARK_MAX_IN_TOKENS, held, usd
 from anjo.sleep.personas.model import load_person_file
 from anjo.sleep.prereg import ledger
-from anjo.sleep.probes.generate import WRITTEN_KINDS, ProbeGenError, generate_probes, seal_probes
+from anjo.sleep.probes.generate import TEMPERATURE, WRITTEN_KINDS, ChatFn, ProbeGenError, generate_probes, seal_probes
 from anjo.sleep.sim.expand_cli import PERSONA_KIND, PERSONAS_DIR
 from anjo.sleep.stops import BudgetStop
 
@@ -47,6 +52,7 @@ SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"
 PROBE_MODEL: Final = "muse-spark"
 PROBE_SEED: Final = 20261101
 PROBE_ATTEMPTS: Final = 3
+RETRY_TEMPERATURE: Final = 0.7  # attempts 2+: at 0 the same inputs return attempt 1's reply
 PROBE_CALLS: Final = len(WRITTEN_KINDS) + 1  # the written kinds, then new_work; taste_ab needs no call
 PROBE_MAX_OUT_TOKENS: Final = 16_384
 META_POOL: Final = ("meta_usd",)
@@ -73,6 +79,17 @@ class MeteredChat:
                             max_tokens=PROBE_MAX_OUT_TOKENS)
         self.tokens = (self.tokens[0] + int(result.input_tokens), self.tokens[1] + int(result.output_tokens))
         return result
+
+
+def _at(chat: MeteredChat, temperature: float) -> ChatFn:
+    """``chat`` with every call sent at ``temperature``, whatever ``generate_probes`` asks."""
+    forced = temperature
+
+    def sampled(model: Any, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+                timeout_s: float, *, temperature: float | None = None) -> ChatResult:
+        return chat(model, messages, tools, timeout_s, temperature=forced)
+
+    return sampled
 
 
 @dataclass(frozen=True)
@@ -105,6 +122,9 @@ def _seal_one(life: str, chat: MeteredChat, personas_dir: Path, sealed_dir: Path
               prices: tuple[float, float]) -> SealOutcome:
     pf = load_person_file(personas_dir / f"{life}.json")
     worst = PROBE_CALLS * prep.tokens_usd(prices, SPARK_MAX_IN_TOKENS, PROBE_MAX_OUT_TOKENS)
+    attempt = prep.attempts_used(ledger.read_entries(), REFUSED_KIND, life) + 1
+    temperature = TEMPERATURE if attempt == 1 else RETRY_TEMPERATURE
+    writer: ChatFn = chat if attempt == 1 else _at(chat, RETRY_TEMPERATURE)
     before = chat.tokens
 
     def spent() -> float:
@@ -112,16 +132,18 @@ def _seal_one(life: str, chat: MeteredChat, personas_dir: Path, sealed_dir: Path
 
     try:
         with held(budget, f"{prep.HOLD_PREFIX}probes:{life}:s{PROBE_SEED}", META_POOL, usd(worst), spent):
-            probes = generate_probes(pf, PROBE_SEED, chat=chat, model=PROBE_MODEL)
+            probes = generate_probes(pf, PROBE_SEED, chat=writer, model=PROBE_MODEL)
     except ProbeGenError as refused:
         ledger.register(REFUSED_KIND, ledger.sha256_bytes(str(refused).encode()), prep.canonical(
-            {"life": life, "seed": PROBE_SEED, "reason": str(refused)}))
+            {"life": life, "seed": PROBE_SEED, "attempt": attempt, "temperature": temperature,
+             "reason": str(refused)}))
         return SealOutcome(life, "refused")
     sha = seal_probes(probes, sealed_dir)
     counts: dict[str, int] = {}
     for p in probes:
         counts[p.kind] = counts.get(p.kind, 0) + 1
-    ledger.register(SEALED_KIND, sha, prep.canonical({"life": life, "seed": PROBE_SEED, "counts": counts}))
+    ledger.register(SEALED_KIND, sha, prep.canonical({"life": life, "seed": PROBE_SEED, "attempt": attempt,
+                                                    "temperature": temperature, "counts": counts}))
     return SealOutcome(life, "sealed", sha)
 
 

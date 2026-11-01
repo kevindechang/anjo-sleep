@@ -317,3 +317,107 @@ def test_freeze_registration_appends_once(data, monkeypatch):
     assert len(notes) == 1 and notes[0].endswith("(at the freeze)")
     assert register_freeze.main([]) == 0
 
+
+
+# ── retries sample: attempt 1 greedy, attempts 2+ at the retry temperature ──
+
+
+class GreedyBreaks(FakeSpark):
+    """Spark Open whose greedy reply breaks a rule and whose sampled one doesn't; records every call."""
+
+    def __call__(self, model, messages, tools, timeout_s, *, temperature=None, max_tokens=None, seed=None):
+        self.calls.append({"model": model, "messages": messages, "tools": tools, "timeout_s": timeout_s,
+                           "temperature": temperature, "max_tokens": max_tokens, "seed": seed})
+        if not temperature:
+            return ChatResult("not json", (), model, 100, 200, "stop")
+        return ChatResult(self.inner.complete(None, messages, temperature=temperature, seed=seed).text, (), model,
+                          100, 200, "stop")
+
+
+def test_expansion_attempt_1_is_the_greedy_request_and_retries_sample(data):
+    from anjo.sleep.lives.draw import load_pairs
+    from anjo.sleep.personas.model import PLANNED_NIGHTS
+    from anjo.sleep.sim import expand
+    _draw(data)
+    spark = GreedyBreaks()
+    out, personas = _expand(data, spark)
+    assert {o.status for o in out} == {"written"} and {o.attempts for o in out} == {2}
+    first = draw_cli.registered_draw().lives[0]
+    pair = next(p for p in load_pairs() if any(lf.id == first for lf in p.lives))
+    life = next(lf for lf in pair.lives if lf.id == first)
+    assert spark.calls[0] == {
+        "model": "meta-models/muse-spark-open-1026", "tools": None, "timeout_s": expand_cli.EXPAND_TIMEOUT_S,
+        "messages": [{"role": "user", "content": expand._prompt(life, pair, PLANNED_NIGHTS)}],
+        "temperature": 0.0, "max_tokens": expand_cli.EXPAND_MAX_OUT_TOKENS, "seed": expand_cli.EXPAND_SEED}
+    assert spark.calls[1] == {**spark.calls[0], "temperature": expand_cli.RETRY_TEMPERATURE,
+                              "seed": expand_cli.EXPAND_SEED + 1}
+    entries = ledger.read_entries()
+    refused = [json.loads(e.note) for e in entries if e.kind == "final_expand_refused"]
+    assert [(n["attempt"], n["temperature"]) for n in refused] == [(1, 0.0)] * 3
+    written = [json.loads(e.note) for e in entries if e.kind == "final_persona"]
+    assert [(n["attempt"], n["temperature"], n["seed"]) for n in written] == \
+        [(2, expand_cli.RETRY_TEMPERATURE, expand_cli.EXPAND_SEED + 1)] * 3
+    assert load_person_file(personas / f"{first}.json").visible.person_id == first
+
+
+def test_expansion_attempt_3_also_samples_at_the_retry_temperature(data):
+    _draw(data)
+    first = draw_cli.registered_draw().lives[0]
+    spark = FakeSpark({first: 99})
+    _expand(data, spark)
+    temps = [(c["seed"], c["temperature"]) for c in spark.calls[:3]]
+    assert temps == [(expand_cli.EXPAND_SEED, 0.0), (expand_cli.EXPAND_SEED + 1, expand_cli.RETRY_TEMPERATURE),
+                     (expand_cli.EXPAND_SEED + 2, expand_cli.RETRY_TEMPERATURE)]
+    notes = [json.loads(e.note) for e in ledger.read_entries() if e.kind == "final_expand_refused"]
+    assert [n["temperature"] for n in notes] == [0.0, expand_cli.RETRY_TEMPERATURE, expand_cli.RETRY_TEMPERATURE]
+
+
+class GreedyMeta(MetaChat):
+    """The Meta API probe writer, its greedy replies one probe short, its sampled ones whole."""
+
+    def __call__(self, model, messages, tools, timeout_s, *, temperature=None, max_tokens=None):
+        self.inner.mutate = None if temperature else (lambda kind, rows: rows[:-1])
+        return super().__call__(model, messages, tools, timeout_s, temperature=temperature, max_tokens=max_tokens)
+
+
+def _seal(data, personas, chat):
+    return seal_cli.run(chat=seal_cli.MeteredChat(chat), budget=None, personas_dir=personas,
+                        sealed_dir=data / "sealed", environ=PRICES)
+
+
+def test_probe_attempt_1_is_greedy_and_a_retry_samples_and_seals(data):
+    personas = _expanded(data)
+    chat = GreedyMeta()
+    assert {o.status for o in _seal(data, personas, chat)} == {"refused"}
+    assert {c["temperature"] for c in chat.inner.calls} == {0.0}
+    assert len(chat.inner.calls) == 3  # each greedy attempt stops at its first, short reply
+    assert {o.status for o in _seal(data, personas, chat)} == {"sealed"}
+    later = chat.inner.calls[3:]
+    assert len(later) == 3 * seal_cli.PROBE_CALLS and {c["temperature"] for c in later} == {seal_cli.RETRY_TEMPERATURE}
+    entries = ledger.read_entries()
+    refused = [json.loads(e.note) for e in entries if e.kind == "final_probes_refused"]
+    assert [(n["attempt"], n["temperature"]) for n in refused] == [(1, 0.0)] * 3
+    sealed = [json.loads(e.note) for e in entries if e.kind == "final_sealed"]
+    assert [(n["attempt"], n["temperature"], n["seed"]) for n in sealed] == \
+        [(2, seal_cli.RETRY_TEMPERATURE, seal_cli.PROBE_SEED)] * 3
+    for life in draw_cli.registered_draw().lives:
+        assert load_sealed(data / "sealed" / f"{life}.jsonl")
+
+
+def test_probe_attempt_1_request_is_unchanged_and_attempt_3_samples(data):
+    from anjo.sleep.probes.generate import TEMPERATURE, generate_probes
+    personas = _expanded(data)
+    first = draw_cli.registered_draw().lives[0]
+    direct = FakeChat()
+    generate_probes(load_person_file(personas / f"{first}.json"), seal_cli.PROBE_SEED, chat=direct,
+                    model=seal_cli.PROBE_MODEL)
+    chat = MetaChat(lambda kind, rows: rows[:-1])
+    for _ in range(seal_cli.PROBE_ATTEMPTS):
+        _seal(data, personas, chat)
+    calls = chat.inner.calls
+    assert calls[:1] == direct.calls[:1] and {c["temperature"] for c in calls[:3]} == {TEMPERATURE}
+    by_attempt = [{c["temperature"] for c in calls[i * 3:(i + 1) * 3]} for i in range(3)]
+    assert by_attempt == [{0.0}, {seal_cli.RETRY_TEMPERATURE}, {seal_cli.RETRY_TEMPERATURE}]
+    notes = [json.loads(e.note) for e in ledger.read_entries() if e.kind == "final_probes_refused"]
+    assert sorted((n["attempt"], n["temperature"]) for n in notes if n["life"] == first) == \
+        [(1, 0.0), (2, seal_cli.RETRY_TEMPERATURE), (3, seal_cli.RETRY_TEMPERATURE)]

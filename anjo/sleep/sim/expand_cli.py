@@ -8,20 +8,22 @@ folder the simulator, the night and the judge brief read personas from (``anjo/s
 as ``{"visible": ..., "held_out": ...}``, and checks the file loads (``load_person_file``).
 
 **Registered parameters** (this file is hashed at the freeze, ``prereg.register_freeze``):
-``EXPAND_SEED``, the seed of attempt 1 (attempt *k* asks seed ``EXPAND_SEED + k - 1``, so a retry
-samples again); ``PLANNED_NIGHTS``, the horizon every loader validates new-work arrival days against
+``EXPAND_SEED``, the seed of attempt 1 (attempt *k* asks seed ``EXPAND_SEED + k - 1``);
+``RETRY_TEMPERATURE``: attempt 1 asks at ``EXPAND_TEMPERATURE`` (0, greedy, so its seed changes
+nothing), attempts 2 and later at ``RETRY_TEMPERATURE``, where the new seed makes them sample a new
+reply (reproducibly only as far as the provider honours the seed); ``PLANNED_NIGHTS``, the horizon every loader validates new-work arrival days against
 (days 2 to 15); at most ``EXPAND_ATTEMPTS`` attempts per life, counted in the ledger across runs.
 
 **Refusal.** ``expand_life`` refuses a file that breaks a rule and never repairs one. Each refusal
 is a ``final_expand_refused`` entry (the sha256 of the model's reply, the life, the attempt, the
-seed and the reason), and the next attempt runs. A life refused ``EXPAND_ATTEMPTS`` times is not
+seed, the temperature and the reason), and the next attempt runs. A life refused ``EXPAND_ATTEMPTS`` times is not
 written: the run goes on to the other lives and exits 3 naming it. The draw stands: no life is
 redrawn or replaced, and the README says which life could not be expanded. A failed call (the
 provider down) is not an attempt: it stops the run, and the rerun starts the life again.
 
 **Written once.** A life whose file exists and matches its ``final_persona`` entry is done and
 skipped; a file that exists without a matching entry stops the run before any call. Each written
-file is a ``final_persona`` entry (the file's sha256; its note: life, attempt, seed, horizon, and the
+file is a ``final_persona`` entry (the file's sha256; its note: life, attempt, seed, temperature, horizon, and the
 canonical hashes of the visible and held-out parts).
 
 **Cost.** Each call holds its worst case (``SPARK_MAX_IN_TOKENS`` in, ``EXPAND_MAX_OUT_TOKENS`` out,
@@ -54,12 +56,13 @@ from anjo.sleep.personas.model import (
     to_visible_dict,
 )
 from anjo.sleep.prereg import ledger
-from anjo.sleep.sim.expand import ExpandError, expand_life
+from anjo.sleep.sim.expand import EXPAND_TEMPERATURE, ExpandError, expand_life
 from anjo.sleep.stops import BudgetStop
 
 PERSONAS_DIR: Final = Path(__file__).resolve().parents[1] / "personas"
 EXPAND_SEED: Final = 20261101
 EXPAND_ATTEMPTS: Final = 3
+RETRY_TEMPERATURE: Final = 0.7  # attempts 2+: at 0 a new seed would return attempt 1's reply
 EXPAND_MAX_OUT_TOKENS: Final = 32_768  # a whole life file: 75 preferences, 25+ new work, 15 taste items
 EXPAND_TIMEOUT_S: Final = 900.0
 SPARK_POOL: Final = ("baseten_sleep_usd",)
@@ -122,7 +125,7 @@ def _plan(lives: Sequence[str], personas_dir: Path, entries: Sequence[ledger.Led
     return state
 
 
-def _write(life: Life, pf: Any, personas_dir: Path, attempt: int, seed: int) -> str:
+def _write(life: Life, pf: Any, personas_dir: Path, attempt: int, seed: int, temperature: float) -> str:
     target = personas_dir / f"{life.id}.json"
     body = {"visible": to_visible_dict(pf.visible), "held_out": to_held_out_dict(pf.held_out)}
     pending = target.with_name(f".{target.name}.tmp")
@@ -131,7 +134,8 @@ def _write(life: Life, pf: Any, personas_dir: Path, attempt: int, seed: int) -> 
     pending.replace(target)
     sha = ledger.sha256_file(target)
     ledger.register(PERSONA_KIND, sha, prep.canonical({
-        "life": life.id, "attempt": attempt, "seed": seed, "planned_nights": PLANNED_NIGHTS,
+        "life": life.id, "attempt": attempt, "seed": seed, "temperature": temperature,
+        "planned_nights": PLANNED_NIGHTS,
         "visible_sha256": ledger.sha256_bytes(canonical_json(to_visible_dict(pf.visible))),
         "held_out_sha256": ledger.sha256_bytes(canonical_json(to_held_out_dict(pf.held_out))),
     }))
@@ -144,6 +148,7 @@ def _expand_one(life: Life, client: SparkOpenClient, personas_dir: Path, budget:
     worst = prep.tokens_usd(prices, SPARK_MAX_IN_TOKENS, EXPAND_MAX_OUT_TOKENS)
     for attempt in range(used + 1, EXPAND_ATTEMPTS + 1):
         seed = EXPAND_SEED + attempt - 1
+        temperature = EXPAND_TEMPERATURE if attempt == 1 else RETRY_TEMPERATURE
         before = client.tokens
 
         def spent(before: tuple[int, int] = before) -> float:
@@ -151,12 +156,15 @@ def _expand_one(life: Life, client: SparkOpenClient, personas_dir: Path, budget:
 
         try:
             with held(budget, f"{prep.HOLD_PREFIX}expand:{life.id}:s{seed}", SPARK_POOL, usd(worst), spent):
-                pf = expand_life(life, seed, client=client, planned_nights=PLANNED_NIGHTS)
+                pf = expand_life(life, seed, client=client, planned_nights=PLANNED_NIGHTS,
+                                 temperature=temperature)
         except ExpandError as refused:
             ledger.register(REFUSED_KIND, ledger.sha256_bytes(client.last_text.encode()), prep.canonical(
-                {"life": life.id, "attempt": attempt, "seed": seed, "reason": str(refused)}))
+                {"life": life.id, "attempt": attempt, "seed": seed, "temperature": temperature,
+                 "reason": str(refused)}))
             continue
-        return LifeOutcome(life.id, "written", attempt, _write(life, pf, personas_dir, attempt, seed))
+        return LifeOutcome(life.id, "written", attempt, _write(life, pf, personas_dir, attempt, seed,
+                                                                temperature))
     return LifeOutcome(life.id, "refused", EXPAND_ATTEMPTS)
 
 
