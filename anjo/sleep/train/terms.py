@@ -47,10 +47,10 @@ in her weights. So the teacher reads the seeding row's consolidated day, the sam
 snapshot of C, built as 2C's is, then today's lessons, corrections, preferences and tone requests), and
 the student the query alone. No model writes a query: each is one of the seeding rows' own messages,
 tonight's practice first, then her day dreams, then replay, at most ``SDFT_SOURCES_MAX`` distinct ones,
-in three forms (``SDFT_FRAMES``): bare (``knowledge``: the day's new work), asking for a read
-(``tone``: where length, opening and hedging show, as in a ``tone_hold`` reply) and asking for a choice
-(``taste``: where her preferences decide). No frame names a preference, a tone or a style, so the student
-learns to hold them unasked; the job samples every reply (``sleep_loss.py``). A row is refused, and
+in two forms (``SDFT_FRAMES``): bare (``tone``: the work message as it came, as a ``tone_hold`` probe is
+an ordinary work message, so length, opening and hedging show unasked; the day's new work is asked the
+same way) and asking for a choice (``taste``: where her preferences decide). No frame names a preference,
+a tone or a style, so the student learns to hold them unasked; the job samples every reply (``sleep_loss.py``). A row is refused, and
 counted, when its query carries (``OverlapGuard``) a sealed probe, a held-out item, an item of a gate,
 anchor or knowledge set, or her own preference or tone request (a cue would teach the request, not its
 hold); when the decontaminator flags it; or when it is longer than the training sequence.
@@ -100,14 +100,19 @@ DAY_DREAMS_NOT_WIRED: Final = "not wired"  # the dataset receipt's day dreams wi
 DAY_DREAM_DROPS: Final = ("no_context", "uncleared", "probe", "truncated")
 NOTES_HEAD: Final = "What you know about them, from your notes:"
 TODAY_HEAD: Final = "What they told you today:"
-SDFT_KINDS: Final = ("knowledge", "tone", "taste")
-# What each kind adds to her message. None names a preference, a tone or a style (a probe's own rule).
+SDFT_KINDS: Final = ("tone", "taste")
+# What each kind adds to her message. None names a preference, a tone or a style (a probe's own rule); a
+# tone query is the bare message, as a tone_hold probe is (a bare knowledge row would be the same query).
 SDFT_FRAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({
-    "knowledge": ("",),
-    "tone": ("Where does this stand?", "What is your read on it?"),
+    "tone": ("",),
     "taste": ("Which way would you go, and why?", "What would you choose here?"),
 })
-SDFT_SOURCES_MAX: Final = 8  # distinct messages a night distils, three rows each: at most 24 rows
+# Distinct messages a night distils, a row a kind: tonight's practice (16 scenes), then day dreams, then
+# replay all fit. A sampled visit is about 30 s on the A100 (192 tokens of Glimmer-30B in 4-bit at some
+# 8 a second, then the teacher's and the student's passes), so 24 sources less the 2 held are some 11
+# minutes of tone rows at one epoch, inside the term's 15 (``sleep_loss.SDFT_BUDGET_S``); past it a
+# visit draws nothing.
+SDFT_SOURCES_MAX: Final = 24
 SDFT_REPLY_TOKENS: Final = 192  # the student's sample, which the length counts (``sleep_loss.SDFT_TOKENS``)
 SDFT_DROPS: Final = ("probe", "held_out", "gate_set", "cue", "truncated")
 CUE_KINDS: Final = ("preference", "tone_request")  # her own requests: a query never carries one

@@ -62,7 +62,7 @@ imitation samples ``IMITATION_SAMPLES_DAY`` times.
 **Self-distillation** (``Batch.sdft``, ``ANJO_SLEEP_SDFT``), after Shenfeld, Damani, Hübotter and Agrawal,
 "Self-Distillation Enables Continual Learning" (arXiv 2601.19897): the model with a demonstration in
 context teaches itself without it, on its own samples. Each ``SdftSeq`` is a query the host built from a
-seeding row's message (``train/terms.py``: bare, asking for a read, or asking for a choice) with the
+seeding row's message (``train/terms.py``: bare, as a tone_hold probe is, or asking for a choice) with the
 consolidated day before it in the teacher's prompt. Every visit draws a fresh sample of the student
 (``SDFT_TOKENS``, temperature 1, no top-p or top-k: fully on-policy, one rollout a visit, as the paper) and
 scores it with ``seed_kl``: the same per-token, full-vocabulary reverse KL to the same ``Teacher``, so the
@@ -70,13 +70,16 @@ term is the seeding term's machinery on the student's own replies, at ``SDFT_WEI
 is an EMA of the student (the reference code syncs it every step at 0.01); here it syncs once a night, to
 the adapter the night starts from: the paper's stable frozen-teacher ablation within a night (an EMA at
 0.01 moves 1 - 0.99^n of the way, a quarter over a step plan's thirty updates), the EMA across nights,
-and ``teacher_drift`` stays zero. Reverse, as the seeding term: the paper's analysis argues for it, though its code now defaults to
-the forward KL. The rows of ``SDFT_HELD`` sources, fixed by the plan seed, are never distilled, but their
+and ``teacher_drift`` stays zero. Reverse, as the seeding term: the paper's analysis argues for it, though
+its code now defaults to the forward KL. As the paper does against teacher-only phrasing ("Based on the
+text..."), the first ``SDFT_MASK_TOKENS`` positions of every sample carry no loss: the teacher's day is
+headed "What they told you today:", and the student must not learn to cite a day it never sees. The rows of ``SDFT_HELD`` sources, fixed by the plan seed, are never distilled, but their
 seeding rows train under ``seed`` as every other's do: the reading on them is SDFT-held (seeded, not
 distilled), never a held-out one. Each is sampled once from the night-start student, and the receipt's
-``sdft.seeded_not_distilled`` reads the KL on those same replies before and after training. The term draws nothing once its own seconds pass ``SDFT_BUDGET_S`` or the deadline passes
-(``skipped_late`` counts the visits), so its cost is bounded whatever the step plan; never in a matched
-control.
+``sdft.seeded_not_distilled`` reads the KL on those same replies before and after training (masked as the
+term is), its samples drawn within ``SDFT_HELD_BUDGET_S``. The term draws nothing once its own seconds pass
+``SDFT_BUDGET_S`` or the deadline passes (``skipped_late`` counts the visits), so its cost is bounded
+whatever the step plan; never in a matched control.
 
 **The fold** (``sleep_fold.py``): with ``long_term_rank`` set, the job trains a LoRA whose first ranks
 hold the person's long-term adapter, frozen by gradient masks (``freeze_leading``), and whose last ranks
@@ -132,12 +135,14 @@ MAX_EPOCHS: Final = 4
 TEMPERATURE: Final = 1.0
 SDFT_TERM: Final = "sdft"  # self-distillation's term, apart from ``WEIGHTS``: off, the receipt is today's
 SDFT_WEIGHT: Final = 1.0  # the seeding KL on the student's own sample: one row weighs as one seed row
-SDFT_KINDS: Final = ("knowledge", "tone", "taste")  # what a query asks for (``terms.SDFT_KINDS``)
+SDFT_KINDS: Final = ("tone", "taste")  # what a query asks for (``terms.SDFT_KINDS``)
 SDFT_TOKENS: Final = FRESH_TOKENS  # the student's sample a visit scores (``terms.SDFT_REPLY_TOKENS``)
 SDFT_HELD: Final = 2  # sources never distilled (their seed rows still train): the SDFT-held reading's rows
 SDFT_HELD_MIN: Final = 4  # with fewer sources no source is held from distillation, and the reading is None
 SDFT_HELD_LABEL: Final = "SDFT-held (seeded, not distilled)"  # what the receipt's reading is, in its own words
 SDFT_BUDGET_S: Final = 15 * 60.0  # the term's seconds a night; past them a visit draws nothing
+SDFT_HELD_BUDGET_S: Final = 3 * 60.0  # the SDFT-held samples' seconds at the night's start; past them, no more
+SDFT_MASK_TOKENS: Final = 3  # a sample's opening positions with no loss (the paper's mask on teacher-only phrasing)
 
 Ids = tuple[int, ...]
 
@@ -416,17 +421,18 @@ class Teacher:
 
 
 def seed_kl(model: Any, row: SeedSeq, teacher: Teacher, soft: Spliced | None = None,
-            teacher_soft: Spliced | None = None) -> Any:
+            teacher_soft: Spliced | None = None, start: int = 0) -> Any:
     """Knowledge seeding: reverse KL(student || teacher) a reply position, averaged. The teacher is
     the night-start adapter with the day in context, scored without a gradient; the student is
     tonight's adapter on the message alone. With the channel both read the row's state: the student
-    through ``soft``, the teacher through ``teacher_soft`` (the projector as the night began)."""
+    through ``soft``, the teacher through ``teacher_soft`` (the projector as the night began). The reply's
+    positions before ``start`` carry no loss (self-distillation's mask; 0 for every other term)."""
     import torch
 
     with teacher(model):
         target = torch.log_softmax(reply_logits(model, row.teacher, row.reply, teacher_soft), dim=-1)
     student = torch.log_softmax(reply_logits(model, row.prompt, row.reply, soft), dim=-1)
-    return (student.exp() * (student - target)).sum(dim=-1).mean()
+    return (student.exp() * (student - target)).sum(dim=-1)[start:].mean()
 
 
 def _scored(row: SdftSeq, reply: Ids) -> SeedSeq:
@@ -437,12 +443,13 @@ def _scored(row: SdftSeq, reply: Ids) -> SeedSeq:
 def sdft_kl(model: Any, row: SdftSeq, teacher: Teacher, plan: Plan, soft: Spliced | None = None,
             teacher_soft: Spliced | None = None) -> tuple[Any, Ids]:
     """Self-distillation, one visit: a fresh sample of the student (tonight's adapter, the query alone),
-    then ``seed_kl`` on it, the teacher the night-start adapter with the day before the query. Returns the
-    loss (None for an empty sample) and the sample."""
+    then ``seed_kl`` on it past its first ``SDFT_MASK_TOKENS`` positions, the teacher the night-start
+    adapter with the day before the query. Returns the loss (None for a sample no longer than the mask)
+    and the sample."""
     reply = sample(model, row.prompt, SDFT_TOKENS, plan, soft)
-    if not reply:
+    if len(reply) <= SDFT_MASK_TOKENS:
         return None, reply
-    return seed_kl(model, _scored(row, reply), teacher, soft, teacher_soft), reply
+    return seed_kl(model, _scored(row, reply), teacher, soft, teacher_soft, SDFT_MASK_TOKENS), reply
 
 
 def sdft_split(rows: Sequence[SdftSeq], seed: int) -> tuple[list[int], list[int]]:
@@ -605,13 +612,18 @@ def mean_seed_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: So
     return sum(scores) / len(scores)
 
 
-def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None = None) -> list[tuple[str, SeedSeq]]:
+def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None = None,
+              timer: Callable[[], float] = time.monotonic) -> list[tuple[str, SeedSeq]]:
     """One sample of the student per SDFT-held row (seeded, not distilled), each with its kind: the replies
-    the receipt's KL is read on before and after training, the same both times (an empty sample is left out)."""
-    held = []
+    the receipt's KL is read on before and after training, the same both times (a sample no longer than the
+    mask is left out). No sample starts once ``SDFT_HELD_BUDGET_S`` have passed."""
+    held: list[tuple[str, SeedSeq]] = []
+    started = timer()
     for row in rows:
+        if timer() - started > SDFT_HELD_BUDGET_S:
+            break
         reply = sample(model, row.prompt, SDFT_TOKENS, plan, _tokens(soft, row.state, detach=True))
-        if reply:
+        if len(reply) > SDFT_MASK_TOKENS:
             held.append((row.kind, _scored(row, reply)))
     return held
 
@@ -620,7 +632,17 @@ def sdft_kl_by_kind(model: Any, held: Sequence[tuple[str, SeedSeq]], teacher: Te
                     soft: Soft | None = None) -> dict[str, float | None]:
     """The seeding KL on the SDFT-held samples, over all of them (``all``) and by kind; None where there are none."""
     groups = {"all": [seq for _, seq in held], **{kind: [seq for k, seq in held if k == kind] for kind in SDFT_KINDS}}
-    return {name: mean_seed_kl(model, rows, teacher, soft) if rows else None for name, rows in groups.items()}
+    return {name: _masked_kl(model, rows, teacher, soft) if rows else None for name, rows in groups.items()}
+
+
+def _masked_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: Soft | None) -> float:
+    """The term's KL (past ``SDFT_MASK_TOKENS``) over ``rows``, averaged, without dropout or a gradient."""
+    import torch
+
+    with _evaluating(model), torch.no_grad():
+        scores = [float(seed_kl(model, row, teacher, _tokens(soft, row.state, detach=True),
+                                _tokens(soft, row.state, ref=True), SDFT_MASK_TOKENS)) for row in rows]
+    return sum(scores) / len(scores)
 
 
 def _dream_trials(
@@ -1000,7 +1022,7 @@ def train_terms(model: Any, batch: Batch, plan: Plan, *, soft: Soft | None = Non
         probe = seeds[0] if seeds else None
         teacher_before, kl_before = _probe(model, probe, teacher, soft)
         with clock("sdft_held") if batch.sdft else nullcontext():  # sampled once, at the night's start
-            sdft_samples = (sdft_held(model, [batch.sdft[i] for i in held_sdft], plan, soft)
+            sdft_samples = (sdft_held(model, [batch.sdft[i] for i in held_sdft], plan, soft, timer)
                             if batch.sdft and not run.late() else [])
             sdft_before = sdft_kl_by_kind(model, sdft_samples, teacher, soft) if sdft_samples else None
         model.train()
@@ -1052,4 +1074,6 @@ def _sdft_receipt(rows: Sequence[SdftSeq], held: Sequence[int], trained: Sequenc
                "kl_by_kind": {kind: {"before": None if before is None else before[kind],
                                      "after": None if after is None else after[kind]} for kind in SDFT_KINDS}}
     return {"weight": SDFT_WEIGHT, "rows": by_kind(trained), "on_policy_samples": run.sdft_sampled,
-            "skipped_late": run.sdft_late, "budget_minutes": SDFT_BUDGET_S / 60.0, "seeded_not_distilled": reading}
+            "skipped_late": run.sdft_late, "budget_minutes": SDFT_BUDGET_S / 60.0,
+            "held_budget_minutes": SDFT_HELD_BUDGET_S / 60.0, "mask_tokens": SDFT_MASK_TOKENS,
+            "seeded_not_distilled": reading}

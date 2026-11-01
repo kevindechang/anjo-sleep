@@ -137,7 +137,7 @@ class SeedRow:
 class SdftRow:
     """One self-distillation row: the teacher reads ``context`` (the consolidated day) before ``query``,
     the student ``query`` alone, and the job scores both on a fresh sample of the student. ``kind`` is
-    what the query asks for (``knowledge``, ``tone`` or ``taste``, ``terms.SDFT_KINDS``) and ``source``
+    what the query asks for (``tone``, the bare message, or ``taste``, ``terms.SDFT_KINDS``) and ``source``
     the seeding row its message came from, so the job holds out a source's rows together."""
 
     id: str

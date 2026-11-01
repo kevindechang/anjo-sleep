@@ -20,7 +20,7 @@ More switches ride on ``sft_dpo_seed`` and are refused with any other objective:
 
 - ``ANJO_SLEEP_SDFT=1``: self-distillation (Shenfeld, Damani, Hübotter and Agrawal, "Self-Distillation
   Enables Continual Learning", arXiv 2601.19897): queries built on the host from the seeding rows' own
-  messages, bare (``knowledge``), asking for a read (``tone``) or for a choice (``taste``), whose teacher
+  messages, bare (``tone``, as a tone_hold probe is) or asking for a choice (``taste``), whose teacher
   reads the consolidated day before the query and whose student reads the query alone, scored on the
   student's own samples (``train/terms.py``, ``sleep_loss.py``). Never in a matched control.
 
