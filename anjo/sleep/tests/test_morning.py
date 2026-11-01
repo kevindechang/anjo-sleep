@@ -18,7 +18,7 @@ from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
-from anjo.sleep.probes.morning import COMMITTED_ARMS, Morning, MorningError, PAIRS, _rows, run_morning
+from anjo.sleep.probes.morning import COMMITTED_ARMS, Morning, MorningError, PAIRS, _rows, night_accelerated, run_morning
 from anjo.sleep.probes.score import ProbeOutcome, Verdict
 from anjo.sleep.reports import results
 from anjo.sleep.stops import BudgetStop
@@ -80,8 +80,10 @@ def test_morning_run_never_saved_to_history(tmp_path: Path) -> None:
     body = done.path.read_text(encoding="utf-8")
     assert "reply from" not in body and all(p.prompt not in body for p in rig.probes)  # no reply or probe text
     assert set(json.loads(body)) == {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable",
-                               "outcomes", "seconds", "judge_model", "judge"}  # its wall time (the arms and the judge), a number only
+                               "outcomes", "seconds", "judge_model", "judge", "synthetic",
+                               "accelerated"}  # its wall time (the arms and the judge), a number only
     assert json.loads(body)["judge_model"] == "unknown"  # the fake has no model ID
+    assert (json.loads(body)["synthetic"], json.loads(body)["accelerated"]) == (False, None)  # no flag, no receipt
     assert json.loads(body)["judge"] == "muse"  # and no other judge than the morning's own
 
 
@@ -398,3 +400,24 @@ def test_no_verdict_counts_show_beside_their_scores(tmp_path: Path) -> None:
     quiet = dailies_view(DailySources(person="p1", nights=[NightFiles(summary, [])]), HeldOutText([]),
                          passes=lambda text: True)
     assert quiet["no_verdict"] == 0
+
+
+def test_a_score_file_carries_provenance_from_the_night_receipts(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    rig.morning = replace(rig.morning, synthetic=True)
+    receipts = tmp_path / "results" / "p1" / "nights"
+    (receipts / NIGHT.isoformat()).mkdir(parents=True)
+    (receipts / NIGHT.isoformat() / "summary.json").write_text(json.dumps({"night": NIGHT.isoformat(), "status": "promoted"}))
+    (receipts / f"{NIGHT.isoformat()}.2").mkdir()
+    (receipts / f"{NIGHT.isoformat()}.2" / "summary.json").write_text(
+        json.dumps({"night": NIGHT.isoformat(), "accelerated": True}))
+    record = json.loads(rig.run().path.read_text(encoding="utf-8"))
+    assert (record["synthetic"], record["accelerated"]) == (True, True)
+    assert night_accelerated(tmp_path / "results" / "p1", date(2026, 1, 1)) is None
+    (receipts / f"{NIGHT.isoformat()}.2" / "summary.json").write_text(json.dumps({"night": NIGHT.isoformat()}))
+    assert night_accelerated(tmp_path / "results" / "p1", NIGHT) is False
+
+
+def test_the_app_morning_marks_its_account_synthetic() -> None:
+    text = (Path(__file__).parents[1] / "app" / "morning.py").read_text(encoding="utf-8")
+    assert "if not is_synthetic(user_id):" in text and "synthetic=True)" in text

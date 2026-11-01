@@ -305,6 +305,14 @@ def test_chart_labels_development_and_final_apart() -> None:
     assert daily["development"]["lives"][0]["nights"][0]["probes"] == "daily-v1"
 
 
+def test_chart_carries_each_sides_provenance() -> None:
+    marked = replace(_night(1, "development", 0.52), synthetic=True, accelerated=True)
+    view = chart_view([marked], [[replace(_night(1, "final", 0.61), synthetic=True)]], name="Mara")
+    assert view["development"]["provenance"] == "synthetic person, accelerated nights"
+    assert view["final"]["provenance"] == "synthetic person"
+    assert chart_view([_night(1, "development", 0.5)], [], name="Mara")["development"]["provenance"] is None
+
+
 def test_task16_result_is_shown_line_by_line_or_not_yet() -> None:
     assert task16_view(None, HeldOutText([]))["state"] == "none"
     text = f"# MIND\n\n## Held-out lives\n\n- Pooled: On 40% of nights her state studied something relevant.\n- {HELD}\n"

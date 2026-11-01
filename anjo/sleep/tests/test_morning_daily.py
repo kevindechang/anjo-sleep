@@ -32,7 +32,7 @@ NIGHT = date(2026, 11, 3)
 PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.95)
 COUNTS: dict[ProbeKind, int] = {"new_work": 25, "vocab": 15, "tone_hold": 15, "taste_ab": 15, "pushback": 10}  # a life's registered probes
 FULL_KEYS = {"night", "label", "checkpoint", "checkpoint_basis", "probes", "arms", "pairs", "unavailable", "outcomes",
-             "seconds", "judge_model", "judge"}
+             "seconds", "judge_model", "judge", "synthetic", "accelerated"}
 # The pairs a full run without ANJO_SLEEP_ARMS_EXTRA can answer: the new arms aren't asked.
 COMMITTED_PAIRS = {name for name, (a, b) in PAIRS.items() if a in COMMITTED_ARMS and b in COMMITTED_ARMS}
 

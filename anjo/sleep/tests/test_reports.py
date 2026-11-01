@@ -140,3 +140,27 @@ def test_the_chart_names_the_headline_pairs_with_their_ci(tmp_path: Path) -> Non
     _with_pairs(tmp_path, "dev", "2026-11-03", 1, "development", [0.41, 0.93])
     svg = chart.render(["dev"], root=tmp_path, out=tmp_path / "c.svg").read_text(encoding="utf-8")
     assert "3_vs_3x 0.69 [0.41,0.93]" in svg and "4_vs_2C" in svg
+
+
+def test_the_table_labels_provenance_and_marks_reported_only_pairs(tmp_path: Path) -> None:
+    _night(tmp_path, "p1", "2026-11-03", 1)
+    path = tmp_path / "p1" / "scores" / "night-01.json"
+    record = json.loads(path.read_text())
+    stat = {"n": 10, "wins": 6, "ties": 2, "losses": 2, "score": 0.7, "decisive_share": 0.8, "ci": [0.5, 0.9]}
+    record |= {"synthetic": True, "accelerated": True,
+               "pairs": {"2H_vs_2C": {"knowledge": stat}, "3_vs_3x": {"knowledge": stat}}}
+    path.write_text(json.dumps(record))
+    text = results.table(["p1"], root=tmp_path)
+    assert "p1 (arm cells: knowledge/style) [synthetic person, accelerated nights]" in text
+    assert "| pair 2H_vs_2C (reported only) |" in text
+    assert "| pair 3_vs_3x |" in text and "3_vs_3x (reported only)" not in text
+    night = results.load("p1", tmp_path)[0]
+    assert (night.synthetic, night.accelerated) == (True, True)
+
+
+def test_a_night_with_no_provenance_prints_as_before(tmp_path: Path) -> None:
+    _night(tmp_path, "p1", "2026-11-03", 1, label=None, scored=False)
+    summary = tmp_path / "p1" / "nights" / "2026-11-03" / "summary.json"
+    summary.write_text(json.dumps({**json.loads(summary.read_text()), "label": "development"}))
+    text = results.table(["p1"], root=tmp_path)
+    assert "p1 (arm cells: no scores yet)\n" in text

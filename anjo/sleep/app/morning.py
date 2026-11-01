@@ -144,4 +144,5 @@ def build(user_id: str, persona: str, night: date) -> Morning:
     return Morning(arms=arms, sealed=probes, judge=judge, prices=prices(), ledger=Ledger(data_root() / SLEEP_DIR / LEDGER_NAME),
                    wake=serving.wake, sleep=serving.sleep_now, concurrency=parallel.concurrency(os.environ),
                    retries=lambda: client.retries() + resent.count, judge_tokens=tokens,
-                   judge_model=meta_api.PINNED_MODELS["muse-spark"] if judge.model == "muse-spark" else judge.model)
+                   judge_model=meta_api.PINNED_MODELS["muse-spark"] if judge.model == "muse-spark" else judge.model,
+                   synthetic=True)  # refused above unless the account is registered synthetic
