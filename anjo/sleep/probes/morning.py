@@ -21,7 +21,8 @@ written to history, evidence or memory (RF5).
 - Every paid call is held first: the arms on ``modal_usd`` and ``baseten_sleep_usd``, and the judge on
   its provider pool plus ``judge_usd``. Muse holds the entire morning; DeepSeek checks room before arms
   and holds each call's full context separately. Both settle at metered list prices, or at the bound
-  for failed or unmetered calls, counted in ``MorningResult.judge_estimated``.
+  for failed or unmetered calls, counted in ``MorningResult.judge_estimated``; a DeepSeek call whose
+  connection never opened settles 0, since nothing reached Fireworks to be billed.
 - With ``concurrency`` above 1 every arm's question is prepared first, on the calling thread
   (``arms.prepare``: adapters, context C, the stored evidence), then the questions are asked side by
   side, then every (pair, probe) is judged side by side, at most ``concurrency`` at once
@@ -66,7 +67,7 @@ from typing import Any, Final
 from anjo.sleep import fireworks_api
 from anjo.sleep.budget import Bound, Ledger, Pool
 from anjo.sleep.harness import harness_on
-from anjo.sleep.model_api import ChatResult, ModelApiError
+from anjo.sleep.model_api import ChatResult, ConnectFailed, ModelApiError
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.night.holds import held, usd
 from anjo.sleep.parallel import Calls
@@ -322,7 +323,10 @@ class _Counting:
 class _HeldDeepseekChat:
     """Hold and settle each call on its own key; the calls run side by side (the ledger's holds are
     concurrent-safe), so only the call number is taken under the lock. Busy-provider HTTP retries are
-    unbilled."""
+    unbilled, and so is a call whose every connection attempt never opened: nothing was sent, so it
+    settles 0. A reply that failed after the request went (a read timeout, a dropped reply, an HTTP
+    error status, or a later attempt refused after one was sent) may have been billed, and settles
+    its bound."""
 
     def __init__(self, chat: Any, ledger: Ledger, key: str) -> None:
         self.chat, self.ledger, self.key = chat, ledger, key
@@ -339,7 +343,12 @@ class _HeldDeepseekChat:
             kwargs: dict[str, Any] = {"temperature": temperature}
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
-            result: ChatResult = self.chat(model, messages, tools, timeout_s, **kwargs)
+            try:
+                result: ChatResult = self.chat(model, messages, tools, timeout_s, **kwargs)
+            except ConnectFailed as error:
+                if not error.request_sent:
+                    cost[0] = 0.0  # no attempt sent a request: none reached Fireworks, none billed
+                raise
             if result.input_tokens > 0 or result.output_tokens > 0:
                 rates = fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES
                 cost[0] = (result.input_tokens * rates[0] + result.output_tokens * rates[1]) / 1e6

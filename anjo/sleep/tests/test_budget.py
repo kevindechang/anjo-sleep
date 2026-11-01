@@ -269,9 +269,11 @@ def test_the_module_reserve_uses_the_data_dir(tmp_path: Path, monkeypatch: pytes
 
 
 def test_the_caps_and_time_limits_are_section_12_1s() -> None:
-    assert dict(budget.CAPS) == {
+    caps = dict(budget.CAPS)
+    assert caps.pop("fireworks_sleep_usd") == pytest.approx(103.51)  # the room below, MIND's $20 kept
+    assert caps == {
         "modal_usd": 500.0, "colab_cu": 100.0, "meta_usd": 140.0, "baseten_sleep_usd": 60.0,
-        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 20.0, "fireworks_sleep_usd": 80.0, "vertex_usd": 50.0,
+        "baseten_mind_usd": 40.0, "fireworks_mind_usd": 20.0, "vertex_usd": 50.0,
         "vertex_mind_usd": 150.0, "judge_usd": 100.0,
     }
     assert budget.UNITS["colab_cu"] == "cu" and budget.BASETEN_TOTAL == 100.0
@@ -279,8 +281,49 @@ def test_the_caps_and_time_limits_are_section_12_1s() -> None:
     assert (budget.SERVING_IDLE_S, budget.SERVING_WINDOW_S) == (600, 10800)
 
 
-def test_the_fireworks_pools_together_stay_inside_its_100_dollar_credit() -> None:
+FIREWORKS_RECORDED = (("the practice", "fireworks_sleep_usd", 57.75), ("the experiment", "fireworks_mind_usd", 6.77))
+
+
+def _recorded_fireworks(tmp_path: Path) -> Ledger:
+    """The Fireworks pools as the local ledger had them on 2026-11-01: $64.52 recorded."""
+    ledger = _ledger(tmp_path)
+    for job, pool, amount in FIREWORKS_RECORDED:
+        held = ledger.reserve(job, (pool,), _bound(amount))
+        assert held is not None
+        held.settle(amount)
+    return ledger
+
+
+def test_the_fireworks_pools_allow_the_rooms_the_console_reading_leaves(tmp_path: Path) -> None:
+    """2026-11-01: the console showed $63.99 remaining though the ledger had $64.52 recorded. The guard
+    allows what is really left, less a margin, rather than the $35.48 the old $100 credit left."""
+    assert (budget.FIREWORKS_REMAINING_USD, budget.FIREWORKS_MARGIN_USD) == (63.99, 5.0)
+    assert budget.FIREWORKS_ROOM_USD == pytest.approx(58.99)  # $63.99 less the $5.00 margin
+    assert budget.FIREWORKS_TOTAL == pytest.approx(64.52 + 58.99)
+
+    ledger = _recorded_fireworks(tmp_path)
+    recorded = ledger.used("fireworks_sleep_usd") + ledger.used("fireworks_mind_usd")
+    assert recorded == pytest.approx(budget.FIREWORKS_RECORDED_USD) == pytest.approx(64.52)
+    assert ledger.remaining("fireworks_sleep_usd") == pytest.approx(58.99)  # Sleep may use all of it
+    assert ledger.reserve("past the room", ("fireworks_sleep_usd",), _bound(59.0)) is None
+    assert ledger.reserve("all the room", ("fireworks_sleep_usd",), _bound(58.99)) is not None
+    assert ledger.reserve("one more", ("fireworks_mind_usd",), _bound(0.01)) is None  # the credit is one
+
+
+def test_the_fireworks_pools_share_one_credit_and_mind_keeps_its_own_cap(tmp_path: Path) -> None:
+    ledger = _recorded_fireworks(tmp_path)
+    assert ledger.remaining("fireworks_mind_usd") == pytest.approx(13.23)  # its own $20, less its spend
+
+    spent = ledger.reserve("mind's experiment", ("fireworks_mind_usd",), _bound(13.23))
+    assert spent is not None
+    assert ledger.remaining("fireworks_sleep_usd") == pytest.approx(58.99 - 13.23)  # the same credit
+    assert ledger.reserve("mind again", ("fireworks_mind_usd",), _bound(0.01)) is None  # its own $20 holds
+
+
+def test_the_fireworks_pools_together_reach_the_reconciled_credit() -> None:
     fireworks = {pool: cap for pool, cap in budget.CAPS.items() if pool.startswith("fireworks_")}
-    assert fireworks == {"fireworks_mind_usd": 20.0, "fireworks_sleep_usd": 80.0}
+    assert fireworks.keys() == {"fireworks_mind_usd", "fireworks_sleep_usd"}
+    assert fireworks["fireworks_mind_usd"] == 20.0  # MIND's own cap, kept
     # every Fireworks pool, a new one too, counts against the one credit
-    assert sum(fireworks.values()) == budget.FIREWORKS_TOTAL <= budget.FIREWORKS_CREDIT_USD == 100.0
+    assert sum(fireworks.values()) == pytest.approx(budget.FIREWORKS_TOTAL)
+    assert budget.FIREWORKS_CREDIT_USD == pytest.approx(63.99 + 64.52)  # the reading plus what was recorded

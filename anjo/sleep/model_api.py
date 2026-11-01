@@ -55,9 +55,14 @@ class RateLimited(ModelApiError):
 
 
 class ConnectFailed(ModelApiError):
-    """A connection that never opened: refused, its host's name not found, its network unreachable
-    or its connect timing out. The request never reached the provider, so nothing was charged, and
-    a caller may send it again when its policy allows it."""
+    """A connection that never opened on the last attempt: refused, its host's name not found, its
+    network unreachable or its connect timing out. ``request_sent`` says whether an earlier attempt
+    sent the request (a lost reply, then a refused connection): only when it did not may the caller
+    assume nothing was charged."""
+
+    def __init__(self, message: str, *, request_sent: bool = False) -> None:
+        super().__init__(message)
+        self.request_sent = request_sent
 
 
 class MissingApiKey(ModelApiError):
@@ -173,7 +178,11 @@ def post_chat(
             while retries is not None and (pause := retries.pause(attempt, response)) is not None:
                 retries.counted()
                 retries.sleep(pause)
-                response, attempt = _send(client, url, body, headers, where=where, retries=retries), attempt + 1
+                try:
+                    response, attempt = _send(client, url, body, headers, where=where, retries=retries), attempt + 1
+                except ConnectFailed as exc:
+                    exc.request_sent = True  # an earlier attempt got a reply, so it was sent
+                    raise
     except httpx.ConnectTimeout:  # no connection made in time: a failed connection, not a slow reply
         raise ConnectFailed(f"{where} failed in transport (ConnectTimeout)") from None
     except httpx.ConnectError:
@@ -212,12 +221,14 @@ def _send(
     connects = 1 if retries is None else max(1, retries.connect_attempts)
     replies = 1 if retries is None else max(1, retries.reply_attempts)
     connect_sends = reply_sends = 0  # resends after each kind of failure, capped above
+    sent = False  # an earlier attempt put the request on the wire, so a later refusal is not free
     while True:
         try:
             return client.post(url, json=body, headers=headers)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             if connect_sends + 1 >= connects:
-                raise ConnectFailed(f"{where} failed in transport ({type(exc).__name__})") from None
+                raise ConnectFailed(f"{where} failed in transport ({type(exc).__name__})",
+                                    request_sent=sent) from None
             assert retries is not None  # connects > 1 only with a policy
             retries.counted()
             retries.sleep(retries.backoff_s[min(connect_sends, len(retries.backoff_s) - 1)])
@@ -229,6 +240,7 @@ def _send(
             retries.counted()
             retries.sleep(retries.backoff_s[min(reply_sends, len(retries.backoff_s) - 1)])
             reply_sends += 1
+            sent = True
 
 
 def _reply_lost(exc: httpx.HTTPError) -> bool:
