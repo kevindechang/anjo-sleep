@@ -1,5 +1,6 @@
 """Which runner trains Sleep's nights (Task 5): ``ANJO_SLEEP_TRAIN_RUNNER`` is ``modal`` (the default;
-Kevin, 2026-10-28: Modal's hackathon credit first) or ``colab`` (the fallback).
+Kevin, 2026-10-28: Modal's hackathon credit first), ``colab`` (the fallback), or ``colab_modal``: Colab
+trains, and Modal trains a night Colab's infrastructure can't (``fallback.py``).
 
 The night command, the accelerated runs and the synthetic example all build their runner here, so
 they can't drift: ``build`` gives the runner and its sweep, the step the night command runs under
@@ -13,6 +14,7 @@ on Colab whatever the setting says.
 
 A Modal-trained adapter is already on the adapters volume Modal serves from, so ``publisher``
 uploads it only where it didn't land (SageMaker's bucket); a Colab-trained one is uploaded as before.
+On ``colab_modal`` the runner says which adapters Modal trained (``Chosen.landed``).
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import logging
 import subprocess
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -29,10 +32,14 @@ from anjo.sleep.ports import GpuRunner
 from anjo.sleep.train.lora import AdapterPublisher
 from anjo.sleep.train.runners import colab as colab_runner
 from anjo.sleep.train.runners.colab import ColabCli, ColabError, ColabRunner, stop_leftover_sessions
+from anjo.sleep.train.runners.fallback import ColabModalRunner
 from anjo.sleep.train.runners.modal import CallRecords, ModalCalls, ModalRunner, cancel_leftover_calls
 
 RUNNER_ENV: Final = "ANJO_SLEEP_TRAIN_RUNNER"
 RUNNERS: Final = ("modal", "colab")
+COLAB_MODAL: Final = "colab_modal"  # Colab trains, Modal when Colab's infrastructure fails
+SETTINGS: Final = (*RUNNERS, COLAB_MODAL)
+COLAB_TRAINS: Final = ("colab", COLAB_MODAL)  # the settings whose nights start their VMs on Colab
 DEFAULT_RUNNER: Final = "modal"
 # What a hiccup of the Colab CLI's session listing raises: a refused call, a hang, or a missing CLI.
 LISTING_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
@@ -46,18 +53,20 @@ class RunnerChoiceError(ValueError):
 @dataclass(frozen=True)
 class Chosen:
     """The runner the setting picked, by name, and its sweep (how many stopped, how many not ours,
-    and why a Colab listing it couldn't read was skipped)."""
+    and why a Colab listing it couldn't read was skipped). ``landed`` says which adapters Modal
+    trained on ``colab_modal``; None on the others, where the name alone says it."""
 
     name: str
     runner: GpuRunner
     sweep: Callable[[], Stopped]
+    landed: Callable[[str], bool] | None = None
 
 
 def runner_name(environ: Mapping[str, str]) -> str:
     """The runner ``environ`` names: ``modal`` when unset or blank."""
     chosen = environ.get(RUNNER_ENV, "").strip() or DEFAULT_RUNNER
-    if chosen not in RUNNERS:
-        raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(RUNNERS)}")
+    if chosen not in SETTINGS:
+        raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(SETTINGS)}")
     return chosen
 
 
@@ -79,7 +88,7 @@ def _sweep(name: str, records: CallRecords, calls: ModalCalls,
             try:
                 stopped, not_ours = stop_leftover_sessions(cli)
             except LISTING_FAILURES as error:
-                if name == "colab":
+                if name in COLAB_TRAINS:
                     stopped, not_ours = stop_leftover_sessions(cli)  # one retry, then fail as today
                 else:
                     skipped = f"colab listing failed ({type(error).__name__})"
@@ -107,14 +116,34 @@ def build(
         cli = colab_cli()
         colab = ColabRunner(cli=cli, ledger=ledger, is_synthetic=is_synthetic, allow_real=bool(allow_real))
         return Chosen(name, colab, _sweep(name, records, calls, cli))
-    raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(RUNNERS)}")
+    if name == COLAB_MODAL:
+        cli = colab_cli()
+        modal = ModalRunner(calls=calls, ledger=ledger, records=records, is_synthetic=is_synthetic,
+                            allow_real=allow_real)
+        both = ColabModalRunner(cli=cli, modal=modal, ledger=ledger, is_synthetic=is_synthetic,
+                                allow_real=bool(allow_real))
+        return Chosen(name, both, _sweep(name, records, calls, cli), both.landed)
+    raise RunnerChoiceError(f"{RUNNER_ENV} is {' or '.join(SETTINGS)}")
 
 
-def publisher(runner: str, upload: AdapterPublisher, *, serving: str) -> AdapterPublisher:
-    """How a finished adapter reaches the server: Modal's training landed it on Modal's volume already."""
+def publisher(
+    runner: str, upload: AdapterPublisher, *, serving: str, landed: Callable[[str], bool] | None = None,
+) -> AdapterPublisher:
+    """How a finished adapter reaches the server: Modal's training landed it on Modal's volume already.
+    On ``colab_modal`` that holds only for the adapters Modal trained, which ``landed`` names."""
     if runner == "modal" and serving == "modal":
         return _landed
+    if runner == COLAB_MODAL and serving == "modal":
+        if landed is None:
+            raise ValueError("colab_modal's publisher needs the runner's record of the adapters Modal trained")
+        return partial(_unless_landed, upload, landed)
     return upload
+
+
+def _unless_landed(upload: AdapterPublisher, landed: Callable[[str], bool], folder: Path, name: str) -> None:
+    """``upload`` a Colab-trained adapter; one Modal trained is on the volume already."""
+    if not landed(name):
+        upload(folder, name)
 
 
 def _landed(folder: Path, name: str) -> None:

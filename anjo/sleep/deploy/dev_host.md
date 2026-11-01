@@ -245,15 +245,16 @@ python -m anjo.sleep.tools.serve_probe --adapter p-<hash>-n<night> --go   # then
 ### 1.7 Training on Modal (Colab is the fallback)
 
 `ANJO_SLEEP_TRAIN_RUNNER` picks the runner that trains Sleep's nights (`train/runners/choice.py`):
-`modal`, the default (Kevin, 2026-10-28: Modal's hackathon credit first), or `colab`. The night
-command, the accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
+`modal`, the default (Kevin, 2026-10-28: Modal's hackathon credit first), `colab`, or `colab_modal`
+(Colab trains, Modal trains a night Colab's infrastructure can't; below). The night command, the
+accelerated runs and the synthetic example all read it. MIND's training (Tasks 17 and
 17b: replay's thinker and the APD runner) stays on Colab and never reads it.
 
 Every night trains `sft_dpo` (SFT, then a DPO pass on the night's (best, worst) practice pairs) unless `ANJO_SLEEP_OBJECTIVE=sft`; a night whose practice kept no usable pair trains `sft` instead, and its log records the objective used and the pair count, never the words. MIND's thinker keeps `sft` and never reads the setting. The DPO learning rate is 5e-6 (beta 0.1), ten times the spec's full-fine-tune 5e-7, which is inert on LoRA weights; the receipt counts the pairs actually trained.
 
 | Setting | Value |
 |---|---|
-| `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default) or `colab`; any other value stops the night before it starts |
+| `ANJO_SLEEP_TRAIN_RUNNER` | `modal` (the default), `colab` or `colab_modal`; any other value stops the night before it starts |
 | `ANJO_SLEEP_OBJECTIVE` | `sft_dpo` (the default), `sft`, or `sft_dpo_seed` (the sleep paradigm's one loss, `train/sleep_loss.py`; Modal only); any other value stops the night, the accelerated run and the example before they start |
 | `ANJO_SLEEP_ADAPTER_FOLD`, `ANJO_SLEEP_DREAMS` | `1` turns on the nightly fold into one rank-32 adapter, or dreams from MIND's dream seeds; only with `sft_dpo_seed`, unset or `0` is off |
 | `ANJO_SLEEP_PROTECT` | `anchors` trains tonight's slot off the forgetting anchors' activation basis (`train/sleep_protect.py`), `random` off a random basis of the same shape (the ablation); only with `sft_dpo_seed` and the fold, unset or `off` is off |
@@ -284,6 +285,11 @@ Deploy once, with the Python that has `pip install -e ".[modal]"`, from the repo
 volume must hold the pinned revision even while Glimmer serves from SageMaker (§1.6's
 `download_weights`, skipped if it ran already):
 
+The image carries `modal_job.TRAIN_FILES` as they were at the deploy, so redeploy (the second line
+below) whenever any of them changes. Each call sends back a digest of its files, and a night whose
+digest isn't the checkout's fails at `train` and says to redeploy; an app deployed before the digest
+existed sends none and isn't checked.
+
 ```bash
 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal run anjo/sleep/serving/modal_app.py::download_weights
 ANJO_SLEEP_GLIMMER_REVISION=<commit> modal deploy anjo/sleep/train/modal_app.py
@@ -310,6 +316,17 @@ before (`runners/colab.py`, held on `colab_cu`), and the adapter is uploaded to 
 again. Switch between nights, not during one. Every night sweeps both runners' leftovers before it
 settles their holds, whichever runner it trains on: Modal's recorded calls are cancelled, and Sleep's
 Colab sessions are stopped wherever the Colab CLI is installed.
+
+**Colab with Modal behind it.** `ANJO_SLEEP_TRAIN_RUNNER=colab_modal` (`runners/fallback.py`) trains
+each night on Colab exactly as `colab` does, and the same job (dataset, recipe, warm start, adapter
+name) on Modal, under Modal's own hold, when Colab's infrastructure fails: any failure of `new` (no
+A100 to assign), `install` or `upload`, any call that hangs past its hard timeout, or an `exec` that
+ends at or past its kernel timeout. Colab's VM is stopped and its `colab_cu` hold settled first.
+Nothing else falls back: an `exec` that exits non-zero sooner (the CLI gives only the exit code, so a
+script error can't be told from a lost VM), a failed `download`, a refusal, `BudgetStop`, a cancel, or
+a stop that failed. The night's receipt says which runner trained (`runner`) and why it fell back
+(`fallback_reason`); a Modal-trained adapter is not uploaded again where it landed. A night that falls
+back after a Colab timeout can train for up to twice the job's timeout.
 
 ### The Oct 28 checks (record the results here)
 

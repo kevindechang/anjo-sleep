@@ -180,9 +180,9 @@ def test_a_real_run_does_not_turn_a_late_accelerated_error_into_a_system_exit(
     monkeypatch.setattr("anjo.sleep.serving.backend.phase", nullcontext)
     monkeypatch.setattr("anjo.sleep.train.trainer.LoraTrainer", lambda *a, **k: object())
     monkeypatch.setattr(night_command, "night_cfg", lambda: object())
-    monkeypatch.setattr(night_command, "_publisher", lambda name: (lambda *a, **k: None))
+    monkeypatch.setattr(night_command, "_publisher", lambda name, landed: (lambda *a, **k: None))
     monkeypatch.setattr(night_command, "chosen_runner",
-                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal"))
+                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal", landed=None))
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
     head = accelerated.git_sha()
 

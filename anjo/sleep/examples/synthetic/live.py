@@ -101,7 +101,7 @@ def build_services(environ: Mapping[str, str] | None = None) -> Services:
     state = Path(tempfile.mkdtemp(prefix="anjo-sleep-example-runner-"))
     chosen = choice.build(runner, ledger=Ledger(state / "budget.jsonl"), calls_dir=state / CALLS_DIR,
                           is_synthetic=lambda person_id: True, colab_cli=ColabCli, modal_calls=SdkCalls)
-    landed = choice.publisher(runner, serving.upload_adapter, serving="modal")
+    landed = choice.publisher(runner, serving.upload_adapter, serving="modal", landed=chosen.landed)
     return Services(
         spark=baseten_api.chat, judge=meta_api.chat, glimmer=serving.client(), serving=serving,
         gpu=chosen.runner, revision=env[REVISION_ENV].strip(),

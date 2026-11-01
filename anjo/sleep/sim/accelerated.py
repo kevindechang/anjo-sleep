@@ -307,8 +307,9 @@ def _per_life(runner: Any, life_s: float) -> Iterator[tuple[Any, dict[str, Any]]
     (``ColabLives``), told how long each day and scoring run took; Modal runs one call a night, so
     there is no VM to keep between nights and nothing to tell it."""
     from anjo.sleep.train.runners.colab import ColabRunner
+    from anjo.sleep.train.runners.fallback import ColabModalRunner
 
-    if not isinstance(runner, ColabRunner):
+    if not isinstance(runner, ColabRunner | ColabModalRunner):
         yield runner, {}
         return
     with runner.lives(life_timeout_s=life_s) as lives:
@@ -473,7 +474,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     try:
         with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, life_s) as (runner, hooks):
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
-                                  publish=night_command._publisher(chosen.name),
+                                  publish=night_command._publisher(chosen.name, chosen.landed),
                                   revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)
             rig = Rig(deps_for=lambda night: _with_terms(wiring(trainer, NightOptions(
                 night=night, personas=personas, mind_inquiry=args.mind, practice_scenes=args.practice_scenes)), terms),

@@ -176,6 +176,7 @@ def _job(tmp_path: Path, script: Script, *, revision: object = PIN, name: str = 
     return modal_job.train_on_volume(
         dataset='{"id": "x"}\n', config_json=json.dumps(recipe), prev=prev or {}, name=name, exec_s=3600.0,
         pinned=PIN, weights_root=weights, adapters_root=adapters, run=script, environ=environ or {"PATH": "/usr/bin"},
+        train_files=modal_job.TRAIN_FILES,
     )
 
 
@@ -198,6 +199,26 @@ def test_modal_adapter_lands_checked_with_its_rendering(tmp_path: Path) -> None:
 
     with pytest.raises(modal_job.ModalJobError, match="already on the volume"):  # a name never changes
         _job(tmp_path, Script())
+
+
+def test_the_call_sends_back_the_digest_of_the_training_files_it_ran_with(tmp_path: Path) -> None:
+    # Arrange: the image's files laid out at their remote paths, under a stand-in for /root
+    _volumes(tmp_path)
+    image = tmp_path / "image"
+    laid = [(image / remote.removeprefix("/"), remote) for _, remote in modal_job.TRAIN_FILES]
+    for (local, _), (copy, _) in zip(modal_job.TRAIN_FILES, laid, strict=True):
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        copy.write_bytes(local.read_bytes())
+
+    # Act
+    done = _job(tmp_path, Script())
+
+    # Assert: the checkout's digest, the same for the image's copies, and another once any file differs
+    assert done[modal_job.DIGEST_KEY] == modal_job.files_digest() == modal_job.files_digest(laid)
+    assert [(str(path), remote) for path, remote in modal_job.deployed_files()] == [
+        (remote, remote) for _, remote in modal_job.TRAIN_FILES]  # in the container, the image's own copies
+    laid[-1][0].write_bytes(laid[-1][0].read_bytes() + b"\n")
+    assert modal_job.files_digest(laid) != modal_job.files_digest()
 
 
 @pytest.mark.parametrize(("adapter", "extra", "match"), [

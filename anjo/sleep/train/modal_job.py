@@ -16,6 +16,10 @@ runs (``colab_train.py``), on the same inputs, with Glimmer read from the weight
    and to the rendering the recipe names, then land them on the adapters volume under the name the
    server loads. A copy that fails partway is removed.
 
+The call also returns one digest of the image's own copies of ``TRAIN_FILES`` (``files_digest``,
+under ``DIGEST_KEY``), and the night's runner holds it to the checkout's: the image carries the files
+as they were when the app was deployed, so a training file changed since then needs a redeploy.
+
 A thought-channel recipe (``channel_train``) runs through the same steps: its warm start may add the
 projector (``projector.npz``) beside the adapter's files, or send it alone, and the projector the run
 trained comes back with the adapter (``projector``), for the host to keep beside the person's core
@@ -26,6 +30,7 @@ only: the image carries those files and this one, and nothing else of Anjo.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -34,7 +39,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -73,6 +78,7 @@ TRAIN_FILES: Final[tuple[tuple[Path, str], ...]] = (
     (_TRAIN / "modal_app.py", f"{TRAIN_ROOT}/sleep/train/modal_app.py"),
     (_TRAIN / "latent_job.py", f"{TRAIN_ROOT}/sleep/train/latent_job.py"),
 )
+DIGEST_KEY: Final = "files_sha256"  # the call's digest of the image's TRAIN_FILES (files_digest)
 BASE_ENV: Final = "ANJO_TRAIN_BASE"  # colab_train.BASE_ENV
 DATASET_FILE: Final = "dataset.jsonl"  # lora.DATASET_FILE
 OFFLINE: Final = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"}
@@ -99,6 +105,22 @@ def exec_seconds(timeout_s: float) -> float:
     if exec_s < MIN_EXEC_S:
         raise ModalJobError("the job's timeout leaves too little time to train")
     return exec_s
+
+
+def files_digest(files: Sequence[tuple[Path, str]] = TRAIN_FILES) -> str:
+    """One sha256 over the training files, each as its remote path and its bytes, in remote-path order:
+    the same on the host (the checkout's files) and in the container (``deployed_files``) when they match."""
+    digest = hashlib.sha256()
+    for local, remote in sorted(files, key=lambda pair: pair[1]):
+        data = local.read_bytes()
+        digest.update(f"{remote}\0{len(data)}\0".encode())
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def deployed_files() -> tuple[tuple[Path, str], ...]:
+    """``TRAIN_FILES`` as the container has them: each at its remote path."""
+    return tuple((Path(remote), remote) for _, remote in TRAIN_FILES)
 
 
 def image_env(revision: str) -> dict[str, str]:
@@ -169,9 +191,12 @@ def train_on_volume(
     *, dataset: str, config_json: str, prev: Mapping[str, bytes], name: str, exec_s: float, pinned: str,
     weights_root: Path, adapters_root: Path, script: str = REMOTE_SCRIPT, python: str = sys.executable,
     run: Run = subprocess.run, environ: Mapping[str, str] | None = None,
+    train_files: Sequence[tuple[Path, str]] | None = None,
 ) -> dict[str, Any]:
     """One call in the container: train ``name`` and land it on the adapters volume. Returns the
-    receipt and the adapter's two files, for the night's own copy."""
+    receipt and the adapter's two files, for the night's own copy, and the digest of the training
+    files the call ran with (``train_files``: the image's own, ``deployed_files``, unless a test names others)."""
+    digest = files_digest(deployed_files() if train_files is None else train_files)
     target = adapters_root / config.check_adapter_name(name)
     if target.exists():
         raise ModalJobError(f"adapter {name} is already on the volume; a night's adapter never changes")
@@ -198,4 +223,4 @@ def train_on_volume(
         files = {file: (stage / file).read_bytes() for file in config.ADAPTER_FILES}
         projector = out / channel_train.PROJECTOR_FILE  # a channel run's projector: back to the host, never landed
         trained = {"projector": projector.read_bytes()} if projector.is_file() else {}
-    return {"adapter": name, "receipt": receipt, "files": files, **trained}
+    return {"adapter": name, "receipt": receipt, "files": files, DIGEST_KEY: digest, **trained}
