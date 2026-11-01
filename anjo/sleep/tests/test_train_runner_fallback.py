@@ -45,7 +45,7 @@ TIMEOUT_S = 7200.0
 NIGHT = date(2026, 10, 28)
 MINUTE_S = 60.0
 # The kernel's own --timeout for a cold night with only the dataset to upload (colab._setup_s(1)).
-KERNEL_S = TIMEOUT_S - (600.0 + 900.0 + 300.0 + 3 * 300.0 + 180.0 + 60.0)
+KERNEL_S = TIMEOUT_S - (600.0 + 900.0 + 60.0 + 60.0 + 300.0 + 3 * 300.0 + 180.0 + 60.0)  # 60 + 60: mkdir
 
 
 def _synthetic(uid: str) -> bool:

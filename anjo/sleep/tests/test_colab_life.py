@@ -104,6 +104,7 @@ def test_one_vm_per_accelerated_life(tmp_path: Path) -> None:
     commands = fake.commands()
     # night 1 has nothing measured, so its VM stops; nights 2 and 3 share one VM (base weights once)
     assert commands.count("new") == 2 and commands.count("install") == 2
+    assert commands.count("mkdir") == commands.count("new")  # the remote folders once a VM, never on a warm night
     assert commands.count("exec") == 3 and commands[-1] == "stop" and commands.count("stop") == 2
     assert commands.index("stop") < commands.index("exec", commands.index("exec") + 1)
     assert [e["op"] for e in _events(ledger)] == ["reserve", "settle", "reserve", "settle"]

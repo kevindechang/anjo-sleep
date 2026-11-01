@@ -8,7 +8,8 @@ Which failures fall back is read off the Colab CLI's own calls. ``TracedCli`` no
 failed: what it raised and how long it ran. Only these fall back:
 
 - any failure of a call made before the training script starts: ``new`` (no A100 to assign, a VM
-  that never came up), ``install`` or ``upload``, whether it exited non-zero, hung past its hard
+  that never came up), ``install``, ``mkdir`` (the exec that makes the remote folders) or ``upload``,
+  whether it exited non-zero, hung past its hard
   timeout or found no CLI;
 - a timeout: any later call that hung past its hard timeout, or an ``exec`` that failed at or past
   the kernel's own ``--timeout``.

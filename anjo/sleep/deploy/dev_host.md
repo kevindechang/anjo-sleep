@@ -320,7 +320,8 @@ Colab sessions are stopped wherever the Colab CLI is installed.
 **Colab with Modal behind it.** `ANJO_SLEEP_TRAIN_RUNNER=colab_modal` (`runners/fallback.py`) trains
 each night on Colab exactly as `colab` does, and the same job (dataset, recipe, warm start, adapter
 name) on Modal, under Modal's own hold, when Colab's infrastructure fails: any failure of `new` (no
-A100 to assign), `install` or `upload`, any call that hangs past its hard timeout, or an `exec` that
+A100 to assign), `install`, `mkdir` (the small `exec` that makes the VM's remote folders before the
+uploads) or `upload`, any call that hangs past its hard timeout, or an `exec` that
 ends at or past its kernel timeout. Colab's VM is stopped and its `colab_cu` hold settled first.
 Nothing else falls back: an `exec` that exits non-zero sooner (the CLI gives only the exit code, so a
 script error can't be told from a lost VM), a failed `download`, a refusal, `BudgetStop`, a cancel, or

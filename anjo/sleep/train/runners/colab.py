@@ -9,7 +9,8 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 2. reserve the job's worst case on ``colab_cu`` before anything starts: the job's hard timeout at
    the A100-80GB rate (``Bound``), keyed by night and person with an attempt number
    (``holds.hold``). With no room, the night stops (``BudgetStop``);
-3. ``new`` an A100 session, ``install`` the pinned training packages, ``upload`` the night's
+3. ``new`` an A100 session, ``install`` the pinned training packages, make the remote folders
+   (``mkdir``: a small ``exec``, once a VM), ``upload`` the night's
    dataset (and, for a warm start, the previous adapter's two files), ``exec`` the training script
    (``colab_train.py``) with the recipe in its environment, and ``download`` the adapter and its
    receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries as one
