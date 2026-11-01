@@ -2,13 +2,36 @@
 
 Reads each life's last ``final`` morning score under ``<results_root>/<life>/scores/night-NN.json``,
 never a earlier night (serving checkpoint after the last night, not the best-scoring night). Writes
-``<results_root>/<life>/scores/final.json`` once; a second run refuses. The git commit must match
-``freeze_tag`` (``sleep-freeze``). No live judging: aggregates registered rules only.
+``<results_root>/<life>/scores/final.json`` once. The registered rerun rule (``thresholds.json``
+``checkpoint_rule.rerun``): once any of the lives has a ``final.json`` the refusal is absolute, with no
+override; a rerun is allowed only for an infrastructure failure while no score file exists, after an
+attempt the prereg ledger logged, and it names its ``rerun_reason``. Every attempt is logged to the
+ledger (kind ``final_run``) before anything is written, and each ``final.json`` it writes after
+(``final_score``); the reason is in ``final.json`` too and must be stated in the README. The git
+commit must match ``freeze_tag`` (``sleep-freeze``). No live judging: aggregates registered rules only.
+
+    python -m anjo.sleep.reports.final --account <life id>=<account id> (x3) \
+        (--draw <draw.json> | --pair <life> <life> --single <life> --donor <life>=<life> ...) \
+        --root <results> --sealed-dir <dir> --require-sha <40 hex> [--rerun-reason TEXT]
+
+scores the three accounts' folders (``<root>/<account>/scores``) on their sealed files
+(``<sealed dir>/<life id>.jsonl``) and prints each dimension's claim row.
+
+Before it reads a score it refuses: a ``thresholds.json`` that differs from its registered copy beyond
+the allowed keys (``prereg.freeze_manifest.registered_comparable``); a missing freeze manifest
+(``$ANJO_DATA_DIR/sleep/freeze_manifest.json``), one whose sha256 is not the ledger's ``freeze_manifest``
+entry or whose commit is not the freeze tag's and HEAD's, or a ``thresholds.json``, ``judge_v1.md``,
+``reports/final.py`` or sealed probe file whose sha256 is not the manifest's; a score file judged by any model but the registered judge (``thresholds.json``
+``judging.judge``: Muse scores are development-only); a ``second_judge`` from any model but the
+registered second judge (``judging.second_judge.model``). ``final.json`` carries each life's
+provenance from its score file (``synthetic``, ``accelerated``): these are synthetic people.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -16,7 +39,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from anjo.sleep.probes.morning import MORNING_PROBES, SUBSETS, subset_probes
+from anjo.sleep.prereg import freeze_manifest, ledger
+from anjo.sleep.probes import second_judge as second_judge_model
+from anjo.sleep.probes.generate import load_sealed
+from anjo.sleep.probes.morning import MORNING_PROBES, REGISTERED_JUDGE_MODEL, SUBSETS, subset_probes
 from anjo.sleep.probes.score import BootstrapConfig, Outcome, score_outcomes
 from anjo.sleep.reports.results import FULL_SET
 from anjo.sleep.types import Probe
@@ -28,6 +54,10 @@ REPO: Final = Path(__file__).parents[3]
 THRESHOLDS: Final = Path(__file__).parents[1] / "prereg" / "thresholds.json"
 SCORES: Final = "scores"
 FINAL_NAME: Final = "final.json"
+RUN_KIND: Final = "final_run"  # the prereg ledger's record of each final attempt
+SCORE_KIND: Final = "final_score"  # and of each final.json it wrote
+_LIVES_NOTE: Final = re.compile(r"lives=(\S+)")
+SEALED_ENV: Final = "ANJO_SLEEP_SEALED_DIR"  # the app's name for the sealed probe files (anjo.sleep.app.ownership)
 NIGHT_PREFIX: Final = "night-"
 COMP_3V1: Final = "3_vs_1"
 COMP_3V3X: Final = "3_vs_3x"
@@ -39,6 +69,9 @@ INTERACTION_KINDS: Final = frozenset({"tone_hold", "taste_ab"})
 NEW_WORK: Final = "new_work"
 DONOR_UNAVAILABLE: Final = "donor_unavailable"
 GIT_TIMEOUT_S: Final = 30.0
+# The model ids the registered judges' names in ``thresholds.json`` ``judging`` stand for.
+JUDGE_MODELS: Final = {"DeepSeek V4.1 Flash": REGISTERED_JUDGE_MODEL}
+SECOND_JUDGE_MODELS: Final = {"Gemini 3.8 Flash": second_judge_model.MODEL_ID}
 
 
 class FinalError(ValueError):
@@ -58,9 +91,17 @@ class FinalReport:
     dimensions: Mapping[str, Mapping[str, Any]]
     fairness: Mapping[str, Mapping[str, Any]]
     qualifiers: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    provenance: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)  # per life, from its score file
+    judge_model: str = ""
+    manifest_commit: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "synthetic": bool(self.provenance) and all(p.get("synthetic") is True for p in self.provenance.values()),
+            "accelerated": any(p.get("accelerated") is True for p in self.provenance.values()),
+            "provenance": {k: dict(v) for k, v in self.provenance.items()},
+            "judge_model": self.judge_model,
+            "manifest_commit": self.manifest_commit,
             "freeze_tag": self.freeze_tag,
             "freeze_sha": self.freeze_sha,
             "git_sha": self.git_sha,
@@ -110,9 +151,94 @@ def git_sha(repo: Path = REPO) -> str:
     return sha
 
 
+def registered_model(text: str, known: Mapping[str, str], key: str) -> str:
+    """The model id a registered judge's name in ``thresholds.json`` stands for."""
+    for name, model in known.items():
+        if text.startswith(name):
+            return model
+    raise FinalError(f"thresholds.json {key} names no judge this report knows: {text!r}")
+
+
+def registered_judge() -> str:
+    return registered_model(str(_thresholds()["judging"]["judge"]), JUDGE_MODELS, "judging.judge")
+
+
+def registered_second_judge() -> str:
+    return registered_model(str(_thresholds()["judging"]["second_judge"]["model"]), SECOND_JUDGE_MODELS,
+                            "judging.second_judge.model")
+
+
+def check_judge(path: Path, record: Mapping[str, Any]) -> None:
+    """Refuse a score file not judged by the registered judge."""
+    expected = registered_judge()
+    found = record.get("judge_model")
+    if found != expected:
+        raise FinalError(f"{path} was judged by {found!r}, not the registered judge {expected!r} "
+                         "(thresholds.json judging.judge); Muse scores are development-only")
+
+
+def check_second_judge(second_judge: Mapping[str, Any]) -> None:
+    """Refuse a second judge's results not from the registered second judge (``model``)."""
+    expected = registered_second_judge()
+    found = second_judge.get("model")
+    if found != expected:
+        raise FinalError(f"second_judge comes from {found!r}, not the registered second judge {expected!r} "
+                         "(thresholds.json judging.second_judge.model)")
+
+
+def check_frozen(manifest: Path, sealed_files: Sequence[Path], *, commit: str,
+                 ledger_file: Path | None = None) -> dict[str, Any]:
+    """Refuse thresholds that drifted from the registered copy, a manifest the ledger doesn't register
+    or written at another commit than ``commit``, or any frozen file off the manifest."""
+    drift = freeze_manifest.thresholds_drift(THRESHOLDS)
+    if drift is not None:
+        raise FinalError(drift)
+    try:
+        return freeze_manifest.check(manifest, sealed_files, commit=commit, ledger_file=ledger_file)
+    except freeze_manifest.ManifestError as error:
+        raise FinalError(str(error)) from None
+
+
+def _provenance(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {"synthetic": record.get("synthetic"), "accelerated": record.get("accelerated")}
+
+
+def _sealed_from(sealed_files: Mapping[str, Path]) -> Callable[[str], Sequence[Probe]]:
+    loaded = {life: [replace(p, person_id=life) for p in load_sealed(path)] for life, path in sealed_files.items()}
+
+    def sealed(life_id: str) -> Sequence[Probe]:
+        return loaded[life_id]
+
+    return sealed
+
+
 def score_path(results_root: Path, life_id: str) -> Path:
     """Per-life final analysis output (written once)."""
     return results_root / life_id / SCORES / FINAL_NAME
+
+
+def _ledger_entries(ledger_file: Path | None) -> list[ledger.LedgerEntry]:
+    try:
+        entries = ledger.read_entries(ledger_file)
+        ledger.verify_entries(entries)
+    except ledger.LedgerError as error:
+        raise FinalError(f"the prereg ledger can't be used: {error}") from None
+    return entries
+
+
+def logged_attempts(lives: Sequence[str], ledger_file: Path | None = None) -> int:
+    """How many final attempts the ledger logged for any of ``lives``."""
+    wanted = set(lives)
+    return sum(1 for entry in _ledger_entries(ledger_file) if entry.kind == RUN_KIND
+               and (m := _LIVES_NOTE.search(entry.note)) and wanted & set(m.group(1).split(",")))
+
+
+def _log(kind: str, body: Mapping[str, Any], note: str, ledger_file: Path | None) -> None:
+    raw = json.dumps(dict(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    try:
+        ledger.register(kind, hashlib.sha256(raw).hexdigest(), note, path=ledger_file)
+    except ledger.LedgerError as error:
+        raise FinalError(f"the prereg ledger can't log the final: {error}") from None
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -534,9 +660,15 @@ def run(
     rerun_reason: str | None = None,
     style_neutral: Mapping[str, Outcome3 | None] | None = None,
     second_judge: Mapping[str, Any] | None = None,
-    sealed: Callable[[str], Sequence[Probe]] | None = None,
+    sealed_files: Mapping[str, Path] | None = None,
+    manifest: Path | None = None,
+    ledger_file: Path | None = None,
 ) -> dict[str, Any]:
-    """Score held-out lives once; refuse wrong code or an existing per-life ``final.json``."""
+    """Score held-out lives once; refuse wrong code or an existing per-life ``final.json``.
+
+    ``sealed_files`` maps each life to its sealed probe file (``<life>.jsonl``); each must match the
+    freeze ``manifest`` (default ``$ANJO_DATA_DIR/sleep/freeze_manifest.json``), as must
+    ``thresholds.json``, ``judge_v1.md`` and this file. ``ledger_file`` defaults to the prereg ledger."""
     expected = freeze_sha(freeze_tag, repo)
     found = git if git is not None else git_sha(repo)
     if found != expected:
@@ -546,17 +678,36 @@ def run(
         raise FinalError("final test expects 3 lives, a pair of 2 and one single life")
     for life_id in lives:
         if score_path(results_root, life_id).exists():
-            raise FinalError(f"{life_id} already has {FINAL_NAME}; the first score stands")
+            raise FinalError(f"{life_id} already has {FINAL_NAME}; the first score stands "
+                             "(the registered rule: once a score exists the refusal is absolute)")
+
+    if sealed_files is None or set(sealed_files) != set(lives):
+        raise FinalError("each life's sealed probe file is required to map score rows to bootstrap blocks")
+    if manifest is None:
+        try:
+            manifest = freeze_manifest.manifest_path()
+        except freeze_manifest.ManifestError as error:
+            raise FinalError(str(error)) from None
+    frozen = check_frozen(manifest, [sealed_files[life_id] for life_id in lives], commit=found,
+                          ledger_file=ledger_file)
+    if second_judge is not None:
+        check_second_judge(second_judge)
+    attempts = logged_attempts(lives, ledger_file)
+    if attempts and rerun_reason is None:
+        raise FinalError(f"the ledger logs {attempts} earlier final attempt(s) and no score: a rerun is allowed "
+                         "only for an infrastructure failure, and names it (rerun_reason)")
+    if rerun_reason is not None and (not attempts or not rerun_reason.strip()):
+        raise FinalError("a rerun reason is only for a logged attempt that wrote no score, and says why")
 
     life_records: dict[str, dict[str, Any]] = {}
     for life_id in lives:
         path = serving_morning_path(results_root, life_id)
         record = _json(path)
+        check_judge(path, record)
         record = {**record, "life_id": life_id, "_morning_path": str(path)}
         life_records[life_id] = record
 
-    if sealed is None:
-        raise FinalError("sealed probes are required to map score rows to bootstrap blocks")
+    sealed = _sealed_from(sealed_files)
     registries = {
         life_id: registered_probes(
             life_id, life_records[life_id], sealed, results_root=results_root
@@ -613,28 +764,148 @@ def run(
         dimensions=dim_report,
         fairness=fairness_report,
         qualifiers=tuple(all_quals),
+        provenance={life_id: _provenance(life_records[life_id]) for life_id in lives},
+        judge_model=registered_judge(),
+        manifest_commit=str(frozen["git_commit"]),
     )
-    body = report.to_dict()
+    body = {**report.to_dict(), "attempt": attempts + 1, "rerun_reason": rerun_reason}
+    note = f"lives={','.join(sorted(lives))} freeze={expected} attempt={attempts + 1}"
+    _log(RUN_KIND, {"lives": sorted(lives), "freeze_sha": expected, "donors": dict(donors),
+                    "attempt": attempts + 1, "rerun_reason": rerun_reason},
+         note + ("" if rerun_reason is None else f" rerun: {rerun_reason}"), ledger_file)
     for life_id in lives:
         folder = results_root / life_id / SCORES
         folder.mkdir(parents=True, exist_ok=True)
         target = score_path(results_root, life_id)
         pending = target.with_name(f".{target.name}.tmp")
-        pending.write_text(
-            json.dumps({**body, "life_id": life_id}, sort_keys=True, indent=1), encoding="utf-8"
-        )
+        text = json.dumps({**body, "life_id": life_id}, sort_keys=True, indent=1)
+        pending.write_text(text, encoding="utf-8")
         pending.replace(target)
+        _log(SCORE_KIND, {"life_id": life_id, "final": text}, f"{life_id} {FINAL_NAME} attempt={attempts + 1}",
+             ledger_file)
     return body
+
+
+def _pairs(raw: Sequence[str], flag: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for item in raw:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip() or not value.strip() or key.strip() in found:
+            raise FinalError(f"{flag} takes distinct <id>=<id> pairs, got {item!r}")
+        found[key.strip()] = value.strip()
+    return found
+
+
+def read_draw(path: Path) -> tuple[tuple[str, str], str, dict[str, str]]:
+    """A draw file (``{"pair": [a, b], "single": s, "donors": {...}}``), in life ids."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise FinalError(f"the draw file can't be read ({type(error).__name__})") from None
+    pair, single, donors = (raw.get(k) for k in ("pair", "single", "donors")) if isinstance(raw, dict) else (None,) * 3
+    if not (isinstance(pair, list) and len(pair) == 2 and all(isinstance(x, str) for x in pair)
+            and isinstance(single, str) and isinstance(donors, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in donors.items())):
+        raise FinalError(f"{path.name} is not a draw: a pair of two life ids, a single life id and the donors")
+    return (pair[0], pair[1]), single, dict(donors)
+
+
+def drawn_accounts(
+    accounts: Mapping[str, str], pair: tuple[str, str], single: str, donors: Mapping[str, str],
+) -> tuple[tuple[str, str], str, dict[str, str]]:
+    """The draw (life ids) in account ids, once it is three lives and the registered donor rule."""
+    lives = {*pair, single}
+    if len(lives) != 3 or set(accounts) != lives:
+        raise FinalError("--account names exactly the draw's three lives, each once")
+    if len(set(accounts.values())) != 3:
+        raise FinalError("each life has its own account")
+    rule = {pair[0]: pair[1], pair[1]: pair[0], single: pair[0]}  # lives.draw.donor_map
+    if dict(donors) != rule:
+        raise FinalError("the donors are not the registered donor rule for this draw")
+    return ((accounts[pair[0]], accounts[pair[1]]), accounts[single],
+            {accounts[life]: accounts[donor] for life, donor in donors.items()})
+
+
+def claim_lines(body: Mapping[str, Any]) -> list[str]:
+    """Each dimension's claim row and claim, as the claim table gives it."""
+    return [f"{dimension}: {cell['claim_row']}: {cell['claim']}"
+            for dimension, cell in body["dimensions"].items()]
+
+
+def main(argv: Sequence[str] | None = None, *, out: Callable[[str], None] = print) -> int:
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Score the three held-out lives once (the registered final).")
+    parser.add_argument("--account", action="append", default=[], required=True,
+                        help="<life id>=<account id>, once for each of the three final lives")
+    parser.add_argument("--draw", type=Path, help='the draw file: {"pair": [a, b], "single": s, "donors": {...}}')
+    parser.add_argument("--pair", nargs=2, metavar="LIFE", help="the drawn pair's life ids (without --draw)")
+    parser.add_argument("--single", metavar="LIFE", help="the drawn single life's id (without --draw)")
+    parser.add_argument("--donor", action="append", default=[], help="<life id>=<donor life id> (without --draw)")
+    parser.add_argument("--root", type=Path, required=True, help="the results tree (<root>/<account>/scores)")
+    parser.add_argument("--sealed-dir", type=Path, default=None, help=f"sealed probe files (default: ${SEALED_ENV})")
+    parser.add_argument("--require-sha", required=True, help="the freeze commit's 40-hex sha")
+    parser.add_argument("--tag", default="sleep-freeze", help="the freeze tag (default: sleep-freeze)")
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="the freeze manifest (default: $ANJO_DATA_DIR/sleep/freeze_manifest.json)")
+    parser.add_argument("--rerun-reason", help="the infrastructure failure, when an attempt is logged and no "
+                        "final.json exists (refused once one does)")
+    args = parser.parse_args(argv)
+    try:
+        if args.draw is not None:
+            if args.pair or args.single or args.donor:
+                raise FinalError("--draw or --pair/--single/--donor, not both")
+            pair, single, donors = read_draw(args.draw)
+        elif args.pair and args.single and args.donor:
+            pair, single, donors = (args.pair[0], args.pair[1]), args.single, _pairs(args.donor, "--donor")
+        else:
+            raise FinalError("name the draw: --draw <file>, or --pair, --single and each --donor")
+        accounts = _pairs(args.account, "--account")
+        pair_accounts, single_account, donor_accounts = drawn_accounts(accounts, pair, single, donors)
+        expected = freeze_sha(args.tag)
+        if args.require_sha != expected:
+            raise FinalError(f"--require-sha is not the commit {args.tag!r} names")
+        named = os.environ.get(SEALED_ENV, "").strip()
+        sealed_dir = args.sealed_dir or (Path(named) if named else None)
+        if sealed_dir is None:
+            raise FinalError(f"--sealed-dir or {SEALED_ENV} names the sealed probe files")
+        body = run(
+            args.tag, args.root, (*pair_accounts, single_account), donors=donor_accounts,
+            pair_lives=pair_accounts, single_life=single_account, rerun_reason=args.rerun_reason,
+            sealed_files={accounts[life]: sealed_dir / f"{life}.jsonl" for life in accounts},
+            manifest=args.manifest,
+        )
+    except FinalError as error:
+        out(f"final: {error}")
+        return 1
+    out(f"final{' rerun' if args.rerun_reason else ''}: {', '.join(f'{life}={accounts[life]}' for life in accounts)}"
+        f" at {body['git_sha'][:12]}, judged by {body['judge_model']}"
+        f"{' (synthetic people)' if body['synthetic'] else ''}{', accelerated nights' if body['accelerated'] else ''}")
+    for line in claim_lines(body):
+        out(line)
+    if args.rerun_reason:
+        out(f"rerun (attempt {body['attempt']}): {args.rerun_reason}; logged to the prereg ledger: state it in the README")
+    return 0
 
 
 __all__ = [
     "FINAL_NAME",
     "FinalError",
     "FinalReport",
+    "check_frozen",
+    "check_judge",
+    "check_second_judge",
     "freeze_sha",
     "git_sha",
     "registered_probes",
     "run",
+    "logged_attempts",
+    "main",
     "score_path",
     "serving_morning_path",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

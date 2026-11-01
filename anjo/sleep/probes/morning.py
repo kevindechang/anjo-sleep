@@ -219,6 +219,10 @@ def subset_probes(probes: Sequence[Probe], subset: ProbeSubset) -> list[Probe]:
     return chosen
 
 
+# The registered judge's model id (``thresholds.json`` ``judging.judge``), as a score file records it.
+REGISTERED_JUDGE_MODEL: Final = fireworks_api.DEEPSEEK_V4P1_FLASH
+
+
 @dataclass(frozen=True)
 class Morning:
     """What a morning run reaches outside through. ``arms.adapters`` is the registry of serving
@@ -237,6 +241,7 @@ class Morning:
     retries: Callable[[], int] = field(default=lambda: 0)  # the arms' running count of requests sent again (the night log's)
     judge_tokens: JudgeTokens | None = None  # the judge's metered usage (``MuseJudge.tokens``); None: every call estimated
     judge_model: str = "unknown"  # injected judges must identify themselves in the wiring
+    synthetic: bool = False  # the account is a registered synthetic person (the app's morning requires it)
 
     def __post_init__(self) -> None:
         if isinstance(self.judge, MuseJudge):
@@ -497,6 +502,18 @@ def _worst_judge_calls(probes: Sequence[Probe], arms: Sequence[Arm] = COMMITTED_
     return (len(arms) - 1 + pairs) * judged * 2
 
 
+def night_accelerated(person_root: Path, night: date) -> bool | None:
+    """Whether the night's receipts (``nights/<date>/summary.json``, a rerun's ``<date>.N``) say it ran
+    accelerated; None when the night has no receipt."""
+    found: bool | None = None
+    for summary in sorted((person_root / "nights").glob(f"{night.isoformat()}*/summary.json")):
+        record = json.loads(summary.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or str(record.get("night", night.isoformat())) != night.isoformat():
+            continue
+        found = bool(found) or record.get("accelerated") is True
+    return found
+
+
 def run_morning(
     user_id: str, night: date, checkpoint: CheckpointRef | None, *, morning: Morning,
     label: str = "development", promoted: bool = True, subset: ProbeSubset | None = None, pinned: bool = False,
@@ -525,6 +542,7 @@ def _run_morning(
     if subset is not None and label == "final":
         raise MorningError("a final run asks the full set of probes and arms, never a subset")
     folder = results.results_root(morning.root) / user_id / SCORES
+    accelerated = night_accelerated(folder.parent, night)  # read before any call: provenance, never a guess
     target = path if path is not None else _next_file(
         folder, night, None if subset is None else subset.name, any_set=not pinned)
     serving = morning.arms.adapters.last_promoted(user_id)
@@ -656,7 +674,7 @@ def _run_morning(
         stats[BASELINE] = _all_ties(next(iter(stats.values())))
     record = {
         "night": night.isoformat(), "label": label, "probes": len(probes), "judge_model": morning.judge_model,
-        "judge": morning.judge_name,
+        "judge": morning.judge_name, "synthetic": morning.synthetic, "accelerated": accelerated,
         "checkpoint": None if checkpoint is None else checkpoint.id,
         "checkpoint_basis": "promoted" if promoted else "not_promoted",
         "arms": dict(sorted(stats.items())), "pairs": pairs, "unavailable": unavailable, "outcomes": rows,

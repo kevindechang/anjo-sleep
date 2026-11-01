@@ -288,6 +288,7 @@
     if (dev) {
       const figure = element("figure", "chart");
       figure.append(element("figcaption", "", fill(copy.chart_dev_caption, { name: dev.lives[0].name })));
+      if (dev.provenance) figure.append(element("p", "note provenance", dev.provenance)); // synthetic, accelerated
       const panels = element("div", "panels");
       data.dimensions.forEach((d, n) => panels.append(panel(dev.lives[0], d, data.arms, `chart-dev-${n}`)));
       const legend = element("ul", "legend");
@@ -308,6 +309,7 @@
     const final = element("div", "final");
     final.append(element("p", "label", copy.chart_final_heading));
     final.append(element("p", "note", data.final ? fill(copy.chart_final_ready, { lives: data.final.lives.length }) : copy.chart_final_not_yet));
+    if (data.final && data.final.provenance) final.append(element("p", "note provenance", data.final.provenance));
     body.append(final);
     return box;
   }

@@ -16,6 +16,11 @@ It reads a person's results tree, ``<root>/<person>/``:
   gave no readable verdict on; the table prints the count beside that comparison's score. A stat with
   no probe behind it (``n`` 0) is read as missing, never as a 0.50 tie.
 
+A score file's ``synthetic`` and ``accelerated`` (and a summary's ``accelerated``) are its provenance: a
+person whose nights carry them is labeled ``synthetic person`` / ``accelerated nights`` beside her
+numbers, so no table reads as a real person's. A pair in ``REPORTED_ONLY`` is marked ``(reported
+only)`` wherever it is printed: it is never a registered win, loss or match.
+
 Development and final results are printed in separate sections and never mixed. A night whose
 summary carries no label is refused: an unlabeled result could be read as the other kind. The root
 defaults to ``$ANJO_DATA_DIR/sleep/results``.
@@ -34,6 +39,7 @@ ARMS: Final = ("1", "2C", "2F", "3", "3x", "4")
 # Scored and printed when a score file carries it, never a registered win or a column: the harness
 # arm is reported beside the six, and its absence leaves the table exactly as it was.
 REPORTED_ONLY: Final = ("2H_vs_2C",)
+REPORTED_ONLY_MARK: Final = " (reported only)"
 DIMENSIONS: Final = ("knowledge", "interaction")  # shown first, in this order; others follow alphabetically
 DATA_DIR_ENV: Final = "ANJO_DATA_DIR"
 MISSING: Final = "-"
@@ -81,6 +87,8 @@ class Night:
     pairs: Mapping[str, Mapping[str, Stat]]
     probes: str = FULL_SET  # the probe set its scores come from: ``full`` or a subset's name
     no_verdict: Mapping[str, int] = field(default_factory=dict)  # per comparison (``3_vs_1``, ``4_vs_2C``)
+    synthetic: bool | None = None  # the score file's provenance; None: not recorded
+    accelerated: bool | None = None  # the score file's, else the night summary's; None: not recorded
 
 
 def results_root(root: Path | None = None) -> Path:
@@ -111,7 +119,7 @@ def _counts(raw: Any) -> dict[str, int]:
     return {str(k): v for k, v in raw.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0}
 
 
-Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str, dict[str, int]]
+Scored = tuple[dict[str, dict[str, Stat]], dict[str, dict[str, Stat]], str, dict[str, int], dict[str, Any]]
 
 
 def score_records(folder: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -134,7 +142,8 @@ def _scores(folder: Path) -> dict[str, Scored]:
     for (night, probes), record in score_records(folder).items():
         if night not in found or probes == FULL_SET:
             found[night] = (_stats(record["arms"]), _stats(record.get("pairs") or {}), probes,
-                            _counts(record.get("no_verdict")))
+                            _counts(record.get("no_verdict")),
+                            {k: record[k] for k in ("synthetic", "accelerated") if isinstance(record.get(k), bool)})
     return found
 
 
@@ -149,13 +158,28 @@ def load(person: str, root: Path | None = None) -> list[Night]:
         if label not in LABELS:
             raise ResultsError(f"{person} {summary.parent.name}: the night has no development or final label")
         night = str(record.get("night", summary.parent.name))
-        arms, pairs, probes, no_verdict = scores.get(night, ({}, {}, FULL_SET, {}))
+        arms, pairs, probes, no_verdict, provenance = scores.get(night, ({}, {}, FULL_SET, {}, {}))
+        stamped = record.get("accelerated")
         nights.append(Night(
             person=person, night=night, label=str(label), status=str(record.get("status", "?")),
             cost_usd=float(record.get("cost_usd", 0.0)), gates=record.get("gates") or {},
             arms=arms, pairs=pairs, probes=probes, no_verdict=no_verdict,
+            synthetic=provenance.get("synthetic"),
+            accelerated=provenance.get("accelerated", stamped if isinstance(stamped, bool) else None),
         ))
     return sorted(nights, key=lambda n: n.night)
+
+
+def provenance(nights: Sequence[Night]) -> str | None:
+    """``synthetic person`` and/or ``accelerated nights`` when any of the nights records it; None otherwise."""
+    shown = [label for label, on in (("synthetic person", any(n.synthetic for n in nights)),
+                                     ("accelerated nights", any(n.accelerated for n in nights))) if on]
+    return ", ".join(shown) or None
+
+
+def pair_name(name: str) -> str:
+    """A pair's name as printed: a reported-only one carries its mark."""
+    return name + REPORTED_ONLY_MARK if name in REPORTED_ONLY else name
 
 
 def dimensions(nights: Sequence[Night]) -> tuple[str, ...]:
@@ -204,7 +228,9 @@ def _section(label: str, people: Sequence[str], loaded: Mapping[str, list[Night]
             continue
         dims = dimensions(nights)
         head = ["night", "status", "probes", *(f"arm {a}" for a in ARMS), "general", "safety", "cost"]
-        lines += ["", f"{person} (arm cells: {'/'.join(dims) or 'no scores yet'})", " | ".join(head)]
+        shown = provenance(nights)
+        lines += ["", f"{person} (arm cells: {'/'.join(dims) or 'no scores yet'})"
+                  + ("" if shown is None else f" [{shown}]"), " | ".join(head)]
         for n in nights:
             row = [n.night, n.status, n.probes, *(cell(n, a, dims) for a in ARMS), gate_cell(n, "general"),
                    gate_cell(n, "safety"), f"${n.cost_usd:.2f}"]
@@ -212,7 +238,7 @@ def _section(label: str, people: Sequence[str], loaded: Mapping[str, list[Night]
         for n in nights:
             for name, stats in sorted(n.pairs.items()):
                 shown = "; ".join(f"{d}: {pair_cell(stats[d])}" for d in (*dims, OVERALL) if d in stats)
-                lines.append(f"{n.night} | pair {name} | {shown}{unjudged(n, name)}")
+                lines.append(f"{n.night} | pair {pair_name(name)} | {shown}{unjudged(n, name)}")
     return lines
 
 

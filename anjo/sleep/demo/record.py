@@ -5,7 +5,8 @@ and the pre-registration ledger's hashes, ready to send.
   final apart and labeled, never pooled; each night names its probe set (``probes``), and the page
   draws one line a set. The development nights are the film student's own; the
   final ones are the held-out lives', scored after the freeze, so until then the final side is
-  ``None`` and the page says "not yet".
+  ``None`` and the page says "not yet". Each side carries its ``provenance`` (``reports.results.provenance``:
+  ``synthetic person``, ``accelerated nights``, or None when no night records it), shown with its numbers.
 - ``task16_view``: MIND's report (``reports.mind.render``), its held-out section line by line, the
   pooled line first. Absent until the final run writes it.
 - ``ledger_view``: the ledger's entries, newest first, with whether the chain verifies here and
@@ -20,7 +21,7 @@ from typing import Any, Final
 
 from anjo.sleep.demo.heldout import HeldOutText
 from anjo.sleep.prereg.ledger import LedgerEntry, LedgerError, verify_entries
-from anjo.sleep.reports.results import ARMS, Night, dimensions
+from anjo.sleep.reports.results import ARMS, Night, dimensions, provenance
 
 LEDGER_SHOWN: Final = 200  # the newest entries sent; the count says how many there are
 HELD_OUT_HEADING: Final = "## Held-out lives"
@@ -48,8 +49,10 @@ def chart_view(development: Sequence[Night], final_lives: Sequence[Sequence[Nigh
     arms = [arm for arm in ARMS if any(arm in n.arms for n in everything)]
     return {
         "state": "ok", "dimensions": list(dims), "arms": arms,
-        "development": {"label": "development", "lives": [_life(dev, dims, name)]} if dev else None,
-        "final": {"label": "final", "lives": [_life(life, dims, None) for life in lives]} if lives else None,
+        "development": {"label": "development", "provenance": provenance(dev),
+                        "lives": [_life(dev, dims, name)]} if dev else None,
+        "final": {"label": "final", "provenance": provenance([n for life in lives for n in life]),
+                  "lives": [_life(life, dims, None) for life in lives]} if lives else None,
     }
 
 
