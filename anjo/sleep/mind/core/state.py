@@ -9,10 +9,12 @@ killed night's day is caught up the next), and whether any event reached it thro
 encoder (``fake_latents``: sticky, so a state built on stand-in latents always says so). It names
 the core it belongs to (``model_id``): the slots and the memory mean something only
 under those weights, so ``load`` refuses a state of another core; a person's state for a new core
-is rebuilt by replaying their events.
+is rebuilt by replaying their events. A core with the continuum memory (``cms``) also keeps its
+session and night levels and their pending steps (``levels``); a state without them has none.
 
 ``save`` writes a zip of ``.npy`` arrays plus a JSON ``meta`` entry, with fixed zip times, so the
-same state always gives the same bytes (``allow_pickle`` stays off on the way back).
+same state always gives the same bytes (``allow_pickle`` stays off on the way back). ``levels`` is an
+entry only when the state has them, so a state of a core without them saves as it always did.
 """
 from __future__ import annotations
 
@@ -27,9 +29,12 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
+from anjo.sleep.mind.core.cms import LEVELS
+
 STATE_VERSION: Final = 2  # 2: pending, through and fake_latents
 _ARRAYS: Final = ("slots", "usage", "opened", "memory", "momentum", "glob")
 _DELTA: Final = "delta__"
+_LEVELS: Final = "levels"
 _ZIP_TIME: Final = (1980, 1, 1, 0, 0, 0)
 Cite = tuple[str, float]  # an event id and the share it wrote into the slot
 
@@ -55,6 +60,7 @@ class CoreState:
     pending: float = 0.0  # surprise observed since the last consolidation: what sleep hasn't taken in
     through: tuple[float, str] | None = None  # the last event observed: (days, id); None before any
     fake_latents: bool = False  # any event observed through the fake encoder
+    levels: NDArray[np.float32] | None = None  # (LEVELS, d, d) the continuum memory's (``cms``); None without it
 
     def __post_init__(self) -> None:
         for name in _ARRAYS:
@@ -66,6 +72,12 @@ class CoreState:
             raise StateError("a state's slots, usage, opening times and global vector disagree")
         if self.memory.shape != (d, d) or self.momentum.shape != (d, d) or len(self.cites) != k:
             raise StateError("a state's memory or cites don't fit its slots")
+        if self.levels is not None:
+            levels = np.array(self.levels, dtype=np.float32)
+            if levels.shape != (LEVELS, d, d):
+                raise StateError("a state's continuum levels don't fit its memory")
+            levels.setflags(write=False)
+            object.__setattr__(self, "levels", levels)
         frozen = {}
         for name, value in self.delta.items():
             array = np.array(value, dtype=np.float32)
@@ -92,7 +104,8 @@ def equal(a: CoreState, b: CoreState) -> bool:
         b.person, b.model_id, b.now, b.observed, b.cites, b.pending, b.through, b.fake_latents)
     same_arrays = all(np.array_equal(getattr(a, name), getattr(b, name)) for name in _ARRAYS)
     same_delta = set(a.delta) == set(b.delta) and all(np.array_equal(a.delta[n], b.delta[n]) for n in a.delta)
-    return same_meta and same_arrays and same_delta
+    same_levels = a.levels is None if b.levels is None else a.levels is not None and np.array_equal(a.levels, b.levels)
+    return same_meta and same_arrays and same_delta and same_levels
 
 
 def _npy(array: NDArray[np.generic]) -> bytes:
@@ -111,6 +124,8 @@ def save(state: CoreState) -> bytes:
     }
     entries = {name: getattr(state, name) for name in _ARRAYS}
     entries.update({_DELTA + name: value for name, value in sorted(state.delta.items())})
+    if state.levels is not None:
+        entries[_LEVELS] = state.levels
     entries["meta"] = np.array(json.dumps(meta, sort_keys=True))
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as zf:
@@ -140,7 +155,7 @@ def load(blob: bytes, *, model_id: str) -> CoreState:
             delta={name[len(_DELTA):]: value for name, value in arrays.items() if name.startswith(_DELTA)},
             pending=float(meta["pending"]),
             through=None if meta["through"] is None else (float(meta["through"][0]), str(meta["through"][1])),
-            fake_latents=bool(meta["fake_latents"]),
+            fake_latents=bool(meta["fake_latents"]), levels=arrays.get(_LEVELS),
         )
     except (KeyError, TypeError) as error:
         raise StateError(f"a saved state is missing a part: {error}") from None

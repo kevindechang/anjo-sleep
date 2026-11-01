@@ -17,7 +17,7 @@ CLI (``python -m anjo.sleep.mind.core``) need torch, on the CPU.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Final, Literal, get_args
 
@@ -50,7 +50,8 @@ class CoreConfig:
     """The shared core's shape. ``fast`` off is the no-fast-weights ablation (N-nofast);
     ``memory`` off resets the state before every event: the no-memory baseline. ``stance`` reads
     the fast memory by topic, whatever the stance, and gives each slot update the product of the
-    recalled stance and the event's own (``net``): the stance probe for contradictions."""
+    recalled stance and the event's own (``net``): the stance probe for contradictions. ``cms`` reads
+    and writes the memory as a continuum of levels, step, session and night (``cms``)."""
 
     dim_in: int
     width: int = 64
@@ -64,6 +65,7 @@ class CoreConfig:
     cite_keep: int = 8  # cited events a slot keeps, the strongest writes first
     dream_gap_days: float = 0.25  # an imagined event's distance from the one before
     stance: bool = False
+    cms: bool = False
 
     def __post_init__(self) -> None:
         for name in ("dim_in", "width", "slots", "horizon", "cite_keep"):
@@ -71,6 +73,14 @@ class CoreConfig:
                 raise ValueError(f"{name} must be at least 1")
         if not 0.0 < self.theta_max <= 0.5:
             raise ValueError("theta_max is in (0, 0.5]")
+        if self.cms and not self.fast:
+            raise ValueError("the continuum memory builds on the fast weights")
+
+
+def config_record(config: CoreConfig) -> dict[str, object]:
+    """The config as the model id, the saved core and its card record it: ``cms`` only when on, so
+    a core built with the switch off records, and hashes, as it did before the switch."""
+    return {name: value for name, value in asdict(config).items() if name != "cms" or config.cms}
 
 
 @dataclass(frozen=True)

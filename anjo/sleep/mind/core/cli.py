@@ -54,6 +54,8 @@
   the bar: the contrast-revision recipe 0.51 / 0.59, the stance probe 0.57 / 0.52, every margin's
   95% interval holding 0. The pair scorer (rank 8) does: 0.97 / 0.99, margins +0.33 to +0.52 (and over ``match_age``).
 
+Both build the core with the continuum memory under ``ANJO_SLEEP_MIND_CMS=1`` (``cms``; default off).
+
 ``toy`` and ``train`` write ``core.npz`` (the weights and thresholds; run data, never in git) and
 ``model_card.json``: parameters, data, seed, losses, thresholds, metrics and the time per event.
 """
@@ -62,6 +64,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import re
 import sys
 import time
@@ -75,9 +78,9 @@ import torch
 
 from anjo.sleep.mind.apd.store import loads
 from anjo.sleep.mind.apd.types import ArmRun, FindingReport
-from anjo.sleep.mind.core import contra_bar, contra_run, data, evaluate, findings, toy, train
+from anjo.sleep.mind.core import cms, contra_bar, contra_run, data, evaluate, findings, toy, train
 from anjo.sleep.mind.core.api import Core
-from anjo.sleep.mind.core.types import CoreConfig, LabelledStream
+from anjo.sleep.mind.core.types import CoreConfig, LabelledStream, config_record
 
 MODEL_FILE: Final = "core.npz"
 CARD_FILE: Final = "model_card.json"
@@ -116,7 +119,7 @@ def _card(trained: train.Trained, seconds: float, data_note: dict[str, Any], see
           extra: dict[str, Any]) -> dict[str, Any]:
     core = trained.core
     return {
-        "model_id": core.model_id, "params": core.params, "config": dataclasses.asdict(core.config),
+        "model_id": core.model_id, "params": core.params, "config": config_record(core.config),
         "data": data_note, "seed": seed, "epochs": len(trained.log), "best_epoch": trained.best_epoch,
         "log": [list(row) for row in trained.log], "thresholds": dataclasses.asdict(core.thresholds),
         "metrics": {"held_back": metrics(core, held), **extra},
@@ -131,7 +134,8 @@ def _write(out: Path, core: Core, card: dict[str, Any]) -> None:
 
 
 def run_toy(args: argparse.Namespace) -> dict[str, Any]:
-    config = CoreConfig(dim_in=toy.DIM, width=args.width, slots=args.slots, fast=not args.no_fast, stance=args.stance)
+    config = CoreConfig(dim_in=toy.DIM, width=args.width, slots=args.slots, fast=not args.no_fast, stance=args.stance,
+                        cms=cms.cms_on(os.environ))
     contrast, revisions = 0 if args.no_contrast else TOY_PAIRS_PER_EPOCH, not args.no_revisions
     start = time.perf_counter()
     family = args.stance_lives
@@ -190,7 +194,7 @@ def run_train(args: argparse.Namespace) -> dict[str, Any]:
     header, _ = data.read_latents(args.latents)
     fit, held = split_lives(streams, args.val_share, args.seed)
     config = CoreConfig(dim_in=int(header["d"]), width=args.width, slots=args.slots, fast=not args.no_fast,
-                        stance=args.stance)
+                        stance=args.stance, cms=cms.cms_on(os.environ))
     start = time.perf_counter()
     trained = train.train_shared(fit, held, config, seed=args.seed, epochs=args.epochs, patience=args.patience,
                                  batch_size=args.batch)

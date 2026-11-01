@@ -22,6 +22,9 @@ At night (the one system's loop, ``night``):
   (``SLOW_MEMORY`` in her adaptation), pruned to its ``rank`` strongest directions, and the fast
   level keeps only ``residue`` of itself, its momentum none (consolidate, then reset: Behrouz et
   al., "Language Models Need Sleep", 2026). The slow memory is read with the fast one ever after.
+  With the continuum memory (``cms``) it is the levels' Sleep instead: the session and the night take
+  their pending steps (the night's pruned to its ``rank`` strongest directions) and the fast level
+  keeps ``residue`` of itself; the night level moves at no other time.
 - ``rehearse(state, events)``: replays chosen events into the fast memory only; slots, cites and
   the clock stay as they were. Offline, it is what the night's rehearsal does to her memory.
 - ``dream_states(state, steps, rng)``: the night's one dream (``dream`` keeps only its
@@ -47,7 +50,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from anjo.sleep.mind.core import curriculum
+from anjo.sleep.mind.core import cms, curriculum
 from anjo.sleep.mind.core.net import CoreNet, Heads, Tensors, param_count
 from anjo.sleep.mind.core.state import Cite, CoreState
 from anjo.sleep.mind.core.types import (
@@ -58,6 +61,7 @@ from anjo.sleep.mind.core.types import (
     IgnitionKind,
     Predictions,
     SlotPrediction,
+    config_record,
     days_of,
     kind_index,
 )
@@ -134,7 +138,7 @@ class PressureFeatures(NamedTuple):
 
 def model_id(net: CoreNet) -> str:
     """A hash of the config and every weight: a state names the core it was built under."""
-    digest = hashlib.sha256(json.dumps(asdict(net.cfg), sort_keys=True).encode())
+    digest = hashlib.sha256(json.dumps(config_record(net.cfg), sort_keys=True).encode())
     for name, tensor in sorted(net.state_dict().items()):
         digest.update(name.encode())
         digest.update(tensor.detach().contiguous().numpy().tobytes())
@@ -186,7 +190,7 @@ class Core:
         return CoreState(
             person=person, model_id=self.model_id, slots=rows[0], usage=rows[1], opened=rows[2], memory=rows[3],
             momentum=rows[4], glob=rows[5], now=now, observed=observed, cites=cites, delta=delta, pending=pending,
-            through=through, fake_latents=fake_latents,
+            through=through, fake_latents=fake_latents, levels=rows[7] if self.config.cms else None,
         )
 
     def tensors(self, state: CoreState, copies: int = 1) -> Tensors:
@@ -194,8 +198,11 @@ class Core:
             return torch.from_numpy(np.array(a, dtype=np.float32))[None].repeat(copies, *([1] * a.ndim))
 
         now = torch.full((copies,), 0.0 if state.now is None else state.now)
+        d = self.config.width
+        levels = t(state.levels) if state.levels is not None else torch.zeros(
+            copies, cms.LEVELS if self.config.cms else 0, d, d)
         return Tensors(t(state.slots), t(state.usage), t(state.opened), t(state.memory), t(state.momentum),
-                       t(state.glob), now)
+                       t(state.glob), now, levels)
 
     def _delta(self, state: CoreState) -> dict[str, Tensor]:
         return {name: torch.from_numpy(np.array(v)) for name, v in state.delta.items() if name != SLOW_MEMORY}
@@ -323,8 +330,8 @@ class Core:
     def _imagined(self, state: CoreState, st: Tensors, alive: np.ndarray, r: int) -> DreamState:
         threads = tuple(int(k) for k in np.flatnonzero(alive > 0.5))
         cites = tuple(state.cites[k] if k in threads else () for k in range(self.config.slots))
-        imagined = replace(state, **{name: getattr(st, name)[r].numpy() for name in
-                                     ("slots", "usage", "opened", "memory", "momentum", "glob")},
+        names = ("slots", "usage", "opened", "memory", "momentum", "glob") + (("levels",) if self.config.cms else ())
+        imagined = replace(state, **{name: getattr(st, name)[r].numpy() for name in names},
                            now=float(st.now[r]), cites=cites)
         return DreamState(imagined, threads, tuple(dict.fromkeys(e for k in threads for e in state.cited(k))))
 
@@ -379,10 +386,13 @@ class Core:
 
     def consolidate(self, state: CoreState, *, rank: int | None = None, residue: float = 0.0) -> CoreState:
         """The fast memory into the slow, pruned to its ``rank`` strongest directions (all when
-        ``None``); the fast memory keeps ``residue`` of itself and no momentum."""
+        ``None``); the fast memory keeps ``residue`` of itself and no momentum. With the continuum
+        memory, the levels' Sleep instead (``_sleep_levels``)."""
         self._check(state)
         if not 0.0 <= residue <= 1.0 or (rank is not None and rank < 1):
             raise ValueError("a residue is in [0, 1] and a rank is positive")
+        if self.config.cms:
+            return self._sleep_levels(state, rank=rank, residue=residue)
         fast = np.array(state.memory, dtype=np.float64)
         moved = fast
         if rank is not None:
@@ -391,6 +401,18 @@ class Core:
         slow = np.array(state.delta.get(SLOW_MEMORY, np.zeros_like(fast)), dtype=np.float64) + moved
         return replace(state, memory=(residue * fast).astype(np.float32), momentum=np.zeros_like(state.momentum),
                        delta={**state.delta, SLOW_MEMORY: slow.astype(np.float32)}, pending=0.0)
+
+    def _sleep_levels(self, state: CoreState, *, rank: int | None, residue: float) -> CoreState:
+        """The continuum memory's Sleep (``CoreNet.sleep``), the night's step pruned to ``rank``."""
+        levels = np.array(state.levels, dtype=np.float32)
+        if rank is not None:
+            u, sv, vt = np.linalg.svd(levels[cms.NIGHT_PENDING].astype(np.float64))
+            night = ((u[:, :rank] * sv[:rank]) @ vt[:rank]).astype(np.float32)
+            levels = np.stack([night if n == cms.NIGHT_PENDING else row for n, row in enumerate(levels)])
+        with torch.no_grad():
+            st = self.net.sleep(self.tensors(replace(state, levels=levels)), residue)
+        return replace(state, memory=st.memory[0].numpy(), momentum=st.momentum[0].numpy(),
+                       levels=st.levels[0].numpy(), pending=0.0)
 
     def pressure_features(self, state: CoreState) -> PressureFeatures:
         risky = math.fsum(max(0.0, s.risk - PRESSURE_RISK) for s in self.predict(state).slots if s.cites)
@@ -419,7 +441,7 @@ class Core:
 
     def save(self, path: Path) -> None:
         """The weights and thresholds as ``.npz`` (no pickle): run data, never in git."""
-        meta = {"version": MODEL_VERSION, "config": asdict(self.config), "model_id": self.model_id,
+        meta = {"version": MODEL_VERSION, "config": config_record(self.config), "model_id": self.model_id,
                 "thresholds": asdict(self.thresholds)}
         arrays = {f"w__{name}": t.detach().numpy() for name, t in self.net.state_dict().items()}
         with path.open("wb") as handle:
