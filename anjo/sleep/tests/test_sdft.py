@@ -35,7 +35,8 @@ from anjo.sleep.tests.test_sleep_objective import (
     _transcript,
 )
 from anjo.sleep.train import colab_train, objective, sleep_job, sleep_loss, terms
-from anjo.sleep.train.dataset import SeedRow
+from anjo.sleep.probes.logprob import ORDERS, present
+from anjo.sleep.train.dataset import Pair, SeedRow
 from anjo.sleep.train.lora import LoraCfg, LoraCfgError, training_config
 from anjo.sleep.types import Evidence, Probe
 
@@ -71,15 +72,23 @@ def _said() -> list[Evidence]:
 
 
 def _night(tmp_path: Path, on: bool, *, extra: list[Evidence] | None = None, sealed: list[Probe] | None = None,
-           made: list[Any] | None = None) -> tuple[Any, dict[str, Any]]:
+           made: list[Any] | None = None, pairs: bool = False) -> tuple[Any, dict[str, Any]]:
     made = made or [_transcript(0), _transcript(1)]
     world = World(tmp_path)
     world.evidence("p1").add([*_said(), *(extra or [])])
     world.transcripts("p1").add(made)
     deps = world.deps(terms=Terms(seed=True, sdft=on))
-    data, receipt = terms.attach_night_terms(deps, "p1", NIGHT, world.evidence("p1"), sealed or [], _data(made),
+    data = _data(made)
+    if pairs:  # the night's DPO pairs: her best (the practice reply) and her worst reply on each message
+        data = replace(data, pairs=tuple(_pair(t) for t in made))
+    data, receipt = terms.attach_night_terms(deps, "p1", NIGHT, world.evidence("p1"), sealed or [], data,
                                              SpendMeter(spark_in_per_m=0.2, spark_out_per_m=0.6))
     return data, receipt
+
+
+def _pair(t: Any) -> Pair:
+    return Pair(id=t.id, prompt=(("user", t.message),), chosen=t.reply, rejected=f"Digital for scene {t.scene}, fast.",
+                chosen_from="glimmer", rejected_from="glimmer", tokens=60)
 
 
 def _loss_batch(sdft: tuple[Any, ...] = ()) -> Any:
@@ -149,8 +158,8 @@ def test_the_switch_rides_only_on_the_seed_objective_and_never_in_a_matched_cont
 
 
 def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: Path) -> None:
-    data, receipt = _night(tmp_path, on=True)
-    assert receipt["sdft"] == {"rows": {"tone": 2, "taste": 2}, "sources": 2,
+    data, receipt = _night(tmp_path, on=True, pairs=True)
+    assert receipt["sdft"] == {"rows": {"tone": 2, "taste": 4}, "sources": 2,
                                "dropped": dict.fromkeys(terms.SDFT_DROPS, 0), "demonstrations": 2}
     assert {k: v for k, v in receipt.items() if k != "sdft"} == TODAYS_RECEIPT  # the seeding rows are today's
     by_source = {row.id: row for row in data.seeds}
@@ -159,14 +168,17 @@ def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: 
         assert row.context == source.context and TONE in row.context and PREFERENCE in row.context
         assert "they edit at night" in row.context  # the snapshot of C, then today's items: 2C's material
         assert row.query.startswith(source.message) and TONE not in row.query and PREFERENCE not in row.query
-        frames = terms.SDFT_FRAMES[row.kind]
-        assert row.query == terms.sdft_query(source.message, row.kind, source.id, 20261028)
-        assert (row.query == source.message) == (row.kind == "tone") and any(row.query.endswith(f) for f in frames)
-        demo = f"{row.query}\n\n{terms.SDFT_DEMO_HEAD}\n{source.reply}\n\n{terms.SDFT_DEMO_TAIL}"
-        assert row.teacher_query == (demo if row.kind == "tone" else None)  # her practice reply, tone rows only
+        if row.kind == "tone":  # the bare message, her practice reply the teacher's demonstration
+            assert row.query == terms.sdft_query(source.message, row.kind, source.id, 20261028) == source.message
+            demo = f"{row.query}\n\n{terms.SDFT_DEMO_HEAD}\n{source.reply}\n\n{terms.SDFT_DEMO_TAIL}"
+            assert row.teacher_query == demo
+        else:  # the night's pair as an A/B choice, in one of the two orders, and no demonstration
+            options = (source.reply, f"Digital for scene {source.id[1:]}, fast.")
+            assert row.query in {terms.taste_question(source.message, options, order) for order in ORDERS}
+            assert row.teacher_query is None and row.tokens == terms._tokens(row.context, row.query) + 1
     written = [json.loads(line) for line in data.to_jsonl(pairs=True, terms=True).splitlines()]
     rows = [row for row in written if row.get("kind") == "sdft"]
-    assert len(rows) == 4 and all("completion" not in row for row in rows)  # the job samples every reply
+    assert len(rows) == 6 and all("completion" not in row for row in rows)  # the job samples every reply
     for row in rows:
         assert [m["role"] for m in row["teacher"]] == ["system", "user"] and TONE in row["teacher"][0]["content"]
         assert [m["role"] for m in row["prompt"]] == ["user"]
@@ -177,11 +189,11 @@ def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: 
     # Today's split never reads them; the job reads them only when the recipe asks.
     assert colab_train.split_rows(written) == colab_train.split_rows([r for r in written if r.get("kind") != "sdft"])
     by_kind = sleep_job.term_rows(colab_train, written)
-    assert len(by_kind["sdft"]) == 4 and len(by_kind["seed"]) == 2
+    assert len(by_kind["sdft"]) == 6 and len(by_kind["seed"]) == 2
     template = {"reasoning_strength": "low", "current_date": NIGHT.isoformat()}
     cfg = {"max_seq_length": 8192, "terms": {"fold_rank": None, "dreams": False, "sdft": True}}
     batch, too_long = sleep_job.seed_batch(colab_train, sleep_loss, _Tokens(), [], [], by_kind, cfg, template)
-    assert len(batch.sdft) == 4 and too_long == {"seed": 0, "dream": 0, "sdft": 0}
+    assert len(batch.sdft) == 6 and too_long == {"seed": 0, "dream": 0, "sdft": 0}
     first = next(seq for seq in batch.sdft if seq.kind == "taste")  # no demonstration: the same query
     assert first.prompt[:2] == (1, 8) and first.teacher[:2] == (1, 7) and first.teacher[-len(first.prompt) + 1:] == first.prompt[1:]
     assert {seq.kind for seq in batch.sdft} == set(sleep_loss.SDFT_KINDS) and first.state is None
@@ -201,13 +213,13 @@ def test_sources_are_tonights_then_dreams_then_replay_each_message_once_and_capp
     seeds = [row("old", "An old scene I shot?"), row("d0", "A dreamt question about the cut?", "dream"),
              row("t0", "Tonight's scene: the opening?"), row("t1", "Tonight's scene: the opening?")]
     made, dropped = terms.sdft_rows(seeds, frozenset({"old"}), terms.OverlapGuard([]), [], _NoLeak(), seed=3)
-    assert [r.source for r in made[::2]] == ["t0", "d0", "old"] and dropped == dict.fromkeys(terms.SDFT_DROPS, 0)
+    assert [r.source for r in made] == ["t0", "d0", "old"] and dropped == dict.fromkeys(terms.SDFT_DROPS, 0)
     many = [row(f"t{i}", f"Scene {i} of the short: what lens?") for i in range(terms.SDFT_SOURCES_MAX + 3)]
     made, _ = terms.sdft_rows(many, frozenset(), terms.OverlapGuard([]), [], _NoLeak(), seed=3)
-    assert len({r.source for r in made}) == terms.SDFT_SOURCES_MAX and len(made) == 2 * terms.SDFT_SOURCES_MAX
+    assert len({r.source for r in made}) == terms.SDFT_SOURCES_MAX == len(made)  # a tone row a source
     short, dropped = terms.sdft_rows(seeds[:1], frozenset(), terms.OverlapGuard([]), [], _NoLeak(), seed=3,
                                      max_seq_tokens=terms.SDFT_REPLY_TOKENS)
-    assert short == () and dropped["truncated"] == 2  # the sample's room counts against the length
+    assert short == () and dropped["truncated"] == 1  # the sample's room counts against the length
 
 
 # ── the guard ────────────────────────────────────────────────────────────────
@@ -271,7 +283,7 @@ def test_the_demonstration_is_her_practice_reply_and_never_a_dream_or_a_flagged_
     assert terms.sdft_demo(practice, "tone", practice.message, guard, [PROBE], Flags(), max_seq_tokens=8192) is None
     assert terms.sdft_demo(practice, "tone", practice.message, guard, [], _NoLeak(), max_seq_tokens=200) is None
     made, _ = terms.sdft_rows([practice], frozenset(), guard, [], _NoLeak(), seed=1)
-    assert [row.teacher_query is not None for row in made] == [kind == "tone" for kind in terms.SDFT_KINDS]
+    assert [(row.kind, row.teacher_query is not None) for row in made] == [("tone", True)]
     assert all(row.tokens > terms.SDFT_REPLY_TOKENS for row in made)
 
 
@@ -281,8 +293,8 @@ def test_a_row_carrying_a_probe_or_held_out_text_is_refused_and_counted(tmp_path
     data, receipt = _night(tmp_path, on=True, extra=[HELD], sealed=[PROBE], made=leaky)
     # Both seed (these rows skip the dataset's own decontamination); neither message ever becomes a query.
     assert {row.source for row in data.sdft} == {"t1"} and {"t0", "t2"} <= {row.id for row in data.seeds}
-    assert receipt["sdft"]["dropped"]["held_out"] == 2 and receipt["sdft"]["dropped"]["probe"] == 2
-    assert receipt["sdft"]["rows"] == dict.fromkeys(terms.SDFT_KINDS, 1)
+    assert receipt["sdft"]["dropped"]["held_out"] == 1 and receipt["sdft"]["dropped"]["probe"] == 1
+    assert receipt["sdft"]["rows"] == {"tone": 1, "taste": 0}
     assert not any(HELD.text in row.query or PROBE.prompt in row.query for row in data.sdft)
 
     class Flags:
@@ -291,7 +303,7 @@ def test_a_row_carrying_a_probe_or_held_out_text_is_refused_and_counted(tmp_path
 
     seeds = [SeedRow(id="t9", context="Notes.", message="Which lens for scene 9?", reply="r", tokens=5)]
     made, dropped = terms.sdft_rows(seeds, frozenset(), terms.OverlapGuard([]), [PROBE], Flags(), seed=1)
-    assert made == () and dropped["probe"] == 2  # the decontaminator's three rules run on every query too
+    assert made == () and dropped["probe"] == 1  # the decontaminator's three rules run on every query too
 
 
 def test_the_night_logs_the_rows_in_its_dataset_receipt(tmp_path: Path) -> None:
@@ -301,8 +313,8 @@ def test_the_night_logs_the_rows_in_its_dataset_receipt(tmp_path: Path) -> None:
     result = run_night_batch_with(deps, {"p1": NIGHT}, windows={"p1": window(NIGHT)})
     receipt = step(result["p1"].log_path, "dataset")["terms"]
     assert set(receipt["sdft"]) == {"rows", "sources", "dropped", "demonstrations"} and set(receipt["sdft"]["rows"]) == set(terms.SDFT_KINDS)
-    assert (sum(receipt["sdft"]["rows"].values()) + sum(receipt["sdft"]["dropped"].values())
-            == len(terms.SDFT_KINDS) * receipt["seeds"])
+    tone = receipt["sdft"]["rows"]["tone"] + sum(receipt["sdft"]["dropped"].values())
+    assert tone >= min(receipt["seeds"], terms.SDFT_SOURCES_MAX) and receipt["sdft"]["sources"] <= receipt["seeds"]
 
 
 # ── the term ─────────────────────────────────────────────────────────────────
@@ -387,10 +399,10 @@ def test_the_job_trains_sdft_rows_on_fresh_samples_and_reads_the_sdft_held_kl(mo
     assert reading["label"] == sleep_loss.SDFT_HELD_LABEL == "SDFT-held (seeded, not distilled)"
     assert sdft["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 3) and reading["rows"] == dict.fromkeys(sleep_loss.SDFT_KINDS, 2)
     assert "held_out" not in json.dumps(sdft) and "held-out" not in json.dumps(sdft)  # no held-out claim anywhere
-    visits = 6 * got["epochs"]
+    visits = 3 * got["epochs"]  # the tone rows' visits: a taste row samples nothing
     assert sdft["on_policy_samples"] == visits and reading["samples"] == 4 and sdft["skipped_late"] == 0
-    assert len(drawn) == visits + 4  # every visit drew its own sample, and each held row one
-    assert set(drawn[:4]) == {rows[i].prompt for i in held}  # the held slice first, at the night's start
+    assert len(drawn) == visits + 2  # every tone visit drew its own sample, and each held tone row one
+    assert set(drawn[:2]) == {rows[i].prompt for i in held if rows[i].kind == "tone"}  # the held slice first
     assert math.isfinite(reading["kl_before"]) and reading["kl_after"] != reading["kl_before"]
     assert set(reading["kl_by_kind"]) == set(sleep_loss.SDFT_KINDS) and sdft["weight"] == sleep_loss.SDFT_WEIGHT
     assert got["weights"] == sleep_loss.WEIGHTS and got["loss"]["sdft"] is not None and "sdft" in got["minutes"]
@@ -410,6 +422,63 @@ def test_the_held_sources_seed_rows_still_train_under_the_seed_term() -> None:
     got = sleep_loss.train_terms(_tiny(torch), batch, _plan(), timer=lambda: 0.0)
     assert len(held) == sleep_loss.SDFT_HELD and got["rows"]["seed"] == len(seeds)  # held from distillation only
     assert got["sdft"]["seeded_not_distilled"]["rows"]["tone"] == sleep_loss.SDFT_HELD
+
+
+def test_a_taste_row_samples_nothing_and_is_the_reverse_kl_at_the_label_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    torch = _torch()
+    model = _tiny(torch)
+    teacher = sleep_loss.Teacher([model.lora_A, model.lora_B])
+    start = model.lora_B.detach().clone()
+    with torch.no_grad():
+        model.lora_B.add_(0.5)
+    tonight = model.lora_B.detach().clone()
+    model.train()
+
+    def never(*_: Any, **__: Any) -> Any:
+        raise AssertionError("a taste row samples nothing")
+
+    monkeypatch.setattr(sleep_loss, "sample", never)
+    row = sleep_loss.SdftSeq(prompt=(1, 2, 3), teacher=(7, 8, 1, 2, 3), kind="taste", source="t0")
+    kl, reply = sleep_loss.sdft_kl(model, row, teacher, _plan())
+    assert reply == () and sleep_loss.SDFT_LABEL_KIND == "taste"
+    kl.backward()
+    assert model.lora_B.grad is not None
+    with torch.no_grad():
+        model.lora_B.copy_(start)
+        t = torch.log_softmax(model(torch.tensor([list(row.teacher)])).logits[0, -1], -1)
+        model.lora_B.copy_(tonight)
+        s = torch.log_softmax(model(torch.tensor([list(row.prompt)])).logits[0, -1], -1)
+    assert torch.allclose(kl.detach(), (s.exp() * (s - t)).sum(), atol=1e-6) and float(kl.detach()) > 0  # unmasked
+
+
+def test_taste_rows_are_the_nights_pairs_as_the_scorers_ab_choice_in_both_orders() -> None:
+    probe = Probe("x", "p1", "taste_ab", "Which cut for the trailer?", ("The long one", "The short one"), None, ())
+    for order in ORDERS:  # present()'s question, byte for byte
+        assert terms.taste_question(probe.prompt, probe.options, order) == present(probe, order, None)[0]["content"]
+    seeds = [SeedRow(id=f"t{i}", context="Notes.", message=f"Scene {i}: which take?", reply="r", tokens=5)
+             for i in range(terms.SDFT_TASTE_PAIRS_MAX + 2)]
+    seeds.append(SeedRow(id="d0", context="Notes.", message="A dreamt take?", reply="r", tokens=5, group="dream"))
+    pairs = [Pair(id=row.id, prompt=(("user", row.message),), chosen=f"Take {i}, the warm one.",
+                  rejected=f"Take {i + 1}, the cold one.", chosen_from="glimmer", rejected_from="glimmer", tokens=9)
+             for i, row in enumerate(seeds)]
+    made, dropped = terms.taste_rows(seeds, pairs, terms.OverlapGuard([]), [], _NoLeak())
+    assert len(made) == 2 * terms.SDFT_TASTE_PAIRS_MAX and dropped == dict.fromkeys(terms.SDFT_DROPS, 0)
+    assert "d0" not in {row.source for row in made} and {row.kind for row in made} == {"taste"}
+    first, second = made[:2]
+    assert first.query == terms.taste_question(seeds[0].message, ("Take 0, the warm one.", "Take 1, the cold one."), (0, 1))
+    assert second.query == terms.taste_question(seeds[0].message, ("Take 0, the warm one.", "Take 1, the cold one."), (1, 0))
+    leaky = [replace(pairs[0], rejected=PROBE.prompt), replace(pairs[1], chosen=f"Fine. {HELD.text}"),
+             replace(pairs[2], chosen=f"{PREFERENCE} So the warm take.")]
+    made, dropped = terms.taste_rows(seeds[:3], leaky, _guard(), [PROBE], _NoLeak())
+    assert made == () and (dropped["probe"], dropped["held_out"]) == (2, 2) and dropped["cue"] + dropped["gate_set"] == 2
+
+    class Flags:
+        def check(self, texts: Any, sealed: Any) -> tuple[bool, ...]:
+            return tuple("cold" in text for text in texts)
+
+    made, dropped = terms.taste_rows(seeds[:1], pairs[:1], terms.OverlapGuard([]), [PROBE], Flags())
+    assert made == () and dropped["probe"] == 2  # the decontaminator reads every question
+    assert terms.taste_rows(seeds, [], terms.OverlapGuard([]), [], _NoLeak())[0] == ()  # no pair, no taste row
 
 
 def test_past_its_budget_the_term_draws_nothing_and_a_matched_control_refuses_it(monkeypatch: pytest.MonkeyPatch) -> None:

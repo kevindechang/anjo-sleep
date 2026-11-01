@@ -47,10 +47,13 @@ in her weights. So the teacher reads the seeding row's consolidated day, the sam
 snapshot of C, built as 2C's is, then today's lessons, corrections, preferences and tone requests), and
 the student the query alone. No model writes a query: each is one of the seeding rows' own messages,
 tonight's practice first, then her day dreams, then replay, at most ``SDFT_SOURCES_MAX`` distinct ones,
-in two forms (``SDFT_FRAMES``): bare (``tone``: the work message as it came, as a ``tone_hold`` probe is
-an ordinary work message, so length, opening and hedging show unasked; the day's new work is asked the
-same way) and asking for a choice (``taste``: where her preferences decide). No frame names a preference,
-a tone or a style, so the student learns to hold them unasked; the job samples every reply (``sleep_loss.py``).
+bare (``tone``: the work message as it came, as a ``tone_hold`` probe is an ordinary work message, so
+length, opening and hedging show unasked; the day's new work is asked the same way), and the job samples
+every reply (``sleep_loss.py``). ``taste`` rows ask what a ``taste_ab`` probe asks, in its scorer's exact
+form (``probes/logprob.present``: the message, the two options as A and B, the one-letter instruction),
+in both orders: the options are the night's own DPO pair on a practice message (her best and her worst
+reply, ``taste_rows``), never a probe's; the job reads them at the label's position alone. No query
+names a preference, a tone or a style, so the student learns to hold them unasked.
 Where the source is a practice row (tonight's or replay's, not a day dream), a tone row's teacher also sees
 her own practice reply after the query as a demonstration, between the paper's two fixed lines
 (``SDFT_DEMO_HEAD``, ``SDFT_DEMO_TAIL``): its best teacher read the text and the answer together. A reply
@@ -80,6 +83,7 @@ from anjo.sleep.night.meter import SpendMeter
 from anjo.sleep.ports import Decontaminator, EvidenceStore
 from anjo.sleep.practice.transcripts import PracticeTranscript, TranscriptStore
 from anjo.sleep.probes.decontam import NGRAM, probe_texts, words
+from anjo.sleep.probes.logprob import INSTRUCTION, LABELS, ORDERS
 from anjo.sleep.provenance import may_train, union
 from anjo.sleep.sets.loader import SETS_DIR, load_anchors, load_collapse, load_general
 from anjo.sleep.train.dataset import (
@@ -89,6 +93,7 @@ from anjo.sleep.train.dataset import (
     Dataset,
     DreamRow,
     Example,
+    Pair,
     SdftRow,
     SeedRow,
     carries_verbatim,
@@ -106,12 +111,13 @@ DAY_DREAM_DROPS: Final = ("no_context", "uncleared", "probe", "truncated")
 NOTES_HEAD: Final = "What you know about them, from your notes:"
 TODAY_HEAD: Final = "What they told you today:"
 SDFT_KINDS: Final = ("tone", "taste")
-# What each kind adds to her message. None names a preference, a tone or a style (a probe's own rule); a
-# tone query is the bare message, as a tone_hold probe is (a bare knowledge row would be the same query).
-SDFT_FRAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({
-    "tone": ("",),
-    "taste": ("Which way would you go, and why?", "What would you choose here?"),
-})
+# What a message-built kind adds to her message: a tone query is the bare message, as a tone_hold probe is
+# (a bare knowledge row would be the same query). Taste rows are built from the night's pairs (``taste_rows``).
+SDFT_FRAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({"tone": ("",)})
+# DPO pairs a night asks as an A/B choice, both orders: at most 16 taste rows. A taste visit samples nothing
+# (two passes over the day and the question, some 5 s), so they add about a minute inside the term's 15.
+SDFT_TASTE_PAIRS_MAX: Final = 8
+SDFT_LABEL_TOKENS: Final = 1  # a taste row's reply is the label alone: the length counts one token
 # Distinct messages a night distils, a row a kind: tonight's practice (16 scenes), then day dreams, then
 # replay all fit. A sampled visit is about 30 s on the A100 (192 tokens of Glimmer-30B in 4-bit at some
 # 8 a second, then the teacher's and the student's passes), so 24 sources less the 2 held are some 11
@@ -389,8 +395,9 @@ def sdft_rows(
 ) -> tuple[tuple[SdftRow, ...], dict[str, int]]:
     """The self-distillation rows from the seeding rows' messages, and the refusals by reason. Sources:
     tonight's rows, then her day dreams, then replay (``replay_ids``), each message once, the first
-    ``SDFT_SOURCES_MAX``; each gives one row a kind, with its seeding row's context and core, and a tone
-    row from a practice source its reply as the teacher's demonstration (``sdft_demo``)."""
+    ``SDFT_SOURCES_MAX``; each gives one tone row (the bare message), with its seeding row's context and
+    core, and from a practice source its reply as the teacher's demonstration (``sdft_demo``). The taste
+    rows come from the night's pairs (``taste_rows``)."""
     dropped = dict.fromkeys(SDFT_DROPS, 0)
     order = sorted(range(len(seeds)), key=lambda i: (
         2 if seeds[i].id in replay_ids else 1 if seeds[i].group == DAY_DREAM_GROUP else 0, i))
@@ -400,7 +407,7 @@ def sdft_rows(
         if len(sources) < SDFT_SOURCES_MAX and (message := seeds[i].message.strip()) not in seen:
             seen.add(message)
             sources.append(seeds[i])
-    candidates = [(row, kind, sdft_query(row.message, kind, row.id, seed)) for row in sources for kind in SDFT_KINDS]
+    candidates = [(row, kind, sdft_query(row.message, kind, row.id, seed)) for row in sources for kind in SDFT_FRAMES]
     flags = decontam.check([query for _, _, query in candidates], list(sealed)) if candidates else ()
     if len(flags) != len(candidates):
         raise ValueError("the decontaminator must return one flag per text")
@@ -415,6 +422,40 @@ def sdft_rows(
         rows.append(SdftRow(id=f"{row.id}:{kind}", kind=kind, source=row.id, context=row.context, query=query,
                             tokens=tokens if taught is None else _tokens(row.context, taught) + SDFT_REPLY_TOKENS,
                             core=row.core, teacher_query=taught))
+    return tuple(rows), dropped
+
+
+def taste_question(message: str, options: tuple[str, str], order: tuple[int, int]) -> str:
+    """An A/B choice in the forced-choice scorer's exact form (``probes/logprob.present``'s question)."""
+    first, second = (options[index] for index in order)
+    return f"{message}\n\n{LABELS[0]}. {first}\n{LABELS[1]}. {second}\n\n{INSTRUCTION}"
+
+
+def taste_rows(
+    seeds: Sequence[SeedRow], pairs: Sequence[Pair], guard: OverlapGuard, sealed: Sequence[Probe],
+    decontam: Decontaminator, *, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
+) -> tuple[tuple[SdftRow, ...], dict[str, int]]:
+    """The taste rows and the refusals by reason: each of the night's DPO pairs on a practice seeding row's
+    message (her best and worst replies, the training side's own), the first ``SDFT_TASTE_PAIRS_MAX`` in the
+    seeding rows' order, asked as an A/B choice in both orders (``ORDERS``) with the seeding row's day as
+    the teacher's context. Every question passes the guard, the decontaminator and the length."""
+    dropped = dict.fromkeys(SDFT_DROPS, 0)
+    by_id = {pair.id: pair for pair in pairs}
+    chosen = [(row, by_id[row.id]) for row in seeds if row.group != DAY_DREAM_GROUP and row.id in by_id]
+    candidates = [(row, n, taste_question(row.message.strip(), (pair.chosen.strip(), pair.rejected.strip()), order))
+                  for row, pair in chosen[:SDFT_TASTE_PAIRS_MAX] for n, order in enumerate(ORDERS)]
+    flags = decontam.check([query for _, _, query in candidates], list(sealed)) if candidates else ()
+    if len(flags) != len(candidates):
+        raise ValueError("the decontaminator must return one flag per text")
+    rows: list[SdftRow] = []
+    for (row, n, query), flag in zip(candidates, flags, strict=True):
+        tokens = _tokens(row.context, query) + SDFT_LABEL_TOKENS
+        reason = guard.refusal(query) or ("probe" if flag else "truncated" if tokens > max_seq_tokens else None)
+        if reason is not None:
+            dropped[reason] += 1
+            continue
+        rows.append(SdftRow(id=f"{row.id}:taste:{n}", kind="taste", source=row.id, context=row.context, query=query,
+                            tokens=tokens, core=row.core))
     return tuple(rows), dropped
 
 
@@ -501,7 +542,10 @@ def attach_night_terms(
     if deps.terms.sdft:  # from the seeding rows above: no model is asked for anything
         guard = sdft_guard(sealed, held_out_items(store, night), store.stored(night))
         replay = frozenset(example.id for example in data.examples if not example.new)
-        sdft, refused = sdft_rows(seeds, replay, guard, sealed, deps.decontam, seed=deps.settings.seed)
+        tone, refused = sdft_rows(seeds, replay, guard, sealed, deps.decontam, seed=deps.settings.seed)
+        taste, taste_refused = taste_rows(seeds, data.pairs, guard, sealed, deps.decontam)
+        sdft = (*tone, *taste)
+        refused = {reason: refused[reason] + taste_refused[reason] for reason in SDFT_DROPS}
         done["sdft"] = {"rows": {kind: sum(row.kind == kind for row in sdft) for kind in SDFT_KINDS},
                         "sources": len({row.source for row in sdft}), "dropped": refused,
                         "demonstrations": sum(row.teacher_query is not None for row in sdft)}

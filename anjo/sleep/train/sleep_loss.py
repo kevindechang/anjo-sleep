@@ -63,7 +63,9 @@ imitation samples ``IMITATION_SAMPLES_DAY`` times.
 "Self-Distillation Enables Continual Learning" (arXiv 2601.19897): the model with a demonstration in
 context teaches itself without it, on its own samples. Each ``SdftSeq`` is a query the host built from a
 seeding row's message (``train/terms.py``: bare, as a tone_hold probe is, or asking for a choice) with the
-consolidated day before it in the teacher's prompt. Every visit draws a fresh sample of the student
+consolidated day before it in the teacher's prompt. A taste row (``SDFT_LABEL_KIND``) is an A/B choice in
+the forced-choice scorer's form and samples nothing: its KL is at the label's position alone, where the
+``taste_ab`` probe reads the letter, so it is exact and cheap. Every other visit draws a fresh sample of the student
 (``SDFT_TOKENS``, temperature 1, no top-p or top-k: fully on-policy, one rollout a visit, as the paper) and
 scores it with ``seed_kl``: the same per-token, full-vocabulary reverse KL to the same ``Teacher``, so the
 term is the seeding term's machinery on the student's own replies, at ``SDFT_WEIGHT``. The paper's teacher
@@ -143,6 +145,7 @@ SDFT_HELD_LABEL: Final = "SDFT-held (seeded, not distilled)"  # what the receipt
 SDFT_BUDGET_S: Final = 15 * 60.0  # the term's seconds a night; past them a visit draws nothing
 SDFT_HELD_BUDGET_S: Final = 3 * 60.0  # the SDFT-held samples' seconds at the night's start; past them, no more
 SDFT_MASK_TOKENS: Final = 3  # a sample's opening positions with no loss (the paper's mask on teacher-only phrasing)
+SDFT_LABEL_KIND: Final = "taste"  # an A/B choice: scored at the label's position alone, unmasked, never sampled
 
 Ids = tuple[int, ...]
 
@@ -445,11 +448,19 @@ def sdft_kl(model: Any, row: SdftSeq, teacher: Teacher, plan: Plan, soft: Splice
     """Self-distillation, one visit: a fresh sample of the student (tonight's adapter, the query alone),
     then ``seed_kl`` on it past its first ``SDFT_MASK_TOKENS`` positions, the teacher the night-start
     adapter with the day before the query. Returns the loss (None for a sample no longer than the mask)
-    and the sample."""
+    and the sample. A taste row samples nothing (``_label``): the KL at the label's position, and no sample."""
+    if row.kind == SDFT_LABEL_KIND:
+        return seed_kl(model, _label(row, plan), teacher, soft, teacher_soft), ()
     reply = sample(model, row.prompt, SDFT_TOKENS, plan, soft)
     if len(reply) <= SDFT_MASK_TOKENS:
         return None, reply
     return seed_kl(model, _scored(row, reply), teacher, soft, teacher_soft, SDFT_MASK_TOKENS), reply
+
+
+def _label(row: SdftSeq, plan: Plan) -> SeedSeq:
+    """A taste row scored at its label's position: one reply slot, whose logits are the prompt's last (the
+    distribution over the letter); the slot's own token is never read, so it is her end of turn."""
+    return _scored(row, (plan.eot,))
 
 
 def sdft_split(rows: Sequence[SdftSeq], seed: int) -> tuple[list[int], list[int]]:
@@ -616,12 +627,16 @@ def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None
               timer: Callable[[], float] = time.monotonic) -> list[tuple[str, SeedSeq]]:
     """One sample of the student per SDFT-held row (seeded, not distilled), each with its kind: the replies
     the receipt's KL is read on before and after training, the same both times (a sample no longer than the
-    mask is left out). No sample starts once ``SDFT_HELD_BUDGET_S`` have passed."""
+    mask is left out; a taste row is read at its label, sampling nothing). No sample starts once
+    ``SDFT_HELD_BUDGET_S`` have passed."""
     held: list[tuple[str, SeedSeq]] = []
     started = timer()
     for row in rows:
         if timer() - started > SDFT_HELD_BUDGET_S:
             break
+        if row.kind == SDFT_LABEL_KIND:
+            held.append((row.kind, _label(row, plan)))
+            continue
         reply = sample(model, row.prompt, SDFT_TOKENS, plan, _tokens(soft, row.state, detach=True))
         if len(reply) > SDFT_MASK_TOKENS:
             held.append((row.kind, _scored(row, reply)))
@@ -631,17 +646,19 @@ def sdft_held(model: Any, rows: Sequence[SdftSeq], plan: Plan, soft: Soft | None
 def sdft_kl_by_kind(model: Any, held: Sequence[tuple[str, SeedSeq]], teacher: Teacher,
                     soft: Soft | None = None) -> dict[str, float | None]:
     """The seeding KL on the SDFT-held samples, over all of them (``all``) and by kind; None where there are none."""
-    groups = {"all": [seq for _, seq in held], **{kind: [seq for k, seq in held if k == kind] for kind in SDFT_KINDS}}
+    groups = {"all": list(held), **{kind: [(k, seq) for k, seq in held if k == kind] for kind in SDFT_KINDS}}
     return {name: _masked_kl(model, rows, teacher, soft) if rows else None for name, rows in groups.items()}
 
 
-def _masked_kl(model: Any, rows: Sequence[SeedSeq], teacher: Teacher, soft: Soft | None) -> float:
-    """The term's KL (past ``SDFT_MASK_TOKENS``) over ``rows``, averaged, without dropout or a gradient."""
+def _masked_kl(model: Any, rows: Sequence[tuple[str, SeedSeq]], teacher: Teacher, soft: Soft | None) -> float:
+    """The term's KL over ``rows`` as it trains them (past ``SDFT_MASK_TOKENS``, a taste row at its label),
+    averaged, without dropout or a gradient."""
     import torch
 
     with _evaluating(model), torch.no_grad():
         scores = [float(seed_kl(model, row, teacher, _tokens(soft, row.state, detach=True),
-                                _tokens(soft, row.state, ref=True), SDFT_MASK_TOKENS)) for row in rows]
+                                _tokens(soft, row.state, ref=True), 0 if kind == SDFT_LABEL_KIND else SDFT_MASK_TOKENS))
+                  for kind, row in rows]
     return sum(scores) / len(scores)
 
 
@@ -786,7 +803,7 @@ class _Run:
             if index in self.fresh and (fresh := sample(self.model, seq.prompt, FRESH_TOKENS, self.plan, student)):
                 seq, self.sampled = replace(seq, reply=fresh), self.sampled + 1
             return seed_kl(self.model, seq, self.teacher, student, self.tokens(seq.state, ref=True))
-        if term == SDFT_TERM:  # every visit a fresh sample; past the term's budget or the deadline, none
+        if term == SDFT_TERM:  # a tone visit a fresh sample, a taste visit its label; past the budget, none
             _, row = row
             if self.clock.seconds.get(SDFT_TERM, 0.0) > SDFT_BUDGET_S or self.timer() > self.plan.deadline:
                 self.sdft_late += 1
@@ -1064,7 +1081,8 @@ def _sdft_receipt(rows: Sequence[SdftSeq], held: Sequence[int], trained: Sequenc
                   before: Mapping[str, float | None] | None, after: Mapping[str, float | None] | None) -> dict[str, Any]:
     """Self-distillation's part of the receipt: rows distilled by kind, the on-policy samples drawn in
     training, the visits the budget or the deadline skipped, and ``seeded_not_distilled``: the SDFT-held
-    rows by kind (their seeding rows trained, so this is no held-out reading), their samples, and the
+    rows by kind (their seeding rows trained, so this is no held-out reading), the rows read (a taste row's
+    label counts as one), and the
     seeding KL on them before and after training, over all and by kind. Counts only."""
     def by_kind(indices: Sequence[int]) -> dict[str, int]:
         return {kind: sum(rows[i].kind == kind for i in indices) for kind in SDFT_KINDS}

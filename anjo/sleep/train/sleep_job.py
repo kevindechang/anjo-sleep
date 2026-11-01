@@ -41,7 +41,8 @@ second adapter and no second boot.
 **Self-distillation** (``ANJO_SLEEP_SDFT``, the recipe's ``terms.sdft``): the dataset's ``sdft`` rows carry a
 teacher prompt (the consolidated day, then the query), a student prompt (the query alone), their kind and
 their source, and no reply. Each becomes a ``sleep_loss.SdftSeq``, kept when its teacher prompt and a full
-sample (``SDFT_TOKENS``) fit the sequence; the one loss samples every reply. Off, the rows are never read.
+sample (``SDFT_TOKENS``; a taste row's label, one token) fit the sequence; the one loss samples every tone
+reply. Off, the rows are never read.
 Their prompts are the served ids every seeding prompt is; with no reply there is no render to hold them
 against (``_check_seed_tokens``).
 """
@@ -133,7 +134,8 @@ def seed_batch(ct: Any, loss: Any, tokenizer: Any, kept: Kept, pairs: Kept, term
                                  state_key(row)) for row, _ in pairs),
         seeds=tuple(row for row in seeds if len(row.teacher) + len(row.reply) <= limit),
         dreams=tuple(seq for seq, _ in fit), dream_groups=tuple(kind for _, kind in fit),
-        sdft=tuple(seq for seq in sdft if len(seq.teacher) + loss.SDFT_TOKENS <= limit),
+        sdft=tuple(seq for seq in sdft if len(seq.teacher) + (1 if seq.kind == loss.SDFT_LABEL_KIND else loss.SDFT_TOKENS)
+                   <= limit),
         anchors=tuple(loss.AnchorSeq(prompt(row), tuple(tuple(ct.reply_ids(tokenizer, c, end=False)) for c in row["choices"]),
                                      row["answer"]) for row in terms["anchor"]),
     )
