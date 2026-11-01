@@ -23,6 +23,12 @@ Wonder are reported but not charged against the $10, exactly as spec §5.5 count
 summary has no cost parts are printed at their ``cost_usd`` and left out of the month: a total with
 no split cannot price a step.
 
+**An accelerated life.** Its nights are deep by construction (accelerated runs force deep), so the
+observed-rate line is labeled "every night deep (accelerated runs force deep)", not a real schedule;
+beside it, the month ``night.cost`` models through the nap-or-deep decision (``month_from_trace`` over
+its ``ACTIVE`` and ``QUIET`` months, at the ``CURRENT`` setting priced on the life's last costed night,
+under ``SleepPolicy``'s default cap), labeled as modeled. Neither cost model changes here.
+
 **The drivers.** A step cut to zero saves its mean a night, 30 times over at the observed pace; the
 top three by mean are listed with that saving. This is a marginal read, not a claim that a step can
 be cut without losing what it buys.
@@ -43,7 +49,9 @@ from pathlib import Path
 from typing import Any, Final
 
 from anjo.sleep.demo.dailies import CEILING_PARTS, CEILING_USD, MONTH_NIGHTS, _trained
+from anjo.sleep.night import cost as night_cost
 from anjo.sleep.night.cost import DEFAULT_PRICES
+from anjo.sleep.night.sleep_pressure import SleepPolicy
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.morning import JUDGE_USD_PER_CALL
 from anjo.sleep.reports import results
@@ -89,6 +97,7 @@ class NightCost:
     costed: bool  # the summary carried cost parts, so the month can price its steps
     steps: tuple[StepCost, ...]
     wonder_usd: float
+    accelerated: bool = False  # the summary's stamp: an accelerated run's night
 
     @property
     def ceiling_usd(self) -> float:
@@ -109,6 +118,17 @@ class Month:
 
 
 @dataclass(frozen=True)
+class Modeled:
+    """A month ``night.cost`` models through the nap-or-deep decision (``month_from_trace``)."""
+
+    usage: str  # ``active`` or ``quiet``
+    usd: float  # every night's modeled spend, the morning and Wonder included
+    deep: int
+    naps: int
+    cap_usd: float  # the policy's month cap
+
+
+@dataclass(frozen=True)
 class Driver:
     """One step's mean a night and what cutting it to zero would save a person-month."""
 
@@ -125,6 +145,7 @@ class UserCost:
     nights: tuple[NightCost, ...]
     month: Month | None
     drivers: tuple[Driver, ...]
+    modeled: tuple[Modeled, ...] = ()  # an accelerated life's modeled schedule; empty otherwise
 
 
 def _number(value: Any) -> float | None:
@@ -217,6 +238,7 @@ def night(folder: Path, user: str) -> NightCost:
         costed=bool(parts),
         cost_usd=math.fsum(step.usd for step in parts) if total is None else total,
         steps=tuple(lines), wonder_usd=_number(record.get("wonder_usd")) or 0.0,
+        accelerated=record.get("accelerated") is True,
     )
 
 
@@ -267,10 +289,37 @@ def drivers(nights_costed: Sequence[NightCost]) -> tuple[Driver, ...]:
                         key=lambda driver: (-driver.mean_usd, driver.step))[:TOP_DRIVERS])
 
 
+def forced_deep(nights_costed: Sequence[NightCost]) -> bool:
+    """The costed nights come from an accelerated run that slept deep each night (no nap among them)."""
+    known = [entry for entry in nights_costed if entry.costed]
+    return bool(known) and any(entry.accelerated for entry in known) and not any(
+        entry.status == "napped" for entry in known)
+
+
+def modeled(folder: Path) -> tuple[Modeled, ...]:
+    """``night.cost``'s modeled months through the nap-or-deep decision, priced on ``folder``'s night."""
+    try:
+        summary, steps = night_cost.read_night(folder)
+    except night_cost.CostError as error:
+        raise CostReportError(f"{folder.name}: {error}") from None
+    policy = SleepPolicy()
+    projection = night_cost.project(night_cost.CURRENT, night_cost.UNITS, DEFAULT_PRICES,
+                                    night_cost.measured(summary, steps, DEFAULT_PRICES))
+    found = []
+    for usage in (night_cost.ACTIVE, night_cost.QUIET):
+        trace = night_cost.month_from_trace(usage.days, policy, projection)
+        found.append(Modeled(usage.name, trace.usd, trace.deep, trace.naps, policy.month_usd))
+    return tuple(found)
+
+
 def user_cost(user: str, root: Path | None = None) -> UserCost:
-    """A life's nights, month and drivers."""
+    """A life's nights, month and drivers; an accelerated life's modeled schedule too."""
     found = nights(user, root)
-    return UserCost(user, found, month(found), drivers(found))
+    model: tuple[Modeled, ...] = ()
+    if forced_deep(found):
+        last = [entry for entry in found if entry.costed][-1]
+        model = modeled(results.results_root(root) / user / "nights" / last.folder)
+    return UserCost(user, found, month(found), drivers(found), model)
 
 
 def _usd(value: float | None) -> str:
@@ -319,8 +368,13 @@ def render(found: UserCost) -> str:
     out.append(f"  {month.nights} costed nights, promote rate {month.promote_share:.2f}"
                f" ({month.promoted} promoted, {month.nights - month.promoted} quiet;"
                f" {month.trained} trained)")
-    out.append(f"  at the observed rate  {_usd(month.at_pace)}  ({_against(month.at_pace)})")
+    observed = ("every night deep (accelerated runs force deep)" if forced_deep(found.nights)
+                else "at the observed rate")
+    out.append(f"  {observed}  {_usd(month.at_pace)}  ({_against(month.at_pace)})")
     out.append(f"  training every night  {_usd(month.every_night)}  ({_against(month.every_night)})")
+    for entry in found.modeled:
+        out.append(f"  modeled nap/deep schedule, {entry.usage} month (night.cost, ${entry.cap_usd:g} cap,"
+                   f" morning and Wonder included)  {_usd(entry.usd)}  ({entry.deep} deep, {entry.naps} naps)")
     out.append("")
     if not found.drivers:
         out.append("top cost drivers: none; the nights spent nothing in the priced steps")

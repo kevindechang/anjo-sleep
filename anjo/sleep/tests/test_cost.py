@@ -143,3 +143,26 @@ def test_cli_reports_each_user_and_says_when_one_has_no_nights(tmp_path: Path) -
     assert cost.main(["--root", str(tmp_path), "--user", "p1", "--user", "nobody"], out=lines.append) == 0
     text = "\n".join(lines)
     assert "cost: p1" in text and "cost: nobody" in text and "no nights" in text
+
+
+def test_an_accelerated_life_labels_its_month_forced_deep_and_shows_the_modeled_schedule(tmp_path: Path) -> None:
+    for folder in ("2026-11-01", "2026-11-02"):
+        _night(tmp_path, "p1", folder)
+        summary_path = tmp_path / "p1" / "nights" / folder / "summary.json"
+        summary_path.write_text(json.dumps({**json.loads(summary_path.read_text()), "accelerated": True}))
+    found = cost.user_cost("p1", tmp_path)
+    text = cost.render(found)
+    assert "every night deep (accelerated runs force deep)  $13.2600" in text
+    assert "at the observed rate" not in text
+    assert [m.usage for m in found.modeled] == ["active", "quiet"]
+    for entry in found.modeled:
+        assert entry.deep + entry.naps == 30 and entry.cap_usd > 0
+        assert f"modeled nap/deep schedule, {entry.usage} month (night.cost, ${entry.cap_usd:g} cap," in text
+        assert f"({entry.deep} deep, {entry.naps} naps)" in text
+
+
+def test_a_daily_life_keeps_the_observed_rate_line_unchanged(tmp_path: Path) -> None:
+    _night(tmp_path, "p1", "2026-11-01")
+    found = cost.user_cost("p1", tmp_path)
+    text = cost.render(found)
+    assert "  at the observed rate  $13.2600" in text and "modeled" not in text and found.modeled == ()
