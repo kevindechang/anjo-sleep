@@ -11,7 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
+from anjo.sleep import fireworks_api
 from anjo.sleep.lives import draw as lives_draw
+from anjo.sleep.prereg import freeze_manifest
+from anjo.sleep.probes.generate import _line as sealed_line
 from anjo.sleep.probes.morning import MORNING_PROBES
 from anjo.sleep.reports import final
 from anjo.sleep.tests.sleep_fakes import probe, taste
@@ -80,12 +83,16 @@ def _write_morning(
     outcomes: list[dict[str, Any]],
     unavailable: dict[str, str] | None = None,
     basis: str = "promoted",
+    judge_model: str = fireworks_api.DEEPSEEK_V4P1_FLASH,
 ) -> None:
     folder = root / life_id / "scores"
     folder.mkdir(parents=True, exist_ok=True)
     record = {
         "night": f"2026-11-{night:02d}",
         "label": "final",
+        "judge_model": judge_model,
+        "synthetic": True,
+        "accelerated": True,
         "checkpoint": f"{life_id}-ckpt",
         "checkpoint_basis": basis,
         "probes": len(outcomes),
@@ -158,17 +165,36 @@ def root(tmp_path: Path) -> Path:
     return tmp_path / "results"
 
 
+def _sealed_files(base: Path) -> dict[str, Path]:
+    """Each test life's sealed probe file, in ``seal_probes``' line format (the catalog repeats ids)."""
+    found: dict[str, Path] = {}
+    (base / "sealed").mkdir(parents=True, exist_ok=True)
+    for life in LIVES:
+        found[life] = base / "sealed" / f"{life}.jsonl"
+        if not found[life].exists():
+            found[life].write_text("".join(sealed_line(p) + "\n" for p in _SEALED[life]), encoding="utf-8")
+    return found
+
+
+def _manifest(base: Path, sealed: dict[str, Path]) -> Path:
+    """A freeze manifest of this checkout's frozen files and the test's sealed files, in tmp."""
+    out = base / "freeze_manifest.json"
+    if not out.exists():
+        freeze_manifest.write(freeze_manifest.build(list(sealed.values()), commit="c" * 40), out)
+    return out
+
+
 def _run(root: Path, **kwargs: Any) -> dict[str, Any]:
+    sealed = _sealed_files(root.parent)
+    kwargs = {"sealed_files": sealed, "manifest": _manifest(root.parent, sealed), "donors": DONORS, **kwargs}
     with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
         return final.run(
             TAG,
             root,
             LIVES,
-            donors=DONORS,
             pair_lives=PAIR,
             single_life=SINGLE,
             git=FREEZE_SHA,
-            sealed=_sealed,
             **kwargs,
         )
 
@@ -273,19 +299,11 @@ def test_donor_never_changes_after_draw(root: Path) -> None:
     _rig_all_wins(root)
     report = _run(root)
     assert report["donors"] == DONORS
+    first = final.score_path(root, PAIR[0]).read_bytes()
     alt = {**DONORS, SINGLE: "someone-else"}
-    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
-        with pytest.raises(final.FinalError, match="already has final.json"):
-            final.run(
-                TAG,
-                root,
-                LIVES,
-                donors=alt,
-                pair_lives=PAIR,
-                single_life=SINGLE,
-                git=FREEZE_SHA,
-                rerun_reason="infra",
-            )
+    rerun = _run(root, donors=alt, rerun_reason="infra")  # a rerun is written beside, never over
+    assert rerun["rerun_reason"] == "infra" and rerun["donors"] == alt
+    assert final.score_path(root, PAIR[0]).read_bytes() == first
     stored = json.loads(final.score_path(root, PAIR[0]).read_text(encoding="utf-8"))
     assert stored["donors"] == DONORS
 
@@ -293,18 +311,27 @@ def test_donor_never_changes_after_draw(root: Path) -> None:
 def test_rerun_reason_does_not_overwrite_existing_score(root: Path) -> None:
     _rig_all_wins(root)
     _run(root)
-    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
-        with pytest.raises(final.FinalError, match="already has final.json"):
-            final.run(
-                TAG,
-                root,
-                LIVES,
-                donors=DONORS,
-                pair_lives=PAIR,
-                single_life=SINGLE,
-                git=FREEZE_SHA,
-                rerun_reason="infra",
-            )
+    first = {life: final.score_path(root, life).read_bytes() for life in LIVES}
+    with pytest.raises(final.FinalError, match="already has final.json"):
+        _run(root)
+    with pytest.raises(final.FinalError, match="says why"):
+        _run(root, rerun_reason="  ")
+    _run(root, rerun_reason="infra")
+    _run(root, rerun_reason="infra again")
+    for life in LIVES:
+        assert final.score_path(root, life).read_bytes() == first[life]
+        folder = root / life / "scores"
+        assert sorted(p.name for p in folder.glob("final-rerun-*.json")) == ["final-rerun-01.json", "final-rerun-02.json"]
+        second = json.loads((folder / "final-rerun-02.json").read_text(encoding="utf-8"))
+        assert second["rerun"] is True and second["rerun_reason"] == "infra again"
+    assert final.serving_morning_path(root, SINGLE).name == "night-02.json"  # reruns are never read as a morning
+
+
+def test_rerun_reason_without_a_first_score_is_refused(root: Path) -> None:
+    _rig_all_wins(root)
+    with pytest.raises(final.FinalError, match="already scored"):
+        _run(root, rerun_reason="infra")
+    assert not final.score_path(root, SINGLE).exists()
 
 
 def test_loss_uses_ci_upper_bound() -> None:
@@ -505,3 +532,180 @@ def test_final_morning_without_subset_uses_full_set_not_night_summary(tmp_path: 
     reg = final.registered_probes(life, record, _sealed, results_root=root)
     assert f"{life}-new_work-01" in reg
     assert f"{life}-new_work-02" in reg
+
+
+# ── the registered judge, the freeze manifest and provenance (audit fixes) ─────
+
+
+def test_final_refuses_a_score_file_from_an_unregistered_judge(root: Path) -> None:
+    _rig_all_wins(root)
+    rows = _wins(SINGLE, final.COMP_3V1)
+    _write_morning(root, SINGLE, night=2, outcomes=rows, judge_model="muse-spark-1.3")
+    with pytest.raises(final.FinalError, match=r"night-02\.json was judged by 'muse-spark-1\.3', not the registered judge"):
+        _run(root)
+    assert not final.score_path(root, PAIR[0]).exists()
+
+
+def test_final_refuses_a_score_file_with_no_judge_model(root: Path) -> None:
+    _rig_all_wins(root)
+    path = root / SINGLE / "scores" / "night-02.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.pop("judge_model")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(final.FinalError, match="judged by None"):
+        _run(root)
+
+
+def test_registered_judges_are_read_from_thresholds() -> None:
+    assert final.registered_judge() == fireworks_api.DEEPSEEK_V4P1_FLASH
+    assert final.registered_second_judge() == "gemini-3.8-flash"
+    with pytest.raises(final.FinalError, match="names no judge"):
+        final.registered_model("Muse Spark with judge_v1.md", final.JUDGE_MODELS, "judging.judge")
+
+
+def test_final_checks_the_second_judges_model(root: Path) -> None:
+    _rig_all_wins(root)
+    with pytest.raises(final.FinalError, match="not the registered second judge 'gemini-3.8-flash'"):
+        _run(root, second_judge={"model": "muse-spark-1.3", "knowledge": {"agreement": 0.9}})
+    with pytest.raises(final.FinalError, match="from None"):
+        _run(root, second_judge={"knowledge": {"agreement": 0.9}})
+    report = _run(root, second_judge={"model": "gemini-3.8-flash", "knowledge": {"agreement": 0.9}})
+    assert report["dimensions"]["knowledge"]["second_judge"] == {"agreement": 0.9}
+
+
+def test_final_refuses_without_a_freeze_manifest(root: Path) -> None:
+    _rig_all_wins(root)
+    with pytest.raises(final.FinalError, match="no freeze manifest"):
+        _run(root, manifest=root.parent / "nowhere.json")
+
+
+def test_final_refuses_a_sealed_file_that_differs_from_the_manifest(root: Path) -> None:
+    _rig_all_wins(root)
+    sealed = _sealed_files(root.parent)
+    manifest = _manifest(root.parent, sealed)
+    sealed[SINGLE].write_text(sealed[SINGLE].read_text(encoding="utf-8").replace("prompt", "prompt "), encoding="utf-8")
+    with pytest.raises(final.FinalError, match=f"sealed probe file {SINGLE}.jsonl differs from the manifest"):
+        _run(root, sealed_files=sealed, manifest=manifest)
+
+
+def test_final_refuses_a_frozen_file_that_differs_from_the_manifest(root: Path) -> None:
+    _rig_all_wins(root)
+    sealed = _sealed_files(root.parent)
+    built = freeze_manifest.build(list(sealed.values()), commit="c" * 40)
+    for rel in freeze_manifest.FROZEN_FILES:
+        tampered = {**built, "files": {**built["files"], rel: "0" * 64}}
+        out = root.parent / f"manifest-{rel.replace('/', '-')}"
+        freeze_manifest.write(tampered, out)
+        with pytest.raises(final.FinalError, match=f"{rel} differs from the manifest"):
+            _run(root, sealed_files=sealed, manifest=out)
+
+
+def test_final_refuses_thresholds_that_drift_from_the_registered_copy(root: Path, tmp_path: Path) -> None:
+    _rig_all_wins(root)
+    drifted = json.loads(final.THRESHOLDS.read_text(encoding="utf-8"))
+    drifted["win"]["overall_score_at_least"] = 0.5
+    edited = tmp_path / "thresholds.json"
+    edited.write_text(json.dumps(drifted), encoding="utf-8")
+    with patch.object(final, "THRESHOLDS", edited):
+        with pytest.raises(final.FinalError, match="differs from thresholds_registered.json beyond the allowed keys: win"):
+            _run(root)
+    allowed = json.loads(final.THRESHOLDS.read_text(encoding="utf-8"))
+    allowed["hand_written"] = {"note": "allowed to differ"}
+    edited.write_text(json.dumps(allowed), encoding="utf-8")
+    assert freeze_manifest.thresholds_drift(edited) is None
+
+
+def test_manifest_is_written_once_and_names_every_file(tmp_path: Path) -> None:
+    sealed = _sealed_files(tmp_path)
+    out = _manifest(tmp_path, sealed)
+    record = json.loads(out.read_text(encoding="utf-8"))
+    assert set(record["files"]) == set(freeze_manifest.FROZEN_FILES)
+    assert set(record["sealed"]) == {f"{life}.jsonl" for life in LIVES}
+    assert record["git_commit"] == "c" * 40
+    with pytest.raises(freeze_manifest.ManifestError, match="already exists"):
+        freeze_manifest.write(record, out)
+    with pytest.raises(freeze_manifest.ManifestError, match="pass --sealed"):
+        freeze_manifest.build([], commit="c" * 40)
+
+
+def test_final_json_carries_provenance(root: Path) -> None:
+    _rig_all_wins(root)
+    report = _run(root)
+    assert report["synthetic"] is True and report["accelerated"] is True
+    assert report["provenance"][SINGLE] == {"synthetic": True, "accelerated": True}
+    assert report["judge_model"] == fireworks_api.DEEPSEEK_V4P1_FLASH
+    assert report["manifest_commit"] == "c" * 40
+    stored = json.loads(final.score_path(root, SINGLE).read_text(encoding="utf-8"))
+    assert stored["synthetic"] is True and stored["accelerated"] is True
+
+
+# ── the command line ──────────────────────────────────────────────────────────
+
+ACCOUNTS = {"life-a": "acct-1", "life-b": "acct-2", "life-c": "acct-3"}
+
+
+def _cli_tree(root: Path) -> tuple[Path, Path]:
+    """The lives' morning files under their account ids, the sealed dir and a manifest in tmp."""
+    _rig_all_wins(root)
+    for life, account in ACCOUNTS.items():
+        (root / life).rename(root / account)
+    sealed = _sealed_files(root.parent)
+    return root.parent / "sealed", _manifest(root.parent, sealed)
+
+
+def _cli(root: Path, sealed_dir: Path, manifest: Path, *extra: str, draw: list[str] | None = None) -> tuple[int, list[str]]:
+    lines: list[str] = []
+    argv = [*(f"--account={life}={account}" for life, account in ACCOUNTS.items()),
+            *(draw if draw is not None else ["--pair", *PAIR, "--single", SINGLE,
+                                             *(f"--donor={k}={v}" for k, v in DONORS.items())]),
+            "--root", str(root), "--sealed-dir", str(sealed_dir), "--manifest", str(manifest),
+            "--require-sha", FREEZE_SHA, *extra]
+    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA), \
+            patch.object(final, "git_sha", return_value=FREEZE_SHA):
+        code = final.main(argv, out=lines.append)
+    return code, lines
+
+
+def test_cli_scores_the_accounts_and_prints_the_claim_rows(root: Path) -> None:
+    sealed_dir, manifest = _cli_tree(root)
+    code, lines = _cli(root, sealed_dir, manifest)
+    assert code == 0, lines
+    assert lines[0].startswith("final: life-a=acct-1, life-b=acct-2, life-c=acct-3 at aaaaaaaaaaaa")
+    assert "(synthetic people), accelerated nights" in lines[0]
+    assert lines[1].startswith("knowledge: headline: ") and lines[2].startswith("interaction: headline: ")
+    stored = json.loads(final.score_path(root, "acct-3").read_text(encoding="utf-8"))
+    assert stored["single_life"] == "acct-3" and stored["pair_lives"] == ["acct-1", "acct-2"]
+    assert stored["donors"] == {"acct-1": "acct-2", "acct-2": "acct-1", "acct-3": "acct-1"}
+    code, lines = _cli(root, sealed_dir, manifest)  # a second run without a reason is refused
+    assert code == 1 and "already has final.json" in lines[0]
+    code, lines = _cli(root, sealed_dir, manifest, "--rerun-reason", "infra")
+    assert code == 0 and lines[0].startswith("final rerun:")
+    assert (root / "acct-1" / "scores" / "final-rerun-01.json").exists()
+
+
+def test_cli_reads_a_draw_file(root: Path, tmp_path: Path) -> None:
+    sealed_dir, manifest = _cli_tree(root)
+    draw = tmp_path / "draw.json"
+    draw.write_text(json.dumps({"pair": list(PAIR), "single": SINGLE, "donors": DONORS}), encoding="utf-8")
+    code, lines = _cli(root, sealed_dir, manifest, draw=["--draw", str(draw)])
+    assert code == 0, lines
+
+
+def test_cli_refuses_before_scoring(root: Path, tmp_path: Path) -> None:
+    sealed_dir, manifest = _cli_tree(root)
+    wrong_donors = ["--pair", *PAIR, "--single", SINGLE, *(f"--donor={k}={v}" for k, v in {**DONORS, SINGLE: PAIR[1]}.items())]
+    assert "registered donor rule" in _cli(root, sealed_dir, manifest, draw=wrong_donors)[1][0]
+    lines: list[str] = []
+    argv = [*(f"--account={k}={v}" for k, v in ACCOUNTS.items()), "--pair", *PAIR, "--single", SINGLE,
+            *(f"--donor={k}={v}" for k, v in DONORS.items()), "--root", str(root), "--sealed-dir", str(sealed_dir),
+            "--manifest", str(manifest), "--require-sha", "b" * 40]
+    with patch.object(final, "freeze_sha", return_value=FREEZE_SHA):
+        assert final.main(argv, out=lines.append) == 1
+    assert "--require-sha is not the commit" in lines[0]
+    assert "no freeze manifest" in _cli(root, sealed_dir, tmp_path / "missing.json")[1][0]
+    path = root / "acct-2" / "scores" / "night-02.json"
+    path.write_text(path.read_text(encoding="utf-8").replace(fireworks_api.DEEPSEEK_V4P1_FLASH, "muse-spark-1.3"),
+                    encoding="utf-8")
+    code, lines = _cli(root, sealed_dir, manifest)
+    assert code == 1 and "not the registered judge" in lines[0]
+    assert not any(final.score_path(root, account).exists() for account in ACCOUNTS.values())

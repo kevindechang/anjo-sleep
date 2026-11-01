@@ -117,17 +117,12 @@ def test_thresholds_pin_the_review_items():
 
 
 def test_only_the_development_keys_and_replays_placeholder_differ_from_the_registered_version():
-    import copy
+    from anjo.sleep.prereg.freeze_manifest import registered_comparable, thresholds_drift
 
     frozen = json.loads((Path(__file__).parent / "frozen" / "thresholds_registered.json").read_text())
-    now = copy.deepcopy(T)
-    for obj in (frozen, now):
-        obj["development"].pop("pooled_lives")
-        obj["donor_rule"].pop("dev_lives")
-        obj.pop("hand_written")
-    now.pop("replay_token_penalty")  # Task 17b's λ, added after registration as a dated placeholder
-    now["placeholders"].pop("replay_token_penalty")
-    assert now == frozen  # the final-test rule cannot drift
+    now, registered = registered_comparable(T, frozen)  # the one comparison the final also runs
+    assert now == registered  # the final-test rule cannot drift
+    assert thresholds_drift() is None
     assert T["development"]["pooled_lives"] == [
         "founder", "founder_donor", "researcher", "researcher_donor"]
     assert "(personas-v2)" in T["donor_rule"]["dev_lives"]
