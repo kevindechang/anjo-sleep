@@ -323,9 +323,10 @@ class _Counting:
 class _HeldDeepseekChat:
     """Hold and settle each call on its own key; the calls run side by side (the ledger's holds are
     concurrent-safe), so only the call number is taken under the lock. Busy-provider HTTP retries are
-    unbilled, and so is a connection that never opened: nothing was sent, so the call settles 0. A
-    reply that failed after the request went (a read timeout, a dropped reply, an HTTP error status)
-    may have been billed, and settles its bound."""
+    unbilled, and so is a call whose every connection attempt never opened: nothing was sent, so it
+    settles 0. A reply that failed after the request went (a read timeout, a dropped reply, an HTTP
+    error status, or a later attempt refused after one was sent) may have been billed, and settles
+    its bound."""
 
     def __init__(self, chat: Any, ledger: Ledger, key: str) -> None:
         self.chat, self.ledger, self.key = chat, ledger, key
@@ -344,8 +345,9 @@ class _HeldDeepseekChat:
                 kwargs["max_tokens"] = max_tokens
             try:
                 result: ChatResult = self.chat(model, messages, tools, timeout_s, **kwargs)
-            except ConnectFailed:
-                cost[0] = 0.0  # the connection never opened: no request reached Fireworks, none billed
+            except ConnectFailed as error:
+                if not error.request_sent:
+                    cost[0] = 0.0  # no attempt sent a request: none reached Fireworks, none billed
                 raise
             if result.input_tokens > 0 or result.output_tokens > 0:
                 rates = fireworks_api.DEEPSEEK_V4P1_FLASH_PRICES

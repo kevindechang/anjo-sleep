@@ -176,7 +176,8 @@ def _recorded_fireworks(tmp_path: Path) -> Ledger:
 
 def test_a_morning_holds_sixteen_deepseek_calls_at_once_beside_the_recorded_spend(tmp_path: Path) -> None:
     """A morning holds each judge call's full context until it settles: the sixteen in flight (about
-    $20.13) fit beside the $64.52 the ledger had recorded, which the $100 credit refused."""
+    $20.13) fit beside the $64.52 the ledger had recorded, and inside the old $80 sleep cap's $22.25
+    of room (80 - 57.75) too: the $100 credit was never the limit here."""
     ledger = _recorded_fireworks(tmp_path)
     rig = Rig(tmp_path, ledger=ledger)
     tokens = JudgeTokens()
@@ -227,6 +228,51 @@ def test_a_connection_that_never_opened_settles_nothing_and_a_lost_reply_its_bou
 
     with pytest.raises(ModelApiError, match="timed out"):
         held_chat(lost, "morning:judge:lost")(fireworks_api.DEEPSEEK_V4P1_FLASH, [], None, 1.0)
+    assert ledger.used("fireworks_sleep_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
+    assert ledger.used("judge_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
+    assert not ledger.open_holds()
+
+
+def test_every_attempt_refused_settles_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the judge's three connect attempts, a call whose every attempt was refused sent nothing."""
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "test-key")
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    seen: list[httpx.Request] = []
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    chat = partial(fireworks_api.chat, transport=httpx.MockTransport(refused),
+                   retries=Retries(connect_attempts=3, sleep=lambda _: None))
+    held_chat = _HeldDeepseekChat(chat, ledger, "morning:judge:unsent")
+    with pytest.raises(ConnectFailed, match="ConnectError") as raised:
+        held_chat(fireworks_api.DEEPSEEK_V4P1_FLASH, [], None, 1.0)
+    assert raised.value.request_sent is False and len(seen) == 3
+    assert (ledger.used("fireworks_sleep_usd"), ledger.used("judge_usd")) == (0.0, 0.0)
+    assert not ledger.open_holds()
+
+
+def test_a_lost_reply_before_later_refusals_settles_its_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Attempt 1 read-timed-out (billed), the later tries could not connect: the call still settles."""
+    monkeypatch.setenv(fireworks_api.KEY_ENV, "test-key")
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    seen: list[httpx.Request] = []
+
+    def lost_then_refused(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.ReadTimeout("slow reply", request=request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    chat = partial(fireworks_api.chat, transport=httpx.MockTransport(lost_then_refused),
+                   retries=Retries(connect_attempts=3, reply_attempts=4, sleep=lambda _: None))
+    held_chat = _HeldDeepseekChat(chat, ledger, "morning:judge:maybe-sent")
+    with pytest.raises(ConnectFailed, match="ConnectError") as raised:
+        held_chat(fireworks_api.DEEPSEEK_V4P1_FLASH, [], None, 1.0)
+    assert raised.value.request_sent is True and len(seen) == 4
     assert ledger.used("fireworks_sleep_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
     assert ledger.used("judge_usd") == pytest.approx(DEEPSEEK_JUDGE_USD_PER_CALL)
     assert not ledger.open_holds()
