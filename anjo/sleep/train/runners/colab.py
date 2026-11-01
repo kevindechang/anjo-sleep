@@ -12,9 +12,9 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
 3. ``new`` an A100 session, ``install`` the pinned training packages, ``upload`` the night's
    dataset (and, for a warm start, the previous adapter's two files), ``exec`` the training script
    (``colab_train.py``) with the recipe in its environment, and ``download`` the adapter and its
-   receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries, at
-   Modal's paths, and runs the uploaded script there, so its loss, fold and protect files load
-   beside it;
+   receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries as one
+   archive, at Modal's paths, unpacked on the VM before the entry runs, so its loss, fold and
+   protect files load beside it;
 4. ``stop`` the session in a ``finally``, on success, failure or cancel, then settle what the VM
    ran for. A stop that fails settles the whole hold and raises, so a VM that may still run is
    never silent.
@@ -44,6 +44,7 @@ import json
 import math
 import re
 import subprocess
+import tarfile
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -68,10 +69,18 @@ A100_CU_PER_HOUR: Final = 7.5
 POOL: Final = "colab_cu"
 REMOTE_DIR: Final = "/content/anjo"
 SCRIPT: Final = Path(colab_train.__file__)
-# A seeded night ships Modal's file list and runs it where Modal runs it, so its siblings load by
-# path; the three hours cover their uploads (at each call's hard timeout) plus a 27-minute night.
+# A seeded night ships Modal's file list as one archive, unpacked on the VM before the entry runs;
+# the three hours cover that upload (at the call's hard timeout), the unpack and a 27-minute night,
+# leaving a warm seed night (dataset, archive and two adapter files) over 100 minutes to train.
 SEED_TIMEOUT_S: Final = 3 * 3600.0
-SEED_ENTRY: Final = f"import runpy\nrunpy.run_path({modal_job.REMOTE_SCRIPT!r}, run_name='__main__')\n"
+SEED_ARCHIVE: Final = "train-files.tar"
+SEED_ARCHIVE_ENTRY: Final = f"{REMOTE_DIR}/{SEED_ARCHIVE}"
+SEED_ENTRY: Final = (
+    "import runpy, tarfile\n"
+    f"with tarfile.open({SEED_ARCHIVE_ENTRY!r}) as archive:\n"
+    "    archive.extractall('/')\n"
+    f"runpy.run_path({modal_job.REMOTE_SCRIPT!r}, run_name='__main__')\n"
+)
 # An accelerated life's VM is kept between nights only when the simulated day before was this short;
 # otherwise idling costs more than downloading the base weights again. Revisited after the Oct 30 timing.
 MAX_IDLE_BETWEEN_NIGHTS_S: Final = 600.0
@@ -187,16 +196,41 @@ def _job_timeout(inputs: Mapping[str, object], timeout_s: float) -> float:
     return max(timeout_s, SEED_TIMEOUT_S) if _seeded(inputs) else timeout_s
 
 
+def _seed_archive(
+    workdir: Path, files: Sequence[tuple[Path, str]] = modal_job.TRAIN_FILES,
+) -> tuple[Path, str]:
+    """One archive of the shared training files, at their remote paths, unpacked at the VM's root.
+
+    The member list must be exactly ``modal_job.TRAIN_FILES``: a file outside that list is refused
+    before the archive is written, and the written archive is read back and checked again.
+    """
+    allowed = {remote.lstrip("/") for _, remote in modal_job.TRAIN_FILES}
+    members = [(local, remote.lstrip("/")) for local, remote in files]
+    if len(members) != len(allowed) or {remote for _, remote in members} != allowed:
+        raise ColabError("a seeded night archives exactly the shared training files")
+    archive = workdir / SEED_ARCHIVE
+    with tarfile.open(archive, "w") as tar:
+        for local, remote in members:
+            if not local.is_file():
+                raise ColabError(f"a shared training file is missing or not a file: {local}")
+            tar.add(local, arcname=remote)
+    with tarfile.open(archive) as tar:
+        written = tar.getnames()
+    if sorted(written) != sorted(allowed):
+        raise ColabError("the seed archive's members are not exactly the shared training files")
+    return archive, SEED_ARCHIVE_ENTRY
+
+
 def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
-    """The dataset, a seeded night's shared training files, and a warm start's two adapter files:
-    nothing else is ever uploaded."""
+    """The dataset, a seeded night's shared training files in one archive, and a warm start's two
+    adapter files: nothing else is ever uploaded."""
     workdir = Path(str(inputs["workdir"]))
     dataset = Path(str(inputs["dataset_path"]))
     if dataset.name != DATASET_FILE or dataset.parent != workdir:
         raise ColabError("only the night's dataset file is uploaded")
     files = [(dataset, f"{REMOTE_DIR}/{DATASET_FILE}")]
     if _seeded(inputs):  # before any hold or VM: the same files, at the same paths, as Modal's image
-        files += list(modal_job.TRAIN_FILES)
+        files.append(_seed_archive(workdir))
     prev = inputs.get("prev_adapter_dir")
     if prev is not None:
         files += [(Path(str(prev)) / name, f"{REMOTE_DIR}/prev/{name}") for name in config.ADAPTER_FILES]

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import tarfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -345,13 +346,18 @@ def test_a_seeded_night_ships_the_shared_files_and_runs_modal_entry(tmp_path: Pa
     fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
     outputs = _runner(fake, ledger).run(JOB, inputs, timeout_s=TIMEOUT_S)
 
+    archive = tmp_path / "work" / colab.SEED_ARCHIVE
     uploads = [(Path(args[-2]), args[-1]) for args, _ in fake.calls if args[3] == "upload"]
     assert uploads == [
         (tmp_path / "work" / DATASET_FILE, f"{colab.REMOTE_DIR}/{DATASET_FILE}"),
-        *modal_job.TRAIN_FILES,
+        (archive, f"{colab.REMOTE_DIR}/{colab.SEED_ARCHIVE}"),
         *([] if prev is None else [(prev / file, f"{colab.REMOTE_DIR}/prev/{file}") for file in config.ADAPTER_FILES]),
     ]
+    with tarfile.open(archive) as tar:
+        members = tar.getnames()
+    assert sorted(members) == sorted(remote.lstrip("/") for _, remote in modal_job.TRAIN_FILES)
     assert fake.executed == colab.SEED_ENTRY and modal_job.REMOTE_SCRIPT in fake.executed
+    assert colab.SEED_ARCHIVE_ENTRY in fake.executed  # unpacked before the entry runs
     executed = next(args for args, _ in fake.calls if args[3] == "exec")
     env = _env(executed)
     assert env == {
@@ -364,6 +370,29 @@ def test_a_seeded_night_ships_the_shared_files_and_runs_modal_entry(tmp_path: Pa
     assert reserve["timeout_s"] == SEED_TIMEOUT_S
     assert sum(timeout for _, timeout in fake.calls) <= SEED_TIMEOUT_S
     assert outputs["gpu"] == "A100-SXM4-80GB" and outputs["gpu_memory_mb"] == 81920
+
+
+def test_a_warm_seed_night_leaves_at_least_100_minutes_to_train(tmp_path: Path) -> None:
+    prev = tmp_path / "prev"
+    prev.mkdir()
+    for file in config.ADAPTER_FILES:
+        (prev / file).write_text("{}")
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    _runner(fake, ledger).run(JOB, _seeded_inputs(tmp_path, prev=prev), timeout_s=TIMEOUT_S)
+    executed = next(args for args, _ in fake.calls if args[3] == "exec")
+    exec_s = float(executed[executed.index("--timeout") + 1])
+    assert exec_s >= 6000.0  # the base weights' download and 4-bit load, then a 27-minute night
+    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0
+
+
+def test_the_seed_archive_refuses_a_file_outside_the_shared_list(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("raise SystemExit\n")
+    with pytest.raises(ColabError, match="shared training files"):
+        colab._seed_archive(work, [*modal_job.TRAIN_FILES, (outside, f"{colab.REMOTE_DIR}/outside.py")])
+    assert not (work / colab.SEED_ARCHIVE).exists()
 
 
 @pytest.mark.parametrize("objective", ["sft", "sft_dpo"])

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import tarfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -279,8 +280,11 @@ def test_colab_ships_the_seed_objectives_loss_files_at_modals_paths(tmp_path: Pa
     dataset = tmp_path / "dataset.jsonl"
     dataset.write_text("")
     inputs = {"workdir": str(tmp_path), "dataset_path": str(dataset), "config": {"objective": "sft_dpo_seed"}}
+    archive = tmp_path / colab.SEED_ARCHIVE
     assert colab._uploads(inputs) == [
-        (dataset, f"{colab.REMOTE_DIR}/{dataset.name}"), *modal_job.TRAIN_FILES]
+        (dataset, f"{colab.REMOTE_DIR}/{dataset.name}"), (archive, colab.SEED_ARCHIVE_ENTRY)]
+    with tarfile.open(archive) as tar:
+        assert sorted(tar.getnames()) == sorted(remote.lstrip("/") for _, remote in modal_job.TRAIN_FILES)
     assert colab._uploads({**inputs, "config": {"objective": "sft_dpo"}}) == [
         (dataset, f"{colab.REMOTE_DIR}/{dataset.name}")]
 
