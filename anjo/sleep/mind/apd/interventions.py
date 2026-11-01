@@ -22,9 +22,11 @@ thinker should run at temperature 0, or sampling noise adds to it).
 baseline, from the operations the branch applied on the edited question (``measures``):
 
 - ``swap_lead``: ``acts_on_new_lead``, a PREDICT or ASSESS aimed at the new lead (``aims_at``);
-- ``delete_prediction``: ``deleted_not_resolved``, no true or false verdict on the deleted
-  prediction; ``replaced_or_moved_on``, a new PREDICT on the question, or the focus leaves it
-  for another question, or it ends parked or abandoned;
+- ``delete_prediction``: ``replaced_or_moved_on``, a new PREDICT on the question, or the focus
+  leaves it for another question, or it ends parked or abandoned. Whether the deleted prediction
+  goes unresolved is not a measure: the edit removes it from the workspace and the loop resolves
+  only held pending predictions (``kernel._edit``; ``loop._cycle``, ``loop._settle_expired``), so
+  on the edited branch it holds by construction and could never fail;
 - ``inject_hypothesis``: ``injected_tested``, a PREDICT or ASSESS aimed at it, and
   ``injected_dropped``, retracted, or left below its 0.5 and not leading after an update on
   evidence (no baseline: only the edited branch holds it).
@@ -61,7 +63,6 @@ from anjo.sleep.mind.inquiry.types import (
     PredictOp,
     Question,
     Rejected,
-    Resolved,
     RunStart,
     Step,
     Workspace,
@@ -72,7 +73,7 @@ from anjo.sleep.types import Target
 
 SkipReason = Literal["tied_lead", "no_pending_prediction", "four_alternatives"]
 MeasureName = Literal[
-    "acts_on_new_lead", "deleted_not_resolved", "replaced_or_moved_on", "injected_tested", "injected_dropped",
+    "acts_on_new_lead", "replaced_or_moved_on", "injected_tested", "injected_dropped",
 ]
 EDIT_KINDS: Final[tuple[EditKind, ...]] = ("swap_lead", "delete_prediction", "inject_hypothesis")
 INJECTED_AT: Final = 0.5  # an injected hypothesis's credence (Edit)
@@ -264,14 +265,6 @@ def _acts_on(run: InquiryRun, question_id: str, hypothesis_id: str) -> bool:
     return any(aims_at(op, hypothesis_id) for op in _ops_on(run, question_id))
 
 
-def _resolved(run: InquiryRun, prediction_id: str) -> bool:
-    return any(
-        isinstance(e.step.entry, Resolved) and e.step.entry.prediction_id == prediction_id
-        and e.step.entry.outcome in ("true", "false")
-        for e in run.events
-    )
-
-
 def _replaced_or_moved_on(run: InquiryRun, question_id: str) -> bool:
     question = run.ws.question(question_id)
     return (
@@ -302,9 +295,7 @@ def measures(edit: Edit, before: Workspace, resumed: Resumed) -> tuple[Measure, 
         lead = str(edit.hypothesis_id)
         return (Measure("acts_on_new_lead", _acts_on(edited, question, lead), _acts_on(unedited, question, lead)),)
     if edit.kind == "delete_prediction":
-        deleted = str(edit.prediction_id)
         return (
-            Measure("deleted_not_resolved", not _resolved(edited, deleted), not _resolved(unedited, deleted)),
             Measure("replaced_or_moved_on", _replaced_or_moved_on(edited, question),
                     _replaced_or_moved_on(unedited, question)),
         )
