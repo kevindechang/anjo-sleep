@@ -405,9 +405,9 @@ def test_a_bad_token_for_any_life_stops_the_final_run_before_any_lifes_day(
     monkeypatch.setattr("anjo.sleep.serving.backend.phase", nullcontext)
     monkeypatch.setattr("anjo.sleep.train.trainer.LoraTrainer", lambda *a, **k: object())
     monkeypatch.setattr(night_command, "night_cfg", lambda: object())
-    monkeypatch.setattr(night_command, "_publisher", lambda name: (lambda *a, **k: None))
+    monkeypatch.setattr(night_command, "_publisher", lambda name, landed: (lambda *a, **k: None))
     monkeypatch.setattr(night_command, "chosen_runner",
-                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal"))
+                        lambda *a, **k: SimpleNamespace(sweep=lambda: (0, 0), runner=object(), name="modal", landed=None))
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
     checked: list[str] = []
 
