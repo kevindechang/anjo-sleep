@@ -124,9 +124,11 @@ SDFT_LABEL_TOKENS: Final = 1  # a taste row's reply is the label alone: the leng
 # minutes of tone rows at one epoch, inside the term's 15 (``sleep_loss.SDFT_BUDGET_S``); past it a
 # visit draws nothing.
 SDFT_SOURCES_MAX: Final = 24
-# The paper's two fixed lines around a demonstration in the teacher's prompt (Shenfeld et al.), verbatim.
+# The paper's two fixed lines around a demonstration in the teacher's prompt (Shenfeld et al.); the tail drops
+# its ", including the thinking process": the served prompt already opens the visible channel, so a teacher told
+# to think would narrate its reasoning in the reply and the student would learn that narration.
 SDFT_DEMO_HEAD: Final = "This is an example for a response to the question:"
-SDFT_DEMO_TAIL: Final = "Now answer with a response of your own, including the thinking process:"
+SDFT_DEMO_TAIL: Final = "Now answer with a response of your own:"
 DEMO_REFUSED: Final = ("probe", "held_out", "gate_set")  # a guard label that keeps a reply out of the teacher
 SDFT_REPLY_TOKENS: Final = 192  # the student's sample, which the length counts (``sleep_loss.SDFT_TOKENS``)
 SDFT_DROPS: Final = ("probe", "held_out", "gate_set", "cue", "truncated")
