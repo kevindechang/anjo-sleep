@@ -83,8 +83,12 @@ NO_IMITATION: Final = "no imitation row tonight"
 FOLD_OFF: Final = "the adapter wasn't folded tonight"
 PROTECT_OFF: Final = "no protected slot tonight"
 NOT_REPORTED: Final = "the training job didn't report it"
-ADAPTATION_NOT_YET: Final = "MIND's core doesn't adapt to her in the night yet"  # mind-frontier: no step logs it
-SELF_MODEL_NOT_YET: Final = "MIND's self-model isn't scored yet"  # mind-frontier: no step logs it
+# No step logs either record. Each line says what the code checks today (train.adapt, which no
+# night calls; evaluate.calibration's self_error_mse, offline on toy slots), and claims no more.
+ADAPTATION_NOT_YET: Final = ("not measured on the real model: no night runs MIND's core adaptation, and its only "
+                             "check is training loss on the same resolved threads it fits")
+SELF_MODEL_NOT_YET: Final = ("not measured on the real model: no night scores MIND's self-model, and its nearest "
+                             "number is an offline self-error score on toy slots")
 
 
 class StoryError(ValueError):
@@ -251,7 +255,7 @@ class Learn:
     """The night's one training job: its rows, MIND's surprise on them, the thought channel's loss and
     the projector's stamp (thought-channel), the sleep objective's seeding and imitation terms, the rank
     the adapter was folded to and the protected slot, and the core's per-person adaptation loss on the
-    outcomes that resolved today (mind-frontier: no step logs it yet)."""
+    outcomes that resolved today (no step logs it: not measured on the real model)."""
 
     rows: int
     surprise: Surprise | NotRun

@@ -312,6 +312,15 @@ def test_everything_the_night_logs_fills_its_record() -> None:
     assert told.wake == st.Wake(st.Morning(28, 1), st.NotRun(st.SELF_MODEL_NOT_YET))  # nor this: a plain line
 
 
+
+def test_the_two_unlogged_records_say_what_the_code_measures_today() -> None:
+    """Neither reads as a step coming soon: each says it isn't measured on the real model and names
+    the nearest thing the code does check."""
+    for reason in (st.ADAPTATION_NOT_YET, st.SELF_MODEL_NOT_YET):
+        assert reason.startswith("not measured on the real model: ") and "\n" not in reason and "yet" not in reason
+    assert "training loss on the same resolved threads it fits" in st.ADAPTATION_NOT_YET
+    assert "offline self-error score on toy slots" in st.SELF_MODEL_NOT_YET
+
 def _terms(**changes: Any) -> list[dict[str, Any]]:
     return _swapped(EVERYTHING, {**TRAINED, "receipt": {**CHANNEL_RECEIPT, "terms": {**TERMS, **changes}}})
 
