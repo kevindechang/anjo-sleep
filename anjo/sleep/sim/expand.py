@@ -1,7 +1,8 @@
 """Life expansion (Task 12a): one line of a life becomes a ``PersonFile`` on Spark Open.
 
 ``expand_life`` fills ``prompts/expand_v1.md`` with the life and its pair's shared taste items, asks
-Spark Open through the ``ModelClient`` port (temperature 0, the seed given), and validates what
+Spark Open through the ``ModelClient`` port (at ``temperature``, ``EXPAND_TEMPERATURE`` = 0 unless
+the caller gives another, with the seed given), and validates what
 comes back strictly: the shared ``personas.model`` rules (counts, leaks, arrival days), plus the
 rules of an expanded life (its registered line and plans stay, its pair's shared ``taste_ab`` items
 appear unchanged with this life's label, new-work arrivals are spread over many days). Anything
@@ -119,12 +120,12 @@ def _check_spread(pf: PersonFile, nights: int) -> None:
 
 def expand_life(
     life: Life, seed: int, *, client: ModelClient, pairs: Sequence[Pair] | None = None,
-    planned_nights: int = PLANNED_NIGHTS,
+    planned_nights: int = PLANNED_NIGHTS, temperature: float = EXPAND_TEMPERATURE,
 ) -> PersonFile:
     """Expand ``life`` into a validated ``PersonFile``, or raise ``ExpandError``."""
     pair = _pair_of(life, load_pairs() if pairs is None else pairs)
     reply = client.complete(None, [{"role": "user", "content": _prompt(life, pair, planned_nights)}],
-                            temperature=EXPAND_TEMPERATURE, seed=seed)
+                            temperature=temperature, seed=seed)
     pf = _build(_parse(reply.text))
     try:
         validate_person_file(pf, planned_nights=planned_nights)
