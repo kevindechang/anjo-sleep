@@ -391,8 +391,11 @@ def test_a_bad_token_for_any_life_stops_the_final_run_before_any_lifes_day(
     from contextlib import contextmanager, nullcontext
     from types import SimpleNamespace
 
-    from anjo.sleep.app.sim_transport import TokenRefused
     from anjo.sleep.night import __main__ as night_command
+
+    class TokenRefused(RuntimeError):
+        """Stands in for ``app.sim_transport.TokenRefused``: the core never names the adapters' error, it only
+        lets it through (the published tree leaves the adapters out, test_example_synthetic)."""
 
     @contextmanager
     def sweep(ledger: object, stop: object) -> Any:
