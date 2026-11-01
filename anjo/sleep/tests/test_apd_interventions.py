@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import signal
+import typing
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,9 +130,11 @@ def test_three_edits_per_snapshot_and_skips_are_recorded() -> None:
     assert late_swap == (interventions.Measure("acts_on_new_lead", False, False),)  # nothing left to test: no credit
     deleted = results[3]
     assert deleted.measures == (
-        interventions.Measure("deleted_not_resolved", True, True),
         interventions.Measure("replaced_or_moved_on", True, False),  # she commits a new test; unedited, she needn't
     )
+    # Not measured: the edit removes the prediction, and only held pending predictions are ever
+    # resolved, so "not resolved" on the edited branch would hold by construction.
+    assert "deleted_not_resolved" not in typing.get_args(interventions.MeasureName)
     assert json.loads(deleted.edited.ops[0])["op"] == "PREDICT" and json.loads(deleted.unedited.ops[0])["op"] == "INVESTIGATE"
     assert measured[len(hypothesized.events), "inject_hypothesis"] == (
         interventions.Measure("injected_tested", True, None),  # the injected hypothesis leads at 0.5, so it is tested

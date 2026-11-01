@@ -120,6 +120,18 @@ def test_reversal_rewards_retraction() -> None:
     assert points(scored([decoy], explained, judge)) == {"i3": apd.NOTHING}
 
 
+def test_reversal_retracted_after_a_correct_dismissal_scores_nothing() -> None:
+    """A resolution that holds dismissed the reversal; it is no flag, so retracting it earns 0, not +1."""
+    reversal = item("i2", "reversal", resolution="The early worry dissolves: the grant covers it")
+    judge = Judge(same=frozenset({("f2", "i2")}), holds=frozenset({"not a problem"}))
+    dismissed_then_retracted = run(rep("f2", 3, "resolution", 0.9, conclusion="not a problem"),
+                                   rep("f2", 5, "retraction", 0.9))
+    assert points(scored([reversal], dismissed_then_retracted, judge)) == {"i2": apd.NOTHING}
+    wrong_then_retracted = run(rep("f2", 3, "resolution", 0.9, conclusion="a problem"),
+                               rep("f2", 5, "retraction", 0.9))
+    assert points(scored([reversal], wrong_then_retracted, judge)) == {"i2": apd.RESOLVED}
+
+
 def test_judge_sees_only_report_time_evidence() -> None:
     judge = Judge(same=frozenset({("f1", "i1")}))
     arm_run = run(rep("f1", 3, cites=("e-02-1",)), rep("f9", 4, cites=("e-04-1",)))

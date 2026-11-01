@@ -5,6 +5,7 @@ model. A state-changing edit must move the replies beyond the null re-render; a 
 its brief must not; and the 2x2 must attribute a state swap to the claims while a talker swap
 leaves them alone.
 """
+import hashlib
 import json
 import re
 from dataclasses import replace
@@ -230,3 +231,31 @@ def test_injected_embedder_is_cached_and_scored_by_cosine() -> None:
     assert distances.semantic('red', 'blue') == pytest.approx(1.0)
     assert calls == ['red', 'crimson', 'blue']
     assert mind_causal.cites('I think [q1.h2a] and [p3] (not [a phrase]).') == frozenset({'q1.h2a', 'p3'})
+
+
+def test_two_empty_citation_sets_are_no_evidence_of_shared_claims() -> None:
+    """A pair that cites nothing on a probe says nothing about claims: it is left out, not counted as 1.0."""
+    result = mind_causal.execute(plan(), talker_a=lambda *_: 'No ids here.', talker_b=lambda *_: 'None here.',
+                                 distances=mind_causal.Distances(None))
+    assert result.grid is not None
+    assert all(c.claims is None for c in (*result.grid.rows, *result.grid.columns))
+    assert '| n/a (nothing cited) |' in mind_causal.render(result)
+    cells = {('own', 'A'): ('[e0] [e1]', 'nothing'), ('swapped', 'A'): ('[e0]', 'nothing'),
+             ('own', 'B'): ('x', 'y'), ('swapped', 'B'): ('x', 'y')}
+    row = mind_causal.grid(cells, mind_causal.Distances(None)).rows[0]
+    assert row.claims == 0.5  # only the probe where either cites counts: 1/2, not (1/2 + 1) / 2
+
+
+def test_null_changes_bytes_but_not_state_so_a_byte_sensitive_talker_is_not_load_bearing() -> None:
+    """The null re-render differs from own by a blank line only. A talker whose reply is any function
+    of the brief's bytes moves as far on the null as on an edit, so no edit is credited for it."""
+    def by_bytes(brief: str, prompt: str) -> str:
+        digest = hashlib.sha256((brief + prompt).encode()).hexdigest()
+        return ' '.join(digest[i:i + 4] for i in range(0, 64, 4))
+
+    found = plan()
+    by_name = {c.name: c for c in found.conditions}
+    assert by_name['null'].brief != by_name['own'].brief and by_name['null'].digest == by_name['own'].digest
+    result = mind_causal.execute(found, talker_a=by_bytes, talker_b=by_bytes, distances=mind_causal.Distances(None))
+    assert result.floor.low > 0.0
+    assert not result.load_bearing

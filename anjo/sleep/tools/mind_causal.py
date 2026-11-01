@@ -12,7 +12,9 @@ probes.
   night last worked;
 - ``empty``: the kernel's empty workspace, with its served prose ablated the way the week probe
   does it;
-- ``null``: ``own`` rendered and asked again, unchanged: the noise floor;
+- ``null``: ``own``'s state with one blank line added before its MIND block: the same state in
+  different bytes, the floor. At temperature 0 an unchanged re-ask returns the same reply, so a
+  byte-identical null would floor at 0 and credit any byte change to the state;
 - ``swapped``: another synthetic life's state, for the 2x2.
 
 **The measure.** A semantic distance between the two replies to a probe (MiniLM, the embedder
@@ -177,7 +179,7 @@ def conditions(source: Records, night: date, *, other: Records | None = None,
     empty_served = served_without_mind(source, ws)
     found = (
         Condition('own', own, kernel.digest(ws)),
-        Condition('null', own, kernel.digest(ws)),  # the same bytes, asked again: the floor
+        Condition('null', null_brief(own), kernel.digest(ws)),  # the same state, other bytes: the floor
         Condition('empty', probe_brief(kernel.fold(()), source.targets, source.expectations, as_of,
                                        empty_served), kernel.digest(kernel.fold(()))),
     )
@@ -200,6 +202,14 @@ def conditions(source: Records, night: date, *, other: Records | None = None,
     found += (Condition('swapped', probe_brief(swapped, source.targets, source.expectations, as_of, source.common),
                         kernel.digest(swapped)),)
     return found, skips
+
+
+def null_brief(brief: str) -> str:
+    """``brief`` with one blank line before its MIND block: no state changes, only bytes."""
+    fixed, marker, mind = brief.partition('<MIND>\n')
+    if not marker:
+        raise ValueError('a probe brief carries a MIND block')
+    return fixed + '\n' + marker + mind
 
 
 def scope(night: date) -> datetime:
@@ -414,12 +424,14 @@ def null_floor(replies: Replies, distances: Distances) -> Interval:
 @dataclass(frozen=True)
 class Contrast:
     """Two cells of the 2x2, paired over probes: how far apart they read and how many claims they
-    share (``claims`` 1.0: the same ids cited)."""
+    share (``claims`` 1.0: the same ids cited). ``claims`` is the mean over the probes where either
+    reply cites an id, since two replies that cite nothing are no evidence of shared claims; it is
+    ``None`` when no probe cites any."""
 
     left: str
     right: str
     semantic: float
-    claims: float
+    claims: float | None
 
 
 @dataclass(frozen=True)
@@ -435,9 +447,10 @@ def grid(cells: Mapping[tuple[str, str], tuple[str, ...]], distances: Distances)
     """Every row and column of the 2x2, paired over probes."""
     def contrast(left: tuple[str, str], right: tuple[str, str]) -> Contrast:
         semantic = tuple(distances.semantic(a, b) for a, b in zip(cells[left], cells[right], strict=True))
-        claims = tuple(1.0 - distances.cited(a, b) for a, b in zip(cells[left], cells[right], strict=True))
+        claims = tuple(1.0 - distances.cited(a, b) for a, b in zip(cells[left], cells[right], strict=True)
+                       if cites(a) or cites(b))
         return Contrast(f'{left[0]}/{left[1]}', f'{right[0]}/{right[1]}',
-                        math.fsum(semantic) / len(semantic), math.fsum(claims) / len(claims))
+                        math.fsum(semantic) / len(semantic), math.fsum(claims) / len(claims) if claims else None)
 
     return Grid(
         cells=tuple(f'{state}/{talker}' for state in _STATES for talker in _TALKERS),
@@ -613,9 +626,11 @@ def render(result: Result) -> str:
         grid_found = result.grid
         lines += ['', '## The 2x2', '',
                    'State {own, another life} x talker {A, B}: `claims` is the mean overlap of the ids each '
-                   'pair cites (1.0: the same claims), `semantic` their mean distance.', '',
+                   'pair cites (1.0: the same claims) over the probes where either cites one, '
+                   '`semantic` their mean distance.', '',
                    '| contrast | semantic | claims |', '|---|---|---|']
-        lines += [f'| {c.left} vs {c.right} | {c.semantic:.3f} | {c.claims:.3f} |'
+        lines += [f'| {c.left} vs {c.right} | {c.semantic:.3f} | '
+                  f'{"n/a (nothing cited)" if c.claims is None else f"{c.claims:.3f}"} |'
                   for c in (*grid_found.rows, *grid_found.columns)]
     if result.skips:
         lines += ['', '## Conditions the night could not supply', '']

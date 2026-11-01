@@ -17,10 +17,11 @@ conclusion true against the sealed resolution (``holds``):
 
 - contradiction, gap, opportunity: a resolution that holds +1, one that doesn't -0.5, a
   suspicion +0.25, a retraction 0;
-- reversal: dismissed +1, either retracted after a flag (an earlier suspicion or resolution of
-  the same finding, matched to the item, by the cutoff) or resolved as not a problem (a
-  resolution that holds); still standing as a problem (a suspicion, or a resolution that doesn't
-  hold) -0.5; a retraction with no flag before it 0;
+- reversal: dismissed +1, either retracted after a flag (an earlier suspicion, or resolution
+  that doesn't hold, of the same finding, matched to the item, by the cutoff) or resolved as not a
+  problem (a resolution that holds); still standing as a problem (a suspicion, or a resolution
+  that doesn't hold) -0.5; a retraction with no flag before it 0 (a resolution that holds is a
+  dismissal, not a flag, so retracting it earns nothing);
 - decoy: still flagged (a suspicion, or a resolution that doesn't hold) -0.5; otherwise 0;
 - an item nothing matched in time: 0.
 
@@ -214,11 +215,13 @@ def _canonical(item: PlantedItem, reports: Sequence[FindingReport], rulings: _Ru
 
 
 def _flag_before(item: PlantedItem, state: FindingReport, reports: Sequence[FindingReport], rulings: _Rulings) -> bool:
-    """Whether ``state``'s finding flagged ``item`` (a suspicion or resolution matched to it)
-    before ``state`` and by the item's cutoff."""
+    """Whether ``state``'s finding flagged ``item`` (a suspicion, or a resolution that doesn't
+    hold, matched to it) before ``state`` and by the item's cutoff. A resolution that holds
+    dismissed the item, so it is no flag."""
     return any(
         report.finding_id == state.finding_id and report.seq < state.seq and report.day <= _cutoff(item)
         and report.kind in ("suspicion", "resolution") and rulings.matches(report, item)
+        and (report.kind == "suspicion" or not rulings.of(report, item).holds)
         for report in reports
     )
 

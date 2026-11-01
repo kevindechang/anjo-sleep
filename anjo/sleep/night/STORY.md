@@ -16,8 +16,9 @@ never reads as where the night stopped. Nor does a kept brief: a `failed` brief 
 A record a step didn't fill is `NotRun(reason)`, never missing, `None` or a zero, and its reason is a
 plain line saying why: the core didn't dream for her (`CORE_OFF`), the night trained without the sleep
 objective's terms (`TERMS_OFF`), a term had no rows tonight, or the training job didn't report a number
-(`NOT_REPORTED`). Each line claims only what its record shows. The two records no step logs yet keep a
-`*_NOT_YET` reason in `story.py`: `learn.core_adaptation` and `wake.self_model`.
+(`NOT_REPORTED`). Each line claims only what its record shows. The two records no step logs keep a
+`*_NOT_YET` reason in `story.py`, `learn.core_adaptation` and `wake.self_model`, and each says it is
+not measured on the real model and what the code does check instead.
 
 | Record | Fields | Owner |
 |---|---|---|
@@ -33,11 +34,11 @@ objective's terms (`TERMS_OFF`), a term had no rows tonight, or the training job
 | `learn.surprise` | `Surprise(applied, rows)`: whether the loss applied MIND's weights (the train step's `surprise_weights`) and how many rows carried one (the dataset step's `mind_weighted`) | sleep-objective (filled) |
 | `learn.channel_loss`, `learn.stamp` | the channel's last training loss (`channel.loss_last`), and the projector's stamp: its id's first 12 characters (`channel.projector`), else its file's name, never its folder | thought-channel (filled from the train step's `receipt`) |
 | `learn.seeding`, `learn.imitation`, `learn.fold`, `learn.protect` | `Seeding(rows, kl_before, kl_after, minutes)`, `Imitation(rows, reward, minutes)`, the rank the adapter was folded to, `Protect(basis, rank, minutes)`: the sleep objective's terms in the train step's `receipt.terms` | sleep-objective (filled) |
-| `learn.core_adaptation` | the core's per-person adaptation loss on today's resolved outcomes | **mind-frontier** (no step logs it yet) |
+| `learn.core_adaptation` | the core's per-person adaptation loss on today's resolved outcomes | not measured on the real model: no night calls `train.adapt`, and its only check is training loss on the same resolved threads it fits (`mind/core/train.py`, `adapt`) |
 | `learn.learned` | one strategy line the harness promoted tonight (the `harness` step's `learned`); the key is absent on every other night, so the story is byte-identical to today's | harness (filled when `ANJO_SLEEP_HARNESS=1` promotes one) |
 | `check` | `Check(gates, promoted)`, each `Gate(name, passed, skipped, value, threshold)` | night-story (filled) |
 | `wake.morning` | `Morning(replies, no_verdict)` or `Failed("morning", error)` | night-story (filled by `daily.py`) |
-| `wake.self_model` | `SelfModel(predicted, actual)`: MIND's predicted error against its real error | **mind-frontier** (no step logs it yet) |
+| `wake.self_model` | `SelfModel(predicted, actual)`: MIND's predicted error against its real error | not measured on the real model: `SelfModel` is built only in tests; the nearest number is the offline `Calibration.self_error_mse` on toy slots (`mind/core/evaluate.py`, `calibration`) |
 
 MIND's core's dream is a `dream` step (`CORE_DREAM`), logged after `notice` when the core serves her,
 a nap's CPU dream included. `tell` reads these keys from it, the names `mind.core.night`'s receipt
