@@ -14,7 +14,7 @@ import pytest
 
 from anjo.sleep.mind.cog import core
 from anjo.sleep.mind.cog.toy_life import ToyLife
-from anjo.sleep.mind.cog.types import Event, Prediction, Query, Question
+from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
 from anjo.sleep.mind.cog.voi import MindInquirer, entropy
 from anjo.sleep.tests.test_cog_core import DEV, trained_tiny
 
@@ -63,6 +63,20 @@ def test_value_is_the_information_gain_on_the_upcoming_queries() -> None:
     assert math.isclose(values["b"], 0.0, abs_tol=1e-12)
     assert inq.choose(0, (useful, noise), UPCOMING) == "a"
     assert MindInquirer(StubPredictor(), lam=want / 0.1 + 1.0).choose(0, (useful, noise), UPCOMING) is None  # type: ignore[arg-type]
+
+
+def test_the_week_ahead_counts_once_the_inquirer_knows_the_person() -> None:
+    meta = LifeMeta("p", 10, 2, ("run", "gym"), (), ())
+    inq = MindInquirer(StubPredictor(), lam=1.0)  # type: ignore[arg-type]
+    useful = _q("a", "x", 0.1, (("x", "hi"), ("x", "lo")))
+    alone = inq.values(5, (useful,), UPCOMING)["a"]
+    inq.begin(meta)
+    week = inq.week_queries(5)
+    assert sorted((q.subject, q.target_day) for q in week) == sorted((a, d) for a in ("run", "gym") for d in (6, 7, 8, 9))
+    assert all(q.asked_day == 5 and f"h={q.target_day - 5}" in q.tokens and f"dow={(2 + q.target_day) % 7}" in q.tokens
+               for q in week)
+    assert math.isclose(inq.values(5, (useful,), UPCOMING)["a"], alone * (3 + len(week)) / 3, rel_tol=1e-9)
+    assert MindInquirer(StubPredictor(), lam=1.0, week=0).week_queries(5) == ()  # type: ignore[arg-type]
 
 
 def test_no_upcoming_queries_means_silence() -> None:

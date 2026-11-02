@@ -14,7 +14,8 @@ factory makes a fresh predictor per life (an inquirer factory takes that life's 
 factory must pickle for ``--workers > 1``. MIND's own predictor registers here as ``mind``, with its
 lesions ``mind_nofast`` (no fast memory), ``mind_k1`` (one head, no u), ``mind_nonight`` and
 ``mind_uniform`` (uniform replay at equal compute); ``--set ckpt=PATH`` picks the checkpoint
-(default ``train_cog``'s default output). Its inquirer is ``mind_voi`` (``--set lam=1.0``), which
+(default ``train_cog``'s default output). Its inquirer is ``mind_voi`` (``--set lam=1.0``, and
+``--set week=7`` for the hypothetical days ahead it weighs, 0 for today's queries only), which
 needs a ``mind*`` predictor. Settings come from ``--set key=value``; a key no builder reads is an error.
 
 The Gemini builders need ``--set client=module:attribute``, a ``Callable[[str], str]`` that the
@@ -139,13 +140,13 @@ def _mind(name: str, **switches: Any) -> PredictorBuilder:
     return build
 
 
-def _make_mind_voi(predictor: Predictor, *, lam: float) -> Inquirer:
+def _make_mind_voi(predictor: Predictor, *, lam: float, week: int = 7) -> Inquirer:
     from anjo.sleep.mind.cog.core import MindPredictor
     from anjo.sleep.mind.cog.voi import MindInquirer
 
     if not isinstance(predictor, MindPredictor):
         raise ValueError(f"mind_voi weighs questions with MIND's own state; {predictor.name} has none")
-    return MindInquirer(predictor, lam=lam)
+    return MindInquirer(predictor, lam=lam, week=week)
 
 
 def load_client(path: str) -> Complete:
@@ -235,7 +236,8 @@ INQUIRERS: dict[str, InquirerBuilder] = {
                                   p_ask=ctx.option("p_ask", 0.3, float)),
     "max_uncertainty": lambda ctx: MaxUncertainty,
     "gemini": _gemini_inquirer,
-    "mind_voi": lambda ctx: partial(_make_mind_voi, lam=ctx.option("lam", 1.0, float)),
+    "mind_voi": lambda ctx: partial(_make_mind_voi, lam=ctx.option("lam", 1.0, float),
+                                    week=ctx.option("week", 7, int)),
 }
 
 
