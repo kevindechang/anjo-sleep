@@ -4,7 +4,7 @@
   per week of ``asked_day`` (the learning curve), with the oracle's and the true state's losses.
 - **T2** ECE over 15 equal-width bins; AURC, abstaining on the highest ``u`` first (ties share
   their losses, so a constant ``u`` scores like random order), with the optimal (abstain on the
-  true excess loss) and random (the mean loss) references; Spearman of ``u`` with the excess loss
+  highest loss itself) and random (the mean loss) references; Spearman of ``u`` with the excess loss
   over the oracle. Skipped (None) when any of a run's ``u`` is None.
 - **T3** per life, paired with the same predictor run without the inquirer: the queries asked in
   the ``window`` days starting on each ask's day (the union, so overlapping asks count a query
@@ -138,7 +138,7 @@ def summarize_run(records: Sequence[LifeRecord]) -> dict[str, Any]:
     has_u = bool(queries) and all(q.u is not None for q in queries)
     if has_u:
         u = np.array([q.u for q in queries], dtype=float)
-        out["aurc"] = {"aurc": aurc(u, a["loss"]), "optimal": aurc(a["excess"], a["loss"]),
+        out["aurc"] = {"aurc": aurc(u, a["loss"]), "optimal": aurc(a["loss"], a["loss"]),
                        "random": _mean(a["loss"])}
         out["spearman_u_excess"] = spearman(u, a["excess"])
     else:
