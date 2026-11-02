@@ -132,6 +132,7 @@ HOLD_KINDS: Final = {SESSION_PREFIX: ("colab_train", "colab_life"), MIND_SESSION
 CLI_NOTE: Final = "[colab] "  # the CLI's own messages, such as an update notice
 NO_SESSIONS: Final = "No active sessions"
 _SESSION_LINE: Final = re.compile(r"^\[(?P<name>[^\]]+)\] \S+ \| Hardware: ")
+UNNAMED: Final = "?"  # how ``colab sessions`` names an assignment this machine has no record of
 EXEC_MARGIN_S: Final = 60.0  # the CLI's own wait past the kernel's timeout
 # 2026-11-02: an upload into a folder the VM lacks fails (HTTP 500 from its contents API), and a
 # new VM has no REMOTE_DIR: the first real Colab night failed at its first upload. Each VM makes
@@ -405,6 +406,23 @@ def _forget_lost(cli: ColabCli) -> None:
         cli.call("sessions", timeout_s=LIST_TIMEOUT_S)
 
 
+def _not_found(session: str) -> str:
+    """What ``colab stop`` prints, exiting 0, for a session it has no record of."""
+    return f"Session '{session}' not found"
+
+
+def _unnamed_may_run(cli: ColabCli) -> bool:
+    """After a stop that found no record of a VM that was up: whether an assignment this machine
+    can't name is still listed. The CLI drops its record on any 404 or 401 in an exec's error, while
+    the VM may run on, so that assignment may be it. A list that fails can't say, so it may."""
+    try:
+        return UNNAMED in _live_sessions(cli)
+    except (ColabError, subprocess.TimeoutExpired, OSError) as error:
+        logger.warning("listing the sessions after a stop that found none failed (%s: %s)",
+                       type(error).__name__, error)
+        return True
+
+
 def _receipt(path: Path) -> dict[str, object]:
     receipt = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(receipt, dict):
@@ -554,7 +572,7 @@ class ColabRunner:
                                      timeout_s=POLL_EXEC_S + EXEC_MARGIN_S)
         except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # a miss: counted, and logged
             rounds.polls_failed += 1
-            logger.warning("a poll of %s failed (%s)", session, type(error).__name__)
+            logger.warning("a poll of %s failed (%s: %s)", session, type(error).__name__, error)
             return None
         reading = detached.read_poll(printed)
         if reading is None or reading.state == "missing":
@@ -605,13 +623,22 @@ class ColabRunner:
           error ``new`` raised is the one that propagates.
         - A ``new`` that timed out may have made one: it is stopped, and the whole hold settled.
         - Any other failed stop settles the whole hold and says to stop the VM by hand.
+        - A stop that finds no record of a VM that was up, while an assignment this machine can't
+          name is listed (or the list fails), may have left that VM running: the whole hold is
+          settled and a warning says to stop it by hand. The night's own error still propagates.
         """
         try:
-            self._cli.call("stop", "-s", session, timeout_s=STOP_TIMEOUT_S)
+            stopped = self._cli.call("stop", "-s", session, timeout_s=STOP_TIMEOUT_S)
         except (ColabError, subprocess.TimeoutExpired, OSError) as error:
             if vm.state != "none":
                 reservation.settle(reservation.bound.amount)
                 raise ColabError(f"stopping {session} failed; stop it by hand before anything else") from error
+        else:
+            if vm.state == "up" and _not_found(session) in stopped and _unnamed_may_run(self._cli):
+                vm.state = "maybe"
+                logger.warning("colab stop found no record of %s, and a Colab VM this machine can't name may "
+                               "still run: its whole hold is settled; check colab sessions and stop it by hand",
+                               session)
         elapsed = max(0.0, self._clock() - started)
         if vm.state == "maybe":
             reservation.settle(reservation.bound.amount)

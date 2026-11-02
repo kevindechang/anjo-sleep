@@ -23,7 +23,7 @@ from anjo.sleep.night.sweep import Stopped
 from anjo.sleep.serving import config, framing
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.tests.test_colab_life import _night
-from anjo.sleep.tests.test_colab_runner import FakeColab, PollClock
+from anjo.sleep.tests.test_colab_runner import UNNAMED, FakeColab, PollClock
 from anjo.sleep.tests.test_lora import REVISION, _examples
 from anjo.sleep.tests.test_modal_runner import NAME, RENDERING, Clock, FakeCalls, _inputs
 from anjo.sleep.tests.test_train_runner_choice import NoColab, _EmptyColab, _FlakyColab
@@ -194,6 +194,16 @@ def test_a_lost_vm_drops_the_dead_session_before_the_stop(tmp_path: Path) -> Non
     runner, calls, ledger = _rig(tmp_path, colab)
     assert runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)["fallback_reason"] == "colab VM lost mid-run"
     assert colab.commands()[-2:] == ["sessions", "stop"] and colab.commands().count("poll") == 1 + LOST_POLLS
+
+
+def test_a_lost_vm_the_cli_forgot_still_trains_on_modal_and_settles_its_whole_colab_hold(tmp_path: Path) -> None:
+    colab = TimedColab(readings=["running", "fail", "fail", "fail"])
+    colab.answers = {**colab.answers, "stop": f"[colab] Session 'anjo-sleep-{NAME}' not found.\n", "sessions": UNNAMED}
+    runner, calls, ledger = _rig(tmp_path, colab)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["runner"] == "modal" and out["fallback_reason"] == "colab VM lost mid-run" and len(calls.spawned) == 1
+    assert colab.commands()[-3:] == ["sessions", "stop", "sessions"] and ledger.open_holds() == ()
+    assert ledger.used("colab_cu") == pytest.approx(Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount)
 
 
 @pytest.mark.parametrize("readings", [["running", "fail", "running", "done 0"], ["hang", "missing", "done 0"]])

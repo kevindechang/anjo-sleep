@@ -65,16 +65,52 @@ def test_the_launcher_returns_at_once_and_the_poll_reads_the_trainings_exit_code
     assert f"training {tmp_path / detached.ENTRY}" in (tmp_path / detached.LOG).read_text()
 
 
+def _gone(pid: int) -> bool:
+    deadline = time.monotonic() + WAIT_S
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def test_a_killed_training_reads_missing_and_a_new_launch_forgets_the_last_exit_code(tmp_path: Path) -> None:
-    _launch(tmp_path, "import time\ntime.sleep(60)\n")
+    entry = ("import os, time\nos.makedirs(os.environ['ANJO_TRAIN_OUT'], exist_ok=True)\n"
+             "open(os.path.join(os.environ['ANJO_TRAIN_OUT'], 'pid'), 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+    _launch(tmp_path, entry)
     assert _poll(tmp_path) == Reading("running")
+    deadline = time.monotonic() + WAIT_S
+    while not (tmp_path / "out" / "pid").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    training = int((tmp_path / "out" / "pid").read_text())
     assert detached.MARK in _run(detached.kill_script(str(tmp_path)))
     assert _until(tmp_path, "missing") == Reading("missing")  # gone, with no exit code
+    assert _gone(training)  # the training itself, the runner's child, went with the runner's group
     (tmp_path / detached.EXIT).write_text("0")  # as a kept VM's last night left it
     _launch(tmp_path, "import time\ntime.sleep(60)\n")
     assert _poll(tmp_path) == Reading("running")
     _run(detached.kill_script(str(tmp_path)))
     _until(tmp_path, "missing")
+
+
+def test_under_a_kernel_that_never_reaps_its_runner_the_poll_still_reads_done(tmp_path: Path) -> None:
+    """On the VM the launcher runs in the session's kernel, which lives on and never reaps the runner."""
+    launcher = detached.launch_script(str(tmp_path), "import time\ntime.sleep(0.5)\n", KEYS)
+    kernel = subprocess.Popen(
+        [sys.executable, "-c", "import os, sys, time\nos.environ.update(ANJO_TRAIN_CONFIG='{}', ANJO_TRAIN_OUT='o')\n"
+         "exec(compile(sys.stdin.read(), 'launch', 'exec'), {})\nsys.stdout.flush()\ntime.sleep(30)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert kernel.stdin is not None and kernel.stdout is not None
+        kernel.stdin.write(launcher)
+        kernel.stdin.close()
+        assert detached.read_launch(kernel.stdout.readline()) is not None
+        assert _until(tmp_path, "done") == Reading("done", 0) and kernel.poll() is None  # the kernel lives on
+    finally:
+        kernel.kill()
+        kernel.wait()
 
 
 def test_no_launch_reads_missing_and_a_kill_with_nothing_to_kill_says_so(tmp_path: Path) -> None:

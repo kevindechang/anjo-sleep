@@ -628,6 +628,88 @@ def test_a_launch_that_starts_no_training_fails_the_night_before_any_poll(tmp_pa
     assert "poll" not in fake.commands() and fake.commands()[-1] == "stop"
 
 
+FORGOTTEN = f"[colab] Session 'anjo-sleep-{NAME}' not found.\n"  # what ``colab stop`` says, exit 0, for a pruned one
+UNNAMED = "[?] gpu-a100-s-9 | Hardware: A100 | GPU | HIGHMEM\n"  # an assignment this machine has no name for
+
+
+@pytest.mark.parametrize(("listed", "whole"), [
+    ("[colab] No active sessions found on server.\n", False),  # the VM is gone: what it ran
+    (UNNAMED, True),  # an assignment the CLI can't name may be the VM, still running: the whole hold
+    (None, True),  # the list failed, so it can't say: the whole hold
+])
+def test_a_stop_that_finds_no_record_of_the_session_looks_for_the_vm_the_cli_forgot(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, listed: str | None, whole: bool,
+) -> None:
+    """2026-11-02 (review): the CLI prunes a session on any 404 or 401 in an exec's error, and then
+    ``colab stop`` exits 0 without unassigning a VM that may still run."""
+    fake = FakeColab("sessions" if listed is None else None, readings=["running", "fail", "fail", "fail"],
+                     answers={"stop": FORGOTTEN, **({} if listed is None else {"sessions": listed})})
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    with caplog.at_level(logging.WARNING), pytest.raises(ColabVmLost):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.commands()[-3:] == ["sessions", "stop", "sessions"] and ledger.open_holds() == ()
+    hold = Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount
+    assert (ledger.used("colab_cu") == pytest.approx(hold)) is whole
+    assert ("stop it by hand" in caplog.text) is whole
+
+
+def test_a_stop_that_ends_the_session_lists_nothing_more(tmp_path: Path) -> None:
+    fake = FakeColab(answers={"stop": "[colab] Stopping session...\n[colab] Session terminated.\n"})
+    _runner(fake, Ledger(tmp_path / "budget.jsonl")).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.commands()[-1] == "stop" and "sessions" not in fake.commands()
+
+
+class Slowest(FakeColab):
+    """Every call takes its whole hard timeout on one clock, which the polls' sleeps move on too; the
+    training is done ``train_for`` seconds after its launch returns."""
+
+    def __init__(self, train_for: float) -> None:
+        super().__init__()
+        self.now, self.train_for, self.launched = 0.0, train_for, math.inf
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        self.now += timeout_s
+        if command_label(list(args)[3:]) == colab.LAUNCH:
+            self.launched = self.now
+        self.readings = ["done 0" if self.now - self.launched >= self.train_for else "running"]
+        return super().__call__(args, timeout_s)
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.parametrize("uploads", [1, 3])
+def test_with_every_call_at_its_hard_timeout_the_night_still_ends_inside_its_hold(
+    tmp_path: Path, uploads: int,
+) -> None:
+    """Done just before its deadline, just after it (read by the last poll), or never (killed): each
+    call taking its whole hard timeout, the stop included, the night ends inside its hold."""
+    warm = None
+    if uploads == 3:
+        warm = tmp_path / "prev"
+        warm.mkdir()
+        for file in config.ADAPTER_FILES:
+            (warm / file).write_text("{}")
+    train_s, outcomes = _train_s(TIMEOUT_S, uploads=uploads), {}
+    for train_for in [*range(int(train_s) - 300, int(train_s) + 300, 7), math.inf]:
+        fake, ledger = Slowest(train_for), Ledger(tmp_path / f"budget-{train_for}.jsonl")
+        runner = ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake, keepalive=PING), ledger=ledger,
+                             is_synthetic=lambda uid: uid.startswith("synthetic"), clock=fake.clock,
+                             poll_clock=fake.clock, sleep=fake.sleep)
+        try:
+            runner.run(JOB, _inputs(tmp_path, prev=warm), timeout_s=TIMEOUT_S)
+            outcomes[train_for] = "done"
+        except ColabTrainingTimeout:
+            outcomes[train_for] = "killed"
+        assert fake.now <= TIMEOUT_S, train_for
+        assert ledger.open_holds() == ()
+    assert all(outcome == "done" for train_for, outcome in outcomes.items() if train_for <= train_s)
+    assert outcomes[math.inf] == "killed" and "done" in {o for t, o in outcomes.items() if t > train_s}
+
+
 def test_a_failed_ping_is_counted_and_never_fails_the_night(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     fake, ledger = FakeColab(readings=DONE), Ledger(tmp_path / "budget.jsonl")
     fake.ping_code = 1
