@@ -52,6 +52,19 @@
 .prediction { display: grid; gap: 4px; margin-top: 6px; padding: var(--s2) 0 0 var(--s3); border-left: 1px solid var(--line-strong); }
 .prediction .plain { font-size: 14px; }
 
+/* her latest live pass: the first thing in the panel, so turn one already shows work */
+.mind-pass { position: relative; margin-top: var(--s4); padding: var(--s4); border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%), var(--surface-2); }
+.mind-pass > h3 { color: var(--accent); }
+.mind-pass[data-state="none"] { border-style: dashed; background: transparent; }
+.mind-pass[data-state="none"] > h3, .mind-pass[data-state="failed"] > h3 { color: var(--muted); }
+.mind-pass > .plain { font: 500 13px/1.6 var(--mono); letter-spacing: .01em; color: var(--ink-soft); }
+.pass-choice { display: grid; gap: 4px; margin-top: var(--s3); padding: var(--s3) 0 0 var(--s3); border-top: 1px solid var(--line); border-left: 2px solid var(--accent-2); }
+.pass-choice.is-none { border-left-color: var(--line-strong); }
+.pass-choice .plain { font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
+.held .exact { font-size: 13px; color: var(--ink-soft); }
+.held { padding: var(--s2) 0; }
+
 .pick .plain { font-size: 16px; }
 .pick { padding-left: var(--s3); border-left: 2px solid var(--accent); border-bottom: 0; }
 .beat { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }

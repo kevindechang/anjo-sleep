@@ -276,11 +276,12 @@ globalThis.window = {
 Date.now = () => now;
 const listeners = {};
 const words = { textContent: "" };
-const line = { hidden: true, querySelector: () => words };
+const line = { hidden: true, dataset: {}, querySelector: () => words };
+const retry = { hidden: true, addEventListener: () => {} };
 const tab = { dataset: {} };
 globalThis.document = {
   hidden: false, addEventListener: (name, f) => { listeners[name] = f; },
-  getElementById: (id) => (id === "live-pass" ? line : tab),
+  getElementById: (id) => (id === "live-pass" ? line : id === "live-pass-retry" ? retry : tab),
 };
 const L = await import(LIVEPASS);
 const { COPY } = await import(COPYJS);
@@ -310,7 +311,7 @@ async function watch(answer, script = async () => until(400000)) {
   lp.mark();
   lp.watch();
   await script();
-  return { reads, hidden: line.hidden, pending: timers.length, slowShown };
+  return { reads, hidden: line.hidden, pending: timers.length, slowShown, said: words.textContent, retry: !retry.hidden };
 }
 
 const running = (t, end) => (t < end ? { revision: 5, livePass: "running" } : { revision: 6, livePass: "idle" });
@@ -350,9 +351,10 @@ def test_a_slow_pass_is_still_seen_and_a_hidden_tab_pauses_the_checks() -> None:
     slow = out["slow"]
     assert slow["reads"][:3] == [2000, 4000, 6000] and 60000 in slow["reads"]
     assert slow["reads"][-3:] == [60000, 70000, 80000]  # every 10 s once the minute is up, until it lands
-    assert slow["slowShown"] and slow["hidden"] and slow["pending"] == 0
-    endless = out["endless"]
-    assert endless["reads"][-1] == 180000 and endless["hidden"] and endless["pending"] == 0
+    assert slow["slowShown"] and slow["hidden"] and slow["pending"] == 0 and not slow["retry"]
+    endless = out["endless"]  # never lands: the line stays and says so, with a way to check again
+    assert endless["reads"][-1] == 180000 and not endless["hidden"] and endless["pending"] == 0
+    assert endless["said"].startswith("Still waiting for MIND") and endless["retry"]
     away = out["away"]
     assert not [t for t in away["reads"] if 30000 < t < 150000]  # nothing while hidden
     assert 150000 in away["reads"] and away["reads"][-1] == 150000 and away["hidden"]
@@ -371,3 +373,66 @@ def test_the_judge_pages_call_anjo_her() -> None:
         assert not re.search(r"\b(its|itself)\b", text, re.IGNORECASE)
     for phrase in ("What she's working out about you", "Her bet on herself"):
         assert phrase in (APP_DIR / "live.html").read_text(), phrase
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_a_watch_that_cannot_confirm_the_pass_says_why() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    cases = [
+        ({"base": 3, "revision": 4, "livePass": "idle", "sawRunning": False}, "landed"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": True}, "landed"),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True}, "timeout"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False}, "nopass"),
+        ({"ok": False, "base": 3, "revision": 3}, "unconfirmed"),
+        ({"fresh": 2}, "landed"),
+    ]
+    script = f"""
+const L = await import({json.dumps((APP_DIR / "livepass.js").as_uri())});
+console.log(JSON.stringify({json.dumps([c for c, _ in cases])}.map((c) => L.ending(c))));
+"""
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == [want for _, want in cases]
+
+
+_PANEL_HELPERS = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const P = await import(PANEL);
+const ok = { at: "2026-11-03T10:15:00+00:00", state: "ok", thinker: "spark-open", questions_opened: 0, new_items: 1,
+  choice: { action: null, target: null } };
+const won = { ...ok, new_items: 2, choice: { action: "revisit_thread", target: { text: "choosing between two job offers", withheld: false } } };
+console.log(JSON.stringify({
+  none: P.passLine(null), first: P.passLine(ok), opened: P.passLine({ ...ok, new_items: 3, questions_opened: 2 }),
+  failed: P.passLine({ at: ok.at, state: "failed" }),
+  abstain: P.liveChoice(ok), pick: P.liveChoice(won), old: P.liveChoice({ ...ok, choice: undefined }),
+  failedChoice: P.liveChoice({ ...won, state: "failed" }),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_panel_shows_each_live_pass_from_its_own_counts() -> None:
+    """Turn one already shows work: what the pass read, that it opened no question, and that her
+    chooser picked nothing; a later pass shows her pick and its stored target. Never inferred."""
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _PANEL_HELPERS.replace("PANEL", json.dumps((APP_DIR / "panel.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["first"] == "Read your latest messages · 1 new piece of evidence · no question opened"
+    assert out["opened"] == "Read your latest messages · 3 new pieces of evidence · 2 questions opened"
+    assert out["none"].startswith("Her first pass runs") and out["failed"].startswith("Her last pass didn't finish")
+    assert out["abstain"] == {"kind": "none"}
+    assert out["pick"] == {"kind": "pick", "action": "revisit_thread",
+                           "target": {"text": "choosing between two job offers", "withheld": False}}
+    assert out["old"] is None and out["failedChoice"] is None
+    panel = (APP_DIR / "panel.js").read_text()
+    assert "view.live" in panel and "view.targets" in panel  # both blocks the API sends are drawn
