@@ -8,6 +8,15 @@ activity done yesterday). The regime shows only through late-night messages, moo
 fact only through weak hints and outcomes; distractor mentions show nothing. ``world_prior`` holds
 the population priors and ``world_filter`` the exact references.
 
+Tokens (``k`` a weekday 0-6, Monday 0):
+- a habit on its slot day: ("did"|"skipped", activity, "dow=k"); no event means no slot that day
+- a plan: ("plan", activity, "in=N", "dow=k") made N days ahead, ``value`` its target day; on that
+  day ("did"|"cancel", activity, "dow=k"), a cancel's ``value`` being that same day
+- ("mood", "level=L") with ``value`` L; ("message", person, "late"|"day"), late ones the regime's
+  signal; ("mention", topic, value) for a distractor, ("mention", hint, value) for a fact's hint
+- a query: ("query", "happen"|"plan", activity, "h=N", "dow=k"), N days after the asked day
+- a question: ("ask", subject); its answer, one of ``render.answer_options(subject)``
+
 Everything is drawn at construction from the seed, on fixed-shape draws from one stream per purpose,
 so a life is deterministic, and changing one outcome (``interventions``, for causal tests) changes
 nothing before its day. Answers are noiseless (``ANSWER_NOISE``): they state the true regime, fact
@@ -222,7 +231,7 @@ def _day_items(d: int, person: Person, y: np.ndarray, occ: np.ndarray, plans: li
     for a, name in enumerate(person.activities):
         if occ[d, a]:
             kind = "did" if y[d, a] else "cancel" if person.planned[a] else "skipped"
-            items.append((kind, name, (kind, name, dow), None))
+            items.append((kind, name, (kind, name, dow), float(d) if kind == "cancel" else None))
     for a, target in plans:
         name = person.activities[a]
         items.append(("plan", name, ("plan", name, f"in={target - d}", f"dow={person.weekday(target)}"),
@@ -260,7 +269,7 @@ def _all_queries(rng: np.random.Generator, pid: str, person: Person, made: np.nd
         queries = []
         for i, (h, a, kind) in enumerate(picked):
             target, name = t + h, person.activities[a]
-            tokens = ("query", kind, name, f"in={h}", f"dow={person.weekday(target)}")
+            tokens = ("query", kind, name, f"h={h}", f"dow={person.weekday(target)}")
             q = Query(qid=f"{pid}/d{t}/q{i}", asked_day=t, target_day=target, subject=name,
                       text=render.query_text(tokens, int(choices[t, i])), tokens=tokens,
                       family="count" if person.steady[a] else "hidden")
@@ -280,7 +289,7 @@ def _pick_queries(t: int, person: Person, made: np.ndarray, size: int, coin: boo
         target = t + h
         for a in range(len(person.activities)):
             if person.planned[a]:
-                ok, kind = 0 <= made[a, target] <= t, "kept"
+                ok, kind = 0 <= made[a, target] <= t, "plan"
             else:
                 ok, kind = bool(person.pattern[a, target]), "happen"
             if ok:

@@ -137,6 +137,8 @@ def test_no_query_leaks_its_outcome(lives: list[world.SimLife]) -> None:
                     assert e.value is not None and e.value > day
                     assert e.tokens == ("plan", e.subject, f"in={int(e.value) - day}",
                                         f"dow={(life.meta.start_weekday + int(e.value)) % 7}")
+                elif e.kind == "cancel":
+                    assert e.value == day  # a plan is cancelled on the day it was for, never before
                 elif e.kind != "mood":
                     assert e.value is None
         for q in (q for d in range(life.meta.n_days) for q in life.queries(d)):
@@ -144,9 +146,11 @@ def test_no_query_leaks_its_outcome(lives: list[world.SimLife]) -> None:
             before = [e for d in range(q.asked_day + 1) for e in by_day[d]]
             assert not any(e.kind in OUTCOME_KINDS and e.day >= q.target_day for e in before)
             assert not any(e.value == q.target_day and e.kind != "plan" for e in before if e.kind != "mood")
+            assert q.tokens == ("query", q.tokens[1], q.subject, f"h={q.target_day - q.asked_day}",
+                                f"dow={(life.meta.start_weekday + q.target_day) % 7}")
             on_target = [e for e in by_day[q.target_day] if e.subject == q.subject and e.kind in OUTCOME_KINDS]
             assert len(on_target) == 1 and (on_target[0].kind == "did") == r.outcome
-            if q.tokens[1] == "kept":
+            if q.tokens[1] == "plan":
                 assert on_target[0].kind in ("did", "cancel")
                 assert any(e.kind == "plan" and e.subject == q.subject and e.value == q.target_day
                            for e in before)
@@ -283,7 +287,7 @@ def _counter_predictions(life: world.SimLife, base_rates: dict[tuple[str, str, s
             hit[0] += int(e.kind == "did")
             hit[1] += 1
         for q in life.queries(day):
-            weekday = -1 if q.tokens[1] == "kept" else (life.meta.start_weekday + q.target_day) % 7
+            weekday = -1 if q.tokens[1] == "plan" else (life.meta.start_weekday + q.target_day) % 7
             done, n = tally[(q.subject, weekday)]
             out.append((q, (done + strength * base_rates[_key(q)]) / (n + strength)))
     return out
@@ -428,6 +432,12 @@ def test_shifts_are_recorded_and_real(lives: list[world.SimLife]) -> None:
         truth = life.truth()
         shifts = truth.params["shifts"]
         assert truth.shift_days == tuple(s["day"] for s in shifts)
+        subjects = truth.params["shift_subjects"]
+        assert len(subjects) == len(shifts)
+        for shift, named in zip(shifts, subjects, strict=True):
+            assert named[0] == shift["activity"] and set(named) <= set(life.meta.activities) | set(life.meta.people)
+            if shift["kind"] == "friend_moves":
+                assert named[1] == shift["activity"][len(render.DINNER_PREFIX):].capitalize()
         assert all(0 < s["day"] < life.meta.n_days for s in shifts)
         n_shifts.append(len(shifts))
         for shift in shifts:

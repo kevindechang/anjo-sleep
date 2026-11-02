@@ -69,11 +69,11 @@ def test_every_answer_option_reads_differently() -> None:
 
 
 def test_query_and_question_texts() -> None:
-    q = render.query_text(("query", "happen", "run", "in=1", "dow=3"), 0)
+    q = render.query_text(("query", "happen", "run", "h=1", "dow=3"), 0)
     assert q.endswith("?") and "tomorrow" in q.lower()
-    kept = {render.query_text(("query", "kept", "dinner_sam", "in=3", "dow=4"), c) for c in range(6)}
+    kept = {render.query_text(("query", "plan", "dinner_sam", "h=3", "dow=4"), c) for c in range(6)}
     assert all("Sam" in text and "Friday" in text for text in kept) and len(kept) >= 2
-    week = render.query_text(("query", "happen", "gym", "in=7", "dow=1"), 0)
+    week = render.query_text(("query", "happen", "gym", "h=7", "dow=1"), 0)
     assert "week" in week and "Tuesday" in week
     assert render.question_text(("ask", "work"), 0).endswith("?")
     assert "Severance" in render.question_text(("ask", "severance"), 0)

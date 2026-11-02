@@ -153,7 +153,7 @@ _ANSWER_TOPIC: Final = ("Since you ask, {phrase}.", "Well, {phrase}.", "Oh, {phr
                         "Good question: {phrase}.")
 _QUERY: Final = {
     "happen": ("Will they {q} {when}?", "Are they going to {q} {when}?", "Do you think they'll {q} {when}?"),
-    "kept": ("Will they keep their plan to {q} {when}?", "Will the plan for {bare} {when} hold?",
+    "plan": ("Will they keep their plan to {q} {when}?", "Will the plan for {bare} {when} hold?",
              "Is {bare} {when} still going to happen?"),
 }
 _QUESTION: Final = {
@@ -308,10 +308,11 @@ def answer_options(subject: str) -> tuple[tuple[str, ...], ...]:
 
 
 def query_text(tokens: tuple[str, ...], choice: int) -> str:
-    """("query", "happen"|"kept", activity, "in=h", "dow=k") as a question about the person."""
+    """("query", "happen"|"plan", activity, "h=N", "dow=k") as a question about the person: will a
+    habit happen, or will a plan made by the asked day be kept, ``N`` days on, on weekday ``k``."""
     if len(tokens) != 5 or tokens[0] != "query" or tokens[1] not in _QUERY:
-        raise ValueError("a query is (query, happen|kept, activity, in=h, dow=k)")
-    when, _ = when_text(_field(tokens, "in"), _field(tokens, "dow"))
+        raise ValueError("a query is (query, happen|plan, activity, h=N, dow=k)")
+    when, _ = when_text(_field(tokens, "h"), _field(tokens, "dow"))
     return _cap(_fill_activity(_pick(_QUERY[tokens[1]], choice), tokens[2], when=when))
 
 

@@ -339,7 +339,8 @@ def sample_person(rng: np.random.Generator, pop: Population, n_days: int) -> Per
             "streak_weight": float(streak_w[a]),
             "trigger": (names[int(trigger_src[a])], float(trigger_w[a])) if trigger_src[a] >= 0 else None,
         } for a, s in enumerate(specs)},
-        "idiosyncratic": odd, "shifts": shifts, "regime_stay": stay,
+        "idiosyncratic": odd, "shifts": shifts, "shift_subjects": tuple(_shift_subjects(s) for s in shifts),
+        "regime_stay": stay,
     }
     return Person(
         start_weekday=start_weekday, people=people, topics=topics, activities=names,
@@ -348,6 +349,14 @@ def sample_person(rng: np.random.Generator, pop: Population, n_days: int) -> Per
         chain=np.kron(p_regime, fact_chain(pop.fact_rates)), init=init, late_p=late[regime_of],
         mood_p=mood_p, hint_p=_hint_table()[fact_of], report=report,
     )
+
+
+def _shift_subjects(shift: dict[str, Any]) -> tuple[str, ...]:
+    """The subjects a shift changed: its activity, and the friend who moved away."""
+    activity = str(shift["activity"])
+    if shift["kind"] == "friend_moves":
+        return activity, activity[len(render.DINNER_PREFIX):].capitalize()
+    return (activity,)
 
 
 def _mood_kind(f: int) -> str:
