@@ -506,6 +506,20 @@ def test_cli_eval_writes_records_and_a_report(tmp_path: Path) -> None:
     assert json.loads(again.read_text())["runs"].keys() == report["runs"].keys()
 
 
+def test_cli_runs_the_counter_on_three_indep_lives(tmp_path: Path) -> None:
+    from anjo.sleep.mind.cog import cli
+
+    out = tmp_path / "indep"
+    assert cli.main(["eval", "--predictor", "counter", "--world", "indep", "--seeds", "10000-10002",
+                     "--train-seeds", "0-2", "--out", str(out)]) == 0
+    recs = load_records(out / "counter.jsonl")
+    assert len(recs) == 3 and all(r.queries for r in recs)
+    assert all(0 < q.p < 1 for r in recs for q in r.queries)
+    with pytest.raises(ValueError, match="no populations"):
+        cli.main(["eval", "--predictor", "counter", "--world", "indep", "--population", "ood", "--seeds", "1",
+                  "--train-seeds", "0", "--out", str(out)])
+
+
 def test_cli_lists_its_registries() -> None:
     from anjo.sleep.mind.cog import cli
 
