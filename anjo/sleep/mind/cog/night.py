@@ -44,9 +44,10 @@ O'Reilly 1995) replays nothing. It moves a share ``move`` of the fast memory int
 predictor scales the fast weights and their momentum by ``1 - move``, and each of the day's queries
 gives the logit that removed (the heads' mean, the full memory's minus the scaled one's). Each
 measured cell's adapter gains the mean of its queries, and the subject's other weekdays the mean
-of the subject's (``transfer``). The moved part is always served: it is no fit to outcomes that
-the gate would have to vouch for. It conserves the evidence only if the memory stays scaled down,
-and this core's does not: its write moves ``M k`` toward the fixed value ``W_v [y, 1 - y]``
+of the subject's (``transfer``); a night with no queries measures nothing, so moves nothing and
+scales nothing. The moved part is always served: it is no fit to outcomes that the gate would
+have to vouch for. It conserves the evidence only if the memory stays scaled down, and this core's
+does not: its write moves ``M k`` toward the fixed value ``W_v [y, 1 - y]``
 whatever the adapter holds, so a scaled-down memory relearns the same content by the next night
 and the adapter takes it again. On 40 real-world lives no core trained on (seeds 7000-7039, the
 6000-life tally core), the memory's norm settled at 1.2 instead of 4.4, the adapter's subject

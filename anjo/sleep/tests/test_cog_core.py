@@ -538,6 +538,12 @@ def test_platt_recovers_a_known_miscalibration() -> None:
         train_cog.calibrate(Path("x.pt"), range(9_990, 10_010), Path("y.pt"))  # never on dev seeds
 
 
+def test_platt_converges_where_a_plain_newton_step_overshoots() -> None:
+    """Confident predictions that carry no information: the best map is the constant 0.5."""
+    a, b = train_cog.fit_platt(np.array([0.01, 0.01, 0.99, 0.99]), np.array([0.0, 1.0, 0.0, 1.0]))
+    assert abs(a) < 1e-3 and abs(b) < 1e-3
+
+
 def test_the_predictor_applies_its_platt_map() -> None:
     trained = trained_tiny()
     life = ToyLife(DEV[3])

@@ -274,16 +274,30 @@ def fit_prior(lives: Sequence[Life]) -> dict[str, float]:
 
 
 def fit_platt(p: np.ndarray, y: np.ndarray, iters: int = 100) -> tuple[float, float]:
-    """``(a, b)`` minimizing the log loss of ``sigmoid(a logit(p) + b)`` against ``y`` (Newton steps)."""
+    """``(a, b)`` minimizing the log loss of ``sigmoid(a logit(p) + b)`` against ``y``: Newton steps,
+    each halved until the loss falls (a plain step overshoots when the predictions say little)."""
     p = np.clip(np.asarray(p, dtype=np.float64), 1e-6, 1 - 1e-6)
     y = np.asarray(y, dtype=np.float64)
     z, a, b = np.log(p / (1 - p)), 1.0, 0.0
+
+    def nll(a: float, b: float) -> float:
+        s = a * z + b
+        return float(np.mean(y * np.logaddexp(0.0, -s) + (1 - y) * np.logaddexp(0.0, s)))
+
+    best = nll(a, b)
     for _ in range(iters):
         q = 1.0 / (1.0 + np.exp(-(a * z + b)))
         w = q * (1 - q)
         hess = np.array([[np.mean(w * z * z), np.mean(w * z)], [np.mean(w * z), np.mean(w)]]) + 1e-9 * np.eye(2)
         step = np.linalg.solve(hess, np.array([np.mean((q - y) * z), np.mean(q - y)]))
-        a, b = a - float(step[0]), b - float(step[1])
+        for _ in range(60):
+            loss = nll(a - float(step[0]), b - float(step[1]))
+            if loss <= best:
+                break
+            step = step / 2.0
+        else:
+            break  # no step lowers the loss: at the optimum, up to rounding
+        a, b, best = a - float(step[0]), b - float(step[1]), loss
         if np.abs(step).max() < 1e-10:
             break
     return a, b
