@@ -23,7 +23,8 @@ Public (``PUBLIC_PREFIX``), each 404 unless this is the sleep host and ``ANJO_SL
 The caller's own (Bearer; 404 off the sleep host, 401 without a token, 403 outside the cohort). Each
 one counts as the judge being present (``judge_talker.arrive``), so a cold Glimmer starts waking:
 
-- ``GET /api/sleep/me/mind``: their MIND state (``judge_views.mind_payload``);
+- ``GET /api/sleep/me/mind``: their MIND state (``judge_views.mind_payload``), with ``revision`` and
+  ``live_pass`` (``idle|running``) to poll on after a reply (``live_mind``; ``me/thought`` has both too);
 - ``GET /api/sleep/me/wake``: what Anjo opens with after a night (``judge_views.wake_payload``);
 - ``POST /api/sleep/me/undo``: the previous version serves again (``api.undo``'s; 409 when none);
 - ``GET /api/sleep/me/talker``: ``{state: warm|waking|cold, eta_s, model, reason, fallback_via}`` (``model``
@@ -129,11 +130,11 @@ def _talker() -> Any:
     return talker()
 
 
-def _arrive(**lease: float) -> None:
+def _arrive(*, lease_s: float | None = None, anonymous: bool = False) -> None:
     from anjo.core.best_effort import best_effort
 
     with best_effort("judge presence", type_only=True):  # presence never fails the judge's request
-        _talker().arrive(**lease)
+        _talker().arrive(lease_s=lease_s, anonymous=anonymous)
 
 
 def _make_account() -> str:
@@ -197,7 +198,7 @@ def judge_prewake(request: Request) -> dict[str, Any]:
     except CapReached as refused:
         raise _refuse(refused) from None
     talker = _talker()
-    _arrive(lease_s=talker.settings.prewake_s)
+    _arrive(lease_s=talker.settings.prewake_s, anonymous=True)  # no code yet: one small GPU hold at most
     status: dict[str, Any] = talker.status().view()
     return status
 
@@ -219,11 +220,14 @@ def my_mind(user_id: str = Depends(judge_user)) -> dict[str, Any]:
     from anjo.sleep.app.judge_views import mind_payload
     from anjo.sleep.demo.panel import PanelError
 
+    from anjo.sleep.app.live_mind import live_pass_state, revision
+
     try:
         payload: dict[str, Any] = mind_payload(user_id)
-    except PanelError:
+        moved = revision(user_id)
+    except (PanelError, ValueError):
         raise HTTPException(status_code=500, detail="Your MIND record can't be read.") from None
-    return payload
+    return {**payload, "revision": moved, "live_pass": live_pass_state(user_id)}
 
 
 @router.get("/me/wake")
@@ -333,7 +337,8 @@ def _answered(user_id: str) -> None:
 
 class TurnWatch:
     """Pure ASGI: a judge's chat message counts as presence when it starts, and asks for MIND's
-    live pass once it has answered (status 200, its stream ended). Every other request passes by
+    live pass once it has answered (status 200, its stream ended). The pass reads as ``running``
+    from just before the last byte goes out (``LiveRunner.expect``). Every other request passes by
     untouched; a judge's turn itself is never changed or held up."""
 
     def __init__(self, app: Any) -> None:
@@ -350,6 +355,8 @@ class TurnWatch:
             await self.app(scope, receive, send)
             return
         await run_in_threadpool(_arrive)
+        from anjo.sleep.app.live_mind import runner
+
         seen: dict[str, Any] = {}
 
         async def watched(message: Any) -> None:
@@ -357,8 +364,13 @@ class TurnWatch:
                 seen["status"] = message.get("status")
             elif message.get("type") == "http.response.body" and not message.get("more_body", False):
                 seen["done"] = True
+                if seen.get("status") == 200:
+                    runner().expect(user_id)  # before the last byte: the page never reads idle in the gap
             await send(message)
 
-        await self.app(scope, receive, watched)
-        if seen.get("status") == 200 and seen.get("done"):
-            _answered(user_id)
+        try:
+            await self.app(scope, receive, watched)
+            if seen.get("status") == 200 and seen.get("done"):
+                _answered(user_id)
+        finally:
+            runner().forget(user_id)

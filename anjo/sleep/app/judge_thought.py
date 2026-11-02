@@ -188,10 +188,14 @@ def _view(events: Sequence[Any], marks: Sequence[thought.Mark], now: datetime,
 
 
 def view(user_id: str, now: datetime | None = None) -> dict[str, Any]:
+    """The engine's view, plus ``revision`` and ``live_pass`` for the page to poll on (``live_mind``)."""
+    from anjo.sleep.app.live_mind import live_pass_state, revision
+
     wall = now or datetime.now(timezone.utc)
     events, marks = _read(user_id)
     clock = night_clock(events, wall)
-    return _view(events, marks, clock, visit(user_id, wall, clock, events))
+    shown = _view(events, marks, clock, visit(user_id, wall, clock, events))
+    return {**shown, "revision": revision(user_id, len(events), len(marks)), "live_pass": live_pass_state(user_id)}
 
 
 def _act(user_id: str, item_id: str, kind: thought.MarkKind, note: str | None,

@@ -23,27 +23,41 @@ holds ids, counts and codes, never a conversation word; ``judge_views`` reads it
 ``GET /api/sleep/me/mind``.
 
 **Never two at once, never under a night.** One pass per judge runs at a time; a reply during it asks
-for one more after it. A pass skips while any night holds the host's night lock
-(``sweep.held_elsewhere``) or while the night worker holds this judge ``paused``; the pass asked for
-then runs when the pause ends.
+for one more after it. Each pass holds the judge's live-pass lock (``live_pass_guard``:
+``<sleep folder>/live_mind.lock``, an ``flock`` the OS frees when its process dies, so it holds across
+processes) from its first read through the model call to its last append, so a night and a pass never
+both append to her workspace log from the same digest. Inside it, a pass skips while any night holds
+the host's night lock (``sweep.held_elsewhere``) or while this process holds the judge ``paused``; the
+pass asked for then runs when the pause ends. A pass that can't take the lock within ``LIVE_WAIT_S``
+skips too (``busy``).
 
-**What the night worker imports:** ``paused(user_id)`` around a night that writes the judge's
-workspace, and ``extracted_until(user_id)``: the end of the window the live passes extracted, so the
+**What the night worker imports:** ``wait_for_live_pass(user_id, timeout_s)`` before the night's MIND
+step (it holds the night lock by then, so no new pass starts; ``live_pass_guard`` holds passes off for
+as long as it is held), ``paused(user_id)`` around a night that writes the judge's workspace in this
+process, and ``extracted_until(user_id)``: the end of the window the live passes extracted, so the
 night's own extraction can start there instead of reading those turns again.
+
+**What the page polls** (``GET /api/sleep/me/mind`` and ``me/thought``): ``revision`` (her workspace
+step count, the person's thought marks and the passes run: it only grows) and ``live_pass``
+(``running`` or ``idle``). ``running`` starts before the reply's last byte is sent
+(``judge_api.TurnWatch`` calls ``LiveRunner.expect``), so a page that reads on the stream's end never
+sees ``idle`` with the old revision; it can read again until the pass is idle.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from anjo.sleep.app.judge_cohort import LIVE_TOKENS_ENV, CapReached, claim_live, is_judge, joined_at, setting
 
@@ -55,6 +69,11 @@ GLIMMER_THINKER: Final = "glimmer"
 SPARK_THINKER: Final = "spark-open"
 LIVE_ALLOWANCE: Final = (2, 1, 1.0)  # what a night offers her chooser, for the live pick: actions, calls, dollars
 LIVE_SEED: Final = 0
+LOCK_FILE: Final = "live_mind.lock"
+LIVE_WAIT_S: Final = 5.0  # how long a pass waits for the lock (a page's probe, another pass) before it skips
+LOCK_POLL_S: Final = 0.05
+
+LivePass = Literal["idle", "running"]
 
 
 # ── The record ────────────────────────────────────────────────────────────────
@@ -100,6 +119,75 @@ def extracted_until(user_id: str) -> datetime | None:
         return datetime.fromisoformat(raw) if isinstance(raw, str) else None
     except ValueError:
         return None
+
+
+# ── The live-pass lock ────────────────────────────────────────────────────────
+
+
+class LiveBusy(RuntimeError):
+    """This judge's live-pass lock is held (a pass in flight, or a night holding passes off)."""
+
+
+def _lock_path(user_id: str) -> Path:
+    from anjo.sleep.app.storage import sleep_dir
+
+    path: Path = sleep_dir(user_id) / LOCK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@contextmanager
+def live_pass_guard(user_id: str, *, timeout_s: float = 0.0) -> Iterator[None]:
+    """Hold ``user_id``'s live-pass lock, waiting up to ``timeout_s`` for it; ``LiveBusy`` past that.
+    It holds across processes and threads alike (each holder opens the file anew)."""
+    with open(_lock_path(user_id), "a+b") as handle:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise LiveBusy(user_id) from None
+                time.sleep(LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def wait_for_live_pass(user_id: str, timeout_s: float) -> bool:
+    """Wait for any live pass of ``user_id``'s to end: True once none holds the lock, False past
+    ``timeout_s``. The night worker calls it before the night's MIND step."""
+    try:
+        with live_pass_guard(user_id, timeout_s=timeout_s):
+            return True
+    except LiveBusy:
+        return False
+
+
+def live_pass_state(user_id: str) -> LivePass:
+    """``running`` from the moment a reply's stream ends (``LiveRunner.expect``) through the pass
+    asked for and run in this process, or while anything holds the lock."""
+    if runner().busy(user_id):
+        return "running"
+    return "idle" if wait_for_live_pass(user_id, 0.0) else "running"
+
+
+def revision(user_id: str, steps: int | None = None, marks: int | None = None) -> int:
+    """What the page compares after a reply: her workspace step count (``steps``), the person's
+    marks on her thought (``marks``; each read here when None) and the live passes run. All three
+    only grow, so it moves whenever any does. ``ValueError`` when a file can't be read whole."""
+    if steps is None:
+        from anjo.sleep.app.storage import workspace_log
+
+        steps = len(workspace_log(user_id).events())
+    if marks is None:
+        from anjo.sleep.app.judge_thought import load_marks
+
+        marks = len(load_marks(user_id))
+    passes = (load_record(user_id) or {}).get("passes", 0)
+    return steps + marks + (passes if isinstance(passes, int) else 0)
 
 
 # ── One pass ──────────────────────────────────────────────────────────────────
@@ -262,6 +350,14 @@ def run_pass(user_id: str, *, ports: PassPorts | None = None, now: datetime | No
     at = now or datetime.now(timezone.utc)
     if not is_judge(user_id):
         return {"state": "not_a_judge"}
+    try:
+        with live_pass_guard(user_id, timeout_s=LIVE_WAIT_S):  # from the first read to the last append
+            return _guarded_pass(user_id, p, at)
+    except LiveBusy:
+        return {"state": "busy"}
+
+
+def _guarded_pass(user_id: str, p: PassPorts, at: datetime) -> dict[str, Any]:
     if p.night_running():
         return {"state": "night_running"}
     try:
@@ -324,7 +420,18 @@ class LiveRunner:
         self._lock = threading.Lock()
         self._running: set[str] = set()
         self._again: set[str] = set()
+        self._expected: set[str] = set()  # a reply's stream is ending: its pass is about to be asked for
         self._paused: dict[str, int] = {}
+
+    def expect(self, user_id: str) -> None:
+        """A reply is about to end: the page reads ``running`` from now, before ``schedule``."""
+        with self._lock:
+            self._expected.add(user_id)
+
+    def forget(self, user_id: str) -> None:
+        """No pass after all (the reply didn't end well), or ``schedule`` has taken it over."""
+        with self._lock:
+            self._expected.discard(user_id)
 
     def schedule(self, user_id: str) -> bool:
         """Ask for a pass; False when it waits for the running one or a pause to end."""
@@ -370,8 +477,9 @@ class LiveRunner:
                 self.schedule(user_id)
 
     def busy(self, user_id: str) -> bool:
+        """A pass is expected, asked for (waiting on one running or on a pause) or running."""
         with self._lock:
-            return user_id in self._running
+            return user_id in self._running or user_id in self._again or user_id in self._expected
 
 
 _runner: list[LiveRunner] = []

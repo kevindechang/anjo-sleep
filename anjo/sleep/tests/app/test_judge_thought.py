@@ -40,7 +40,9 @@ def test_the_view_is_the_engines_over_their_own_log(api: Any) -> None:  # noqa: 
     assert seen.status_code == 200
     body = seen.json()
     expected = thought.thought_view(thought_demo.demo_events(), (), now=datetime.fromisoformat(body["as_of"]))
+    polled = {key: body.pop(key) for key in ("revision", "live_pass")}
     assert body == expected and len(body["hunches"]) == 2 and body["question"] is not None
+    assert polled == {"revision": len(thought_demo.demo_events()), "live_pass": "idle"}  # no live pass run yet
     assert body["morning"] is None  # a first visit: nothing to catch up on
 
 
@@ -58,6 +60,8 @@ def test_disputes_and_hides_are_the_engines_marks_kept_encrypted(api: Any) -> No
                                "note": "I already asked my tutor."}
     after = api.get("/api/sleep/me/thought", headers=_bearer(token)).json()
     assert next(h for h in after["hunches"] if h["id"] == hunch["id"])["disputed"] is True
+    assert after["revision"] == first["revision"] + 1  # a mark moves the revision the page polls
+    assert api.get("/api/sleep/me/mind", headers=_bearer(token)).json()["revision"] == after["revision"]
     said = [i for i in evidence_store(user_id).stored(datetime.max.date()) if i.source == f"thought:dispute:{hunch['id']}"]
     assert len(said) == 1 and said[0].kind == "correction" and said[0].text == "I already asked my tutor."
     assert said[0].ancestry == frozenset() and said[0].model is None and not said[0].held_out
@@ -122,7 +126,8 @@ def test_the_view_runs_on_the_night_clock(api: Any) -> None:  # noqa: F811
     early = DEMO_NOW - timedelta(days=2)  # a wall clock behind the night that logged
     seen = judge_thought.view(user_id, now=early)
     assert seen["as_of"] == DEMO_NOW.isoformat()  # nothing she logged is left out
-    assert seen == thought.thought_view(thought_demo.demo_events(), (), now=DEMO_NOW)
+    assert {k: v for k, v in seen.items() if k not in ("revision", "live_pass")} == thought.thought_view(
+        thought_demo.demo_events(), (), now=DEMO_NOW)
     assert judge_thought.view(user_id, now=WALL)["as_of"] == WALL.isoformat()
 
 
