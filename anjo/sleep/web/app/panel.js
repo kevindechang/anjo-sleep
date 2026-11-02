@@ -308,7 +308,7 @@ export function createPanel({ onNew, onActivity = () => {} }) {
     const fresh = seen === null ? new Set() : new Set([...now].filter((k) => !seen.has(k)));
     const parts = [section(view.choices), section(view.questions), section(view.expectations), section(view.wants)];
     const targets = section(view.targets);
-    onActivity(activityLine(live));
+    onActivity(activityLine(live), live);
     if (!live && !targets.items.length && parts.every((p) => !p.items.length && p.state !== "unavailable")) {
       body.replaceChildren(el("p", "mind-empty", COPY.mind_empty));
     } else {

@@ -507,3 +507,36 @@ def test_the_wake_keeps_weights_apart_from_working_state() -> None:
     assert [v["kind"] for v in out["unknown"]] == ["changed"]  # no night watched: no claim about weights
     html = (APP_DIR / "live.html").read_text()
     assert html.index('id="wake-compare"') < html.index('id="wake-morning"') < html.index('id="wake-bet"')
+
+
+_TALKER = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const C = await import(CHAT);
+console.log(JSON.stringify({
+  waking: C.talkerLine({ state: "waking", eta_s: 150, fallback_via: "muse-spark" }, { thinker: "spark-open" }),
+  cold: C.talkerLine({ state: "cold", fallback_via: "frontier" }),
+  warm: C.talkerLine({ state: "warm" }, { thinker: "glimmer" }),
+  served: C.talkerLine({ state: "warm" }, { adapter: "tonight" }),
+  undone: C.talkerLine({ state: "warm" }, { adapter: "before" }),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_talker_label_names_who_answers_and_who_thinks() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _TALKER.replace("CHAT", json.dumps((APP_DIR / "chat.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["waking"] == "Chat: Muse Spark · Glimmer loading (~3 min) · MIND: Muse Spark Open"
+    assert out["cold"] == "Chat: a fallback model · Glimmer off right now"
+    assert out["warm"] == "Chat: Glimmer · MIND: Glimmer"
+    assert out["served"] == "Chat: Glimmer + tonight's adapter"
+    assert out["undone"] == "Chat: Glimmer, as she was before this night"
+    live = (APP_DIR / "live.js").read_text()
+    assert "TALKER_WARM_POLL_MS" in live  # still checked once warm: a serve or Undo can change it

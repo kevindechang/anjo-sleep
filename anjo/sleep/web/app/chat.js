@@ -5,7 +5,7 @@
 // starts the watch for MIND's live pass (livepass.js).
 
 import { api } from "./api.js";
-import { COPY } from "./copy.js";
+import { COPY, fill } from "./copy.js";
 import { byId, el, reducedMotion, say } from "./dom.js";
 import { streamMessage } from "./sse.js";
 
@@ -19,6 +19,28 @@ export function modelName(model) {
   if (id.includes("glimmer") || id.includes("sleep_modal")) return COPY.model_glimmer;
   if (id.includes("spark") || id.includes("muse")) return COPY.model_spark;
   return "";
+}
+
+const THINKERS = { "spark-open": "model_spark_open", glimmer: "model_glimmer" };
+
+// The talker label: who answers the chat now (and with which adapter, as far as this page knows),
+// whether Glimmer is loading, and which model MIND's live pass thinks with. ``status`` is
+// GET /me/talker; ``adapter`` is "tonight" after a promoted night, "before" after Undo.
+export function talkerLine(status, { adapter = null, thinker = null } = {}) {
+  const data = status && typeof status === "object" ? status : {};
+  const parts = [];
+  if (data.state === "warm") {
+    const model = adapter === "tonight" ? COPY.talker_adapter_tonight : adapter === "before" ? COPY.talker_adapter_before : COPY.model_glimmer;
+    parts.push(fill(COPY.talker_chat, { model }));
+  } else {
+    const fallback = data.fallback_via === "frontier" ? COPY.model_fallback : COPY.model_spark;
+    parts.push(fill(COPY.talker_chat, { model: fallback }));
+    const eta = Number(data.eta_s);
+    parts.push(data.state === "waking" ? (Number.isFinite(eta) && eta > 0
+      ? fill(COPY.talker_loading, { min: Math.max(1, Math.round(eta / 60)) }) : COPY.talker_loading_soon) : COPY.talker_off);
+  }
+  if (THINKERS[thinker]) parts.push(fill(COPY.talker_thinking, { model: COPY[THINKERS[thinker]] }));
+  return parts.join(" · ");
 }
 
 export function createChat({ onReply, onSend = () => {} }) {

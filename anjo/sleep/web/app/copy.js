@@ -18,9 +18,14 @@ export const COPY = Object.freeze({
   mock_hint: "Mock mode: nothing here reaches a server. The code is GLIMMER.",
 
   // the talker label
-  talker_waking: "Glimmer is waking (~{min} min) — replies from Muse Spark meanwhile",
-  talker_waking_soon: "Glimmer is waking — replies from Muse Spark meanwhile",
-  talker_cold: "Glimmer is asleep — replies from Muse Spark until it wakes",
+  talker_chat: "Chat: {model}",
+  talker_loading: "Glimmer loading (~{min} min)",
+  talker_loading_soon: "Glimmer loading",
+  talker_off: "Glimmer off right now",
+  talker_adapter_tonight: "Glimmer + tonight's adapter",
+  talker_adapter_before: "Glimmer, as she was before this night",
+  talker_thinking: "MIND: {model}",
+  model_fallback: "a fallback model",
 
   // the chat
   you: "You",

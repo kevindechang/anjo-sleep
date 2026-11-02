@@ -283,9 +283,9 @@ async function route(method, path, body, signal) {
   if (CASE === "expired" && path.startsWith("/api/sleep/me/")) return json(401, { detail: "Not authenticated" });
   if (path === "/api/sleep/me/talker") {
     const waited = (now - state.t0) / 1000;
-    if (CASE === "cold") return json(200, { state: "cold", model: "spark-fallback" });
+    if (CASE === "cold") return json(200, { state: "cold", model: "spark-fallback", reason: "wake_off", fallback_via: "muse-spark" });
     if (CASE === "warm" || waited > 25) return json(200, { state: "warm", model: "glimmer" });
-    return json(200, { state: "waking", eta_s: Math.max(60, 180 - waited * 4), model: "spark-fallback" });
+    return json(200, { state: "waking", eta_s: Math.max(60, 180 - waited * 4), model: "spark-fallback", fallback_via: "muse-spark" });
   }
   if (path === "/api/sleep/me/mind") return CASE === "mindfail" ? json(500, {}) : json(200, mind(now));
   if (path === "/api/sleep/me/thought") {
@@ -298,7 +298,7 @@ async function route(method, path, body, signal) {
   if (/^\/api\/chat\/[^/]+\/message$/.test(path)) {
     if (CASE === "chatfail") return json(503, { error: "Service temporarily unavailable" });
     const reply = REPLIES[Math.min(state.turns, REPLIES.length - 1)];
-    const model = (now - state.t0) / 1000 > 25 || CASE === "warm" ? "glimmer-judge" : "muse-spark";
+    const model = CASE !== "cold" && ((now - state.t0) / 1000 > 25 || CASE === "warm") ? "glimmer-judge" : "muse-spark";
     // its live pass starts once the stream below has ended (about 1.3 s plus a word every 65 ms)
     const start = now + 1300 + reply.split(" ").length * 65 + 300;
     save({ turns: state.turns + 1, passes: CASE === "nopass" ? state.passes : [...(state.passes || []), [start, start + PASS_MS]] });

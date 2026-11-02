@@ -114,6 +114,7 @@ button, input, textarea, select { font-family: inherit; }
   animation: p-breathe 3.2s ease-in-out infinite;          /* the site's presence dot */
 }
 .talker[data-state="cold"] .talker-dot { background: var(--muted); box-shadow: none; animation: none; }
+.talker[data-state="warm"] .talker-dot { animation: none; }
 
 .confirm {
   padding: var(--s4) var(--s5); border: 1px solid var(--line-strong); border-left: 2px solid var(--accent);

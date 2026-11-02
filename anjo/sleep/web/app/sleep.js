@@ -160,7 +160,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
     setButton();
     chat.setAsleep(false);
     panel.refresh();
-    onFinish();
+    onFinish(night);
     show(true); // it may have finished while the judge was reading the chat or MIND
     byId("night-steps").open = false; // the story above says it; the steps stay one click away
     if (night.status === "done") {
