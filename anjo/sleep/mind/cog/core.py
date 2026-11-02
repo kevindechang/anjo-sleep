@@ -40,12 +40,25 @@ oracle's), so their MI estimates the expected excess log loss over the oracle.
 **The answer head** gives a distribution over a question's options from the belief before the
 answer; **the self head** predicts the core's own mean log loss on tomorrow's resolving queries.
 ``MindPredictor`` runs one person through the ``Predictor`` protocol with the night (``night``).
+
+**Unknown inputs fall back to the prior** (``fallback``). The core was trained on one world's
+vocabulary; a token it has never seen reads as ``UNK``, and on inputs that are mostly ``UNK`` its
+output was never trained to mean anything (zero-shot on another world it scored 1.037 nats, worse
+than saying 0.5 to everything). So each prediction is a mixture of the core and the training
+world's base rate for the query's family, weighted by how much of what it reads is known:
+``rho = 1 - (1 - rho_q)(1 - rho_e)``, with ``rho_q`` the unknown share of the query's subject and
+tokens and ``rho_e`` that of every event the person has shown so far, and
+
+    p = (1 - rho) p_core + rho p_prior,    u = (1 - rho) u_core + rho H(p_prior)
+
+(with every input unknown, the prior, and all of its uncertainty is epistemic). With every input
+known, ``rho = 0`` and the core speaks alone.
 """
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
-from dataclasses import asdict, dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Final, Literal, NamedTuple
 
@@ -460,6 +473,7 @@ def param_count(module: nn.Module) -> int:
 class Checkpoint:
     net: CogNet
     vocab: Vocab
+    extra: Mapping[str, object] = field(default_factory=dict)  # what training saved beside it (``prior``)
 
 
 def save_checkpoint(path: Path, net: CogNet, vocab: Vocab, extra: dict[str, object] | None = None) -> None:
@@ -473,7 +487,7 @@ def load_checkpoint(path: Path | str) -> Checkpoint:
     net = CogNet(CogConfig(**blob["config"]))
     net.load_state_dict(blob["state_dict"])
     net.eval()
-    return Checkpoint(net, Vocab.from_json(blob["vocab"]))
+    return Checkpoint(net, Vocab.from_json(blob["vocab"]), blob.get("extra") or {})
 
 
 # ── the predictor ────────────────────────────────────────────────────────────
@@ -511,6 +525,7 @@ class PersonState:
     replay: tuple[night_mod.Replayed, ...]  # resolved: the night's buffer
     counts: tuple[tuple[str, int], ...]  # queries asked per subject (the night's need)
     gain: night_mod.Gain = night_mod.NO_GAIN  # what the night's adapter has saved (``night.update_gain``)
+    unk: tuple[float, float] = (0.0, 0.0)  # unknown and all tokens of the events before ``day``
 
 
 class MindPredictor:
@@ -524,14 +539,15 @@ class MindPredictor:
     Lesion switches: ``fast`` (the fast memory read and written), ``ensemble`` (heads used; 1 gives
     ``u = None``, and ``p`` is then head 0's), ``night`` (``off``, ``uniform`` or ``surprise``
     replay into the per-person adapter), ``gate`` (serve the adapter only while it has paid,
-    ``night.served``; off, it is always served) and ``cms`` (the night level; only for a core
-    trained with it).
+    ``night.served``; off, it is always served), ``fallback`` (mix toward ``prior``, the train
+    world's base rate per query family, as more of the inputs are unknown; module docstring) and
+    ``cms`` (the night level; only for a core trained with it).
     """
 
     def __init__(
         self, checkpoint: Checkpoint | Path | str | object, *, fast: bool = True, ensemble: int | None = None,
         night: NightMode = "surprise", cms: bool | None = None, seed: int = 0, name: str = "mind",
-        replay_keep: int = 512, gate: bool = True,
+        replay_keep: int = 512, gate: bool = True, fallback: bool = True, prior: Mapping[str, float] | None = None,
     ) -> None:
         ck = checkpoint if isinstance(checkpoint, Checkpoint) else _as_checkpoint(checkpoint)
         self.net, self.vocab = ck.net.eval(), ck.vocab
@@ -547,6 +563,8 @@ class MindPredictor:
         self.cms = cfg.cms if cms is None else cms
         self.night_mode: NightMode = night
         self.seed, self.name, self.replay_keep, self.gate = seed, name, replay_keep, gate
+        saved = ck.extra.get("prior") if isinstance(ck.extra.get("prior"), Mapping) else None
+        self.fallback, self.prior = fallback, dict(prior or saved or DEFAULT_PRIOR)  # type: ignore[arg-type]
         self._meta: LifeMeta | None = None
         self._state: PersonState | None = None
 
@@ -607,7 +625,7 @@ class MindPredictor:
             with torch.no_grad():
                 cur = self.net.consolidate(cur)
         self._state = PersonState(ps.day, ps.start, cur, ps.today, adapter, (), tuple(waiting), replay,
-                                  tuple(counts.items()), gain)
+                                  tuple(counts.items()), gain, ps.unk)
 
     # ── pure views, for the inquirer ─────────────────────────────────────────
 
@@ -629,7 +647,8 @@ class MindPredictor:
             today = (*today, *events)
             cur = self._step(start, day, today)
         seen = ps.seen if day == ps.day else ()
-        return PersonState(day, start, cur, today, ps.adapter, seen, ps.pending, ps.replay, ps.counts, ps.gain)
+        unk = ps.unk if day == ps.day else _add(ps.unk, self._unknown(ps.today))
+        return PersonState(day, start, cur, today, ps.adapter, seen, ps.pending, ps.replay, ps.counts, ps.gain, unk)
 
     def _step(self, st: CogState, day: int, events: Sequence[Event]) -> CogState:
         assert self._meta is not None
@@ -655,8 +674,29 @@ class MindPredictor:
         shifted = torch.from_numpy(base + adapter.shift(cells)[:, None])
         p = mean_prob(shifted).numpy()
         u = mutual_information(shifted).numpy() if self.k > 1 else None
+        if self.fallback:
+            p, u = self._fall_back(ps, queries, p, u)
         preds = [Prediction(q.qid, float(p[i]), None if u is None else float(u[i])) for i, q in enumerate(queries)]
         return preds, feats, base
+
+    def _unknown(self, events: Sequence[Event]) -> tuple[float, float]:
+        """(unknown, all) of the events' subjects and tokens."""
+        toks = [t for e in events for t in (e.subject, *e.tokens)]
+        return float(sum(t not in self.vocab.index for t in toks)), float(len(toks))
+
+    def _fall_back(self, ps: PersonState, queries: Sequence[Query], p: np.ndarray,
+                   u: np.ndarray | None) -> tuple[np.ndarray, np.ndarray | None]:
+        bad, n = _add(ps.unk, self._unknown(ps.today))
+        rho_e = bad / n if n else 0.0
+        rho_q = np.array([sum(t not in self.vocab.index for t in (q.subject, *q.tokens)) / (1 + len(q.tokens))
+                          for q in queries])
+        rho = 1.0 - (1.0 - rho_q) * (1.0 - rho_e)
+        if not rho.any():
+            return p, u
+        prior = np.array([self.prior.get(q.family, 0.5) for q in queries])
+        h = -(prior * np.log(prior) + (1 - prior) * np.log(1 - prior))
+        mixed = np.clip((1 - rho) * p + rho * prior, P_FLOOR, 1 - P_FLOOR)
+        return mixed, None if u is None else (1 - rho) * u + rho * h
 
     def _cell(self, q: Query) -> tuple[int, int]:
         """The adapter's (subject slot, target weekday) for a query; slot A is any other subject."""
@@ -680,6 +720,13 @@ class MindPredictor:
         ps = self.live
         with torch.no_grad():
             return float(self.net.self_forecast(ps.cur, max(ps.day, 0))[0])
+
+
+DEFAULT_PRIOR: Final = {"count": 0.5, "hidden": 0.5}  # when a checkpoint saved none
+
+
+def _add(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+    return a[0] + b[0], a[1] + b[1]
 
 
 def _mean_sigmoid(logits: np.ndarray) -> np.ndarray:

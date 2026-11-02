@@ -19,7 +19,7 @@ from anjo.sleep.mind.cog import core, train_cog
 from anjo.sleep.mind.cog.encode import Vocab, activity_kinds, build_vocab, collate, encode_life, encode_queries
 from anjo.sleep.mind.cog.night import NO_GAIN, Adapter, Replayed, night, paid, priorities, served, update_gain
 from anjo.sleep.mind.cog.toy_life import ToyLife
-from anjo.sleep.mind.cog.types import Life, Prediction
+from anjo.sleep.mind.cog.types import Event, Life, Prediction, Query, Resolution
 from anjo.sleep.mind.core.net import fast_update
 
 DEV = range(10_000, 10_024)
@@ -427,6 +427,60 @@ def test_the_night_does_not_forget_stable_habits() -> None:
             rows = _run(core.MindPredictor(trained, night=mode), life)
             out.append(_logloss(np.array([r[2] for r in rows]), np.array([r[4] for r in rows])))
     assert np.mean(loss["surprise"]) < np.mean(loss["off"]) + 0.02
+
+
+class _Renamed:
+    """A life whose every name and token the core has never seen (as in another world)."""
+
+    def __init__(self, life: Life) -> None:
+        self.life = life
+        m = life.meta
+        self.meta = replace(m, activities=tuple(f"zz_{a}" for a in m.activities),
+                            people=tuple(f"zz_{p}" for p in m.people), topics=tuple(f"zz_{t}" for t in m.topics))
+
+    def events(self, day: int) -> list[Event]:
+        return [replace(e, subject=f"zz_{e.subject}", tokens=tuple(f"zz_{t}" for t in e.tokens))
+                for e in self.life.events(day)]
+
+    def queries(self, day: int) -> list[Query]:
+        return [replace(q, subject=f"zz_{q.subject}", tokens=tuple(f"zz_{t}" for t in q.tokens))
+                for q in self.life.queries(day)]
+
+    def resolve(self, qid: str) -> Resolution:
+        return self.life.resolve(qid)
+
+
+def test_the_prior_is_the_train_lives_base_rate_per_family(tmp_path: Path) -> None:
+    lives = [ToyLife(s, n_days=21) for s in range(3)]
+    ys: dict[str, list[float]] = {}
+    for life in lives:
+        for d in range(21):
+            for q in life.queries(d):
+                ys.setdefault(q.family, []).append(float(life.resolve(q.qid).outcome))
+    prior = train_cog.fit_prior(lives)
+    assert prior.keys() == ys.keys() and all(np.isclose(prior[k], np.mean(v)) for k, v in ys.items())
+    net, _ = _tiny_net(0)
+    core.save_checkpoint(tmp_path / "c.pt", net, build_vocab(lives), {"prior": prior})
+    assert core.MindPredictor(tmp_path / "c.pt").prior == prior
+
+
+def test_known_inputs_leave_predictions_alone() -> None:
+    trained = trained_tiny()
+    life = ToyLife(DEV[2])
+    plain = _run(core.MindPredictor(trained, fallback=False), life)
+    guarded = _run(core.MindPredictor(trained, fallback=True, prior={"count": 0.3, "hidden": 0.3}), life)
+    assert np.allclose([r[2] for r in plain], [r[2] for r in guarded])
+
+
+def test_unknown_inputs_fall_back_to_the_prior_and_say_so() -> None:
+    trained = trained_tiny()
+    life = _Renamed(ToyLife(DEV[2]))
+    prior = {"count": 0.3, "hidden": 0.4}
+    rows = _run(core.MindPredictor(trained, prior=prior), life)  # type: ignore[arg-type]
+    fam = [q.family for d in range(life.meta.n_days) for q in life.queries(d)]
+    assert np.allclose([r[2] for r in rows], [prior[f] for f in fam])
+    h = {k: -(v * np.log(v) + (1 - v) * np.log(1 - v)) for k, v in prior.items()}
+    assert np.allclose([r[3] for r in rows], [h[f] for f in fam])  # all of it is epistemic
 
 
 def test_predict_has_no_side_effects() -> None:

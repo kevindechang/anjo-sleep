@@ -262,6 +262,16 @@ def _encode(
             for life in lives]
 
 
+def fit_prior(lives: Sequence[Life]) -> dict[str, float]:
+    """The train lives' base rate per query family: what the predictor falls back to on unknown inputs."""
+    ys: dict[str, list[float]] = {}
+    for life in lives:
+        for d in range(life.meta.n_days):
+            for q in life.queries(d):
+                ys.setdefault(q.family, []).append(float(life.resolve(q.qid).outcome))
+    return {k: float(np.clip(np.mean(v), 1e-3, 1 - 1e-3)) for k, v in ys.items()}
+
+
 def asking_share(cfg: TrainConfig) -> float:
     """The share of train lives with random asks (the rest hear no answer, whatever the target)."""
     return cfg.asking_share
@@ -324,6 +334,7 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
         return cache[seed]
 
     vocab = build_vocab(life(s) for s in range(min(cfg.vocab_lives, cfg.lives)))
+    prior = fit_prior([life(s) for s in range(min(cfg.vocab_lives, cfg.lives))])
     net = CogNet(CogConfig(vocab_size=len(vocab), dim=cfg.dim, hidden=cfg.hidden, heads=cfg.heads, fast=cfg.fast,
                            cms=cfg.cms, day_scale=float(cfg.n_days), u_mode=cfg.u_mode, tallies=cfg.tallies))
     dev_lives = [world(DEV_SEED + i, cfg.n_days) for i in range(cfg.dev_lives)]
@@ -367,7 +378,8 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
         if row["dev"] < best - 1e-4:
             best, best_state, stale = row["dev"], {k: v.clone() for k, v in net.state_dict().items()}, 0
             if out is not None:  # the best so far is on disk, whatever happens to the run
-                save_checkpoint(out / "cog_core.pt", net, vocab, {"train": asdict(cfg), "history": history})
+                save_checkpoint(out / "cog_core.pt", net, vocab, {"train": asdict(cfg), "history": history,
+                                                                  "prior": prior})
         else:
             stale += 1
             if stale >= cfg.patience:
@@ -376,7 +388,7 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
     net.eval()
     trained = Trained(net, vocab, history, cfg, seen / max(t_train, 1e-9))
     if out is not None:
-        save_checkpoint(out / "cog_core.pt", net, vocab, {"train": asdict(cfg), "history": history})
+        save_checkpoint(out / "cog_core.pt", net, vocab, {"train": asdict(cfg), "history": history, "prior": prior})
         (out / "history.json").write_text(json.dumps({"config": asdict(cfg), "history": history,
                                                       "lives_per_sec": trained.lives_per_sec}, indent=1))
     return trained
