@@ -6,11 +6,14 @@ the last pass, so the panel beside the chat moves while they talk, not only afte
 
 1. the judge's own turns since the last pass (or since they joined) go through the night's own
    extraction (``HistorySource.record_day``, Spark Open), into their evidence store and targets;
-2. MIND's notice pass reads the fresh items (``MindNight.notice``, the night's own, under the same
-   holds on the budget ledger): it may open questions, with alternatives and their credences. The
-   thinker is base Glimmer while she is up (``judge_talker``), Spark Open otherwise, and the record
-   says which (``glimmer`` or ``spark-open``). A live pass names today as its night, so its tokens
-   count against tonight's MIND budget (``night.mind.tonight``: 12 cycles, 20k tokens);
+2. MIND's notice pass reads the fresh items (``MindNight.notice_live``: the night's own pass, under
+   the same holds on the budget ledger): it may open questions, with alternatives and their
+   credences. The thinker is base Glimmer while she is up (``judge_talker``), Spark Open otherwise,
+   and the record says which (``glimmer`` or ``spark-open``). **Its budget is its own:**
+   ``ANJO_SLEEP_JUDGE_LIVE_TOKENS_PER_DAY`` (default 12,000) a judge a day, counted from the live
+   passes their log holds for the day (``live_budget``; none left: the pass skips, ``budget_spent``). Its ``RunStart`` names
+   ``night.mind.LIVE_DECIDER``, so the night's own 20k MIND tokens (``night.mind.tonight``) never
+   count it, and a busy chat day can't starve the judge's night;
 3. her chooser runs on the state as it now stands (``StateChooser``, the night's policy) and the
    record keeps every want it weighed and what it would pick. It acts on nothing: studying,
    inquiring and the note stay the night's.
@@ -35,14 +38,14 @@ import json
 import logging
 import os
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
 
-from anjo.sleep.app.judge_cohort import CapReached, claim_live, is_judge, joined_at
+from anjo.sleep.app.judge_cohort import LIVE_TOKENS_ENV, CapReached, claim_live, is_judge, joined_at, setting
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +133,28 @@ def _models(glimmer: bool) -> Callable[[str, Any], Any]:
     return models
 
 
+def live_budget_of(events: Sequence[Any], day: date, cap: int) -> Any:
+    """``cap`` tokens less every token the live passes naming ``day`` logged in ``events``."""
+    from anjo.sleep.mind.inquiry.steps import Budget, RunStart
+    from anjo.sleep.night.mind import LIVE_DECIDER
+
+    spent, live = 0, False
+    for event in events:
+        entry = event.step.entry
+        if isinstance(entry, RunStart):
+            live = entry.decider == LIVE_DECIDER and entry.night == day
+        if live:
+            spent += event.step.tokens
+    return Budget(tokens_used=spent, token_cap=cap)
+
+
+def live_budget(user_id: str, day: date) -> Any:
+    """Today's live MIND budget for ``user_id``, read from their own workspace log."""
+    from anjo.sleep.app.storage import workspace_log
+
+    return live_budget_of(workspace_log(user_id).events(), day, setting(LIVE_TOKENS_ENV))
+
+
 @dataclass(frozen=True)
 class PassPorts:
     """What a pass calls out to; tests replace them."""
@@ -138,6 +163,7 @@ class PassPorts:
     mind: Callable[[bool], Any]  # thinker on Glimmer? -> a MindNight
     glimmer_up: Callable[[], bool]
     night_running: Callable[[], bool]
+    budget: Callable[[str, date], Any] = live_budget  # today's live MIND budget
 
 
 def _extract(user_id: str, start: datetime, end: datetime) -> list[Any]:
@@ -239,6 +265,13 @@ def run_pass(user_id: str, *, ports: PassPorts | None = None, now: datetime | No
     if p.night_running():
         return {"state": "night_running"}
     try:
+        budget = p.budget(user_id, at.date())
+    except LIVE_FAILURES as error:  # her log can't be read: the pass would fail on it too
+        logger.warning("a judge's live MIND budget can't be read: %s", type(error).__name__)
+        return {"state": "failed", "error": type(error).__name__}
+    if budget.tokens_left == 0:
+        return {"state": "budget_spent"}
+    try:
         claim_live(user_id, at)
     except CapReached as refused:
         return {"state": "capped", "reason": refused.reason}
@@ -253,7 +286,7 @@ def run_pass(user_id: str, *, ports: PassPorts | None = None, now: datetime | No
         mind = p.mind(glimmer)
         call = _call(user_id, at, mind)
         with _glimmer_turn(glimmer):  # her request in flight: no GPU stop cuts it
-            record["notice"] = dict(mind.notice(call, fresh))
+            record["notice"] = dict(mind.notice_live(call, fresh, budget))
         record["choice"] = _choice_record(_choose(user_id, at, mind, call))
         record["state"] = "ok"
     except LIVE_FAILURES as error:

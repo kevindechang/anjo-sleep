@@ -300,9 +300,27 @@ def notice(
 ) -> InquiryRun:
     """Night step 2b: one thinker pass over the day's new evidence, which may only open questions
     (and wakes the parked questions it bears on)."""
+    return notice_by(None, ws, new, ports, budget, night=night, targets=targets, as_of=as_of, wipe=wipe)
+
+
+def notice_by(
+    decider: str | None,
+    ws: Workspace,
+    new: Sequence[Evidence],
+    ports: InquiryPorts,
+    budget: Budget,
+    *,
+    night: date,
+    targets: Sequence[Target],
+    as_of: datetime,
+    wipe: bool = False,
+) -> InquiryRun:
+    """``notice`` with its ``RunStart`` naming ``decider``: a pass run between nights names
+    ``night.mind.LIVE_DECIDER``, so no night's budget counts it."""
     ctx = _context(ports, as_of, targets)
     run = _Run(ws, budget, FULL_RULES)
-    start = RunStart(night, as_of, "notice", FULL_RULES, "priority", None, budget, wipe, kernel.DENYLIST_VERSION)
+    start = RunStart(night, as_of, "notice", FULL_RULES, "priority", None, budget, wipe, kernel.DENYLIST_VERSION,
+                     decider=decider)
     run = _log(run, ctx, _step(run, ctx, start))
     fresh = tuple({item.id: item for item in _masked(new, as_of)}.values())
     arrived = Retrieved(None, "new_evidence", "", _refs(fresh))

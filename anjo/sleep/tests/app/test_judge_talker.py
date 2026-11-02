@@ -108,7 +108,8 @@ def spark_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_a_judge_arriving_wakes_her_once_and_spark_answers_meanwhile(tmp_path: Path) -> None:
     r = rig(tmp_path)
-    assert r.talker.status().view() == {"state": "cold", "eta_s": 240, "model": "spark-fallback", "reason": None}
+    assert r.talker.status().view() == {"state": "cold", "eta_s": 240, "model": "spark-fallback", "reason": None,
+                                        "fallback_via": "muse-spark"}
 
     r.talker.arrive()
     r.at(10)
@@ -120,7 +121,8 @@ def test_a_judge_arriving_wakes_her_once_and_spark_answers_meanwhile(tmp_path: P
 
     r.run_wakes()
     assert r.serving.wakes == 1
-    assert r.talker.status().view() == {"state": "warm", "eta_s": None, "model": "glimmer", "reason": None}
+    assert r.talker.status().view() == {"state": "warm", "eta_s": None, "model": "glimmer", "reason": None,
+                                        "fallback_via": None}
     assert r.talker.glimmer_first()
     assert r.serving.pings == 0  # Modal is never pinged to learn whether she is up
 
@@ -288,9 +290,13 @@ def test_sagemaker_status_asks_with_one_cached_ping_while_a_judge_is_present(tmp
     assert r.serving.pings == 1
 
 
-def test_without_a_spark_key_the_label_is_the_frontier_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_without_a_spark_key_the_label_stays_and_the_model_under_it_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert rig(tmp_path).talker.status().fallback_via == "muse-spark"
     monkeypatch.delenv("ANJO_META_API_KEY")
-    assert rig(tmp_path).talker.status().model == "frontier-fallback"
+    status = rig(tmp_path).talker.status()
+    assert (status.model, status.fallback_via) == ("spark-fallback", "frontier")
 
 
 def test_settings_from_env() -> None:

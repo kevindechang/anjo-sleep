@@ -6,6 +6,7 @@ MIND step are fakes: no Spark Open, Glimmer or ledger call."""
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 import pytest
 
 from anjo.sleep.app import judge_cohort, live_mind
+from anjo.sleep.mind.inquiry.steps import Budget, RunStart, Step, WorkspaceEvent
 from anjo.sleep.model_api import ModelApiError
 
 NOW = datetime(2026, 11, 3, 15, 0, tzinfo=timezone.utc)
@@ -23,12 +25,14 @@ class FakeMind:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.noticed: list[int] = []
+        self.budgets: list[Budget] = []
 
-    def notice(self, call: Any, fresh: list[Any]) -> dict[str, Any]:
+    def notice_live(self, call: Any, fresh: list[Any], budget: Budget) -> dict[str, Any]:
         if self.fail:
             raise ModelApiError("down")
         assert call.night == call.as_of.date() == NOW.date() and call.actions_left == 0
         self.noticed.append(len(fresh))
+        self.budgets.append(budget)
         return {"new": len(fresh), "questions_opened": 1}
 
     def results(self, call: Any) -> tuple[Any, ...]:
@@ -46,13 +50,14 @@ def judge(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 def ports(mind: FakeMind, windows: list[tuple[datetime, datetime]], *, glimmer: bool = False,
-          night: bool = False) -> live_mind.PassPorts:
+          night: bool = False, spent: int = 0) -> live_mind.PassPorts:
     def extract(_uid: str, start: datetime, end: datetime) -> list[Any]:
         windows.append((start, end))
         return []
 
     return live_mind.PassPorts(extract=extract, mind=lambda _g: mind, glimmer_up=lambda: glimmer,
-                               night_running=lambda: night)
+                               night_running=lambda: night,
+                               budget=lambda _uid, _day: Budget(tokens_used=spent, token_cap=12_000))
 
 
 def test_a_pass_reads_what_was_said_since_the_last_one_and_records_codes_only(judge: str) -> None:
@@ -87,6 +92,58 @@ def test_passes_are_capped_a_day(judge: str, monkeypatch: pytest.MonkeyPatch) ->
     assert live_mind.run_pass(judge, ports=ports(FakeMind(), windows), now=NOW)["state"] == "ok"
     assert live_mind.run_pass(judge, ports=ports(FakeMind(), windows), now=NOW) == {
         "state": "capped", "reason": "live_spent_today"}
+
+
+def test_a_pass_gets_its_own_budget_and_skips_once_it_is_spent(judge: str) -> None:
+    mind, windows = FakeMind(), list[tuple[datetime, datetime]]()
+    assert live_mind.run_pass(judge, ports=ports(mind, windows, spent=4000), now=NOW)["state"] == "ok"
+    assert mind.budgets == [Budget(tokens_used=4000, token_cap=12_000)]
+    assert live_mind.run_pass(judge, ports=ports(mind, windows, spent=12_000), now=NOW) == {"state": "budget_spent"}
+    assert len(mind.budgets) == 1 and len(windows) == 1  # nothing extracted, no pass claimed
+
+
+def _start(night: Any, decider: str | None) -> RunStart:
+    from anjo.sleep.mind.inquiry import kernel
+    from anjo.sleep.mind.inquiry.types import FULL_RULES
+
+    return RunStart(night, NOW, "notice", FULL_RULES, "priority", None, Budget(), False, kernel.DENYLIST_VERSION,
+                    decider=decider)
+
+
+def _event(seq: int, entry: Any, tokens: int = 0) -> WorkspaceEvent:
+    code = None if entry is not None else "malformed"  # a thinker reply that held no operation
+    return WorkspaceEvent(Step(seq, NOW, entry, code=code, tokens=tokens), "before", "after")
+
+
+def test_the_live_budget_counts_only_todays_live_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.night.mind import LIVE_DECIDER
+
+    today, yesterday = NOW.date(), NOW.date() - timedelta(days=1)
+    events = [
+        _event(0, _start(yesterday, LIVE_DECIDER)), _event(1, None, 900),  # yesterday's live pass
+        _event(2, _start(today, LIVE_DECIDER)), _event(3, None, 1500), _event(4, None, 500),  # today's
+        _event(5, _start(today, None)), _event(6, None, 7000),  # tonight's own run
+        _event(7, _start(today, LIVE_DECIDER)), _event(8, None, 1000),  # another today
+    ]
+    assert live_mind.live_budget_of(events, today, 12_000) == Budget(tokens_used=3000, token_cap=12_000)
+    assert judge_cohort.setting(judge_cohort.LIVE_TOKENS_ENV) == 12_000
+    monkeypatch.setenv(judge_cohort.LIVE_TOKENS_ENV, "2000")
+    assert judge_cohort.setting(judge_cohort.LIVE_TOKENS_ENV) == 2000
+
+
+def test_a_budget_that_cant_be_read_fails_the_pass_without_claiming_it(judge: str) -> None:
+    def unreadable(_uid: str, _day: Any) -> Budget:
+        raise ValueError("workspace.jsonl line 3 can't be read")
+
+    windows: list[tuple[datetime, datetime]] = []
+    broken = replace(ports(FakeMind(), windows), budget=unreadable)
+    assert live_mind.run_pass(judge, ports=broken, now=NOW) == {"state": "failed", "error": "ValueError"}
+    assert windows == [] and judge_cohort.counters().count(NOW, f"live:{judge}") == 0
+
+
+def test_the_default_budget_reads_the_judges_own_log(judge: str) -> None:
+    assert live_mind.PassPorts.__dataclass_fields__["budget"].default is live_mind.live_budget
+    assert live_mind.live_budget(judge, NOW.date()) == Budget(token_cap=12_000)  # an empty log: all of it
 
 
 def test_a_failed_pass_is_recorded_and_keeps_its_cursor(judge: str) -> None:

@@ -49,12 +49,14 @@ NIGHTS_PER_DAY_ENV: Final = "ANJO_SLEEP_JUDGE_NIGHTS_PER_DAY"
 NIGHTS_TOTAL_ENV: Final = "ANJO_SLEEP_JUDGE_NIGHTS_TOTAL_PER_DAY"
 MAX_ACCOUNTS_ENV: Final = "ANJO_SLEEP_JUDGE_MAX_ACCOUNTS"
 LIVE_PER_DAY_ENV: Final = "ANJO_SLEEP_JUDGE_LIVE_PER_DAY"
+LIVE_TOKENS_ENV: Final = "ANJO_SLEEP_JUDGE_LIVE_TOKENS_PER_DAY"
 START_PER_IP_ENV: Final = "ANJO_SLEEP_JUDGE_START_PER_IP"
 PREWAKE_PER_IP_ENV: Final = "ANJO_SLEEP_JUDGE_PREWAKE_PER_IP"
 PREWAKE_PER_DAY_ENV: Final = "ANJO_SLEEP_JUDGE_PREWAKE_PER_DAY"
 DEFAULTS: Final[Mapping[str, int]] = {
     NIGHTS_PER_DAY_ENV: 3, NIGHTS_TOTAL_ENV: 60, MAX_ACCOUNTS_ENV: 300,
     LIVE_PER_DAY_ENV: 8,  # MIND's per-turn passes a judge gets a day (each one Spark Open call or two)
+    LIVE_TOKENS_ENV: 12_000,  # their thinker tokens a day, apart from the night's 20k (live_mind.live_budget)
     START_PER_IP_ENV: 20,  # judge/start attempts, right code or wrong, from one address a day
     PREWAKE_PER_IP_ENV: 6, PREWAKE_PER_DAY_ENV: 60,  # judge/prewake calls that may start a wake
 }

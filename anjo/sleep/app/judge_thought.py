@@ -8,71 +8,55 @@ The view and the actions are the engine's (``anjo.sleep.mind.thought``: ``though
 - **their marks** (``<sleep folder>/thought_marks.jsonl``, one encrypted record a line, erased with
   the folder): what they disputed or hid. A mark never edits her log, which is append-only;
 - **their visits** (``<sleep folder>/thought_visit.json``, encrypted): the morning note covers what
-  happened since their last visit, and a visit is one stretch of calls with no gap over
-  ``VISIT_GAP``, so the page's polling doesn't empty the note;
+  happened since their last visit. A visit is one stretch of calls with no gap over ``VISIT_GAP``,
+  so the page's polling doesn't empty the note, and a night logged since the last call starts a new
+  one: a judge who sleeps and wakes within the gap still gets the night's note (``visit``);
 - **a dispute's note**, also kept as their own words in their evidence (a ``correction``, ancestry
   empty), so the next night reads it through the normal path.
 
-Only an item the view shows them (a hunch, a settled bet, or the question it asks) can be disputed
-or hidden; anything else is 404, as the engine's own refusal (``ValueError``) is.
+Only an item in her log (a hunch, or the question it is about) can be disputed or hidden; any other
+id is 404, as the engine refuses it (``ValueError``). A log or marks file that can't be read whole,
+or whose digests don't replay, is ``LogUnreadable`` (500): never a view of part of it.
 
-Until the engine lands, ``engine()`` is None and the routes answer 503: the import is guarded, so
-this branch merges before the engine's.
+**Marks:** each is stored as the engine's own ``Mark.to_json()`` and passed back through
+``Mark.from_json``, which checks it. A note is at most ``thought.MAX_NOTE`` characters, the engine's
+own limit: a longer one is ``NoteTooLong`` (422), never cut and never a 404.
+
+**The clock:** the view's ``now`` is the night clock (``night_clock``): the wall clock, or the last
+step her log holds when a night logged ahead of it, so nothing she logged is left out.
 """
 from __future__ import annotations
 
-import dataclasses
 import hashlib
-import importlib
 import json
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
 
+from anjo.sleep.mind import thought
+
 logger = logging.getLogger(__name__)
 
-ENGINE_MODULE: Final = "anjo.sleep.mind.thought"
 MARKS_FILE: Final = "thought_marks.jsonl"
 VISIT_FILE: Final = "thought_visit.json"
 VISIT_GAP: Final = timedelta(minutes=30)
-NOTE_MAX: Final = 1000
+BEFORE_NIGHT: Final = timedelta(microseconds=1)  # a note from a night's start includes its own first steps
 DISPUTE_KIND: Final = "correction"  # the person's own words, setting her straight
 
-_engine: list[Any] = []
 
-
-class ThoughtUnavailable(Exception):
-    """The engine isn't on this branch yet."""
+class LogUnreadable(Exception):
+    """Her log or their marks can't be read whole, or her log's digests don't replay (500)."""
 
 
 class UnknownItem(ValueError):
-    """Not an item the person's view shows."""
+    """No hunch or question with that id in her log (404)."""
 
 
-def engine() -> Any | None:
-    """The engine module, or None until it lands. Tests set a fake with ``set_engine``."""
-    if _engine:
-        return _engine[0]
-    try:
-        return importlib.import_module(ENGINE_MODULE)
-    except ModuleNotFoundError as missing:
-        if missing.name != ENGINE_MODULE:
-            raise
-        return None
-
-
-def set_engine(made: Any | None) -> None:
-    _engine[:] = [] if made is None else [made]
-
-
-def _required() -> Any:
-    found = engine()
-    if found is None:
-        raise ThoughtUnavailable(ENGINE_MODULE)
-    return found
+class NoteTooLong(Exception):
+    """A dispute's note over ``thought.MAX_NOTE`` characters (422)."""
 
 
 def _sleep_file(user_id: str, name: str) -> Path:
@@ -85,30 +69,6 @@ def _sleep_file(user_id: str, name: str) -> Path:
 # ── Marks ─────────────────────────────────────────────────────────────────────
 
 
-def _record(mark: Any) -> dict[str, Any]:
-    """A mark as one JSON record, whatever shape the engine returns it in."""
-    if dataclasses.is_dataclass(mark) and not isinstance(mark, type):
-        raw: Mapping[str, Any] = dataclasses.asdict(mark)
-    elif isinstance(mark, Mapping):
-        raw = mark
-    else:
-        raise TypeError("a mark is a record")
-    return {key: value.isoformat() if isinstance(value, datetime) else value
-            for key, value in raw.items() if value is not None}
-
-
-def _marks_for(found: Any, rows: Iterable[Mapping[str, Any]]) -> list[Any]:
-    """Stored records as the engine takes them: its own reader if it has one, its ``Mark`` if that
-    is a dataclass, else the records as they are."""
-    rows = list(rows)
-    if hasattr(found, "mark_from_record"):
-        return [found.mark_from_record(row) for row in rows]
-    mark = getattr(found, "Mark", None)
-    if mark is not None and dataclasses.is_dataclass(mark):
-        return [mark(**{k: datetime.fromisoformat(v) if k == "at" else v for k, v in row.items()}) for row in rows]
-    return rows
-
-
 def load_marks(user_id: str) -> list[dict[str, Any]]:
     from anjo.sleep.app.storage import CODEC
     from anjo.sleep.evidence.jsonl import read_records
@@ -117,11 +77,11 @@ def load_marks(user_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _add_mark(user_id: str, mark: Any) -> dict[str, Any]:
+def _add_mark(user_id: str, mark: thought.Mark) -> dict[str, Any]:
     from anjo.sleep.app.storage import CODEC, writer_guard
     from anjo.sleep.evidence.jsonl import append_records
 
-    record = _record(mark)
+    record: dict[str, Any] = mark.to_json()
     with writer_guard(user_id)():
         append_records(_sleep_file(user_id, MARKS_FILE), CODEC, [record])
     return record
@@ -150,16 +110,43 @@ def _when(raw: Any) -> datetime | None:
         return None
 
 
-def visit(user_id: str, now: datetime) -> datetime | None:
-    """Their last visit before this one (the morning note's start), and this call recorded."""
+def _night_start(events: Sequence[Any], logged: int) -> datetime | None:
+    """When the first night logged after the first ``logged`` events began. A live pass between
+    nights (``night.mind.LIVE_DECIDER``) runs after every reply and is no night."""
+    from anjo.sleep.mind.inquiry.types import RunStart
+    from anjo.sleep.night.mind import LIVE_DECIDER
+
+    for event in events[logged:]:
+        entry = event.step.entry
+        if isinstance(entry, RunStart) and entry.decider != LIVE_DECIDER:
+            at: datetime = event.step.at
+            return at
+    return None
+
+
+def visit(user_id: str, now: datetime, clock: datetime | None = None,
+          events: Sequence[Any] = ()) -> datetime | None:
+    """Their last visit before this one (the morning note's start), and this call recorded.
+
+    ``now`` is the wall clock, which times the gap; ``clock`` the night clock the view read (``now``
+    when ``None``), and the next visit's note starts where this one's clock ended. ``events`` is her
+    log as this call read it: a night logged since the last call starts a new visit whose note
+    starts at that night's start, or at the last visit's clock when that is earlier."""
     from anjo.sleep.app.storage import CODEC, writer_guard
 
     held = _read_visit(user_id)
     last, since = _when(held.get("last")), _when(held.get("since"))
-    if last is None or now - last > VISIT_GAP:
-        since = last  # a new visit: the note covers everything since the last one ended
+    before = _when(held.get("seen")) or last
+    logged = held.get("logged")
+    logged = logged if isinstance(logged, int) and 0 <= logged <= len(events) else len(events)
+    night = _night_start(events, logged) if before is not None else None
+    if night is not None and before is not None:
+        since = min(before, night - BEFORE_NIGHT)
+    elif last is None or now - last > VISIT_GAP:
+        since = before  # a new visit: the note covers everything since the last one
     path = _sleep_file(user_id, VISIT_FILE)
-    record = {"since": None if since is None else since.isoformat(), "last": now.isoformat()}
+    record = {"since": None if since is None else since.isoformat(), "last": now.isoformat(),
+              "seen": (clock or now).isoformat(), "logged": len(events)}
     with writer_guard(user_id)():
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(f"{path.name}.part")
@@ -171,39 +158,53 @@ def visit(user_id: str, now: datetime) -> datetime | None:
 # ── The view and the actions ──────────────────────────────────────────────────
 
 
-def _events(user_id: str) -> tuple[Any, ...]:
+def _read(user_id: str) -> tuple[tuple[Any, ...], list[thought.Mark]]:
+    """Her log and their marks, each read whole and checked, or ``LogUnreadable``."""
     from anjo.sleep.app.storage import workspace_log
 
-    return tuple(workspace_log(user_id).events())
+    try:
+        events = tuple(workspace_log(user_id).events())
+        marks = [thought.Mark.from_json(row) for row in load_marks(user_id)]
+    except ValueError as error:
+        logger.error("a judge's thought log can't be read: %s", type(error).__name__)
+        raise LogUnreadable(type(error).__name__) from None
+    return events, marks
 
 
-def _view(found: Any, user_id: str, now: datetime, since: datetime | None) -> dict[str, Any]:
-    marks = _marks_for(found, load_marks(user_id))
-    view: dict[str, Any] = found.thought_view(_events(user_id), marks, now=now, since=since)
-    return view
+def night_clock(events: Sequence[Any], wall: datetime) -> datetime:
+    """MIND's clock for the view: the wall clock, or her last logged step if a night logged ahead."""
+    logged: list[datetime] = [event.step.at for event in events]
+    return max([wall, *logged])
+
+
+def _view(events: Sequence[Any], marks: Sequence[thought.Mark], now: datetime,
+          since: datetime | None) -> dict[str, Any]:
+    try:
+        shown: dict[str, Any] = thought.thought_view(events, marks, now=now, since=since)
+    except ValueError as error:  # a digest that doesn't replay: a tampered or broken log
+        logger.error("a judge's thought log doesn't replay: %s", type(error).__name__)
+        raise LogUnreadable(type(error).__name__) from None
+    return shown
 
 
 def view(user_id: str, now: datetime | None = None) -> dict[str, Any]:
-    found = _required()
+    wall = now or datetime.now(timezone.utc)
+    events, marks = _read(user_id)
+    clock = night_clock(events, wall)
+    return _view(events, marks, clock, visit(user_id, wall, clock, events))
+
+
+def _act(user_id: str, item_id: str, kind: thought.MarkKind, note: str | None,
+         now: datetime | None) -> tuple[dict[str, Any], datetime]:
     at = now or datetime.now(timezone.utc)
-    return _view(found, user_id, at, visit(user_id, at))
-
-
-def _shown(view_: Mapping[str, Any]) -> frozenset[str]:
-    ids = {str(item.get("id")) for key in ("hunches", "settled") for item in view_.get(key) or ()
-           if isinstance(item, Mapping)}
-    question = view_.get("question")
-    if isinstance(question, Mapping) and question.get("question_id"):
-        ids.add(str(question["question_id"]))
-    return frozenset(ids)
-
-
-def _act(user_id: str, item_id: str, make: Any, now: datetime | None) -> tuple[dict[str, Any], datetime]:
-    found = _required()
-    at = now or datetime.now(timezone.utc)
-    if item_id not in _shown(_view(found, user_id, at, None)):
-        raise UnknownItem(item_id)
-    return _add_mark(user_id, make(found, at)), at
+    events, marks = _read(user_id)
+    _view(events, marks, night_clock(events, at), None)  # a log that doesn't replay is a 500, never a 404
+    try:
+        mark = (thought.dispute(events, item_id, at=at, note=note) if kind == "dispute"
+                else thought.hide(events, item_id, at=at))
+    except ValueError:
+        raise UnknownItem(item_id) from None
+    return _add_mark(user_id, mark), at
 
 
 def _note_item(user_id: str, item_id: str, note: str, at: datetime) -> Any:
@@ -217,8 +218,10 @@ def _note_item(user_id: str, item_id: str, note: str, at: datetime) -> Any:
 
 def dispute(user_id: str, item_id: str, note: str | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Mark ``item_id`` disputed; a note is also kept as their own words in their evidence."""
-    words = (note or "").strip()[:NOTE_MAX] or None
-    record, at = _act(user_id, item_id, lambda found, at: found.dispute(item_id, at=at, note=words), now)
+    words = (note or "").strip() or None
+    if words is not None and len(words) > thought.MAX_NOTE:
+        raise NoteTooLong(len(words))
+    record, at = _act(user_id, item_id, "dispute", words, now)
     if words is not None:
         from anjo.sleep.app.storage import evidence_store
 
@@ -228,4 +231,4 @@ def dispute(user_id: str, item_id: str, note: str | None = None, now: datetime |
 
 def hide(user_id: str, item_id: str, now: datetime | None = None) -> dict[str, Any]:
     """Hide ``item_id`` from their view. Her workspace keeps it: this is not a forget."""
-    return _act(user_id, item_id, lambda found, at: found.hide(item_id, at=at), now)[0]
+    return _act(user_id, item_id, "hide", None, now)[0]
