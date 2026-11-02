@@ -271,7 +271,7 @@ def test_the_module_reserve_uses_the_data_dir(tmp_path: Path, monkeypatch: pytes
 def test_the_caps_and_time_limits_are_section_12_1s() -> None:
     caps = dict(budget.CAPS)
     assert caps.pop("fireworks_sleep_usd") == pytest.approx(103.51)  # the room below, MIND's $20 kept
-    assert caps.pop("colab_cu") == pytest.approx(budget.COLAB_CU_COUNTED_AT_RECONCILE + 98.9 - 5.0)  # see below
+    assert caps.pop("colab_cu") == pytest.approx(budget.COLAB_CU_COUNTED_AT_RECONCILE + 98.79 - 5.0)  # see below
     assert caps == {
         "modal_usd": 500.0, "meta_usd": 140.0, "baseten_sleep_usd": 60.0,
         "baseten_mind_usd": 40.0, "fireworks_mind_usd": 20.0, "vertex_usd": 50.0,
@@ -331,17 +331,17 @@ def test_the_fireworks_pools_together_reach_the_reconciled_credit() -> None:
 
 
 def test_the_colab_pool_allows_the_real_balance_less_a_margin(tmp_path: Path) -> None:
-    """2026-11-02: `colab usage` showed 98.9 units left. The guard's room is that reading less a 5-unit
+    """2026-11-02: `colab usage` showed 98.79 units left. The guard's room is that reading less a 5-unit
     margin, whatever the ledger had counted when it was taken (the old cap was a 2026-10-27 reading)."""
-    assert budget.COLAB_REAL_BALANCE_AT_RECONCILE == 98.9
+    assert budget.COLAB_REAL_BALANCE_AT_RECONCILE == 98.79
     counted = budget.COLAB_CU_COUNTED_AT_RECONCILE
     assert counted >= 0.0
-    assert budget.CAPS["colab_cu"] == pytest.approx(counted + 98.9 - 5.0)
+    assert budget.CAPS["colab_cu"] == pytest.approx(counted + 98.79 - 5.0)
     ledger = _ledger(tmp_path)
     if counted:
         held = ledger.reserve("counted at the reading", ("colab_cu",), _bound(counted))
         assert held is not None
         held.settle(counted)
-    assert ledger.remaining("colab_cu") == pytest.approx(93.9)
-    assert ledger.reserve("past the room", ("colab_cu",), _bound(93.91)) is None
-    assert ledger.reserve("all the room", ("colab_cu",), _bound(93.9)) is not None
+    assert ledger.remaining("colab_cu") == pytest.approx(93.79)
+    assert ledger.reserve("past the room", ("colab_cu",), _bound(93.80)) is None
+    assert ledger.reserve("all the room", ("colab_cu",), _bound(93.79)) is not None

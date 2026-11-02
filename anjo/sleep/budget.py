@@ -73,12 +73,12 @@ FIREWORKS_ROOM_USD: Final = FIREWORKS_REMAINING_USD - FIREWORKS_MARGIN_USD  # 58
 FIREWORKS_TOTAL: Final = FIREWORKS_RECORDED_USD + FIREWORKS_ROOM_USD  # 123.51: recorded + room
 FIREWORKS_CREDIT_USD: Final = FIREWORKS_REMAINING_USD + FIREWORKS_RECORDED_USD  # $128.51 as counted
 
-# Colab's compute units as the ledger counts them. 2026-11-02: `colab usage` showed 98.9 units left. The
-# cap is what the ledger had counted at that reading plus the reading less a 5-unit margin, so the room
-# it leaves is what is really left, less the margin. COLAB_CU_COUNTED_AT_RECONCILE is a placeholder:
-# set it to the live ledger's ``used("colab_cu")`` (no hold open) at the reading, before merging.
-COLAB_CU_COUNTED_AT_RECONCILE: Final = 0.0
-COLAB_REAL_BALANCE_AT_RECONCILE: Final = 98.9
+# Colab's compute units as the ledger counts them. 2026-11-02 10:42 Taipei: `colab usage` showed 98.79
+# units left (and still did at 11:42, no VM up), and the live ledger had counted 15.58 on colab_cu (sd3's
+# first night, settled at 10:37; no hold open). The cap is what the ledger had counted at that reading
+# plus the reading less a 5-unit margin, so the room it leaves is what is really left, less the margin.
+COLAB_CU_COUNTED_AT_RECONCILE: Final = 15.58
+COLAB_REAL_BALANCE_AT_RECONCILE: Final = 98.79
 
 CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "modal_usd": 500.0,  # of which about $120 is warm hours for the live page in judging week
