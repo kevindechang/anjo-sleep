@@ -111,9 +111,10 @@ class FakeLife:
     def _make_events(self, day: int) -> tuple[Event, ...]:
         out: list[Event] = []
         for a in ACTIVITIES:
+            # every activity has an outcome every day here, so a day without it done is a skip
             if self._outcomes[(a, day)]:
                 out.append(Event(day, "did", a, f"I did my {a} today.", ("did", a)))
-            elif self.scheduled(a, day):
+            else:
                 out.append(Event(day, "skipped", a, f"I skipped {a} today.", ("skipped", a)))
         for (a, target), made in sorted(self._plans.items()):
             if made == day:
@@ -503,6 +504,20 @@ def test_cli_eval_writes_records_and_a_report(tmp_path: Path) -> None:
     assert cli.main(["report", "--records", str(out / "counter.jsonl"), str(out / "counter+random.jsonl"),
                      "--out", str(again)]) == 0
     assert json.loads(again.read_text())["runs"].keys() == report["runs"].keys()
+
+
+def test_cli_runs_the_counter_on_three_indep_lives(tmp_path: Path) -> None:
+    from anjo.sleep.mind.cog import cli
+
+    out = tmp_path / "indep"
+    assert cli.main(["eval", "--predictor", "counter", "--world", "indep", "--seeds", "10000-10002",
+                     "--train-seeds", "0-2", "--out", str(out)]) == 0
+    recs = load_records(out / "counter.jsonl")
+    assert len(recs) == 3 and all(r.queries for r in recs)
+    assert all(0 < q.p < 1 for r in recs for q in r.queries)
+    with pytest.raises(ValueError, match="no populations"):
+        cli.main(["eval", "--predictor", "counter", "--world", "indep", "--population", "ood", "--seeds", "1",
+                  "--train-seeds", "0", "--out", str(out)])
 
 
 def test_cli_lists_its_registries() -> None:

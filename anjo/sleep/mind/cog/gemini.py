@@ -34,7 +34,7 @@ from typing import Any
 
 import numpy as np
 
-from anjo.sleep.mind.cog.rivals import PersonHistory
+from anjo.sleep.mind.cog.rival_history import PersonHistory
 from anjo.sleep.mind.cog.run import LifeRecord
 from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
 
@@ -192,18 +192,14 @@ class Transcript:
 
 def stats_table(hist: PersonHistory, as_of: int) -> str:
     """A compact table counted from ``hist``'s events up to ``as_of`` (inclusive)."""
-    start = hist.meta.start_weekday
     width = max([len(a) for a in hist.activities] + [8])
     rows = [f"Done / skipped or cancelled, by weekday (Day 0 to Day {as_of}):",
             " " * width + "  " + "  ".join(f"{d:>5}" for d in WEEKDAYS)]
     for a in hist.activities:
         cells = []
         for wd in range(7):
-            days = range((wd - start) % 7, as_of + 1, 7)
-            done = sum(a in hist.did.get(j, ()) for j in days)
-            missed = sum(a not in hist.did.get(j, ()) and hist.outcome(a, j, absent_is_negative=False) == 0
-                         for j in days)
-            cells.append(f"{done}/{missed}")
+            done, seen = hist.rate(a, as_of, wd)
+            cells.append(f"{done}/{seen - done}")
         rows.append(f"{a:<{width}}  " + "  ".join(f"{c:>5}" for c in cells))
     rows.append(f"Last {LAST_OUTCOMES} days with news of each activity, oldest first (+ done, - not):")
     for a in hist.activities:
@@ -211,8 +207,8 @@ def stats_table(hist: PersonHistory, as_of: int) -> str:
         rows.append(f"{a:<{width}}  " + (" ".join("+" if y else "-" for y in outcomes) or "(none)"))
     kept, due = hist.kept(as_of)
     rows.append(f"Plans kept: {kept} of {due} that came due.")
-    rows.append(f"Late-night messages: {hist.total(hist.late, as_of, 3)} in the last 3 days, "
-                f"{hist.total(hist.late, as_of, 7)} in the last 7.")
+    rows.append(f"Late-night messages: {hist.late_count(as_of, 3)} in the last 3 days, "
+                f"{hist.late_count(as_of, 7)} in the last 7.")
     m3, m7 = hist.mood_mean(as_of, 3), hist.mood_mean(as_of, 7)
     rows.append("Mean mood level: " + ", ".join(
         f"{'none' if m is None else f'{m:.1f}'} over the last {k} days" for m, k in ((m3, 3), (m7, 7))) + ".")

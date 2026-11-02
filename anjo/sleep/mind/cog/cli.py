@@ -39,6 +39,7 @@ from anjo.sleep.mind.cog.types import Inquirer, Life, Predictor
 T = TypeVar("T")
 DEFAULT_TRAIN_SEEDS = "0-299"
 DEFAULT_N_DAYS = 84
+WORLDS = {"main": "anjo.sleep.mind.cog.world", "indep": "anjo.sleep.mind.cog.world_indep"}
 
 
 @dataclass(frozen=True)
@@ -76,25 +77,28 @@ def _population(ctx: BuildContext) -> PredictorFactory:
 
 def _counter(ctx: BuildContext) -> PredictorFactory:
     table = PopulationPrior.fit_population(ctx.train_lives(), smoothing=ctx.option("smoothing", 10.0, float))
-    return partial(Counter, table, strength=ctx.option("strength", 4.0, float),
-                   plan_strength=ctx.option("plan_strength", 4.0, float))
+    return partial(Counter, table, strength=ctx.option("strength", 6.0, float),
+                   count_strength=ctx.option("count_strength", 100.0, float),
+                   weekday_strength=ctx.option("weekday_strength", 100.0, float))
 
 
 def _logistic_population(ctx: BuildContext) -> Any:
     return OnlineLogistic.fit_population(
         ctx.train_lives(), l2=ctx.option("l2", 1.0, float), ask_rate=ctx.option("ask_rate", 0.25, float),
-        smoothing=ctx.option("smoothing", 10.0, float), counter_strength=ctx.option("strength", 4.0, float))
+        smoothing=ctx.option("smoothing", 10.0, float), strength=ctx.option("strength", 6.0, float),
+        count_strength=ctx.option("count_strength", 100.0, float),
+        weekday_strength=ctx.option("weekday_strength", 100.0, float))
 
 
 def _online_lr(ctx: BuildContext) -> PredictorFactory:
-    return partial(OnlineLogistic, _logistic_population(ctx), prior_var=ctx.option("prior_var", 0.03, float),
-                   shared_var=ctx.option("shared_var", 1e-4, float))
+    return partial(OnlineLogistic, _logistic_population(ctx), prior_var=ctx.option("prior_var", 1e-3, float),
+                   shared_var=ctx.option("shared_var", 1e-6, float))
 
 
 def _surprise_lr(ctx: BuildContext) -> PredictorFactory:
     return partial(SurpriseLR, _logistic_population(ctx), hazard=ctx.option("hazard", 0.02, float),
                    gain=ctx.option("gain", 1.0, float), decay=ctx.option("decay", 0.7, float),
-                   prior_var=ctx.option("prior_var", 0.03, float), shared_var=ctx.option("shared_var", 1e-4, float))
+                   prior_var=ctx.option("prior_var", 1e-3, float), shared_var=ctx.option("shared_var", 1e-6, float))
 
 
 def load_client(path: str) -> Complete:
@@ -217,7 +221,8 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("--predictor", required=True, choices=sorted(PREDICTORS))
     ev.add_argument("--inquirer", choices=sorted(INQUIRERS))
     ev.add_argument("--seeds", required=True)
-    ev.add_argument("--population", default="base")
+    ev.add_argument("--world", choices=sorted(WORLDS), default="main")
+    ev.add_argument("--population", default="base", help="the main world's population (base or ood)")
     ev.add_argument("--train-seeds", default=DEFAULT_TRAIN_SEEDS)
     ev.add_argument("--n-days", type=int, default=DEFAULT_N_DAYS)
     ev.add_argument("--out", required=True, type=Path)
@@ -241,10 +246,19 @@ def _report_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--window", type=int, default=score.DEFAULT_WINDOW)
 
 
-def _default_make_life() -> Callable[..., Life]:
-    """world.make_life, imported only when a real run needs it (tests inject a fake world)."""
-    world = importlib.import_module("anjo.sleep.mind.cog.world")
-    return cast(Callable[..., Life], world.make_life)
+def _world_maker(args: argparse.Namespace, make_life: Callable[..., Life] | None) -> LifeMaker:
+    """``make_life(seed)`` of the chosen world, imported only when a real run needs it (tests
+    inject a fake world, which takes ``population`` like the main one). The indep world is a
+    black box with the same ``Life`` protocol and no populations."""
+    if make_life is not None:
+        return partial(make_life, population=args.population, n_days=args.n_days)
+    world = importlib.import_module(WORLDS[args.world])
+    maker = cast(Callable[..., Life], world.make_life)
+    if args.world == "indep":
+        if args.population != "base":
+            raise ValueError("the indep world has no populations; drop --population")
+        return partial(maker, n_days=args.n_days)
+    return partial(maker, population=args.population, n_days=args.n_days)
 
 
 def _write_report(path: Path, runs: Mapping[str, Sequence[Any]], args: argparse.Namespace,
@@ -256,7 +270,7 @@ def _write_report(path: Path, runs: Mapping[str, Sequence[Any]], args: argparse.
 
 
 def _eval(args: argparse.Namespace, make_life: Callable[..., Life] | None) -> int:
-    maker = partial(make_life or _default_make_life(), population=args.population, n_days=args.n_days)
+    maker = _world_maker(args, make_life)
     ctx = BuildContext(population=args.population, train_seeds=parse_seeds(args.train_seeds),
                        n_days=args.n_days, make_life=maker, out_dir=args.out, options=_parse_set(args.set))
     factory = PREDICTORS[args.predictor](ctx)
