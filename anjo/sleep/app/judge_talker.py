@@ -29,10 +29,15 @@ someone else's keep-warm window.
 ``ANJO_SLEEP_JUDGE_WAKES_PER_DAY`` (default 30) a day, and never with ``ANJO_SLEEP_JUDGE_WAKE=0``,
 through ``serving.backend`` (Modal or SageMaker, whichever ``ANJO_SLEEP_BACKEND`` names).
 
+**Held on the ledger before it is spent** (``judge_gpu``): a wake or a longer lease first holds
+``modal_usd`` on the host's budget ledger for the GPU time it could cost (the lease's end plus her idle
+window, and a wake's whole timeout), and the stretch settles its real cost on those holds when it ends.
+Without room nothing is woken or extended, and Spark answers, labelled ``reason: budget``.
+``judge/prewake``, which no code guards, takes at most the one hold that opens a stretch.
+
 **Spend alerts, not degradation.** Every second the cohort keeps her up or waking is charged at
 ``ANJO_SLEEP_JUDGE_GPU_USD_PER_HOUR`` (default: ``ANJO_SLEEP_PRICES``' serving rate, else 1.95), kept in
-``<data dir>/sleep/judges/spend.json`` and debited to the host's budget ledger (``modal_usd``) when each
-paid stretch ends. Crossing 70% and 90% of the judges' budget (``ANJO_SLEEP_JUDGE_BUDGET_USD``, default
+``<data dir>/sleep/judges/spend.json``. Crossing 70% and 90% of the judges' budget (``ANJO_SLEEP_JUDGE_BUDGET_USD``, default
 19) or of the day's soft cap (``ANJO_SLEEP_JUDGE_SOFT_USD_PER_DAY``, default 6) writes one record to
 ``<data dir>/sleep/judges/alerts.jsonl`` and a warning line, for the host operator to top the budget up.
 Only the hard cap (``ANJO_SLEEP_JUDGE_HARD_USD_PER_DAY``, default 12, about six hours warm; and
@@ -55,8 +60,10 @@ from typing import Any, Final, Literal
 
 from anjo.core.anjo_model.assignment import OVERRIDE_CAUSE, ROUTE_ANJO, ModelRoute, QualifiedPin
 from anjo.sleep.app.judge_cohort import CapReached, Check, counters, is_judge, judges_dir
+from anjo.sleep.app.judge_gpu import GpuHolds
 from anjo.sleep.app.spark_talker import LABEL as SPARK_LABEL
 from anjo.sleep.app.spark_talker import spark_configured, spark_pin
+from anjo.sleep.budget import Ledger
 from anjo.sleep.serving.backend import Serving
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.serving.config import SCALEDOWN_S, ServeConfigError
@@ -326,7 +333,7 @@ class JudgeTalker:
 
     def __init__(
         self, serving: Serving | None, settings: TalkerSettings, *, spend: SpendTracker,
-        stop: Callable[[], StopResult], window: WindowFile, pay: Callable[[float], bool] = lambda _s: True,
+        stop: Callable[[], StopResult], window: WindowFile, holds: GpuHolds,
         clock: Callable[[], float] = time.time, spawn: Callable[[Callable[[], None]], None] | None = None,
         keeper: Callable[[Callable[[], None]], None] | None = None, sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -335,7 +342,8 @@ class JudgeTalker:
         self._spend = spend
         self._stop = stop
         self._window = window
-        self._pay = pay
+        self._holds = holds
+        self._refused = False  # the ledger had no room for the GPU time last asked: Spark answers
         self._clock = clock
         self._spawn = spawn or _in_thread("sleep-judge-wake")
         self._keeper = keeper or _in_thread("sleep-judge-keeper")
@@ -344,7 +352,7 @@ class JudgeTalker:
         self._warm_until = 0.0
         self._lease_until = 0.0
         self._paying_since: float | None = None
-        self._paid_s = 0.0  # this stretch's seconds, debited to the ledger when it ends
+        self._paid_s = 0.0  # this stretch's seconds, settled on its ledger holds when it ends
         self._waking_since: float | None = None
         self._last_wake_try = -math.inf
         self._last_ping = -math.inf
@@ -363,18 +371,36 @@ class JudgeTalker:
             return float(IDLE_MINUTES) * 60.0
         return float(SCALEDOWN_S)
 
+    def _wake_s(self) -> float:
+        """The longest a wake may run (the backend's own timeout), all of it paid."""
+        if self.backend == "sagemaker":
+            from anjo.sleep.serving.sagemaker.settings import WAKE_TOTAL_TIMEOUT_S as SAGEMAKER_WAKE_S
+
+            return float(SAGEMAKER_WAKE_S)
+        from anjo.sleep.serving.client import WAKE_TOTAL_TIMEOUT_S
+
+        return float(WAKE_TOTAL_TIMEOUT_S)
+
+    def _cover(self, until: float, now: float) -> bool:
+        """Ledger room for the GPU up to ``until`` plus her idle window (the tail a failed stop
+        leaves), held before it is spent. False (and Spark answers, ``reason: budget``) without."""
+        self._refused = not self._holds.cover(until + self._idle_window(), now)
+        return not self._refused
+
     def _mark_up(self, now: float) -> None:
         self._warm_until = now + self._idle_window() - WARM_MARGIN_S
         self._last_beat = now
         if self._paying_since is None:
             self._paying_since = now
+            self._cover(now, now)  # she is up and paid for either way; no room: the keeper stops her
         if now < self._lease_until:
             self._window.extend(self._lease_until, now)
 
     # ── what judges see ───────────────────────────────────────────────────────
 
     def capped(self, now: float | None = None) -> bool:
-        return self._spend.hard_reached(self._clock() if now is None else now)
+        """The hard cap is reached, or the budget ledger had no room the last time it was asked."""
+        return self._refused or self._spend.hard_reached(self._clock() if now is None else now)
 
     def up(self, *, ask: bool = False) -> bool:
         """Whether Glimmer is up, found without waking her (see the module's note)."""
@@ -425,23 +451,42 @@ class JudgeTalker:
 
     # ── presence ──────────────────────────────────────────────────────────────
 
-    def arrive(self, *, lease_s: float | None = None) -> None:
+    def arrive(self, *, lease_s: float | None = None, anonymous: bool = False) -> None:
         """A judge is here: hold the lease, keep her warm, and wake her if she sleeps (debounced,
-        capped per day). Never blocks the request: the wake and the keeper run off its thread."""
+        capped per day). GPU time is held on the ledger first; without room nothing is woken or
+        extended. An ``anonymous`` caller (``judge/prewake``) takes at most the one hold that opens a
+        stretch and never extends past it. Never blocks the request: the wake and the keeper run
+        off its thread."""
         now = self._clock()
         wake = False
         with self._lock:
-            self._lease_until = max(self._lease_until, now + (self.settings.idle_s if lease_s is None else lease_s))
-            if self._serving is None or self.capped(now):
+            lease_until = max(self._lease_until, now + (self.settings.idle_s if lease_s is None else lease_s))
+            if self._serving is None or self._spend.hard_reached(now):
+                self._lease_until = lease_until
                 return
+            up = self.up()
+            may_wake = (not up and self._waking_since is None and self.settings.wake_on
+                        and now - self._last_wake_try >= WAKE_DEBOUNCE_S)
+            if up or may_wake or self._waking_since is not None:
+                held = self._held_lease(lease_until, now, anonymous)
+                if held is None:
+                    return  # an anonymous caller with nothing held left to extend into
+                lease_until = held
+                need = max(lease_until, now + self._wake_s()) if may_wake else lease_until
+                if anonymous and self._holds.held:
+                    if not self._holds.covers(need + self._idle_window()):
+                        return  # never past the stretch's holds
+                elif not self._cover(need, now):
+                    return  # no ledger room: no wake, no longer lease; Spark answers
+            self._lease_until = max(self._lease_until, lease_until)
             self._start_keeper()
-            if self.up():
+            if up:
                 if self._paying_since is None:
                     self._paying_since = now
                 if self._last_beat is not None:
                     self._window.extend(self._lease_until, self._last_beat)
                 return
-            if self._waking_since is not None or not self.settings.wake_on or now - self._last_wake_try < WAKE_DEBOUNCE_S:
+            if not may_wake:
                 return
             self._last_wake_try = now
             try:
@@ -455,6 +500,15 @@ class JudgeTalker:
             wake = True
         if wake:
             self._spawn(self._wake)
+
+    def _held_lease(self, lease_until: float, now: float, anonymous: bool) -> float | None:
+        """The lease an ``anonymous`` caller may have: within what the stretch already holds, or
+        anything one new hold covers when none is held. None: it holds nothing to extend into."""
+        covered = self._holds.covered_until()
+        if not anonymous or covered is None:
+            return lease_until
+        within = covered - self._idle_window()
+        return min(lease_until, within) if within > now else None
 
     def _wake(self) -> None:
         from anjo.sleep.app.storage import glimmer_turns
@@ -516,8 +570,7 @@ class JudgeTalker:
             self._spend.add(tail_s, now)
             self._paid_s += tail_s
         paid, self._paid_s, self._paying_since = self._paid_s, 0.0, None
-        if paid and not self._pay(paid):
-            logger.warning("the budget ledger didn't take the judges' %.0f warm seconds", paid)
+        self._holds.settle(paid)
 
     def tick(self) -> bool:
         """The keeper's step: charge the time paid since the last one, ping while a judge is present,
@@ -535,6 +588,7 @@ class JudgeTalker:
             elif self._waking_since is not None:
                 return True  # stop once the wake has ended
             elif self._paying_since is None:
+                self._holds.settle(0.0)  # held for a wake that never started: released
                 self._keeping = False
                 return False
             else:
@@ -619,8 +673,15 @@ def _serving() -> Serving | None:
         return None
 
 
+def _ledger() -> Ledger:
+    from anjo.sleep.app.storage import SLEEP_DIR, data_root
+    from anjo.sleep.budget import LEDGER_NAME
+
+    return Ledger(data_root() / SLEEP_DIR / LEDGER_NAME)
+
+
 def build_talker() -> JudgeTalker:
-    from anjo.sleep.app.demo_live import ledger_pay
+    from anjo.sleep.app.judge_gpu import LEDGER_FAILURES, settle_orphans
     from anjo.sleep.app.storage import data_root
     from anjo.sleep.serving.wake import window_path
 
@@ -628,8 +689,13 @@ def build_talker() -> JudgeTalker:
     settings = TalkerSettings.from_env(None if serving is None else serving.name)
     folder = judges_dir()
     stop = backend_stop(serving, settings.idle_s) if serving is not None else (lambda: ("skipped", {"why": "no_backend"}))
+    holds = GpuHolds(_ledger, settings.rate_per_hour)
+    try:
+        settle_orphans(_ledger(), holds.owner)  # a restart mid-stretch: the stopped process's holds
+    except LEDGER_FAILURES as error:
+        logger.error("the judges' open GPU holds couldn't be swept: %s", type(error).__name__)
     return JudgeTalker(serving, settings, spend=SpendTracker(folder / SPEND_FILE, folder / ALERTS_FILE, settings),
-                       stop=stop, window=WindowFile(window_path(data_root())), pay=ledger_pay(settings.rate_per_hour))
+                       stop=stop, window=WindowFile(window_path(data_root())), holds=holds)
 
 
 _talker_lock = threading.Lock()

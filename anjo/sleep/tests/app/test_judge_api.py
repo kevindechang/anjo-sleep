@@ -131,6 +131,7 @@ def test_a_judges_own_routes(api: Any, talker: Rig) -> None:
     assert mind.status_code == 200
     assert {"questions", "targets", "wants", "choices", "expectations", "timeline", "live"} <= set(mind.json())
     assert mind.json()["live"] is None
+    assert (mind.json()["revision"], mind.json()["live_pass"]) == (0, "idle")
 
     wake = api.get("/api/sleep/me/wake", headers=_bearer(token))
     assert wake.status_code == 200
@@ -166,16 +167,51 @@ def test_prewake_starts_her_wake_within_its_caps(api: Any, talker: Rig, monkeypa
     assert api.post("/api/sleep/judge/prewake").status_code == 429
 
 
+def test_prewakes_never_spend_past_one_small_hold(api: Any, talker: Rig) -> None:
+    for n in range(4):  # within the caps, again and again, no code entered
+        talker.at(61.0 * n)
+        api.post("/api/sleep/judge/prewake")
+    (held,) = talker.open_holds()
+    assert talker.ledger.open_holds()[0].bound.amount <= 1200.0 + 1e-6  # a wake's timeout and her idle window
+    assert held.startswith("judge_gpu:")
+
+
 # ── The chat-turn watch ───────────────────────────────────────────────────────
+
+
+def test_the_panel_can_poll_until_the_live_pass_has_run(api: Any, talker: Rig) -> None:
+    body = _start(api).json()
+    token, user_id = body["token"], body["user_id"]
+    held: list[Any] = []
+    live_mind.set_runner(live_mind.LiveRunner(run=lambda _uid: {}, spawn=held.append))  # asked for, not yet run
+    try:
+        live_mind.runner().schedule(user_id)
+        mind = api.get("/api/sleep/me/mind", headers=_bearer(token)).json()
+        thought = api.get("/api/sleep/me/thought", headers=_bearer(token)).json()
+        assert mind["live_pass"] == thought["live_pass"] == "running"
+        live_mind.save_record(user_id, {"passes": 1, "state": "ok"})  # the pass ran
+        held.pop()()
+        mind = api.get("/api/sleep/me/mind", headers=_bearer(token)).json()
+        assert (mind["revision"], mind["live_pass"]) == (1, "idle")
+    finally:
+        live_mind.set_runner(None)
 
 
 class FakeRunner:
     def __init__(self) -> None:
         self.asked: list[str] = []
+        self.calls: list[str] = []
 
     def schedule(self, user_id: str) -> bool:
         self.asked.append(user_id)
+        self.calls.append("schedule")
         return True
+
+    def expect(self, user_id: str) -> None:
+        self.calls.append("expect")
+
+    def forget(self, user_id: str) -> None:
+        self.calls.append("forget")
 
 
 @pytest.fixture
@@ -213,6 +249,41 @@ def test_a_judges_answered_turn_asks_for_a_live_pass(api: Any, watched: tuple[An
     assert client.post("/api/chat/s1/message", headers=_bearer(make_token(user["user_id"]))).status_code == 200
     assert client.post("/api/chat/s1/message").status_code == 200
     assert fake.asked == [body["user_id"]]  # nobody else's turn, and no failed one
+    assert fake.calls[:3] == ["expect", "schedule", "forget"]
+
+
+def test_the_pass_reads_running_before_the_replys_last_byte_goes_out(api: Any, talker: Rig) -> None:
+    import asyncio
+
+    body = _start(api).json()
+    user_id, token = body["user_id"], body["token"]
+    held: list[Any] = []
+    live_mind.set_runner(live_mind.LiveRunner(run=lambda _uid: {}, spawn=held.append))
+    at_last_byte: list[bool] = []
+
+    async def chat(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"data: hi\n\n", "more_body": True})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def server(message: Any) -> None:
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            at_last_byte.append(live_mind.live_pass_state(user_id) == "running")
+
+    async def receive() -> Any:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/api/chat/s1/message",
+             "headers": [(b"authorization", f"Bearer {token}".encode())], "query_string": b""}
+    try:
+        assert live_mind.live_pass_state(user_id) == "idle"
+        asyncio.run(judge_api.TurnWatch(chat)(scope, receive, server))
+        assert at_last_byte == [True]  # the page reading on the stream's end sees it coming
+        assert live_mind.live_pass_state(user_id) == "running"  # scheduled, not yet run
+        held.pop()()
+        assert live_mind.live_pass_state(user_id) == "idle"
+    finally:
+        live_mind.set_runner(None)
 
 
 def test_register_sleep_wires_the_judge_product(monkeypatch: pytest.MonkeyPatch) -> None:

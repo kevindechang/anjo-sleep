@@ -15,12 +15,14 @@ from typing import Any
 import pytest
 
 from anjo.sleep.app import judge_cohort, judge_talker
+from anjo.sleep.app.judge_gpu import HOLD_KIND, GpuHolds
 from anjo.sleep.app.judge_talker import (
     JudgeTalker,
     SpendTracker,
     TalkerSettings,
     WindowFile,
 )
+from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.serving.client import WakeResult
 from anjo.sleep.serving.wake import WarmWindow, read_window
 
@@ -61,9 +63,17 @@ class Rig:
     clock: list[float]
     spawned: list[Callable[[], None]]
     stops: list[str]
-    paid: list[float]
+    ledger: Ledger
     stop_results: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     window: Path | None = None
+
+    def settled(self) -> float:
+        """Dollars the judges' GPU holds settled on the ledger ($1 a second here)."""
+        settled: float = sum(usd for job, usd in self.ledger.settlements().items() if job.startswith(HOLD_KIND))
+        return settled
+
+    def open_holds(self) -> list[str]:
+        return [held.job for held in self.ledger.open_holds() if held.job.startswith(HOLD_KIND)]
 
     def at(self, seconds: float) -> None:
         self.clock[0] = T0 + seconds
@@ -73,12 +83,12 @@ class Rig:
             self.spawned.pop(0)()
 
 
-def rig(tmp_path: Path, *, backend: str = "modal", **settings: Any) -> Rig:
+def rig(tmp_path: Path, *, backend: str = "modal", modal_usd: float = 1e9, **settings: Any) -> Rig:
     serving = FakeServing(name=backend)
     clock = [T0]
     spawned: list[Callable[[], None]] = []
     stops: list[str] = []
-    paid: list[float] = []
+    ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": modal_usd})
     made = TalkerSettings(**{"rate_per_hour": 3600.0, "budget_usd": 1000.0, "soft_usd_per_day": 0.0,
                              "hard_usd_per_day": 0.0, **settings})
     results: list[tuple[str, dict[str, Any]]] = []
@@ -88,17 +98,12 @@ def rig(tmp_path: Path, *, backend: str = "modal", **settings: Any) -> Rig:
         return results.pop(0) if results else ("ok", {"containers": 1})
 
     window = tmp_path / "keep_warm.json"
-
-    def pay(seconds: float) -> bool:
-        paid.append(seconds)
-        return True
-
     talker = JudgeTalker(
         serving, made, spend=SpendTracker(tmp_path / "spend.json", tmp_path / "alerts.jsonl", made),
-        stop=stop, window=WindowFile(window), pay=pay,
+        stop=stop, window=WindowFile(window), holds=GpuHolds(lambda: ledger, made.rate_per_hour, owner="1-test"),
         clock=lambda: clock[0], spawn=spawned.append, keeper=lambda _run: None, sleep=lambda _s: None,
     )
-    return Rig(talker, serving, clock, spawned, stops, paid, results, window)
+    return Rig(talker, serving, clock, spawned, stops, ledger, results, window)
 
 
 @pytest.fixture(autouse=True)
@@ -162,7 +167,7 @@ def test_no_heartbeat_stops_the_gpu_and_the_spend(tmp_path: Path) -> None:
     assert r.talker.tick() is False
     assert r.stops == ["stop"]
     assert r.talker.status().state == "cold"
-    assert r.paid == [pytest.approx(331.0)]  # the stretch, debited once to the ledger
+    assert r.settled() == pytest.approx(331.0) and r.open_holds() == []  # the stretch, settled on its holds
     r.at(1000)
     assert r.talker.tick() is False and r.stops == ["stop"]  # nothing paid since: nothing more to do
     assert SpendTracker(tmp_path / "spend.json", tmp_path / "alerts.jsonl", r.talker.settings).view(T0 + 1000) \
@@ -188,7 +193,7 @@ def test_a_failed_stop_charges_her_idle_window(tmp_path: Path) -> None:
     r.run_wakes()
     r.at(61)
     assert r.talker.tick() is False
-    assert r.paid == [pytest.approx(61.0 + 600.0)]
+    assert r.settled() == pytest.approx(61.0 + 600.0) and r.open_holds() == []
 
 
 def test_the_keeper_pings_while_a_judge_is_present(tmp_path: Path) -> None:
@@ -379,3 +384,106 @@ def test_any_backend_error_ends_the_wake_and_the_ping(tmp_path: Path) -> None:
     r.at(61)
     r.talker.arrive()
     assert len(r.spawned) == 1  # past the debounce: tried again
+
+
+# ── GPU time held on the ledger before it is spent ───────────────────────────
+
+
+def test_a_wake_is_held_on_the_ledger_before_it_starts(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.talker.arrive()
+    assert r.serving.wakes == 0 and len(r.spawned) == 1  # the wake hasn't run yet...
+    (held,) = r.ledger.open_holds()  # ...but its worst case is already held
+    assert held.job.startswith(HOLD_KIND) and held.pools == ("modal_usd",)
+    assert held.bound.amount == pytest.approx(600.0 + 600.0)  # the wake's timeout, then her idle window
+
+
+def test_no_ledger_room_wakes_nothing_and_spark_answers_labelled(tmp_path: Path) -> None:
+    r = rig(tmp_path, modal_usd=1000.0)  # less than one wake's worst case
+    r.talker.arrive()
+    assert r.spawned == [] and r.open_holds() == []
+    status = r.talker.status()
+    assert (status.state, status.model, status.reason) == ("cold", "spark-fallback", "budget")
+    assert not r.talker.glimmer_first()
+
+
+def test_room_other_jobs_hold_is_not_the_judges_and_freed_room_wakes_her(tmp_path: Path) -> None:
+    from anjo.sleep.budget import Bound
+
+    r = rig(tmp_path, modal_usd=2000.0)
+    night = r.ledger.reserve("night_gpu:someone", ("modal_usd",), Bound(3600.0, 1000.0))  # $1000 of the $2000
+    assert night is not None
+    r.talker.arrive()
+    assert r.spawned == [] and r.talker.status().reason == "budget"
+    night.settle(0.0)
+    r.at(61)  # past the debounce
+    r.talker.arrive()
+    assert len(r.spawned) == 1 and r.talker.status().reason is None
+
+
+def test_a_present_judge_holds_ahead_in_blocks_and_the_stretch_settles_what_it_cost(tmp_path: Path) -> None:
+    r = rig(tmp_path, idle_s=180.0)
+    r.talker.arrive()
+    r.run_wakes()
+    for t in range(60, 1801, 60):  # heartbeats for half an hour
+        r.at(t)
+        r.talker.arrive()
+        r.talker.tick()
+        covered = r.talker._holds.covered_until()
+        assert covered is not None and covered >= T0 + t + 180 + 600  # always held past the lease and its tail
+    assert len(r.open_holds()) >= 2
+    r.at(1981)
+    assert r.talker.tick() is False and r.stops == ["stop"]
+    assert r.settled() == pytest.approx(1981.0) and r.open_holds() == []
+
+
+def test_an_anonymous_prewake_takes_one_small_hold_and_never_extends_past_it(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.talker.arrive(lease_s=300.0, anonymous=True)
+    r.run_wakes()
+    (held,) = r.ledger.open_holds()
+    for t in (200, 550, 700, 900):  # prewakes again and again, no code ever entered
+        r.at(t)
+        r.talker.arrive(lease_s=300.0, anonymous=True)
+    assert [h.job for h in r.ledger.open_holds()] == [held.job]  # still the one hold
+    assert r.talker._lease_until <= T0 + held.bound.amount - 600.0  # the lease stays inside it
+    r.at(601)
+    assert r.talker.tick() is False and r.stops == ["stop"]
+    assert r.settled() == pytest.approx(601.0) and r.settled() <= held.bound.amount
+
+
+def test_a_hold_for_a_wake_that_never_ran_is_released(tmp_path: Path) -> None:
+    r = rig(tmp_path, wakes_per_day=0)  # the day's wakes are spent after the hold is taken
+    r.talker.arrive()
+    assert r.spawned == [] and len(r.open_holds()) == 1
+    r.at(200)
+    assert r.talker.tick() is False
+    assert r.open_holds() == [] and r.settled() == 0.0
+
+
+def test_time_past_the_holds_is_held_and_settled_or_recorded_as_an_overage(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": 2400.0})
+    holds = GpuHolds(lambda: ledger, 3600.0, owner="1-test")
+    assert holds.cover(T0 + 1000.0, T0)
+    holds.settle(1500.0)  # 500 s past its hold: a hold of its own
+    assert sum(ledger.settlements().values()) == pytest.approx(1500.0) and ledger.overages() == ()
+    assert holds.cover(T0 + 400.0, T0)  # the least block, 900 s: the pool is now full
+    holds.settle(1000.0)  # 100 s past it, and no room for a hold of its own: an overage, recorded in full
+    assert sum(ledger.settlements().values()) == pytest.approx(2500.0) and len(ledger.overages()) == 1
+
+
+def test_a_stopped_processs_holds_are_settled_at_their_bound_and_live_ones_left(tmp_path: Path) -> None:
+    import os
+
+    from anjo.sleep.app.judge_gpu import settle_orphans
+    from anjo.sleep.budget import Bound
+
+    ledger = Ledger(tmp_path / "budget.jsonl", caps={**CAPS, "modal_usd": 1e9})
+    for job in (f"{HOLD_KIND}4242-dead:0", f"{HOLD_KIND}{os.getpid()}-old:0", f"{HOLD_KIND}1-test:0",
+                f"{HOLD_KIND}5151-live:0", "night_gpu:other"):
+        assert ledger.reserve(job, ("modal_usd",), Bound(3600.0, 100.0)) is not None
+    assert settle_orphans(ledger, "1-test", alive=lambda pid: pid == 5151) == 2
+    assert sorted(ledger.settlements()) == [f"{HOLD_KIND}4242-dead:0", f"{HOLD_KIND}{os.getpid()}-old:0"]
+    assert all(usd == pytest.approx(100.0) for usd in ledger.settlements().values())
+    assert sorted(h.job for h in ledger.open_holds()) == [f"{HOLD_KIND}1-test:0", f"{HOLD_KIND}5151-live:0",
+                                                          "night_gpu:other"]

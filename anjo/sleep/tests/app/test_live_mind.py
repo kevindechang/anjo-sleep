@@ -146,6 +146,58 @@ def test_the_default_budget_reads_the_judges_own_log(judge: str) -> None:
     assert live_mind.live_budget(judge, NOW.date()) == Budget(token_cap=12_000)  # an empty log: all of it
 
 
+def test_a_pass_holds_the_judges_lock_from_its_first_read_to_its_last_append(judge: str) -> None:
+    seen: list[tuple[str, bool]] = []
+
+    class Watching(FakeMind):
+        def notice_live(self, call: Any, fresh: list[Any], budget: Budget) -> dict[str, Any]:
+            seen.append(("notice", live_mind.wait_for_live_pass(judge, 0.0)))
+            return super().notice_live(call, fresh, budget)
+
+    def night_running() -> bool:
+        seen.append(("night check", live_mind.wait_for_live_pass(judge, 0.0)))
+        return False
+
+    windows: list[tuple[datetime, datetime]] = []
+    watched = replace(ports(Watching(), windows), night_running=night_running)
+    assert live_mind.run_pass(judge, ports=watched, now=NOW)["state"] == "ok"
+    assert seen == [("night check", False), ("notice", False)]  # both under the lock
+    assert live_mind.wait_for_live_pass(judge, 0.0) and live_mind.live_pass_state(judge) == "idle"
+
+
+def test_a_pass_skips_while_a_night_holds_its_lock(judge: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(live_mind, "LIVE_WAIT_S", 0.1)
+    windows: list[tuple[datetime, datetime]] = []
+    with live_mind.live_pass_guard(judge):
+        assert live_mind.live_pass_state(judge) == "running"
+        assert live_mind.run_pass(judge, ports=ports(FakeMind(), windows), now=NOW) == {"state": "busy"}
+    assert windows == [] and judge_cohort.counters().count(NOW, f"live:{judge}") == 0
+
+
+def test_the_lock_holds_across_processes(judge: str) -> None:
+    import subprocess
+    import sys
+
+    path = live_mind._lock_path(judge)
+    code = ("import fcntl, sys, time\n"
+            "f = open(sys.argv[1], 'a+b'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(60)")
+    holder = subprocess.Popen([sys.executable, "-c", code, str(path)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "held"
+        assert live_mind.wait_for_live_pass(judge, 0.2) is False
+    finally:
+        holder.kill()  # its own pid: the OS frees its lock
+        holder.wait(timeout=10)
+    assert live_mind.wait_for_live_pass(judge, 2.0) is True
+
+
+def test_the_revision_grows_with_every_pass_and_every_step(judge: str) -> None:
+    assert live_mind.revision(judge) == 0
+    live_mind.run_pass(judge, ports=ports(FakeMind(), []), now=NOW)
+    assert live_mind.revision(judge) == 1
+    assert live_mind.revision(judge, steps=5) == 6
+
+
 def test_a_failed_pass_is_recorded_and_keeps_its_cursor(judge: str) -> None:
     windows: list[tuple[datetime, datetime]] = []
     done = live_mind.run_pass(judge, ports=ports(FakeMind(fail=True), windows), now=NOW)
