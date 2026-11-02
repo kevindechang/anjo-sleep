@@ -5,10 +5,17 @@ only the dataset goes up, every CLI call has a timeout, and real people are refu
 fake: no VM, no network."""
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
+import logging
 import math
 import subprocess
+import sys
 import tarfile
+import threading
+import time
+import types
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -384,7 +391,8 @@ def test_a_warm_seed_night_leaves_at_least_100_minutes_to_train(tmp_path: Path) 
     executed = next(args for args, _ in fake.calls if args[3] == "exec")
     exec_s = float(executed[executed.index("--timeout") + 1])
     assert exec_s >= 6000.0  # the base weights' download and 4-bit load, then a 27-minute night
-    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 120.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0  # 120: mkdir
+    # 120: mkdir; 30: a keep-alive ping still running when the exec ends
+    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 120.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0 - 30.0
 
 
 def test_the_seed_archive_refuses_a_file_outside_the_shared_list(tmp_path: Path) -> None:
@@ -449,3 +457,181 @@ def test_a_new_vm_makes_the_remote_folders_before_any_upload(tmp_path: Path) -> 
     assert all(remote.startswith(f"{colab.REMOTE_DIR}/") for remote in
                (args[-1] for args, _ in fake.calls if args[3] == "upload"))
     assert not (tmp_path / colab.MKDIR_FILE).exists()  # the script never stays in the night's folder
+
+
+# ── The keep-alive (2026-11-02: an A100 vanished about 35 minutes into a training exec) ──────────────
+
+PING = ("/cli/bin/python", "-I", str(colab.PING_SCRIPT))
+PERIOD_S = 0.02
+
+
+class SlowExec(FakeColab):
+    """An ``exec`` that takes ``exec_s`` of real time (and exits ``exec_code``); a ping (the CLI's python
+    running the ping script) exits ``ping_code``. Pings are recorded apart, with whether the exec ran."""
+
+    def __init__(self, *, exec_s: float = 0.3, exec_code: int = 0, ping_code: int = 0) -> None:
+        super().__init__()
+        self.exec_s, self.exec_code, self.ping_code = exec_s, exec_code, ping_code
+        self.pings: list[tuple[list[str], float, bool]] = []
+        self.in_exec = False
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        args = list(args)
+        if args[1] == "-I":
+            self.pings.append((args, timeout_s, self.in_exec))
+            return subprocess.CompletedProcess(args, self.ping_code, "", "")
+        if command_label(args[3:]) != "exec":
+            return super().__call__(args, timeout_s)
+        self.in_exec = True
+        try:
+            time.sleep(self.exec_s)
+        finally:
+            self.in_exec = False
+        if self.exec_code:
+            self.calls.append((args, timeout_s))
+            return subprocess.CompletedProcess(args, self.exec_code, "", "boom")
+        return super().__call__(args, timeout_s)
+
+
+def _pinging(fake: FakeColab, ledger: Ledger, period_s: float = PERIOD_S) -> ColabRunner:
+    return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake, keepalive=PING), ledger=ledger,
+                       is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(), keepalive_period_s=period_s)
+
+
+def _keepalive_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name == colab.KEEPALIVE_THREAD]
+
+
+def test_a_training_exec_pings_its_sessions_keepalive_with_the_clis_python(tmp_path: Path) -> None:
+    fake, ledger = SlowExec(), Ledger(tmp_path / "budget.jsonl")
+    out = _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert len(fake.pings) >= 3  # 0.3 s of exec at a 0.02 s period
+    assert all(args == [*PING, f"anjo-sleep-{NAME}"] for args, _, _ in fake.pings)
+    assert all(timeout == colab.KEEPALIVE_TIMEOUT_S for _, timeout, _ in fake.pings)
+    assert all(during for _, _, during in fake.pings)  # only while the training exec runs
+    assert (out["keepalive_pings"], out["keepalive_failed"]) == (len(fake.pings), 0)
+    assert fake.commands() == ["new", "install", "mkdir", "upload", "exec", "download", "download", "download", "stop"]
+    pinged = len(fake.pings)
+    time.sleep(10 * PERIOD_S)
+    assert len(fake.pings) == pinged and _keepalive_threads() == []  # stopped when the exec returned
+
+
+def test_the_keepalive_stops_when_the_exec_fails(tmp_path: Path) -> None:
+    fake, ledger = SlowExec(exec_code=1), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabError, match="colab exec failed"):
+        _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.pings and all(during for _, _, during in fake.pings)
+    pinged = len(fake.pings)
+    time.sleep(10 * PERIOD_S)
+    assert len(fake.pings) == pinged and _keepalive_threads() == []
+    assert fake.commands()[-1] == "stop" and [e["op"] for e in _events(ledger)] == ["reserve", "settle"]
+
+
+def test_a_failed_ping_is_counted_and_never_fails_the_night(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    fake, ledger = SlowExec(ping_code=1), Ledger(tmp_path / "budget.jsonl")
+    with caplog.at_level(logging.WARNING):
+        out = _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["steps"] == 9 and out["keepalive_pings"] == out["keepalive_failed"] == len(fake.pings) > 0
+    assert "keep-alive" in caplog.text
+
+
+def test_no_ping_runs_before_one_period_into_the_exec(tmp_path: Path) -> None:
+    fake, ledger = SlowExec(exec_s=0.05), Ledger(tmp_path / "budget.jsonl")
+    out = _pinging(fake, ledger, period_s=colab.KEEPALIVE_PERIOD_S).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.pings == [] and (out["keepalive_pings"], out["keepalive_failed"]) == (0, 0)
+    assert colab.KEEPALIVE_PERIOD_S == 60.0 and colab.KEEPALIVE_TIMEOUT_S < colab.KEEPALIVE_PERIOD_S
+
+
+def _entry(tmp_path: Path, shebang: str, *, python: bool = True) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    if python:
+        (tmp_path / "bin").mkdir(exist_ok=True)
+        (tmp_path / "bin" / "python").write_text("")
+    entry = tmp_path / "colab"
+    entry.write_text(f"{shebang}\n# -*- coding: utf-8 -*-\nimport sys\n")
+    return entry
+
+
+def test_the_ping_runs_on_the_python_named_by_the_clis_shebang(tmp_path: Path) -> None:
+    python = tmp_path / "bin" / "python"
+    assert colab.keepalive_command(_entry(tmp_path, f"#!{python}")) == (str(python), "-I", str(colab.PING_SCRIPT))
+    for shebang in ("#!/bin/sh", "#!/usr/bin/env python3", f"#!{python} -E", "import sys"):
+        assert colab.keepalive_command(_entry(tmp_path, shebang)) is None
+    assert colab.keepalive_command(_entry(tmp_path / "gone", f"#!{tmp_path}/gone/bin/python", python=False)) is None
+    assert colab.keepalive_command(tmp_path / "missing") is None
+    assert colab.PING_SCRIPT.is_file() and colab.PING_SCRIPT.parent == Path(colab.__file__).parent
+
+
+def test_without_a_python_shebang_the_night_trains_without_pings_and_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake, ledger = SlowExec(), Ledger(tmp_path / "budget.jsonl")
+    runner = ColabRunner(cli=ColabCli(_entry(tmp_path, "#!/bin/sh"), run=fake), ledger=ledger,
+                         is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(),
+                         keepalive_period_s=PERIOD_S)
+    with caplog.at_level(logging.WARNING):
+        out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["steps"] == 9 and fake.pings == []
+    assert (out["keepalive_pings"], out["keepalive_failed"]) == (1, 1)  # one try, then no more
+    assert "without keep-alive" in caplog.text
+
+
+def test_the_ping_script_imports_only_colab_cli_and_the_standard_library() -> None:
+    tree = ast.parse(colab.PING_SCRIPT.read_text(encoding="utf-8"))
+    imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    assert "colab_cli" in imported and imported - {"colab_cli"} <= set(sys.stdlib_module_names)
+
+
+class _ReadTimeout(Exception):
+    pass
+
+
+def _ping_module(monkeypatch: pytest.MonkeyPatch, sessions: dict[str, str], issue: Any) -> types.ModuleType:
+    """The ping script, loaded against a fake ``colab_cli``: no OAuth, no network."""
+    client = types.ModuleType("colab_cli.client")
+    client.TUN_ENDPOINT = "/tun/m"  # type: ignore[attr-defined]
+    client.requests = types.SimpleNamespace(exceptions=types.SimpleNamespace(ReadTimeout=_ReadTimeout))  # type: ignore[attr-defined]
+
+    class State:
+        def __init__(self) -> None:
+            self.store = types.SimpleNamespace(
+                get=lambda name: None if name not in sessions else types.SimpleNamespace(endpoint=sessions[name]))
+            self.client = types.SimpleNamespace(colab_domain="https://colab.example", _issue_request=issue)
+
+    common = types.ModuleType("colab_cli.common")
+    common.State = State  # type: ignore[attr-defined]
+    package = types.ModuleType("colab_cli")
+    for name, module in (("colab_cli", package), ("colab_cli.client", client), ("colab_cli.common", common)):
+        monkeypatch.setitem(sys.modules, name, module)
+    spec = importlib.util.spec_from_file_location("colab_ping_under_test", colab.PING_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_ping_script_gets_the_sessions_keepalive_and_a_read_timeout_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def issue(url: str, **kw: Any) -> None:
+        seen.append((url, kw))
+
+    ping = _ping_module(monkeypatch, {"anjo-sleep-x": "gpu-a100-s-1"}, issue)
+    assert ping.main(["anjo-sleep-x"]) == 0
+    url, kw = seen[0]
+    assert url == "https://colab.example/tun/m/gpu-a100-s-1/keep-alive/"
+    assert kw["headers"] == {"X-Colab-Tunnel": "Google"} and 0 < kw["timeout"] < colab.KEEPALIVE_TIMEOUT_S
+
+    def times_out(url: str, **kw: Any) -> None:
+        raise _ReadTimeout("read timed out")
+
+    assert _ping_module(monkeypatch, {"anjo-sleep-x": "e"}, times_out).main(["anjo-sleep-x"]) == 0
+
+    def refused(url: str, **kw: Any) -> None:
+        raise ConnectionError("refused")
+
+    with pytest.raises(ConnectionError):  # any other failure: uncaught, so the process exits 1
+        _ping_module(monkeypatch, {"anjo-sleep-x": "e"}, refused).main(["anjo-sleep-x"])
+    unknown = _ping_module(monkeypatch, {}, issue)
+    assert unknown.main(["anjo-sleep-y"]) not in (0, 1) and unknown.main([]) not in (0, 1)

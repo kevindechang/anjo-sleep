@@ -25,6 +25,9 @@ Everything else fails the night as ``colab`` does:
 - ``BudgetStop``, ``Cancelled``, an interrupt;
 - a VM stop that failed. That VM may still run, so stop it by hand before anything else.
 
+A keep-alive ping that fails (``KEEPALIVE``, from its own thread while the exec runs) is noted like
+any call but never decides the night: the exec's own outcome does.
+
 By the time the job falls back, the Colab runner's own cleanup has run: the VM is stopped (a life's
 VM too), and the ``colab_cu`` hold is settled for what the VM ran, or in full after a ``new`` that
 may have made one. Then the same inputs (dataset, recipe, warm start, adapter name, timeout) go to
@@ -49,7 +52,16 @@ from typing import Final
 from anjo.sleep.budget import Ledger
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config
-from anjo.sleep.train.runners.colab import MKDIR, ColabCli, ColabError, ColabLives, ColabRunner, command_label
+from anjo.sleep.train.runners.colab import (
+    KEEPALIVE,
+    KEEPALIVE_PERIOD_S,
+    MKDIR,
+    ColabCli,
+    ColabError,
+    ColabLives,
+    ColabRunner,
+    command_label,
+)
 from anjo.sleep.train.runners.modal import ModalRunner
 
 # What one Colab CLI call raises when Colab fails: an exit code, a hang past its hard timeout, no CLI.
@@ -59,6 +71,7 @@ CLI_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
 BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload")
 EXEC: Final = "exec"
 STOP: Final = "stop"
+NOT_THE_NIGHT: Final = (STOP, KEEPALIVE)  # calls whose failure is never the night's: the VM's stop, a ping
 logger = logging.getLogger(__name__)
 
 
@@ -104,10 +117,11 @@ class TracedCli(ColabCli):
 def fallback_reason(error: BaseException, failed: Sequence[Failed]) -> str | None:
     """Why Colab's ``error`` sends the job to Modal, or None when it fails the night as on ``colab``.
 
-    Only a CLI call's own failure falls back: the first failed call other than the VM's stop must
-    have raised ``error`` itself, so a refusal, a receipt that isn't one or a failed stop never does.
+    Only a CLI call's own failure falls back: the first failed call other than the VM's stop and the
+    keep-alive's pings must have raised ``error`` itself, so a refusal, a receipt that isn't one, a
+    failed stop or a failed ping never does.
     """
-    first = next((call for call in failed if call.command != STOP), None)
+    first = next((call for call in failed if call.command not in NOT_THE_NIGHT), None)
     if first is None or first.error is not error:
         return None
     if isinstance(error, subprocess.TimeoutExpired):
@@ -127,10 +141,11 @@ class ColabModalRunner:
     def __init__(
         self, *, cli: ColabCli, modal: ModalRunner, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
+        keepalive_period_s: float = KEEPALIVE_PERIOD_S,
     ) -> None:
         self._trace = TracedCli(cli, clock=clock)
         self.colab = ColabRunner(cli=self._trace, ledger=ledger, is_synthetic=is_synthetic, allow_real=allow_real,
-                                 clock=clock)
+                                 clock=clock, keepalive_period_s=keepalive_period_s)
         self.modal = modal
         self._landed: set[str] = set()
 

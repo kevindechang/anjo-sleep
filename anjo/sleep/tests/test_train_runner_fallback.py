@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import subprocess
+import time
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +32,8 @@ from anjo.sleep.train.lora import JOB, TrainReceipt, adapter_name
 from anjo.sleep.train.runners import choice
 from anjo.sleep.train.runners.colab import (
     A100_CU_PER_HOUR,
+    KEEPALIVE,
+    PING_SCRIPT,
     ColabCli,
     ColabError,
     ColabRunner,
@@ -45,7 +48,8 @@ TIMEOUT_S = 7200.0
 NIGHT = date(2026, 10, 28)
 MINUTE_S = 60.0
 # The kernel's own --timeout for a cold night with only the dataset to upload (colab._setup_s(1)).
-KERNEL_S = TIMEOUT_S - (600.0 + 900.0 + 60.0 + 60.0 + 300.0 + 3 * 300.0 + 180.0 + 60.0)  # 60 + 60: mkdir
+# 60 + 60: mkdir; 30: a keep-alive ping still running when the exec ends
+KERNEL_S = TIMEOUT_S - (600.0 + 900.0 + 60.0 + 60.0 + 300.0 + 3 * 300.0 + 180.0 + 60.0 + 30.0)
 
 
 def _synthetic(uid: str) -> bool:
@@ -175,6 +179,57 @@ def test_a_colab_timeout_trains_the_night_on_modal(
     assert out["runner"] == "modal" and out["fallback_reason"] == reason and len(calls.spawned) == 1
     assert colab.commands()[-1] == "stop" and ledger.open_holds() == ()
     assert 0 < ledger.used("colab_cu") <= Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount and ledger.used("modal_usd") > 0
+
+
+class PingsFail(TimedColab):
+    """``TimedColab`` whose ``exec`` takes ``wall_s`` of real time, so keep-alive pings run, and whose every
+    ping (the CLI's python running the ping script) exits 1."""
+
+    def __init__(self, fail: str | None = None, *, timeout: bool = False, wall_s: float = 0.2) -> None:
+        super().__init__(fail, timeout=timeout)
+        self.wall_s, self.pings = wall_s, 0
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        args = list(args)
+        if args[1] == "-I":
+            self.pings += 1
+            return subprocess.CompletedProcess(args, 1, "", "boom")
+        if command_label(args[3:]) == "exec":
+            time.sleep(self.wall_s)
+        return super().__call__(args, timeout_s)
+
+
+def _pinging_rig(tmp_path: Path, colab: TimedColab) -> tuple[ColabModalRunner, FakeCalls, Ledger]:
+    calls, ledger = FakeCalls(), Ledger(tmp_path / "budget.jsonl")
+    cli = ColabCli(Path("/fake/colab"), run=colab, keepalive=("/cli/bin/python", "-I", str(PING_SCRIPT)))
+    runner = ColabModalRunner(cli=cli, modal=_modal(tmp_path, calls, ledger), ledger=ledger, is_synthetic=_synthetic,
+                              clock=colab.clock, keepalive_period_s=0.02)
+    return runner, calls, ledger
+
+
+@pytest.mark.parametrize(("fail", "timeout", "trained", "reason"), [
+    (None, False, "colab", None),  # the exec trained: the failed pings change nothing
+    ("exec", True, "modal", "colab exec timed out"),  # a timeout still falls back, though failed pings came first
+])
+def test_a_failed_keepalive_ping_is_never_the_nights_failure(
+    tmp_path: Path, fail: str | None, timeout: bool, trained: str, reason: str | None,
+) -> None:
+    assert command_label((KEEPALIVE, "anjo-sleep-x")) == KEEPALIVE == "keepalive"  # pings carry their own label
+    colab = PingsFail(fail, timeout=timeout)
+    runner, calls, ledger = _pinging_rig(tmp_path, colab)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert colab.pings > 0 and out["runner"] == trained and out.get("fallback_reason") == reason
+    assert len(calls.spawned) == (trained == "modal") and ledger.open_holds() == ()
+    if trained == "colab":
+        assert out["keepalive_failed"] == out["keepalive_pings"] == colab.pings
+
+
+def test_an_exec_that_fails_after_failed_pings_fails_with_its_own_error(tmp_path: Path) -> None:
+    colab = PingsFail("exec")
+    runner, calls, ledger = _pinging_rig(tmp_path, colab)
+    with pytest.raises(ColabError, match="colab exec failed with exit 1"):
+        runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert colab.pings > 0 and calls.spawned == [] and ledger.open_holds() == ()
 
 
 # ── Everything else fails the night as on ``colab`` ─────────────────────────

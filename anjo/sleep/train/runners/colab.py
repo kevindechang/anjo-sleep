@@ -20,6 +20,16 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
    ran for. A stop that fails settles the whole hold and raises, so a VM that may still run is
    never silent.
 
+**The keep-alive.** 2026-11-02: an A100 running a training ``exec`` was reclaimed about 35 minutes
+in, with the local ``colab exec`` left waiting, and the CLI sends no keep-alive. While the training
+``exec`` runs, and only then, a thread pings the session's keep-alive every ``KEEPALIVE_PERIOD_S``,
+the first one period in: each ping is one process, ``colab_ping.py`` on the CLI's own python (the
+``colab`` entry point's shebang), under its own hard timeout. A ping that fails is logged and
+counted (``keepalive_pings``, ``keepalive_failed`` in the job's outputs), never raised: the exec
+decides the night. Its calls count as ``keepalive`` (``command_label``), so the fallback's tracing
+never takes one for the night's failure. With no python on the shebang the night trains without
+pings, and says so.
+
 A run killed hard runs no ``finally``. Every session is named ``anjo-sleep-<adapter>``, so the
 night command's sweep (``stop_leftover_sessions``) stops any a killed run left before it starts.
 MIND's synthetic jobs (Tasks 17 and 17b) name theirs ``anjo-mind-<...>`` instead (the runner's
@@ -45,9 +55,12 @@ import json
 import math
 import re
 import subprocess
+import logging
 import tarfile
+import threading
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import TracebackType
 from pathlib import Path
@@ -110,6 +123,15 @@ REMOTE_DIRS: Final = (REMOTE_DIR, f"{REMOTE_DIR}/prev")
 MKDIR_SCRIPT: Final = f"import os\nfor path in {REMOTE_DIRS!r}:\n    os.makedirs(path, exist_ok=True)\n"
 MIN_EXEC_S: Final = 1800.0
 _OUTPUT_FILES: Final = (*config.ADAPTER_FILES, colab_train.RECEIPT)
+# The keep-alive (see above): a ping a minute while the training exec runs, each its own process
+# under a hard timeout; the exec's end waits for a ping in flight, so the job's time counts one.
+KEEPALIVE: Final = "keepalive"  # a ping's command, as ``call`` and ``command_label`` name it
+KEEPALIVE_PERIOD_S: Final = 60.0
+KEEPALIVE_TIMEOUT_S: Final = 30.0
+KEEPALIVE_THREAD: Final = "colab-keepalive"
+PING_SCRIPT: Final = Path(__file__).with_name("colab_ping.py")
+_PYTHON: Final = re.compile(r"python[0-9.]*")
+logger = logging.getLogger(__name__)
 
 CliRun = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"]
 
@@ -122,25 +144,60 @@ class RealPersonRefused(PermissionError):
     """A person who isn't registered synthetic, without ``allow_real``."""
 
 
+class KeepaliveOff(ColabError):
+    """No python to run the ping on: the ``colab`` entry point's first line names none."""
+
+
 def run_cli(args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
     """One CLI call under a hard timeout; ``TimeoutExpired`` kills it and propagates."""
     return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout_s, check=False)
 
 
-class ColabCli:
-    """``colab --auth oauth2 <command> ...``, every call with a finite timeout."""
+def keepalive_command(binary: Path = COLAB_BIN) -> tuple[str, ...] | None:
+    """The ping's command before its session's name: the python on the ``colab`` entry point's
+    shebang (the CLI's own environment, where ``colab_cli`` imports), isolated (``-I``), running
+    ``PING_SCRIPT``. None when the first line names no python file by its absolute path alone: a
+    missing entry point, a shell launcher, ``/usr/bin/env python3``, a python with flags."""
+    try:
+        with binary.open("rb") as entry:
+            first = entry.readline(4096).decode("utf-8", "replace").strip()
+    except OSError:
+        return None
+    words = first[2:].split() if first.startswith("#!") else []
+    if len(words) != 1:
+        return None
+    python = Path(words[0])
+    if not (python.is_absolute() and _PYTHON.fullmatch(python.name) and python.is_file()):
+        return None
+    return (str(python), "-I", str(PING_SCRIPT))
 
-    def __init__(self, binary: Path = COLAB_BIN, *, run: CliRun = run_cli) -> None:
+
+class ColabCli:
+    """``colab --auth oauth2 <command> ...``, every call with a finite timeout. ``KEEPALIVE`` is the
+    one command the CLI lacks: ``call(KEEPALIVE, session)`` runs the ping, ``keepalive`` (the command
+    before the session's name) or, by default, ``keepalive_command(binary)``."""
+
+    def __init__(
+        self, binary: Path = COLAB_BIN, *, run: CliRun = run_cli, keepalive: Sequence[str] | None = None,
+    ) -> None:
         self._binary = binary
         self._run = run
+        self._keepalive = None if keepalive is None else tuple(keepalive)
 
     def call(self, *args: str, timeout_s: float) -> str:
         if not (0 < timeout_s < math.inf):
             raise ValueError("every colab call has a finite timeout")
-        done = self._run([str(self._binary), *AUTH, *args], timeout_s)
+        argv = self._ping(args) if command_label(args) == KEEPALIVE else [str(self._binary), *AUTH, *args]
+        done = self._run(argv, timeout_s)
         if done.returncode != 0:
             raise ColabError(f"colab {command_label(args)} failed with exit {done.returncode}")
         return done.stdout
+
+    def _ping(self, args: Sequence[str]) -> list[str]:
+        command = self._keepalive or keepalive_command(self._binary)
+        if command is None:
+            raise KeepaliveOff(f"{self._binary}'s first line names no python to ping the session with")
+        return [*command, *args[1:]]
 
 
 def hold_base(night: str, person_id: str, prefix: str = SESSION_PREFIX) -> str:
@@ -249,11 +306,12 @@ def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
 
 def _setup_s(uploads: int) -> float:
     return (NEW_TIMEOUT_S + INSTALL_TIMEOUT_S + MKDIR_TIMEOUT_S + EXEC_MARGIN_S + uploads * UPLOAD_TIMEOUT_S
-            + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S + EXEC_MARGIN_S)
+            + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S + EXEC_MARGIN_S + KEEPALIVE_TIMEOUT_S)
 
 
 def command_label(args: Sequence[str]) -> str:
-    """A CLI call's command (``args[0]``), or ``MKDIR`` for the ``exec`` that makes the remote folders."""
+    """A CLI call's command (``args[0]``: ``KEEPALIVE`` for a keep-alive ping), or ``MKDIR`` for the
+    ``exec`` that makes the remote folders."""
     if args and args[0] == "exec" and "-f" in args and Path(args[list(args).index("-f") + 1]).name == MKDIR_FILE:
         return MKDIR
     return args[0]
@@ -279,6 +337,44 @@ def _exec_script(workdir: Path, seed: bool) -> Path:
     return path
 
 
+@dataclass
+class _Pings:
+    sent: int = 0
+    failed: int = 0
+
+
+def _ping_each(cli: ColabCli, session: str, period_s: float, stop: threading.Event, pings: _Pings) -> None:
+    due = time.monotonic() + period_s
+    while not stop.wait(max(0.0, due - time.monotonic())):
+        due += period_s
+        pings.sent += 1
+        try:
+            cli.call(KEEPALIVE, session, timeout_s=KEEPALIVE_TIMEOUT_S)
+        except KeepaliveOff as off:
+            pings.failed += 1
+            logger.warning("%s: %s trains without keep-alive pings", off, session)
+            return
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:
+            pings.failed += 1
+            logger.warning("a keep-alive ping for %s failed (%s)", session, type(error).__name__)
+
+
+@contextmanager
+def _keepalive(cli: ColabCli, session: str, period_s: float) -> Iterator[_Pings]:
+    """Ping ``session``'s keep-alive every ``period_s`` from a thread while the block runs, the first
+    one period in. The thread is stopped and joined when the block ends, however it ends."""
+    pings, stop = _Pings(), threading.Event()
+    thread = threading.Thread(target=_ping_each, args=(cli, session, period_s, stop, pings), name=KEEPALIVE_THREAD,
+                              daemon=True)
+    thread.start()
+    try:
+        yield pings
+    finally:
+        stop.set()
+        thread.join()
+        logger.info("keep-alive for %s: %d pings, %d failed", session, pings.sent, pings.failed)
+
+
 def _receipt(path: Path) -> dict[str, object]:
     receipt = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(receipt, dict):
@@ -299,10 +395,14 @@ class ColabRunner:
         self, *, cli: ColabCli, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
         packages: Sequence[str] = TRAIN_PACKAGES, session_prefix: str = SESSION_PREFIX,
+        keepalive_period_s: float = KEEPALIVE_PERIOD_S,
     ) -> None:
         if session_prefix not in SESSION_PREFIXES:
             raise ValueError(f"a session prefix is one of {', '.join(SESSION_PREFIXES)}")
+        if not (0 < keepalive_period_s < math.inf):
+            raise ValueError("the keep-alive has a finite period")
         self.session_prefix = session_prefix
+        self._keepalive_period_s = keepalive_period_s
         self._cli = cli
         self._ledger = ledger
         self._is_synthetic = is_synthetic
@@ -378,8 +478,9 @@ class ColabRunner:
         seed = _seeded(inputs)
         entry = _exec_script(Path(str(inputs["workdir"])), seed)
         try:
-            cli.call("exec", "-s", session, "-f", str(entry), "--timeout", str(exec_s), *flags,
-                     timeout_s=exec_s + EXEC_MARGIN_S)
+            with _keepalive(cli, session, self._keepalive_period_s) as pings:
+                cli.call("exec", "-s", session, "-f", str(entry), "--timeout", str(exec_s), *flags,
+                         timeout_s=exec_s + EXEC_MARGIN_S)
         finally:
             if seed:
                 entry.unlink(missing_ok=True)
@@ -387,7 +488,7 @@ class ColabRunner:
         for name in _OUTPUT_FILES:
             cli.call("download", "-s", session, f"{REMOTE_DIR}/out/{name}", str(out / name),
                      timeout_s=DOWNLOAD_TIMEOUT_S)
-        return _receipt(out / colab_train.RECEIPT)
+        return {**_receipt(out / colab_train.RECEIPT), "keepalive_pings": pings.sent, "keepalive_failed": pings.failed}
 
     def lives(self, *, life_timeout_s: float) -> ColabLives:
         """A runner that keeps one VM per life for all its nights (Task 12a); use it as a context
@@ -422,8 +523,9 @@ def _life_session(person_id: str, prefix: str = SESSION_PREFIX) -> str:
 
 
 def _night_setup_s(uploads: int) -> float:
-    """A later night's fixed call time on a VM that is up: uploads, downloads and the exec margin."""
-    return uploads * UPLOAD_TIMEOUT_S + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + EXEC_MARGIN_S
+    """A later night's fixed call time on a VM that is up: uploads, downloads, the exec margin and the
+    last keep-alive ping."""
+    return uploads * UPLOAD_TIMEOUT_S + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + EXEC_MARGIN_S + KEEPALIVE_TIMEOUT_S
 
 
 @dataclass
