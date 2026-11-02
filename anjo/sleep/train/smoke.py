@@ -56,7 +56,8 @@ It prints one line per step and exits 1 on the first failed check.
 
 ``--runner modal`` or ``--runner colab`` is the same night on real Glimmer, on the runner the night
 trains on (``runners/choice.py``), with the night's own recipe and template: ``sft_dpo`` from cold on
-``smoke_dataset``, under a one-hour hard timeout (``SMOKE_TIMEOUT_S``). Without ``--run`` it only
+``smoke_dataset``, under a 1.5-hour hard timeout (``SMOKE_TIMEOUT_S``: Colab's call allowance plus its
+shortest training). Without ``--run`` it only
 prints the plan: the job and the hold it would take, read from the budget ledger, which it never
 writes. Nothing is held, started or spent::
 
@@ -117,7 +118,7 @@ LONG_WORDS: Final = 9000  # one word is one token, so these rows exceed max_seq_
 RUN_TIMEOUT_S: Final = 1800.0
 OFFLINE: Final = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"}
 SMOKE_OWNER: Final = "smoke-train-"  # the GPU smoke's synthetic person, a fresh one each run
-SMOKE_TIMEOUT_S: Final = 3600.0  # the GPU smoke's hard timeout, held in full before it starts
+SMOKE_TIMEOUT_S: Final = 5400.0  # the GPU smoke's hard timeout, held in full before it starts
 # Each runner's pool and its A100-80GB rate an hour: Modal's in dollars, Colab's in compute units.
 PRICES: Final[Mapping[str, tuple[Pool, float]]] = {
     "modal": (modal_runner.POOL, modal_runner.A100_USD_PER_HOUR), "colab": (colab.POOL, colab.A100_CU_PER_HOUR),

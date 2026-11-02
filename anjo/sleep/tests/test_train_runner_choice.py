@@ -259,6 +259,15 @@ def test_smoke_plan_on_modal_spends_nothing(tmp_path: Path, monkeypatch: pytest.
     assert "on colab_cu" in capsys.readouterr().out
 
 
+def test_the_smoke_timeout_leaves_the_colab_runner_its_training_time() -> None:
+    """2026-11-02: the detached runner's call allowance (``_setup_s``) grew past the smoke's old 1 h, so the
+    A100 smoke was refused before its VM ("leaves too little time to train"). It must fit any upload count."""
+    from anjo.sleep.train.runners import colab as colab_runner
+
+    uploads = 1  # the smoke trains sft_dpo from cold, unseeded: the dataset alone
+    assert smoke.SMOKE_TIMEOUT_S - colab_runner._setup_s(uploads) >= colab_runner.MIN_EXEC_S
+
+
 def test_the_smoke_runs_on_a_gpu_runner_with_the_nights_own_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                                     capsys: pytest.CaptureFixture[str]) -> None:
     from anjo.sleep.serving import framing
