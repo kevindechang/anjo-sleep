@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -318,8 +319,32 @@ def _night(steps: list[tuple[str, str, dict[str, Any]]], result: NightResult | N
     return execute
 
 
+class Live:
+    """``live_mind``'s wait and guard, as the night calls them: each call kept in ``log`` (with the night's
+    steps, when the test's night writes them there too)."""
+
+    def __init__(self, log: list[str] | None = None, *, waited: bool = True) -> None:
+        self.log = [] if log is None else log
+        self.waited = waited
+
+    def wait(self, user_id: str, timeout_s: float) -> bool:
+        self.log.append(f"wait {user_id} {timeout_s:g}")
+        return self.waited
+
+    @contextmanager
+    def guard(self, user_id: str, *, timeout_s: float = 0.0) -> Iterator[None]:
+        self.log.append(f"guard {user_id} {timeout_s:g}")
+        try:
+            yield
+        finally:
+            self.log.append("guard released")
+
+    def ports(self) -> judge_child.LivePorts:
+        return judge_child.LivePorts(wait=self.wait, guard=self.guard)
+
+
 def _run(host: dict[str, Any], night_id: str, execute: Any, notes: Notes, monkeypatch: pytest.MonkeyPatch,
-         served: list[str] | None = None) -> int:
+         served: list[str] | None = None, live: Live | None = None) -> int:
     held: list[Any] = []
 
     def wiring(notifier: Any) -> Any:
@@ -338,7 +363,8 @@ def _run(host: dict[str, Any], night_id: str, execute: Any, notes: Notes, monkey
 
     ensure = (lambda ckpt: served.append(ckpt.id)) if served is not None else None
     return judge_child.run(night_id, store=host["store"], book=host["book"],
-                           environ={"ANJO_DATA_DIR": str(host["root"])}, execute=capture, notifier=notes, ensure=ensure)
+                           environ={"ANJO_DATA_DIR": str(host["root"])}, execute=capture, notifier=notes, ensure=ensure,
+                           live=(live or Live()).ports())
 
 
 def test_a_promoted_night_shows_its_steps_gives_one_note_and_goes_live(host: dict[str, Any],
@@ -429,3 +455,84 @@ def test_the_child_names_the_night_by_its_records_fields_and_the_engine_builds_i
     assert ran == "ran"
     assert handed == {"job": judge.JudgeNight(user=JUDGE, night=date(2026, 11, 3), window=(start, end), as_of=end),
                       "wiring": "wiring"}
+
+
+# ── live MIND passes and the night ───────────────────────────────────────────
+
+
+def _logged_night(log: list[str], steps: list[tuple[str, str, dict[str, Any]]], *,
+                  raises: BaseException | None = None) -> Any:
+    def execute(*, observer: Any, **kwargs: Any) -> JudgeOutcome:
+        for step, state, receipt in steps:
+            log.append(f"{step} {state}")
+            observer(JUDGE, step, state, receipt)
+        if raises is not None:
+            raise raises
+        return JudgeOutcome(_result("rejected", Path("/nonexistent")), warm_usd=0.0)
+
+    return execute
+
+
+PHASE_ONE: list[tuple[str, str, dict[str, Any]]] = [
+    ("extract", "running", {}), ("extract", "ok", {}), ("notice", "running", {}), ("notice", "ok", {}),
+    ("choose", "running", {}), ("homework", "running", {"background": True}), ("choose", "ok", {}),
+    ("brief", "running", {}), ("brief", "ok", {}), ("homework", "running", {}), ("note", "running", {})]
+
+
+def test_the_night_waits_for_a_live_pass_and_holds_its_lock_around_the_mind_steps(
+    host: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log: list[str] = []
+    night_id = _queued(host, monkeypatch)
+    assert _run(host, night_id, _logged_night(log, PHASE_ONE), Notes(), monkeypatch, live=Live(log)) == 0
+    wait = judge_child.PASS_WAIT_S
+    assert log[:6] == ["extract running", "extract ok", "notice running", f"wait {JUDGE} {wait:g}",
+                       f"guard {JUDGE} {wait:g}", "notice ok"]  # extraction runs without it
+    released = log.index("guard released")
+    assert log[released - 1] == "brief running"  # the background study's start inside choose kept it
+    assert log.count("guard released") == 1 and log.count(f"wait {JUDGE} {wait:g}") == 1
+
+
+def test_a_night_that_breaks_during_its_mind_steps_lets_the_lock_go(host: dict[str, Any],
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    log: list[str] = []
+    night_id = _queued(host, monkeypatch)
+    execute = _logged_night(log, PHASE_ONE[:3], raises=RuntimeError("boom"))
+    assert _run(host, night_id, execute, Notes(), monkeypatch, live=Live(log)) == 1
+    assert log[-1] == "guard released" and log.count("guard released") == 1
+
+
+def test_a_live_pass_still_running_after_the_wait_leaves_the_night_waiting_for_its_lock(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log: list[str] = []
+    guard = judge_child.LiveGuard(JUDGE, Live(log, waited=False).ports())
+    guard.observe("notice", "running", {})
+    assert guard.held and log[1] == f"guard {JUDGE} {judge_child.PASS_WAIT_S:g}" and "still ran" in caplog.text
+    guard.release()
+    assert log[-1] == "guard released"
+
+
+def test_a_night_takes_the_judges_real_live_pass_lock_and_the_page_sees_it_only_around_mind() -> None:
+    from anjo.sleep.app import live_mind
+
+    guard = judge_child.LiveGuard(JUDGE)  # live_mind's own wait and lock
+    guard.observe("extract", "running", {})
+    assert live_mind.live_pass_state(JUDGE) == "idle"
+    guard.observe("notice", "running", {})
+    assert guard.held and live_mind.live_pass_state(JUDGE) == "running"
+    assert live_mind.wait_for_live_pass(JUDGE, 0.0) is False  # a live pass now waits, then skips
+    guard.observe("brief", "running", {})
+    assert not guard.held and live_mind.live_pass_state(JUDGE) == "idle"
+
+
+def test_a_lock_a_stuck_pass_holds_is_reported_once_and_mind_runs_on() -> None:
+    from anjo.sleep.app import live_mind
+
+    guard = judge_child.LiveGuard(JUDGE, timeout_s=0.05)
+    with live_mind.live_pass_guard(JUDGE):  # a live pass that never lets go
+        with pytest.raises(live_mind.LiveBusy):  # the night's observer logs it and the night goes on
+            guard.observe("notice", "running", {})
+        guard.observe("choose", "running", {})  # not tried again mid-MIND
+    assert not guard.held
+    guard.release()

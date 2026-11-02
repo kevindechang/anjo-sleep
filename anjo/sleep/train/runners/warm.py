@@ -7,8 +7,12 @@
   method's call is a function call to Modal. ``warm`` spawns the keep-warm method and returns at once.
 - ``Warmer`` keeps the warm container up from the start of a training night until its training
   ends: one ``warm`` call now, then one every ``ping_s`` (``ANJO_SLEEP_JUDGE_WARM_PING_S``, 45 s by
-  default, inside the container's 90 s scale-down window), on a daemon thread, until ``stop``. A ping
-  that fails is logged and the next one tries again: a cold container costs time, never the night.
+  default, inside the container's 90 s scale-down window), on a daemon thread, until ``stop`` or its
+  deadline, whichever comes first. The deadline is what its hold paid for, less the scale-down
+  window: no ping starts after it, whatever the night is doing, so a slow night trains on a container
+  that may have gone cold rather than paying for one nobody holds. A ping that fails is logged and
+  the next one tries again: a cold container costs time, never the night. ``span_s`` is what the
+  pings kept the container up for, from the first ping to the last one's return.
 - ``WarmFirstRunner`` is the ``GpuRunner`` a judge's night trains on. A recipe the warm app runs
   (``warm_job.refusal``: plain SFT, no pairs' terms, no thought channel) goes to the warm runner, a
   ``ModalRunner`` with this app's name and digest, so it holds, records, cancels and settles exactly
@@ -22,6 +26,7 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
@@ -96,13 +101,20 @@ class WarmCalls(SdkCalls):
 
 
 class Warmer:
-    """Keep-warm calls on a daemon thread: one at ``start``, then one every ``ping_s`` until ``stop``."""
+    """Keep-warm calls on a daemon thread: one at ``start``, then one every ``ping_s`` until ``stop``,
+    and none that would start ``deadline_s`` or more after the first."""
 
-    def __init__(self, warm: Callable[[], bool], ping_s: float = warm_job.PING_S) -> None:
-        self._warm, self._ping_s = warm, ping_s
+    def __init__(self, warm: Callable[[], bool], ping_s: float = warm_job.PING_S, *, deadline_s: float,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        if deadline_s <= 0:
+            raise WarmChoiceError("the keep-warm's deadline is a positive number of seconds")
+        self._warm, self._ping_s, self._deadline_s, self._clock = warm, ping_s, deadline_s, clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.pings = 0
+        self.first_ping_at: float | None = None
+        self.last_ping_at: float | None = None  # the last ping's return
+        self.expired = False
 
     def start(self) -> None:
         if self._thread is not None:
@@ -112,8 +124,16 @@ class Warmer:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            now = self._clock()
+            if self.first_ping_at is None:
+                self.first_ping_at = now
+            elif now - self.first_ping_at >= self._deadline_s:
+                self.expired = True
+                logger.warning("the warm trainer's keep-warm reached its %.0f s deadline and stops", self._deadline_s)
+                return
             self.pings += 1
             self._warm()
+            self.last_ping_at = self._clock()
             self._stop.wait(self._ping_s)
 
     def stop(self) -> None:
@@ -124,6 +144,15 @@ class Warmer:
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def span_s(self) -> float | None:
+        """Seconds the pings kept the container up, before its scale-down window: from the first ping
+        to the last one's return, or to now while a ping is still out. None before any ping."""
+        if self.first_ping_at is None:
+            return None
+        last = self._clock() if self.running or self.last_ping_at is None else self.last_ping_at
+        return max(0.0, last - self.first_ping_at)
 
 
 class WarmFirstRunner:

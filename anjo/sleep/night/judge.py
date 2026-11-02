@@ -17,10 +17,13 @@ its progress through the observer. What makes it a judge's night rather than Kev
   steps run meanwhile. Every step that needs Glimmer still waits for its own wake, as on every night.
 - **Keeping the trainer warm.** The ``Warmer`` starts when the night starts (``WARM_AT_ENV``: ``start``
   by default; ``extract``'s end or ``practice``'s on a host that wants a shorter warm span), so
-  Glimmer's load on the trainer overlaps phase 1, and stops when ``train`` ends, or when the night does. Its time is held on
-  ``modal_usd`` (``WARM_HOLD_S`` at Modal's A100 rate) and settled at what it ran, plus the container's
-  scale-down window, never above the hold. A cold-only host (``ANJO_SLEEP_JUDGE_TRAINER=cold``) warms
-  nothing.
+  Glimmer's load on the trainer overlaps phase 1, and stops when ``train`` ends, when the night does,
+  or at its deadline (``WARM_HOLD_S`` less the scale-down window), whichever is first. Its time is held
+  on ``modal_usd`` (``WARM_HOLD_S`` at Modal's A100 rate) and settled at what the pings kept the
+  container up, plus its scale-down window. A cost past the hold (the last ping's own latency) is
+  never cut to fit: a second hold takes the rest, or, when the pool has no room, the whole cost is
+  settled and logged, and the pool waits for the coordinator to clear it. A cold-only host
+  (``ANJO_SLEEP_JUDGE_TRAINER=cold``) warms nothing.
 - **The lock.** ``sweep.shared_night``: judges' nights run side by side; a night command waits for
   them, and they for it.
 
@@ -35,7 +38,6 @@ import logging
 import os
 import sys
 import threading
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -64,6 +66,7 @@ WARM_AT: Final = ("start", "extract", "practice")
 WARM_HOLD_S: Final = 30 * 60  # the longest the keep-warm runs: phase 1 and practice, with room
 WARM_KIND: Final = "modal_train"  # a night kind: a killed run's hold is settled by the next sweep
 STOP_AT: Final = "train"
+OVER_EPSILON: Final = 1e-9  # dollars: below this a settlement is within its hold
 logger = logging.getLogger(__name__)
 
 
@@ -106,45 +109,67 @@ def judge_steps(profile: DemoProfile) -> StepPlan:
     return StepPlan(accumulation=1, epochs=1, steps_per_epoch=profile.train_steps)
 
 
+def warm_deadline(scaledown_s: float) -> float:
+    """The latest a keep-warm ping may start after the first: the hold's span less the scale-down
+    window the last ping keeps the container up for."""
+    return WARM_HOLD_S - scaledown_s
+
+
 class WarmWindow:
     """The keep-warm's span and its hold: ``begin`` at the warm-up step's end, ``end`` at training's end
     or the night's. Only the first ``begin`` and the first ``end`` count."""
 
-    def __init__(self, warmer: Warmer | None, ledger: Ledger, base: str, *, scaledown_s: float,
-                 clock: Callable[[], float] = time.monotonic) -> None:
-        self._warmer, self._ledger, self._base = warmer, ledger, base
-        self._scaledown_s, self._clock = scaledown_s, clock
+    def __init__(self, warmer: Warmer | None, ledger: Ledger, base: str, *, scaledown_s: float) -> None:
+        self._warmer, self._ledger, self._base, self._scaledown_s = warmer, ledger, base, scaledown_s
         self._held: Reservation | None = None
-        self._started: float | None = None
         self.ended = False
         self.spent = 0.0
 
     def begin(self) -> None:
-        if self._warmer is None or self._started is not None or self.ended:
+        if self._warmer is None or self._held is not None or self.ended:
             return
         self._held = hold(self._ledger, self._base, (POOL,), Bound(A100_USD_PER_HOUR, WARM_HOLD_S))
-        self._started = self._clock()
         self._warmer.start()
 
     def end(self) -> None:
         if self.ended:
             return
         self.ended = True
-        if self._warmer is None or self._held is None or self._started is None:
+        if self._warmer is None or self._held is None:
             return
         self._warmer.stop()
-        ran = self._clock() - self._started + self._scaledown_s
-        self.spent = min(ran / 3600.0 * A100_USD_PER_HOUR, self._held.bound.amount)
-        self._held.settle(self.spent)
+        span = self._warmer.span_s
+        if span is None:  # stopped before its first ping: the container never started for it
+            self._held.release()
+            return
+        self.spent = (span + self._scaledown_s) / 3600.0 * A100_USD_PER_HOUR
+        self._settle(self._held, self.spent)
+
+    def _settle(self, held: Reservation, spent: float) -> None:
+        """Settle what the keep-warm cost, all of it: past the hold, a second hold takes the rest."""
+        over = spent - held.bound.amount
+        if over <= OVER_EPSILON:
+            held.settle(spent)
+            return
+        extra = self._ledger.reserve(f"{held.job}:over", (POOL,),
+                                     Bound(A100_USD_PER_HOUR, over / A100_USD_PER_HOUR * 3600.0))
+        if extra is None:
+            logger.warning("the keep-warm cost $%.2f past its hold and %s has no room for it: the whole "
+                           "cost is settled, and the pool waits to be cleared", over, POOL)
+            held.settle(spent)
+            return
+        logger.warning("the keep-warm cost $%.2f past its hold; a second hold took it", over)
+        held.settle(held.bound.amount)
+        extra.settle(over)
 
 
 def watching(observer: StepObserver | None, window: WarmWindow, start_at: str) -> StepObserver:
     """The night's observer, with the keep-warm started and stopped on the steps' ends."""
     def observe(user_id: str, step: str, state: str, receipt: Mapping[str, object]) -> None:
-        if start_at == "start" or (step == start_at and state == "ok"):
-            window.begin()  # once: later calls do nothing
-        elif step == STOP_AT and state != "running":
-            window.end()
+        if step == STOP_AT and state != "running":
+            window.end()  # training's end, however it ended: nothing after it needs the trainer
+        elif start_at == "start" or (step == start_at and state == "ok"):
+            window.begin()  # once, and never after the end
         if observer is not None:
             observer(user_id, step, state, receipt)
 
@@ -212,7 +237,8 @@ def execute_judge(
     trainer = LoraTrainer(WarmFirstRunner(warm=warm_runner, cold=cold.runner, mode=mode),
                           root=data_dir / "sleep" / "training", publish=publisher(),
                           revision=env.get(REVISION_ENV) or None, cfg=LoraCfg(), steps=judge_steps(profile))
-    window = WarmWindow(Warmer(warm.warm, ping_s) if mode == "warm" else None, ledger,
+    warmer = Warmer(warm.warm, ping_s, deadline_s=warm_deadline(scaledown_s)) if mode == "warm" else None
+    window = WarmWindow(warmer, ledger,
                         f"{WARM_KIND}:{job.night.isoformat()}:{job.user}:warm", scaledown_s=scaledown_s)
     with shared_night(ledger, cold.sweep) as swept:
         try:

@@ -289,12 +289,34 @@ def test_the_warmer_pings_until_stopped() -> None:
         pinged.set()
         return True
 
-    warmer = warm.Warmer(ping, ping_s=10.0)
+    warmer = warm.Warmer(ping, ping_s=10.0, deadline_s=1200.0)
     warmer.start()
     warmer.start()  # once
     assert pinged.wait(5.0)
     warmer.stop()
-    assert not warmer.running and count["n"] == 1
+    assert not warmer.running and count["n"] == 1 and not warmer.expired
+
+
+def test_the_warmer_stops_at_its_deadline_whatever_the_night_is_doing() -> None:
+    clock = {"now": 0.0}
+
+    def ping() -> bool:
+        clock["now"] += 10.0  # each ping's round trip, and the time to the next
+        return True
+
+    warmer = warm.Warmer(ping, ping_s=0.001, deadline_s=25.0, clock=lambda: clock["now"])
+    assert warmer.span_s is None
+    warmer.start()
+    assert warmer._thread is not None
+    warmer._thread.join(5.0)  # nobody calls stop: the deadline ends it
+    assert not warmer.running and warmer.expired
+    assert warmer.pings == 3  # started at 0, 10 and 20 s; none at 30 s, past the 25 s deadline
+    assert warmer.span_s == 30.0  # the first ping's start to the last one's return
+
+
+def test_the_warmers_deadline_is_a_positive_number_of_seconds() -> None:
+    with pytest.raises(warm.WarmChoiceError):
+        warm.Warmer(lambda: True, deadline_s=0.0)
 
 
 class _Spawned:

@@ -8,6 +8,14 @@ night on the app's wiring with the judge's note held back until the night ends (
 writes each step into the night's record as the night view's stages, makes tonight's adapter servable
 when it was promoted (``serve``), then settles the hold and checks the judges' spend alerts.
 
+Live MIND passes (``live_mind``) are kept off the night's MIND steps (``LiveGuard``): as the first
+of them starts, the night (which holds the night lock by then, so no new pass starts) waits for a pass
+already under way (``wait_for_live_pass``), then holds the judge's live-pass lock
+(``live_pass_guard``) until the first step after MIND's starts (the brief, or anything later), and lets
+it go at the night's end in any case. Only around those steps: the page reads the lock as a live pass
+``running``. A lock still held after ``PASS_WAIT_S`` more is ``LiveBusy``, which the night's observer
+reports (logged, and in the night's ``observer_errors``) and MIND's steps run without the lock.
+
 The note: phase 1 writes it and the refine step may write it again after the gates, so the night
 view shows each version as it comes, and the judge's outreach gets one note, the last, when the
 night ends. Nothing is pushed: a judge is watching the night view.
@@ -18,7 +26,8 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from contextlib import AbstractContextManager, ExitStack
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -35,6 +44,10 @@ from anjo.sleep.types import CheckpointRef, NightResult
 LIVE: Final = "Live: her next reply comes from tonight's weights"
 LOADS_LATER: Final = "Loads with her next reply"
 NOTHING_TO_SERVE: Final = "Nothing new to serve"
+PASS_WAIT_S: Final = 120.0  # how long a night waits for a live MIND pass already under way, then for its lock
+MIND_STEPS: Final = frozenset({"notice", "probes", "choose", "inquire"})  # the first of these to start takes the lock
+AFTER_MIND: Final = frozenset({"agent", "brief", "homework", "self_predict", "note", "practice", "train", "gate",
+                               "promote", "refine"})  # the first of these to start lets it go
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +124,67 @@ class Recorder:
             "stages": close(job["stages"], at, failed=status == "failed")})
 
 
+@dataclass(frozen=True)
+class LivePorts:
+    """``live_mind``'s two calls the night keeps live passes off its MIND steps with:
+    ``wait(user_id, timeout_s)`` (True once no pass is running) and ``guard(user_id, timeout_s=...)``,
+    the judge's cross-process live-pass lock (``LiveBusy`` when it can't be had in time)."""
+
+    wait: Callable[[str, float], bool]
+    guard: Callable[..., AbstractContextManager[object]]
+
+
+def live_ports() -> LivePorts:
+    from anjo.sleep.app import live_mind
+
+    return LivePorts(wait=live_mind.wait_for_live_pass, guard=live_mind.live_pass_guard)
+
+
+class LiveGuard:
+    """The judge's live MIND passes kept off the night's MIND steps (the module's docstring): ``observe``
+    on each step takes the lock as MIND's first step starts and lets it go as the first step after them
+    starts; ``release`` at the night's end in any case."""
+
+    def __init__(self, user_id: str, ports: LivePorts | None = None, timeout_s: float = PASS_WAIT_S) -> None:
+        self._user, self._ports, self._timeout_s = user_id, ports, timeout_s
+        self._stack = ExitStack()
+        self._lock = threading.Lock()  # the night's end and its last step may both let it go
+        self.held = self.taken = False
+
+    def take(self) -> None:
+        """Wait for a live pass under way, then hold the lock (``LiveBusy`` past the second wait)."""
+        self.taken = True  # once: a lock that couldn't be had isn't tried again mid-MIND
+        ports = self._ports or live_ports()
+        if not ports.wait(self._user, self._timeout_s):
+            logger.warning("a live MIND pass still ran after %.0f s; the night waits for its lock", self._timeout_s)
+        self._stack.enter_context(ports.guard(self._user, timeout_s=self._timeout_s))
+        self.held = True
+
+    def observe(self, step: str, state: str, receipt: Mapping[str, object]) -> None:
+        if state != "running" or receipt.get("background"):
+            return  # the background study's start is reported from inside ``choose``: not a step of its own
+        if step in MIND_STEPS and not self.taken:
+            self.take()
+        elif step in AFTER_MIND:
+            self.release()
+
+    def release(self) -> None:
+        with self._lock:
+            if self.held:
+                self.held = False
+                self._stack.close()
+
+
+def _observing(guard: LiveGuard, recorder: Recorder) -> Callable[[str, str, str, Mapping[str, object]], None]:
+    def observe(user_id: str, step: str, state: str, receipt: Mapping[str, object]) -> None:
+        try:
+            recorder.observe(user_id, step, state, receipt)
+        finally:
+            guard.observe(step, state, receipt)
+
+    return observe
+
+
 def target_label(user_id: str) -> Callable[[str], str | None]:
     from anjo.sleep.app.storage import target_store
 
@@ -171,7 +245,8 @@ def _settle(held: Reservation, outcome: Outcome | None, recorder: Recorder) -> f
 
 
 def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str, str], execute: Execute,
-        notifier: Notifier | None = None, ensure: Callable[[CheckpointRef], None] | None = None) -> int:
+        notifier: Notifier | None = None, ensure: Callable[[CheckpointRef], None] | None = None,
+        live: LivePorts | None = None) -> int:
     record = store.get(night_id)
     if record is None:
         return 2
@@ -185,10 +260,11 @@ def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str
 
         notifier = OutreachNotifier()
     held_note = JudgeNotifier(notifier, recorder.note)
+    guard = LiveGuard(str(record["user_id"]), live)
     outcome: Outcome | None = None
     try:
         outcome = execute(wiring=judge_wiring(held_note), job=_job(record), profile=from_env(environ),
-                          data_dir=Path(environ[DATA_DIR_ENV]), ledger=book, observer=recorder.observe,
+                          data_dir=Path(environ[DATA_DIR_ENV]), ledger=book, observer=_observing(guard, recorder),
                           environ=environ)
         result: NightResult = outcome.result
         held_note.flush()
@@ -198,8 +274,12 @@ def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str
         logger.exception("a judge's night failed")
         status, why = "failed", type(error).__name__
     finally:
-        cost = _settle(held, outcome, recorder)
-        jn.check_alerts(book, store.root.parent / jn.ALERTS_FILE, jn.budget_usd(environ), datetime.now(timezone.utc))
+        try:
+            guard.release()
+        finally:  # the hold is settled whatever letting the guard go did
+            cost = _settle(held, outcome, recorder)
+            jn.check_alerts(book, store.root.parent / jn.ALERTS_FILE, jn.budget_usd(environ),
+                            datetime.now(timezone.utc))
     recorder.finish(status, why, cost)
     return 0 if status == "done" else 1
 

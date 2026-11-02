@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from anjo.sleep.budget import Ledger
+from anjo.sleep.budget import CAPS, Bound, Ledger
 from anjo.sleep.night import judge
 from anjo.sleep.night.deps import NightDeps, NightOptions, Trainer
 from anjo.sleep.night.state import day_window
@@ -25,17 +25,12 @@ from anjo.sleep.train.runners.warm import WarmFirstRunner
 from anjo.sleep.train.trainer import LoraTrainer
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 class Pings:
-    def __init__(self) -> None:
+    """The ``Warmer``'s host side: counts starts and stops, and reports the span its pings ran."""
+
+    def __init__(self, span_s: float | None = None) -> None:
         self.started = self.stopped = 0
+        self.span_s = span_s
 
     def start(self) -> None:
         self.started += 1
@@ -87,18 +82,66 @@ def test_a_judge_is_a_real_person_on_a_deep_night_with_the_profile() -> None:
 
 
 def test_the_keep_warm_is_held_and_settled_at_its_span_plus_the_scale_down(tmp_path: Path) -> None:
-    ledger, clock, pings = Ledger(tmp_path / "budget.jsonl"), Clock(), Pings()
-    window = judge.WarmWindow(pings, ledger, "modal_train:2026-11-03:judge-1:warm", scaledown_s=90.0,  # type: ignore[arg-type]
-                              clock=clock)
+    ledger, pings = Ledger(tmp_path / "budget.jsonl"), Pings()
+    window = judge.WarmWindow(pings, ledger, "modal_train:2026-11-03:judge-1:warm", scaledown_s=90.0)  # type: ignore[arg-type]
     window.begin()
     window.begin()  # once
     [held] = ledger.open_holds()
     assert held.pools == ("modal_usd",) and pings.started == 1
-    clock.now = 270.0
+    pings.span_s = 270.0
     window.end()
     window.end()  # once
     assert pings.stopped == 1 and ledger.open_holds() == ()
     assert window.spent == pytest.approx((270.0 + 90.0) / 3600.0 * 2.50)
+    assert ledger.settled([held.job]) == pytest.approx(window.spent)
+
+
+def test_a_keep_warm_that_never_pinged_releases_its_hold(tmp_path: Path) -> None:
+    ledger, pings = Ledger(tmp_path / "budget.jsonl"), Pings(span_s=None)
+    window = judge.WarmWindow(pings, ledger, "modal_train:x:warm", scaledown_s=90.0)  # type: ignore[arg-type]
+    window.begin()
+    window.end()
+    assert ledger.open_holds() == () and ledger.used("modal_usd") == 0.0 and window.spent == 0.0
+
+
+def test_a_keep_warm_past_its_hold_settles_all_it_cost_on_a_second_hold(tmp_path: Path) -> None:
+    ledger, pings = Ledger(tmp_path / "budget.jsonl"), Pings()
+    window = judge.WarmWindow(pings, ledger, "modal_train:x:warm", scaledown_s=90.0)  # type: ignore[arg-type]
+    window.begin()
+    [held] = ledger.open_holds()
+    pings.span_s = judge.WARM_HOLD_S  # the last ping's latency ran it past the deadline: 90 s over
+    window.end()
+    cost = (judge.WARM_HOLD_S + 90.0) / 3600.0 * 2.50
+    assert window.spent == pytest.approx(cost)  # never cut to the hold
+    assert ledger.open_holds() == () and ledger.overages() == ()
+    assert ledger.settled([held.job]) == pytest.approx(held.bound.amount)
+    assert ledger.settled([f"{held.job}:over"]) == pytest.approx(cost - held.bound.amount)
+    assert ledger.used("modal_usd") == pytest.approx(cost)
+
+
+def test_a_keep_warm_past_its_hold_with_no_room_left_settles_it_whole(tmp_path: Path) -> None:
+    ledger, pings = Ledger(tmp_path / "budget.jsonl"), Pings()
+    window = judge.WarmWindow(pings, ledger, "modal_train:x:warm", scaledown_s=90.0)  # type: ignore[arg-type]
+    window.begin()
+    [held] = ledger.open_holds()
+    room = CAPS["modal_usd"] - ledger.used("modal_usd")
+    filler = ledger.reserve("modal_train:filler", ("modal_usd",), Bound(1.0, room * 3600.0))
+    assert filler is not None  # the pool is now full
+    pings.span_s = judge.WARM_HOLD_S
+    window.end()
+    cost = (judge.WARM_HOLD_S + 90.0) / 3600.0 * 2.50
+    assert ledger.settled([held.job]) == pytest.approx(cost)  # recorded in full, not cut to the hold
+    assert ledger.overages() == (held.job,)  # and the pool waits for the coordinator to clear it
+
+
+def test_the_keep_warm_stops_when_training_ends_even_when_it_started_with_the_night(tmp_path: Path) -> None:
+    pings = Pings(span_s=60.0)
+    window = judge.WarmWindow(pings, Ledger(tmp_path / "b.jsonl"), "modal_train:x:warm", scaledown_s=90.0)  # type: ignore[arg-type]
+    observe = judge.watching(None, window, "start")
+    for step, state in (("extract", "running"), ("train", "running"), ("train", "ok"), ("gate", "running"),
+                        ("refine", "ok")):
+        observe(UID, step, state, {})
+    assert pings.started == 1 and pings.stopped == 1 and window.ended  # not warm through the gates
 
 
 def test_a_cold_only_host_warms_nothing(tmp_path: Path) -> None:
