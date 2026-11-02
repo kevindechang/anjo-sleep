@@ -53,6 +53,29 @@ def test_multi_key_update_with_one_key_is_net_fast_update() -> None:
     assert torch.allclose(got[2][:, 0], want[2], atol=1e-6)
 
 
+def test_the_hazard_gate_writes_a_confident_miss_harder_and_keeps_no_evidence_without_a_probe() -> None:
+    """With ``hazard`` the write's strength also reads ``hz``, the recent excess of the probe's
+    surprise over the entropy it expected, and ``u / H``, the ensemble's share of that entropy."""
+
+    def make(hazard: bool) -> core.CogNet:
+        torch.manual_seed(0)
+        return core.CogNet(core.CogConfig(vocab_size=20, dim=8, hidden=16, hazard=hazard))
+
+    plain, hazard = make(False), make(True)
+    assert all(torch.equal(v, hazard.state_dict()[k]) for k, v in plain.state_dict().items())  # built last
+    key = torch.nn.functional.normalize(torch.randn(1, 2, 8, generator=torch.Generator().manual_seed(1)), dim=-1)
+    sure = plain.initial(1, 2)._replace(probe_logits=torch.full((1, 2, 5), 4.0), probe_key=key,
+                                        probe_ok=torch.tensor([[1.0, 0.0]]))
+    y, mask = torch.zeros(1, 2), torch.ones(1, 2, dtype=torch.bool)
+    off, _ = plain._write(sure, y, mask, True, False)
+    on, _ = hazard._write(sure, y, mask, True, False)
+    assert torch.equal(off.hz, sure.hz)  # without the hazard nothing is kept
+    assert float(on.hz[0, 0]) > 1.0 and float(on.hz[0, 1]) == 0.0  # activity 1 had no probe
+    assert float(on.mem.norm()) > float(off.mem.norm())
+    calm, _ = hazard._write(sure._replace(probe_logits=torch.full((1, 2, 5), -4.0)), y, mask, True, False)
+    assert float(calm.hz[0, 0]) < 0.0  # sure it would not happen, and it did not: less surprise than expected
+
+
 def _tiny_net(seed: int, **kw: object) -> tuple[core.CogNet, list[Life]]:
     lives: list[Life] = [ToyLife(s, n_days=21) for s in range(4)]
     vocab = build_vocab(lives)

@@ -105,6 +105,7 @@ class TrainConfig:
     soft: float = 0.0  # the oracle's share of the query target in lives without asks (``loss``)
     asking_share: float = 0.5  # the share of train lives that get random asks; the rest get none
     tallies: bool = True  # the core keeps the counter's sufficient statistics (``core``, item 6)
+    hazard: bool = False  # the write gate also reads change-point evidence and relative uncertainty (``core``)
     weights: dict[str, float] = field(default_factory=lambda: dict(WEIGHTS))
 
 
@@ -373,7 +374,8 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
     vocab = build_vocab(life(s) for s in range(min(cfg.vocab_lives, cfg.lives)))
     prior = fit_prior([life(s) for s in range(min(cfg.vocab_lives, cfg.lives))])
     net = CogNet(CogConfig(vocab_size=len(vocab), dim=cfg.dim, hidden=cfg.hidden, heads=cfg.heads, fast=cfg.fast,
-                           cms=cfg.cms, day_scale=float(cfg.n_days), u_mode=cfg.u_mode, tallies=cfg.tallies))
+                           cms=cfg.cms, day_scale=float(cfg.n_days), u_mode=cfg.u_mode, tallies=cfg.tallies,
+                           hazard=cfg.hazard))
     dev_lives = [world(DEV_SEED + i, cfg.n_days) for i in range(cfg.dev_lives)]
     dev, dev_ask = dev_batches(vocab, dev_lives, cfg.batch, cfg.ask_rate)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr)
@@ -453,6 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--no-fast", action="store_true", help="train without the fast memory (the trained lesion)")
     ap.add_argument("--cms", action="store_true", help="train with the continuum memory's night level")
     ap.add_argument("--no-tallies", action="store_true", help="train without the tallies (the old core)")
+    ap.add_argument("--hazard", action="store_true", help="the write gate reads the hazard (core, item 2)")
     ap.add_argument("--calibrate", metavar="FIRST-LAST", help="no training: fit the Platt map of OUT/cog_core.pt on "
                     "these train seeds and write OUT/cog_core_platt.pt")
     a = ap.parse_args(argv)
@@ -465,7 +468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = TrainConfig(lives=a.lives, epochs=a.epochs, batch=a.batch, dim=a.dim, hidden=a.hidden, tbptt=a.tbptt,
                       dev_lives=a.dev_lives, n_days=a.n_days, seed=a.seed, threads=a.threads, patience=a.patience,
                       lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms, soft=a.soft,
-                      asking_share=a.asking_share, tallies=not a.no_tallies)
+                      asking_share=a.asking_share, tallies=not a.no_tallies, hazard=a.hazard)
     a.out.mkdir(parents=True, exist_ok=True)
     trained = train(cfg, WORLDS[a.world], a.out, log=lambda m: print(m, flush=True))  # noqa: T201
     print(json.dumps({"out": str(a.out), "lives_per_sec": round(trained.lives_per_sec, 2),  # noqa: T201

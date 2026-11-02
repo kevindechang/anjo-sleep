@@ -13,6 +13,12 @@
    ``theta_a = theta_max * sigmoid(g_w * s_a + g_b)`` (``g_w`` starts at 2, ``g_b`` at -2, both
    learned). Then ``S = eta S - sum_a theta_a grad_a`` and ``M = (1 - alpha) M + S``, the gradient of
    ``|M k_a - v_a|^2`` (``multi_fast_update``), with learned scalar momentum ``eta`` and forgetting ``alpha``.
+   With the hazard (``hazard``; Nassar et al. 2010, a learning rate raised by change-point evidence and
+   by relative uncertainty) the gate also reads ``hz_a``, a running mean (``HAZARD_DECAY`` a write) of
+   the surprise's excess over the entropy the probe expected, ``s_a - H(p_a)``, and the ensemble's
+   share of that entropy, ``u_a / H(p_a)``: ``theta_a = theta_max * sigmoid(g_w s_a + g_h hz_a +
+   g_r u_a / H(p_a) + g_b)``, with ``g_h`` starting at 1 and ``g_r`` at 0, both learned. A run of
+   misses the core was sure of opens the gate wider than any one miss.
    With the continuum memory (``cms``) a night level is read beside it; each write adds its rated
    step to the level's pending sum, applied at the night (``consolidate``; ``core.cms`` eq. 71).
 3. **The belief.** A GRU over days reads the pooled day, the weekday and the day index.
@@ -81,6 +87,7 @@ N_FLAGS: Final = 7
 N_KINDS: Final = 4  # encode.TALLY_KINDS: did, skipped, cancel, plan
 TALLY_FEATURES: Final = 15
 TALLY_DECAY: Final = 0.7
+HAZARD_DECAY: Final = 0.7  # per write: the hazard weighs about the last three days of an activity
 U_MODES: Final = ("oracle", "boot")
 
 
@@ -97,6 +104,7 @@ class CogConfig:
     day_scale: float = 84.0
     u_mode: str = "oracle"
     tallies: bool = False
+    hazard: bool = False
 
     def __post_init__(self) -> None:
         if min(self.vocab_size, self.dim, self.hidden, self.heads, self.window) < 1:
@@ -147,6 +155,7 @@ class CogState(NamedTuple):
     tally: Tensor  # (B, A, 7, 4) did / skipped / cancel / plan events per activity and weekday
     tdays: Tensor  # (B, 7) days of each weekday so far
     tema: Tensor  # (B, A, 7, 2) the recent rate of did per cell: decayed sum of outcomes, of days
+    hz: Tensor  # (B, A) the recent excess of each probe's surprise over its expected entropy (``hazard``)
 
 
 class DayInput(NamedTuple):
@@ -224,6 +233,8 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
         if cfg.cms:  # built last, so a core without it draws the same weights
             self.cms_rate = nn.Parameter(torch.tensor(-1.0))  # the night level's rate, a share of each write
             self.cms_mix = nn.Parameter(torch.tensor(1.0))  # its weight in the read
+        if cfg.hazard:  # last too
+            self.hazard_gate = nn.Parameter(torch.tensor([1.0, 0.0]))  # g_h, g_r
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -237,7 +248,7 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
             epi_day=z(batch, 0, dtype=torch.long), epi_wd=z(batch, 0, dtype=torch.long),
             epi_subj=z(batch, 0, dtype=torch.long), epi_plan=z(batch, 0), epi_span=z(batch, 0),
             epi_mask=z(batch, 0, dtype=torch.bool), act=z(batch, n_act, dtype=torch.long),
-            tally=z(batch, n_act, 7, N_KINDS), tdays=z(batch, 7), tema=z(batch, n_act, 7, 2),
+            tally=z(batch, n_act, 7, N_KINDS), tdays=z(batch, 7), tema=z(batch, n_act, 7, 2), hz=z(batch, n_act),
         )
 
     def count(self, st: CogState, kinds: Tensor, y: Tensor, weekday: Tensor) -> CogState:
@@ -309,7 +320,14 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
         if not fast:
             return st, surprise * active
         g = self.gate
-        theta = self.cfg.theta_max * torch.sigmoid(g[0] * surprise + g[1]) * active
+        drive = g[0] * surprise + g[1]
+        if self.cfg.hazard:
+            expected = -(p * p.log() + (1 - p) * (1 - p).log())
+            hz = torch.where(active > 0, HAZARD_DECAY * st.hz + (1 - HAZARD_DECAY) * (surprise - expected), st.hz)
+            ru = mutual_information(st.probe_logits.detach()) / expected.clamp(min=1e-6)
+            drive = drive + self.hazard_gate[0] * hz + self.hazard_gate[1] * ru
+            st = st._replace(hz=hz)
+        theta = self.cfg.theta_max * torch.sigmoid(drive) * active
         v = self.value(torch.stack([y, 1.0 - y], dim=-1))
         eta, alpha = self.eta_alpha_now(y.shape[0])
         use_cms = cms and st.levels.shape[1] > 0
