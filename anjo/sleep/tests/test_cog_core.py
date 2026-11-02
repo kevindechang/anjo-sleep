@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,7 +28,7 @@ DEV = range(10_000, 10_024)
 def trained_tiny() -> train_cog.Trained:
     """A small core trained for a few seconds on toy lives; shared by this file and test_cog_voi."""
     cfg = train_cog.TrainConfig(lives=384, epochs=6, batch=32, dim=32, hidden=64, tbptt=28, dev_lives=16, lr=6e-3,
-                                n_days=56, seed=0, threads=4, patience=3)
+                                n_days=56, seed=0, threads=1, patience=3)
     return train_cog.train(cfg, world=train_cog.toy_world)
 
 
@@ -295,6 +296,31 @@ def test_predict_has_no_side_effects() -> None:
             rows.append((d, q.subject, pr.p, pr.u, float(r.outcome), r.oracle_p))
         busy.end_day(d)
     assert rows == plain
+
+
+def test_the_cli_builds_mind_and_its_lesions_from_a_checkpoint(tmp_path: Path) -> None:
+    import pickle
+
+    from anjo.sleep.mind.cog import cli
+    from anjo.sleep.mind.cog.rivals import PopulationPrior
+
+    trained = trained_tiny()
+    ckpt = tmp_path / "cog_core.pt"
+    core.save_checkpoint(ckpt, trained.net, trained.vocab)
+    ctx = cli.BuildContext(population="base", train_seeds=(), n_days=56, make_life=ToyLife, out_dir=tmp_path,
+                           options={"ckpt": str(ckpt), "lam": "0.5"})
+    built = {name: cli.PREDICTORS[name](ctx)() for name in
+             ("mind", "mind_nofast", "mind_k1", "mind_nonight", "mind_uniform")}
+    assert all(isinstance(p, core.MindPredictor) and p.name == n for n, p in built.items())
+    assert not built["mind_nofast"].fast and built["mind_k1"].k == 1
+    assert built["mind_nonight"].night_mode == "off" and built["mind_uniform"].night_mode == "uniform"
+    pickle.dumps(cli.PREDICTORS["mind"](ctx))
+    make_voi = cli.INQUIRERS["mind_voi"](ctx)
+    assert make_voi(built["mind"]).lam == 0.5
+    with pytest.raises(ValueError):
+        make_voi(PopulationPrior.__new__(PopulationPrior))
+    with pytest.raises(ValueError):
+        cli.PREDICTORS["mind"](cli.BuildContext("base", (), 56, ToyLife, tmp_path, {"ckpt": str(tmp_path / "no.pt")}))
 
 
 def test_predictions_are_predictions() -> None:

@@ -11,8 +11,11 @@ fit it on ``--train-seeds`` (train seeds only) in this process before the lives 
 
 ``PREDICTORS`` and ``INQUIRERS`` map a name to a builder: ``builder(ctx) -> factory``, where the
 factory makes a fresh predictor per life (an inquirer factory takes that life's predictor). A
-factory must pickle for ``--workers > 1``. MIND's own predictor registers here as ``mind``.
-Settings come from ``--set key=value``; a key no builder reads is an error.
+factory must pickle for ``--workers > 1``. MIND's own predictor registers here as ``mind``, with its
+lesions ``mind_nofast`` (no fast memory), ``mind_k1`` (one head, no u), ``mind_nonight`` and
+``mind_uniform`` (uniform replay at equal compute); ``--set ckpt=PATH`` picks the checkpoint
+(default ``train_cog``'s default output). Its inquirer is ``mind_voi`` (``--set lam=1.0``), which
+needs a ``mind*`` predictor. Settings come from ``--set key=value``; a key no builder reads is an error.
 
 The Gemini builders need ``--set client=module:attribute``, a ``Callable[[str], str]`` that the
 operator supplies; this module never makes a client or reads a key. Responses are cached under
@@ -25,7 +28,7 @@ import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -95,6 +98,54 @@ def _surprise_lr(ctx: BuildContext) -> PredictorFactory:
     return partial(SurpriseLR, _logistic_population(ctx), hazard=ctx.option("hazard", 0.02, float),
                    gain=ctx.option("gain", 1.0, float), decay=ctx.option("decay", 0.7, float),
                    prior_var=ctx.option("prior_var", 0.03, float), shared_var=ctx.option("shared_var", 1e-4, float))
+
+
+@dataclass(frozen=True)
+class MindFactory:
+    """Makes a MindPredictor per life; the checkpoint loads once per process."""
+    ckpt: str
+    name: str = "mind"
+    fast: bool = True
+    ensemble: int | None = None
+    night: str = "surprise"
+
+    def __call__(self) -> Predictor:
+        from anjo.sleep.mind.cog.core import MindPredictor
+
+        return MindPredictor(_mind_checkpoint(self.ckpt), fast=self.fast, ensemble=self.ensemble,
+                             night=self.night, name=self.name)  # type: ignore[arg-type]
+
+
+@lru_cache(maxsize=4)
+def _mind_checkpoint(path: str) -> Any:
+    from anjo.sleep.mind.cog.core import load_checkpoint
+
+    return load_checkpoint(path)
+
+
+def _default_mind_ckpt() -> str:
+    from anjo.sleep.mind.cog.train_cog import DEFAULT_OUT
+
+    return str(DEFAULT_OUT / "cog_core" / "cog_core.pt")
+
+
+def _mind(name: str, **switches: Any) -> PredictorBuilder:
+    def build(ctx: BuildContext) -> PredictorFactory:
+        ckpt = ctx.option("ckpt", "", str) or _default_mind_ckpt()
+        if not Path(ckpt).is_file():
+            raise ValueError(f"no MIND checkpoint at {ckpt}: train one (python -m anjo.sleep.mind.cog.train_cog) "
+                             "or pass --set ckpt=PATH")
+        return MindFactory(ckpt, name, **switches)
+    return build
+
+
+def _make_mind_voi(predictor: Predictor, *, lam: float) -> Inquirer:
+    from anjo.sleep.mind.cog.core import MindPredictor
+    from anjo.sleep.mind.cog.voi import MindInquirer
+
+    if not isinstance(predictor, MindPredictor):
+        raise ValueError(f"mind_voi weighs questions with MIND's own state; {predictor.name} has none")
+    return MindInquirer(predictor, lam=lam)
 
 
 def load_client(path: str) -> Complete:
@@ -171,6 +222,11 @@ PREDICTORS: dict[str, PredictorBuilder] = {
     "surprise_lr": _surprise_lr,
     "gemini": _gemini(stats=False),
     "gemini_stats": _gemini(stats=True),
+    "mind": _mind("mind"),
+    "mind_nofast": _mind("mind_nofast", fast=False),
+    "mind_k1": _mind("mind_k1", ensemble=1),
+    "mind_nonight": _mind("mind_nonight", night="off"),
+    "mind_uniform": _mind("mind_uniform", night="uniform"),
 }
 
 INQUIRERS: dict[str, InquirerBuilder] = {
@@ -179,6 +235,7 @@ INQUIRERS: dict[str, InquirerBuilder] = {
                                   p_ask=ctx.option("p_ask", 0.3, float)),
     "max_uncertainty": lambda ctx: MaxUncertainty,
     "gemini": _gemini_inquirer,
+    "mind_voi": lambda ctx: partial(_make_mind_voi, lam=ctx.option("lam", 1.0, float)),
 }
 
 

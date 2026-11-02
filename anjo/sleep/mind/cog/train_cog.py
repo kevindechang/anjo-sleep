@@ -79,7 +79,7 @@ class TrainConfig:
     dev_lives: int = 200
     n_days: int = 84
     seed: int = 0
-    threads: int = 4
+    threads: int = 1  # the ops are small: more threads do not help (22.5 vs 22.8 lives/s); run seeds in parallel
     patience: int = 3
     lr: float = 3e-3
     clip: float = 1.0
@@ -353,7 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--tbptt", type=int, default=28)
     ap.add_argument("--dev-lives", type=int, default=200)
     ap.add_argument("--n-days", type=int, default=84)
-    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--patience", type=int, default=3)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--u-mode", choices=("oracle", "boot"), default="oracle")
