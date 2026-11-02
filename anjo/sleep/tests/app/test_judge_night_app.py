@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -319,13 +320,17 @@ def _night(steps: list[tuple[str, str, dict[str, Any]]], result: NightResult | N
     return execute
 
 
-class Live:
-    """``live_mind``'s wait and guard, as the night calls them: each call kept in ``log`` (with the night's
-    steps, when the test's night writes them there too)."""
+class Busy(RuntimeError):
+    """The fake lock's ``LiveBusy``."""
 
-    def __init__(self, log: list[str] | None = None, *, waited: bool = True) -> None:
+
+class Live:
+    """``live_mind``'s wait, guard and cursor, as the night calls them: each call kept in ``log``."""
+
+    def __init__(self, log: list[str] | None = None, *, waited: bool = True, busy: bool = False,
+                 cursor: datetime | None = None) -> None:
         self.log = [] if log is None else log
-        self.waited = waited
+        self.waited, self.busy, self.cursor = waited, busy, cursor
 
     def wait(self, user_id: str, timeout_s: float) -> bool:
         self.log.append(f"wait {user_id} {timeout_s:g}")
@@ -333,6 +338,8 @@ class Live:
 
     @contextmanager
     def guard(self, user_id: str, *, timeout_s: float = 0.0) -> Iterator[None]:
+        if self.busy:
+            raise Busy(user_id)
         self.log.append(f"guard {user_id} {timeout_s:g}")
         try:
             yield
@@ -340,14 +347,14 @@ class Live:
             self.log.append("guard released")
 
     def ports(self) -> judge_child.LivePorts:
-        return judge_child.LivePorts(wait=self.wait, guard=self.guard)
+        return judge_child.LivePorts(wait=self.wait, guard=self.guard, busy=Busy, cursor=lambda uid: self.cursor)
 
 
 def _run(host: dict[str, Any], night_id: str, execute: Any, notes: Notes, monkeypatch: pytest.MonkeyPatch,
          served: list[str] | None = None, live: Live | None = None) -> int:
     held: list[Any] = []
 
-    def wiring(notifier: Any) -> Any:
+    def wiring(notifier: Any, *args: Any) -> Any:
         held.append(notifier)
         return lambda trainer, options: None
 
@@ -460,79 +467,191 @@ def test_the_child_names_the_night_by_its_records_fields_and_the_engine_builds_i
 # ── live MIND passes and the night ───────────────────────────────────────────
 
 
-def _logged_night(log: list[str], steps: list[tuple[str, str, dict[str, Any]]], *,
-                  raises: BaseException | None = None) -> Any:
-    def execute(*, observer: Any, **kwargs: Any) -> JudgeOutcome:
-        for step, state, receipt in steps:
-            log.append(f"{step} {state}")
-            observer(JUDGE, step, state, receipt)
-        if raises is not None:
-            raise raises
-        return JudgeOutcome(_result("rejected", Path("/nonexistent")), warm_usd=0.0)
+class Port:
+    """A MIND port that answers available and keeps, for each call, whether the judge's live-pass lock
+    was held then (the page's own reading of it)."""
 
-    return execute
+    available = True
 
+    def __init__(self, user_id: str) -> None:
+        self.user_id, self.calls = user_id, list[tuple[str, bool]]()
 
-PHASE_ONE: list[tuple[str, str, dict[str, Any]]] = [
-    ("extract", "running", {}), ("extract", "ok", {}), ("notice", "running", {}), ("notice", "ok", {}),
-    ("choose", "running", {}), ("homework", "running", {"background": True}), ("choose", "ok", {}),
-    ("brief", "running", {}), ("brief", "ok", {}), ("homework", "running", {}), ("note", "running", {})]
+    def think(self) -> str:
+        from anjo.sleep.app import live_mind
+
+        self.calls.append(("think", live_mind.live_pass_state(self.user_id) == "running"))
+        return "thought"
 
 
-def test_the_night_waits_for_a_live_pass_and_holds_its_lock_around_the_mind_steps(
-    host: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    log: list[str] = []
-    night_id = _queued(host, monkeypatch)
-    assert _run(host, night_id, _logged_night(log, PHASE_ONE), Notes(), monkeypatch, live=Live(log)) == 0
-    wait = judge_child.PASS_WAIT_S
-    assert log[:6] == ["extract running", "extract ok", "notice running", f"wait {JUDGE} {wait:g}",
-                       f"guard {JUDGE} {wait:g}", "notice ok"]  # extraction runs without it
-    released = log.index("guard released")
-    assert log[released - 1] == "brief running"  # the background study's start inside choose kept it
-    assert log.count("guard released") == 1 and log.count(f"wait {JUDGE} {wait:g}") == 1
+def test_mind_is_on_only_once_the_judges_lock_was_had_and_each_call_holds_it() -> None:
+    from anjo.sleep.app import live_mind
+
+    rested: list[bool] = []
+    lock = judge_child.MindLock(JUDGE, on_rest=lambda: rested.append(True))
+    port = Port(JUDGE)
+    mind = judge_child.LockedMind(port, lock)
+    assert lock.state == "untried" and live_mind.live_pass_state(JUDGE) == "idle"
+    assert mind.available and lock.state == "open"  # decided at MIND's first use, the lock had
+    assert live_mind.live_pass_state(JUDGE) == "idle"  # between MIND's calls the page sees no pass
+    assert mind.think() == "thought" and mind.think() == "thought"
+    assert port.calls == [("think", True), ("think", True)] and rested == []
+    assert live_mind.live_pass_state(JUDGE) == "idle"
 
 
-def test_a_night_that_breaks_during_its_mind_steps_lets_the_lock_go(host: dict[str, Any],
-                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    log: list[str] = []
-    night_id = _queued(host, monkeypatch)
-    execute = _logged_night(log, PHASE_ONE[:3], raises=RuntimeError("boom"))
-    assert _run(host, night_id, execute, Notes(), monkeypatch, live=Live(log)) == 1
-    assert log[-1] == "guard released" and log.count("guard released") == 1
-
-
-def test_a_live_pass_still_running_after_the_wait_leaves_the_night_waiting_for_its_lock(
+def test_a_pass_holding_the_lock_past_both_waits_leaves_mind_resting_and_never_unlocked(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    from anjo.sleep.app import live_mind
+
+    rested: list[bool] = []
+    lock = judge_child.MindLock(JUDGE, timeout_s=0.05, on_rest=lambda: rested.append(True))
+    port = Port(JUDGE)
+    mind = judge_child.LockedMind(port, lock)
+    with live_mind.live_pass_guard(JUDGE):  # a live pass stuck in its model call
+        assert mind.available is False and lock.state == "resting"
+    assert mind.available is False  # decided once: not tried again later in the night
+    with pytest.raises(judge_child.MindResting):
+        mind.think()
+    assert port.calls == [] and rested == [True] and "MIND rests tonight" in caplog.text
+
+
+def test_a_lock_that_fails_on_the_fake_too_rests_mind() -> None:
     log: list[str] = []
-    guard = judge_child.LiveGuard(JUDGE, Live(log, waited=False).ports())
-    guard.observe("notice", "running", {})
-    assert guard.held and log[1] == f"guard {JUDGE} {judge_child.PASS_WAIT_S:g}" and "still ran" in caplog.text
-    guard.release()
-    assert log[-1] == "guard released"
+    lock = judge_child.MindLock(JUDGE, Live(log, waited=False, busy=True).ports())
+    assert judge_child.LockedMind(Port(JUDGE), lock).available is False
+    assert log == [f"wait {JUDGE} {judge_child.PASS_WAIT_S:g}"] and lock.state == "resting"
 
 
-def test_a_night_takes_the_judges_real_live_pass_lock_and_the_page_sees_it_only_around_mind() -> None:
+def test_a_resting_mind_shows_its_stages_skipped_in_plain_words(host: dict[str, Any],
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    night_id = _queued(host, monkeypatch)
+    recorder = judge_child.Recorder(host["store"], night_id, lambda target_id: None)
+    recorder.observe(JUDGE, "notice", "running", {})
+    recorder.rest_mind()
+    recorder.observe(JUDGE, "notice", "ok", {"noop": True})
+    recorder.observe(JUDGE, "choose", "ok", {"action": "hold_note"})
+    recorder.observe(JUDGE, "self_predict", "ok", {"noop": True, "why": "MIND's loop is off"})
+    stages = host["store"].get(night_id)["stages"]
+    for name in judge_stages.RESTED:
+        assert stages[name]["state"] == "skipped" and stages[name]["summary"] == judge_stages.MIND_RESTED
+    assert stages["mind_choose"]["state"] == "done"  # her chooser ran, without MIND's questions
+
+
+def _engine_night(tmp_path: Path, lock: judge_child.MindLock) -> tuple[Any, Any, Any]:
+    from anjo.sleep.night.deps import NightSettings, NoInquiry, NoNotice
+    from anjo.sleep.night.run import run_night_batch_with
+    from anjo.sleep.tests.night_fakes import NIGHT, World, thread
+
+    seen: list[tuple[str, bool]] = []
+
+    def held() -> bool:
+        from anjo.sleep.app import live_mind
+
+        return live_mind.live_pass_state(JUDGE) == "running"
+
+    class Notice(NoNotice):
+        available = True
+
+        def notice(self, call: Any, new: Any) -> Any:
+            seen.append(("notice", held()))
+            return {"new": len(new), "questions_opened": 0}
+
+    class Inquiry(NoInquiry):
+        available = True
+
+        def questions(self, call: Any) -> Any:
+            seen.append(("questions", held()))
+            return ()
+
+        def settle(self, call: Any) -> Any:
+            seen.append(("settle", held()))
+            return []
+
+    world = World(tmp_path / "world")
+    world.plan(JUDGE, NIGHT)
+    world.targets(JUDGE).upsert(thread(JUDGE))
+    deps = world.deps(settings=NightSettings(token_cap=16384, min_new_examples=1, mind_inquiry=True))
+    deps = replace(deps, notice=judge_child.LockedMind(Notice(), lock), inquiry=judge_child.LockedMind(Inquiry(), lock))
+    done = run_night_batch_with(deps, {JUDGE: NIGHT})[JUDGE]
+    return done, seen, world
+
+
+def test_the_engine_runs_mind_only_under_the_judges_lock(tmp_path: Path) -> None:
+    done, seen, _ = _engine_night(tmp_path, judge_child.MindLock(JUDGE))
+    assert done.status != "failed" and seen and all(locked for _, locked in seen)
+    assert {name for name, _ in seen} >= {"notice", "settle", "questions"}
+
+
+def test_a_night_whose_mind_rests_runs_on_without_it(tmp_path: Path) -> None:
     from anjo.sleep.app import live_mind
 
-    guard = judge_child.LiveGuard(JUDGE)  # live_mind's own wait and lock
-    guard.observe("extract", "running", {})
-    assert live_mind.live_pass_state(JUDGE) == "idle"
-    guard.observe("notice", "running", {})
-    assert guard.held and live_mind.live_pass_state(JUDGE) == "running"
-    assert live_mind.wait_for_live_pass(JUDGE, 0.0) is False  # a live pass now waits, then skips
-    guard.observe("brief", "running", {})
-    assert not guard.held and live_mind.live_pass_state(JUDGE) == "idle"
+    rested: list[bool] = []
+    lock = judge_child.MindLock(JUDGE, timeout_s=0.05, on_rest=lambda: rested.append(True))
+    with live_mind.live_pass_guard(JUDGE):  # held through the whole night: a pass that never ends
+        done, seen, _ = _engine_night(tmp_path, lock)
+    assert seen == [] and rested == [True]  # no MIND call ran, locked or not
+    assert done.status != "failed"  # the rest of the night went on
 
 
-def test_a_lock_a_stuck_pass_holds_is_reported_once_and_mind_runs_on() -> None:
-    from anjo.sleep.app import live_mind
+# ── the night's extraction after the live passes' ────────────────────────────
 
-    guard = judge_child.LiveGuard(JUDGE, timeout_s=0.05)
-    with live_mind.live_pass_guard(JUDGE):  # a live pass that never lets go
-        with pytest.raises(live_mind.LiveBusy):  # the night's observer logs it and the night goes on
-            guard.observe("notice", "running", {})
-        guard.observe("choose", "running", {})  # not tried again mid-MIND
-    assert not guard.held
-    guard.release()
+
+class Inner:
+    def __init__(self) -> None:
+        self.windows: list[tuple[datetime, datetime]] = []
+
+    def extract_day(self, user_id: str, day: date, window: tuple[datetime, datetime],
+                    as_of: datetime | None = None) -> list[Any]:
+        self.windows.append(window)
+        return []
+
+
+def test_a_judges_extraction_reads_only_after_the_live_passes_cursor() -> None:
+    start, end = NOW - timedelta(days=7), NOW
+    inner, live = Inner(), Live()
+    after = judge_child.AfterLive(inner, live.ports())
+    after.extract_day(JUDGE, date(2026, 11, 3), (start, end))
+    live.cursor = NOW - timedelta(hours=1)
+    after.extract_day(JUDGE, date(2026, 11, 3), (start, end))
+    live.cursor = (NOW - timedelta(minutes=30)).replace(tzinfo=None)  # a cursor without a zone reads as UTC
+    after.extract_day(JUDGE, date(2026, 11, 3), (start, end))
+    live.cursor = NOW + timedelta(minutes=5)  # a pass after the night was asked for read all of it
+    assert after.extract_day(JUDGE, date(2026, 11, 3), (start, end)) == []
+    assert inner.windows == [(start, end), (NOW - timedelta(hours=1), end), (NOW - timedelta(minutes=30), end)]
+    assert live.log.count(f"wait {JUDGE} {judge_child.PASS_WAIT_S:g}") == 4  # a pass under way ends first
+
+
+def test_a_live_pass_then_a_judges_night_extract_each_turn_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections import Counter
+
+    from anjo.sleep.app import judge_cohort, live_mind
+    from anjo.sleep.app.history_source import HistorySource
+    from anjo.sleep.app.storage import evidence_store
+    from anjo.sleep.mind.inquiry.steps import Budget
+    from anjo.sleep.tests.app.test_history_source import EchoSparkOpen, _message
+    from anjo.sleep.tests.app.test_live_mind import FakeMind
+
+    monkeypatch.setenv("ANJO_SLEEP_PRICES", "0.1,0.4,1.0,1.95")
+    joined = NOW - timedelta(hours=3)
+    judge_cohort.add_judge(JUDGE, now=joined)
+    chat = EchoSparkOpen()
+    source = HistorySource(chat=chat)
+    said = ["I sketch every layout on paper first.", "Grids feel like a cage to me.", "Type is where I start."]
+    _message(JUDGE, "user", said[0], at=joined + timedelta(minutes=10))
+    _message(JUDGE, "assistant", "Paper slows the first idea down.", at=joined + timedelta(minutes=11))
+    _message(JUDGE, "user", said[1], at=joined + timedelta(minutes=20))
+    passed_at = joined + timedelta(minutes=30)
+    passed = live_mind.run_pass(JUDGE, now=passed_at, ports=live_mind.PassPorts(
+        extract=lambda uid, start, end: source.record_day(uid, end.date(), (start, end), as_of=end)[0],
+        mind=lambda glimmer: FakeMind(), glimmer_up=lambda: False, night_running=lambda: False,
+        budget=lambda uid, day: Budget(tokens_used=0, token_cap=12_000)))
+    assert passed["state"] == "ok" and live_mind.extracted_until(JUDGE) == passed_at
+    _message(JUDGE, "user", said[2], at=passed_at + timedelta(minutes=10))
+    night_end = passed_at + timedelta(minutes=20)
+    night = judge_child.AfterLive(source)  # live_mind's own wait and cursor
+    found = night.extract_day(JUDGE, date(2026, 11, 4), (NOW - timedelta(days=7), night_end), night_end)
+    read = Counter(m["text"] for call in chat.calls for m in json.loads(call[-1]["content"])["messages"])
+    assert read == Counter(said)  # each of the judge's turns went through one extraction, once
+    assert [item.text for item in found] == [f"They said: {said[2]}"]
+    stored = [item.text for item in evidence_store(JUDGE).stored(date(2026, 11, 4))]
+    assert sorted(stored) == sorted(f"They said: {text}" for text in said)  # no item stored twice

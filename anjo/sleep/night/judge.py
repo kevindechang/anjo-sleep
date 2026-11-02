@@ -18,9 +18,10 @@ its progress through the observer. What makes it a judge's night rather than Kev
 - **Keeping the trainer warm.** The ``Warmer`` starts when the night starts (``WARM_AT_ENV``: ``start``
   by default; ``extract``'s end or ``practice``'s on a host that wants a shorter warm span), so
   Glimmer's load on the trainer overlaps phase 1, and stops when ``train`` ends, when the night does,
-  or at its deadline (``WARM_HOLD_S`` less the scale-down window), whichever is first. Its time is held
-  on ``modal_usd`` (``WARM_HOLD_S`` at Modal's A100 rate) and settled at what the pings kept the
-  container up, plus its scale-down window. A cost past the hold (the last ping's own latency) is
+  or at its deadline (``WARM_HOLD_S`` less the scale-down window), whichever is first, and its keep-warm
+  inputs are cancelled then. Its time is held on ``modal_usd`` (``WARM_HOLD_S`` at Modal's A100 rate)
+  and settled at what the pings kept the container up (never less than a container start a ping may
+  have begun: ``WARM_START_S``, Modal's startup timeout), plus its scale-down window. A cost past the hold (the last ping's own latency) is
   never cut to fit: a second hold takes the rest, or, when the pool has no room, the whole cost is
   settled and logged, and the pool waits for the coordinator to clear it. A cold-only host
   (``ANJO_SLEEP_JUDGE_TRAINER=cold``) warms nothing.
@@ -52,7 +53,7 @@ from anjo.sleep.night.run import Window, run_night_batch_with
 from anjo.sleep.night.sweep import shared_night
 from anjo.sleep.serving.client import ServingError, WakeResult
 from anjo.sleep.serving.config import REVISION_ENV
-from anjo.sleep.train import warm_job
+from anjo.sleep.train import modal_job, warm_job
 from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, StepPlan
 from anjo.sleep.train.runners import choice
 from anjo.sleep.train.runners.colab import ColabCli
@@ -67,6 +68,7 @@ WARM_HOLD_S: Final = 30 * 60  # the longest the keep-warm runs: phase 1 and prac
 WARM_KIND: Final = "modal_train"  # a night kind: a killed run's hold is settled by the next sweep
 STOP_AT: Final = "train"
 OVER_EPSILON: Final = 1e-9  # dollars: below this a settlement is within its hold
+WARM_START_S: Final = float(modal_job.STARTUP_TIMEOUT_S)  # the longest a start a ping began can run on after it
 logger = logging.getLogger(__name__)
 
 
@@ -142,7 +144,7 @@ class WarmWindow:
         if span is None:  # stopped before its first ping: the container never started for it
             self._held.release()
             return
-        self.spent = (span + self._scaledown_s) / 3600.0 * A100_USD_PER_HOUR
+        self.spent = (max(span, WARM_START_S) + self._scaledown_s) / 3600.0 * A100_USD_PER_HOUR
         self._settle(self._held, self.spent)
 
     def _settle(self, held: Reservation, spent: float) -> None:
@@ -237,7 +239,8 @@ def execute_judge(
     trainer = LoraTrainer(WarmFirstRunner(warm=warm_runner, cold=cold.runner, mode=mode),
                           root=data_dir / "sleep" / "training", publish=publisher(),
                           revision=env.get(REVISION_ENV) or None, cfg=LoraCfg(), steps=judge_steps(profile))
-    warmer = Warmer(warm.warm, ping_s, deadline_s=warm_deadline(scaledown_s)) if mode == "warm" else None
+    warmer = (Warmer(warm.warm, ping_s, deadline_s=warm_deadline(scaledown_s), cancel=warm.cancel_input)
+              if mode == "warm" else None)
     window = WarmWindow(warmer, ledger,
                         f"{WARM_KIND}:{job.night.isoformat()}:{job.user}:warm", scaledown_s=scaledown_s)
     with shared_night(ledger, cold.sweep) as swept:

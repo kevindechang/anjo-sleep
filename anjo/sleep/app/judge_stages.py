@@ -32,6 +32,9 @@ ACTIONS: Final[Mapping[str, str]] = {
     "hold_note": "Chose to write",
 }
 
+MIND_RESTED: Final = "A live thought still held her mind, so MIND rested tonight"
+RESTED: Final = ("mind_notice", "mind_inquire", "self_predict")  # what a night without MIND leaves out
+
 Stages = dict[str, dict[str, Any]]
 Label = Callable[[str], "str | None"]
 
@@ -183,6 +186,14 @@ def _inquire(stages: Stages, state: str, receipt: Mapping[str, Any], at: str) ->
     if state in ("ok", "skipped"):
         return _set(stages, "mind_inquire", "skipped", at, "Nothing to ask tonight")
     return _set(stages, "mind_inquire", "failed", at, "Didn't finish")
+
+
+def rest_mind(stages: Stages, at: str) -> Stages:
+    """MIND's stages ``skipped`` with ``MIND_RESTED``, when the live-pass lock kept MIND from running."""
+    for name in RESTED:
+        if stages[name]["state"] != "skipped" or stages[name]["summary"] != MIND_RESTED:
+            stages = _set(stages, name, "skipped", at, MIND_RESTED)
+    return stages
 
 
 def fold(stages: Stages, step: str, state: str, receipt: Mapping[str, Any], at: str,

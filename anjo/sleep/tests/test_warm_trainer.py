@@ -284,34 +284,63 @@ def test_the_warmer_pings_until_stopped() -> None:
     pinged = threading.Event()
     count = {"n": 0}
 
-    def ping() -> bool:
+    def ping() -> str:
         count["n"] += 1
         pinged.set()
-        return True
+        return "fc-1"
 
-    warmer = warm.Warmer(ping, ping_s=10.0, deadline_s=1200.0)
+    cancelled: list[str] = []
+    warmer = warm.Warmer(ping, ping_s=10.0, deadline_s=1200.0, cancel=cancelled.append)
     warmer.start()
     warmer.start()  # once
     assert pinged.wait(5.0)
     warmer.stop()
     assert not warmer.running and count["n"] == 1 and not warmer.expired
+    assert cancelled == ["fc-1"]  # no keep-warm input runs after the pings stop
 
 
 def test_the_warmer_stops_at_its_deadline_whatever_the_night_is_doing() -> None:
     clock = {"now": 0.0}
 
-    def ping() -> bool:
+    def ping() -> str:
         clock["now"] += 10.0  # each ping's round trip, and the time to the next
-        return True
+        return f"fc-{int(clock['now'])}"
 
-    warmer = warm.Warmer(ping, ping_s=0.001, deadline_s=25.0, clock=lambda: clock["now"])
+    cancelled: list[str] = []
+    warmer = warm.Warmer(ping, ping_s=0.001, deadline_s=25.0, cancel=cancelled.append, clock=lambda: clock["now"])
     assert warmer.span_s is None
     warmer.start()
     assert warmer._thread is not None
     warmer._thread.join(5.0)  # nobody calls stop: the deadline ends it
     assert not warmer.running and warmer.expired
     assert warmer.pings == 3  # started at 0, 10 and 20 s; none at 30 s, past the 25 s deadline
-    assert warmer.span_s == 30.0  # the first ping's start to the last one's return
+    assert warmer.span_s == 30.0  # the first ping's start to the deadline's stop
+    assert cancelled == ["fc-10", "fc-20", "fc-30"]  # every input it spawned, cancelled at the deadline
+
+
+def test_a_ping_still_in_flight_when_the_pings_stop_is_counted_and_cancelled_when_it_lands() -> None:
+    clock = {"now": 0.0}
+    out, land = threading.Event(), threading.Event()
+
+    def ping() -> str:
+        out.set()
+        land.wait(5.0)  # Modal's spawn call hangs past ``stop``'s join
+        return "fc-late"
+
+    cancelled: list[str] = []
+    warmer = warm.Warmer(ping, ping_s=0.001, deadline_s=1200.0, cancel=cancelled.append,
+                         clock=lambda: clock["now"], join_s=0.01)
+    warmer.start()
+    assert out.wait(5.0)
+    clock["now"] = 40.0
+    warmer.stop()
+    assert warmer.running and cancelled == []  # the spawn hasn't returned yet
+    assert warmer.span_s == 40.0  # counted to the stop, however long the call takes to land
+    clock["now"] = 400.0
+    land.set()
+    assert warmer._thread is not None
+    warmer._thread.join(5.0)
+    assert cancelled == ["fc-late"] and warmer.span_s == 40.0
 
 
 def test_the_warmers_deadline_is_a_positive_number_of_seconds() -> None:
@@ -360,7 +389,7 @@ def test_warm_calls_spawn_the_class_method_with_the_jobs_arguments(monkeypatch: 
     assert warm.WarmCalls().spawn(job) == "fc-00000001"
     assert ("cls", warm_job.APP_NAME, warm_job.CLASS) in log
     assert ("train", ("d", "{}", {"a": b"1"}, NAME)) in log
-    assert warm.WarmCalls().warm() is True and log[-1] == ("warm", ())
+    assert warm.WarmCalls().warm() == "fc-00000001" and log[-1] == ("warm", ())
 
 
 def test_a_warm_app_modal_refuses_is_spawn_refused_and_a_failed_ping_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,5 +399,24 @@ def test_a_warm_app_modal_refuses_is_spawn_refused_and_a_failed_ping_is_false(mo
     job = RemoteJob(dataset="d", config_json="{}", prev={}, name=NAME, exec_s=1800.0)
     with pytest.raises(SpawnRefused):
         warm.WarmCalls().spawn(job)
-    assert warm.WarmCalls().warm() is False
+    assert warm.WarmCalls().warm() is None
 
+
+
+def test_a_keep_warm_input_is_cancelled_without_its_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    log: list[Any] = []
+    fake = _fake_modal(monkeypatch, log)
+
+    class Call:
+        def __init__(self, call_id: str) -> None:
+            self.call_id = call_id
+
+        def cancel(self, terminate_containers: bool = False) -> None:
+            if self.call_id == "fc-gone":
+                raise fake.exception.Error("no such call")
+            log.append(("cancel", self.call_id, terminate_containers))
+
+    fake.FunctionCall = types.SimpleNamespace(from_id=Call)
+    assert warm.WarmCalls().cancel_input("fc-1") is True
+    assert log[-1] == ("cancel", "fc-1", False)  # another judge's training may share the container
+    assert warm.WarmCalls().cancel_input("fc-gone") is False

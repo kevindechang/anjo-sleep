@@ -88,12 +88,22 @@ def test_the_keep_warm_is_held_and_settled_at_its_span_plus_the_scale_down(tmp_p
     window.begin()  # once
     [held] = ledger.open_holds()
     assert held.pools == ("modal_usd",) and pings.started == 1
-    pings.span_s = 270.0
+    pings.span_s = 1000.0
     window.end()
     window.end()  # once
     assert pings.stopped == 1 and ledger.open_holds() == ()
-    assert window.spent == pytest.approx((270.0 + 90.0) / 3600.0 * 2.50)
+    assert window.spent == pytest.approx((1000.0 + 90.0) / 3600.0 * 2.50)
     assert ledger.settled([held.job]) == pytest.approx(window.spent)
+
+
+def test_a_short_keep_warm_counts_the_container_start_a_ping_may_have_begun(tmp_path: Path) -> None:
+    ledger, pings = Ledger(tmp_path / "budget.jsonl"), Pings()
+    window = judge.WarmWindow(pings, ledger, "modal_train:x:warm", scaledown_s=90.0)  # type: ignore[arg-type]
+    window.begin()
+    pings.span_s = 30.0  # the night broke half a minute in, while the container may still be starting
+    window.end()
+    assert judge.WARM_START_S == 15 * 60
+    assert window.spent == pytest.approx((judge.WARM_START_S + 90.0) / 3600.0 * 2.50)
 
 
 def test_a_keep_warm_that_never_pinged_releases_its_hold(tmp_path: Path) -> None:
@@ -172,9 +182,14 @@ class Warm:
 
     def __init__(self) -> None:
         self.pings = 0
+        self.cancelled: list[str] = []
 
-    def warm(self) -> bool:
+    def warm(self) -> str:
         self.pings += 1
+        return f"fc-warm-{self.pings}"
+
+    def cancel_input(self, call_id: str) -> bool:
+        self.cancelled.append(call_id)
         return True
 
 
