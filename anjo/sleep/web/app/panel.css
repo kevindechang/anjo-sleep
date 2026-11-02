@@ -174,7 +174,16 @@
 .wake-card .exact { margin-top: 6px; }
 .changed { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 15px; line-height: 1.5; color: var(--ink-soft); }
 .changed li::before { content: "\2192\00a0"; color: var(--muted-2); }
-.compare { margin-top: var(--s4); padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+.compare { margin-top: var(--s5); padding: var(--s4); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); transition: opacity .3s var(--ease); }
+.compare.is-historical { opacity: .62; }
+.compare.is-historical .compare-after { border-top-color: var(--line-strong); }
+.verdict { display: grid; gap: 6px; margin: 0 0 var(--s4); padding: 0; list-style: none; }
+.verdict li { position: relative; padding-left: 18px; font-size: 15px; line-height: 1.5; color: var(--text); }
+.verdict li::before { content: ""; position: absolute; left: 0; top: .55em; width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line-strong); }
+.verdict-promoted::before, .verdict-changed::before { background: var(--accent); border-color: transparent !important; }
+.verdict-kept, .verdict-same { color: var(--ink-soft) !important; }
+.compare-none, .compare-note { margin: var(--s3) 0 0; font: 500 12.5px/1.6 var(--mono); color: var(--muted); }
+.compare-note { color: var(--ink-soft); }
 .compare-q { margin: 0; font-size: 17px; line-height: 1.45; letter-spacing: -0.014em; color: var(--text); }
 .compare-sides { display: grid; gap: var(--s3); margin-top: var(--s4); }
 .compare-side { padding-top: var(--s3); border-top: 1px solid var(--line-strong); }
@@ -199,5 +208,5 @@
   .story[data-state="running"] .label::after { animation: none; }
   .story, .night-steps summary::before { transition: none; }
   .new-mark { animation: none; }
-  .bar-fill, .night-phase { transition: none; }
+  .bar-fill, .night-phase, .compare { transition: none; }
 }

@@ -149,9 +149,9 @@ async function boot() {
   const sleep = createSleep({
     chat, panel,
     onFinish: () => thought.refresh(),
-    onAwake: () => {
+    onAwake: (night) => {
       tabs.select("chat");
-      wake.show();
+      wake.show(night);
     },
     onStatus: (text, kind) => say(status, text, kind),
     onShow: () => {

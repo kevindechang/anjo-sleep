@@ -1,6 +1,9 @@
 // The wake view: GET /api/sleep/me/wake. Anjo's opener becomes the first bubble of the morning's
-// chat; above it, how its bet on itself resolved, what changed, the same question answered by last
-// night's model and this one, and Undo (POST /api/sleep/me/undo) with an inline confirm. At its top,
+// chat. Above it, first the behavioral proof: whether the weights were promoted (the night's own
+// gate) apart from whether her working state changed, and the same question answered before and
+// after sleep (or that no pair was saved). Then her morning note, her bet on herself, what changed,
+// and Undo (POST /api/sleep/me/undo) with an inline confirm; after Undo, the pair is marked as from
+// before it. At its top,
 // "Since your last visit" from her line of thought (morning.js), and the side panel turns to it.
 
 import { api } from "./api.js";
@@ -19,7 +22,22 @@ export function changedLines(value) {
   return value.map((v) => (typeof v === "string" ? v : v && (v.line || v.text || v.summary))).filter(Boolean).map(String);
 }
 
-export function createWake({ chat, panel, thought, since }) {
+// The two verdicts, kept apart: the weights (from the night's gate) and her working state (from
+// what changed). ``night`` is the finished night, or null when this page didn't watch it.
+export function verdicts(night, changed) {
+  const out = [];
+  if (night && typeof night === "object") {
+    const gate = (Array.isArray(night.stages) ? night.stages : []).find((s) => s && s.name === "gate");
+    const said = gate && gate.state === "done" && typeof gate.summary === "string" ? gate.summary : "";
+    out.push({ kind: night.adapter_live ? "promoted" : "kept",
+      text: [night.adapter_live ? COPY.wake_weights_promoted : COPY.wake_weights_kept, said].filter(Boolean).join(" ") });
+  }
+  out.push(changed.length ? { kind: "changed", text: fill(changed.length === 1 ? COPY.wake_state_changed_one : COPY.wake_state_changed, { n: changed.length }) }
+    : { kind: "same", text: COPY.wake_state_same });
+  return out;
+}
+
+export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
   const view = byId("wake");
   const body = byId("wake-body");
   const status = byId("wake-status");
@@ -48,18 +66,31 @@ export function createWake({ chat, panel, thought, since }) {
     const list = byId("changed-list");
     const lines = changedLines(value);
     list.replaceChildren(...(lines.length ? lines : [COPY.wake_nothing_changed]).map((line) => el("li", "", line)));
+    return lines;
   }
 
+  function verdict(night, lines) {
+    byId("wake-verdict").replaceChildren(...verdicts(night, lines).map((v) => {
+      const row = el("li", `verdict-${v.kind}`, v.text);
+      return row;
+    }));
+  }
+
+  // The same question before and after sleep, or plainly that this night saved no pair.
   function compare(pair) {
-    const card = byId("wake-compare");
-    if (!pair || !pair.question) {
-      card.hidden = true;
+    const has = Boolean(pair && pair.question);
+    byId("compare-q").hidden = !has;
+    byId("compare-sides").hidden = !has;
+    byId("compare-none").hidden = has;
+    byId("compare-note").hidden = true;
+    byId("wake-compare").classList.remove("is-historical");
+    if (!has) {
+      byId("compare-none").textContent = COPY.wake_compare_none;
       return;
     }
     byId("compare-q").textContent = String(pair.question);
     byId("compare-before").textContent = pair.before ? String(pair.before) : "–";
     byId("compare-after").textContent = pair.after ? String(pair.after) : "–";
-    card.hidden = false;
   }
 
   function morning(view) {
@@ -77,8 +108,13 @@ export function createWake({ chat, panel, thought, since }) {
     try {
       await api.undo();
       say(undoStatus, COPY.undo_done, "ok");
+      byId("wake-compare").classList.add("is-historical");
+      say(byId("compare-note"), COPY.wake_compare_undone);
+      byId("compare-note").hidden = false;
+      byId("wake-verdict").replaceChildren(el("li", "verdict-kept", COPY.wake_weights_undone));
       panel.refresh();
       thought.refresh();
+      onUndo();
     } catch (error) {
       say(undoStatus, error.message || COPY.server, "error");
       undo.disabled = false;
@@ -104,7 +140,7 @@ export function createWake({ chat, panel, thought, since }) {
   });
 
   return {
-    async show() {
+    async show(night = null) {
       view.hidden = false;
       body.hidden = false;
       undo.disabled = false;
@@ -119,14 +155,14 @@ export function createWake({ chat, panel, thought, since }) {
         const data = await api.wake();
         say(status, "");
         bet(data && data.self_prediction);
-        changed(data && data.what_changed);
+        verdict(night, changed(data && data.what_changed));
         compare(data && data.before_after);
         chat.morning(data && typeof data.opener === "string" ? data.opener : "");
       } catch (error) {
         say(status, error.status === 401 ? error.message : COPY.wake_failed, "error");
         byId("wake-bet").hidden = true;
-        byId("wake-compare").hidden = true;
-        changed(null);
+        verdict(night, changed(null));
+        compare(null);
       }
       panel.refresh();
     },

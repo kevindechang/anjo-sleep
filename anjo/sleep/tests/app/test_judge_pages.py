@@ -474,3 +474,36 @@ def test_the_night_tells_its_story_from_the_stages_own_summaries() -> None:
     assert out["failed"] == {"state": "failed", "text": "The gate couldn't run."}
     assert out["kept"] == {"state": "done", "text": "Gate kept it: +3 of 5. Promoted."}
     assert out["missing"]["state"] == "pending"
+
+
+_VERDICTS = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const W = await import(WAKE);
+const gate = (state, summary) => ({ name: "gate", state, summary });
+console.log(JSON.stringify({
+  promoted: W.verdicts({ adapter_live: true, stages: [gate("done", "Gate kept it: +3 of 5.")] }, ["a", "b"]),
+  kept: W.verdicts({ adapter_live: false, stages: [gate("failed", "x")] }, []),
+  unknown: W.verdicts(null, ["a"]),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_wake_keeps_weights_apart_from_working_state() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _VERDICTS.replace("WAKE", json.dumps((APP_DIR / "wake.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["promoted"] == [
+        {"kind": "promoted", "text": "Weights promoted: tonight's adapter is live. Gate kept it: +3 of 5."},
+        {"kind": "changed", "text": "Working state changed: 2 things, listed below."}]
+    assert out["kept"] == [{"kind": "kept", "text": "Weights kept: the gate kept last night's model."},
+                           {"kind": "same", "text": "Working state: nothing she could measure changed."}]
+    assert [v["kind"] for v in out["unknown"]] == ["changed"]  # no night watched: no claim about weights
+    html = (APP_DIR / "live.html").read_text()
+    assert html.index('id="wake-compare"') < html.index('id="wake-morning"') < html.index('id="wake-bet"')

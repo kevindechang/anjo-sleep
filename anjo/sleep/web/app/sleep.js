@@ -66,6 +66,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   let polls = 0;
   let running = false;
   let starting = false;
+  let finished = null; // the night that just ended, for the wake's verdict
   let startedAt = null;
 
   byId("sleep-confirm-text").textContent = COPY.sleep_confirm;
@@ -153,6 +154,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   }
 
   function finish(night) {
+    finished = night;
     running = false;
     setNightId(null);
     setButton();
@@ -274,7 +276,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   });
   wakeUp.addEventListener("click", () => {
     show(false);
-    onAwake();
+    onAwake(finished);
   });
 
   return {

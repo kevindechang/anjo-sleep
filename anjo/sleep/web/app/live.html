@@ -78,6 +78,17 @@
           </header>
           <div id="wake-body">
             <p class="form-status" id="wake-status" role="status" aria-live="polite"></p>
+            <article class="compare" id="wake-compare">
+              <h3 class="label">Same question, before and after sleep</h3>
+              <ul class="verdict" id="wake-verdict" aria-label="What the night changed"></ul>
+              <p class="compare-q" id="compare-q"></p>
+              <div class="compare-sides" id="compare-sides">
+                <section class="compare-side"><h4>Before sleep</h4><div class="compare-text" id="compare-before"></div></section>
+                <section class="compare-side compare-after"><h4 id="compare-after-label">After sleep</h4><div class="compare-text" id="compare-after"></div></section>
+              </div>
+              <p class="compare-none" id="compare-none" hidden></p>
+              <p class="compare-note" id="compare-note" hidden></p>
+            </article>
             <article class="wake-card wake-morning" id="wake-morning" hidden>
               <h3 class="label">Since your last visit</h3>
               <div class="since-body" id="wake-morning-body"></div>
@@ -93,14 +104,6 @@
                 <ul class="changed" id="changed-list"></ul>
               </article>
             </div>
-            <article class="compare" id="wake-compare" hidden>
-              <h3 class="label">Same question, two models</h3>
-              <p class="compare-q" id="compare-q"></p>
-              <div class="compare-sides">
-                <section class="compare-side"><h4>Last night's model</h4><div class="compare-text" id="compare-before"></div></section>
-                <section class="compare-side compare-after"><h4>This morning's model</h4><div class="compare-text" id="compare-after"></div></section>
-              </div>
-            </article>
             <div class="undo">
               <button class="btn btn-ghost" type="button" id="undo" aria-controls="undo-step" aria-expanded="false">Undo this night</button>
               <div class="confirm" id="undo-step" hidden>
