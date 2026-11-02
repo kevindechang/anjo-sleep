@@ -7,9 +7,11 @@ Colab can't give.
 Which failures fall back is read off the Colab CLI's own calls. ``TracedCli`` notes each call that
 failed: what it raised and how long it ran. Only these fall back:
 
-- any failure of a call made before the training starts: ``new`` (no A100 to assign, a VM that never
-  came up), ``install``, ``mkdir`` (the exec that makes the remote folders) or ``upload``, whether
-  it exited non-zero, hung past its hard timeout or found no CLI;
+- any failure of a call made before the training runs: ``new`` (no A100 to assign, a VM that never
+  came up), ``install``, ``mkdir`` (the exec that makes the remote folders), ``upload`` or the
+  ``launch`` that starts the detached training, whether it exited non-zero, hung past its hard
+  timeout or found no CLI. A launch that failed may have started the training, but the VM is
+  stopped before Modal trains, so the night never trains twice;
 - a timeout: any later call that hung past its hard timeout (the ``launch`` that starts the detached
   training among them), or the training past its own time, killed (``ColabTrainingTimeout``);
 - a VM lost mid-run (``ColabVmLost``): ``LOST_POLLS`` polls in a row found no training on the VM.
@@ -18,7 +20,6 @@ Everything else fails the night as ``colab`` does:
 
 - a training that ended with a non-zero exit code: a Python error or a NaN the script reports would
   fail the same way on Modal. Its log's last lines are kept in the night's folder;
-- a ``launch`` that exits non-zero or starts no training: the training counts as started;
 - a ``download`` that exits non-zero, or a receipt that isn't one;
 - a refusal before any VM: a real person, the thought channel, a timeout too short;
 - ``BudgetStop``, ``Cancelled``, an interrupt;
@@ -55,6 +56,7 @@ from anjo.sleep.serving import config
 from anjo.sleep.train.runners.colab import (
     KEEPALIVE,
     KILL,
+    LAUNCH,
     LOG_TAIL,
     MKDIR,
     POLL,
@@ -71,9 +73,10 @@ from anjo.sleep.train.runners.modal import ModalRunner
 
 # What one Colab CLI call raises when Colab fails: an exit code, a hang past its hard timeout, no CLI.
 CLI_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
-# The calls before the training script starts: the VM (an A100 to assign), its packages, its remote
-# folders, the night's files.
-BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload")
+# The calls before the training runs: the VM (an A100 to assign), its packages, its remote folders, the
+# night's files, and the launch of the detached training (2026-11-02, the lead: a launch that fails is
+# Colab's infrastructure, not the script, which Modal runs without it).
+BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload", LAUNCH)
 STOP: Final = "stop"
 # Calls whose failure is never the night's: the VM's stop, the polls, the pings, a kill, a log tail.
 NOT_THE_NIGHT: Final = (STOP, POLL, KEEPALIVE, KILL, LOG_TAIL)

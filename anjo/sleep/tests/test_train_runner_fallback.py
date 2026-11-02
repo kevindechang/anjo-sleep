@@ -189,6 +189,15 @@ def test_a_colab_timeout_or_a_lost_vm_trains_the_night_on_modal(
     assert 0 < ledger.used("colab_cu") <= Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount and ledger.used("modal_usd") > 0
 
 
+def test_a_launch_that_fails_trains_the_night_on_modal_after_the_vm_is_stopped(tmp_path: Path) -> None:
+    colab = TimedColab("launch", readings=["done 0"])
+    runner, calls, ledger = _rig(tmp_path, colab)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["runner"] == "modal" and out["fallback_reason"] == "colab launch failed with exit 1"
+    assert colab.commands()[-1] == "stop" and "poll" not in colab.commands() and len(calls.spawned) == 1
+    assert ledger.open_holds() == () and runner.landed(NAME)
+
+
 def test_a_lost_vm_drops_the_dead_session_before_the_stop(tmp_path: Path) -> None:
     colab = TimedColab(readings=["running", "fail", "fail", "fail"])
     runner, calls, ledger = _rig(tmp_path, colab)
@@ -239,7 +248,6 @@ def test_a_lost_vm_and_a_training_past_its_time_fall_back_and_a_failed_poll_neve
 
 @pytest.mark.parametrize(("fail", "readings", "match"), [
     (None, ["running", "done 1"], "the training on the VM exited 1"),  # a Python error or a NaN: Modal's too
-    ("launch", ["done 0"], "colab launch failed with exit 1"),  # the training counts as started
     ("download", ["done 0"], "colab download failed with exit 1"),
 ])
 def test_a_training_failure_on_colab_fails_the_night_without_modal(
