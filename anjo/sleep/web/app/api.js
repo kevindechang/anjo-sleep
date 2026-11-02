@@ -108,6 +108,14 @@ export async function request(path, { method = "GET", body, messages = {}, auth 
   return data;
 }
 
+// An answer as JSON without ``live_pass``: whether MIND's live pass is running isn't a change worth
+// redrawing a panel for (its revision and content are).
+export function contentOf(data) {
+  if (!data || typeof data !== "object") return JSON.stringify(data);
+  const { live_pass: _running, ...rest } = data;
+  return JSON.stringify(rest);
+}
+
 // The judge API (the API worker's routes) and the chat start, by name.
 export const api = Object.freeze({
   start: (code) => request("/api/sleep/judge/start", {

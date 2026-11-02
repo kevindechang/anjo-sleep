@@ -18,6 +18,24 @@
 .side-tab:focus-visible, .choice:focus-visible, .settled summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mind-section > h3:focus { outline: none; }
 
+/* ── MIND's live pass, after a reply ───────────────────────────────────── */
+
+.live-pass {
+  display: flex; align-items: center; gap: 10px; margin: calc(-1 * var(--s2)) 0 var(--s4);
+  font: 500 12px/1.4 var(--mono); letter-spacing: .02em; color: var(--accent-2);
+}
+.live-pass[hidden] { display: none; }
+.live-pass .scan, .tab[data-thinking]::after { flex: none; }
+.live-pass .scan { position: relative; width: 56px; height: 2px; overflow: hidden; border-radius: 2px; background: var(--track); }
+.live-pass .scan::after {
+  content: ""; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent-2), transparent); animation: scan 1.4s ease-in-out infinite;
+}
+.tab[data-thinking]::after {     /* on a phone, the Mind tab breathes while MIND thinks */
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 8px; vertical-align: 2px; border-radius: 50%;
+  background: var(--accent-2); animation: p-breathe 1.6s ease-in-out infinite;
+}
+
 /* ── hunches ────────────────────────────────────────────────────────────── */
 
 .hunch .tags { gap: 8px; }
@@ -118,7 +136,7 @@
   .calib-row { grid-template-columns: 6em minmax(0, 1fr) 3.4em; gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .since { animation: none; }
+  .since, .live-pass .scan::after, .tab[data-thinking]::after { animation: none; }
   .side-tab, .choice, .dispute-note { transition: none; }
   .choice:active:not(:disabled) { transform: none; }
 }

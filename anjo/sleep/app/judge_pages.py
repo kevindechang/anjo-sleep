@@ -48,6 +48,7 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "thought.css": _CSS,   # her line of thought, the side panel's tabs, "since your last visit"
     "thought.js": _JS,     # her line of thought: hunches (dispute, hide), her scorecard, one question
     "morning.js": _JS,     # "since your last visit", in the wake and on the next visit
+    "livepass.js": _JS,    # after a reply, polls MIND until its live pass has landed
     "mock_thought.js": _JS,  # her line of thought for ?mock=1 (a synthetic life), loaded only by mock.js
 })
 

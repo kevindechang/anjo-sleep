@@ -2,8 +2,10 @@
 // hypotheses, credences and predictions; expectations; wants; each night's choice). Every item says
 // a plain line first and its own stored words second. Items it hasn't shown before arrive with a
 // subtle entrance and a "New" mark; a credence that moved slides from its old value to the new one.
+// Each answer's ``revision`` and ``live_pass`` (idle | running) are kept for livepass.js, which polls
+// after a reply until MIND's live pass has landed; an answer identical to the last isn't redrawn.
 
-import { api } from "./api.js";
+import { api, contentOf } from "./api.js";
 import { COPY, fill } from "./copy.js";
 import { byId, day, el, percent } from "./dom.js";
 
@@ -44,6 +46,8 @@ export function createPanel({ onNew }) {
   let seen = null;               // item keys shown so far; null before the first render
   let credences = new Map();     // hypothesis id -> credence last shown
   let inflight = null;
+  let last = null;               // the last answer as JSON: the same again is not redrawn
+  let revision;                  // MIND's revision in the last answer (undefined from an older API)
 
   function item(key, className, fresh) {
     const node = el("li", `item ${className || ""}`.trim());
@@ -212,6 +216,10 @@ export function createPanel({ onNew }) {
   }
 
   function render(view) {
+    updated.textContent = fill(COPY.mind_updated, { time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) });
+    const json = contentOf(view);
+    if (json === last) return 0; // nothing new: the "New" marks stay as they are
+    last = json;
     const now = keys(view);
     const fresh = seen === null ? new Set() : new Set([...now].filter((k) => !seen.has(k)));
     const parts = [section(view.choices), section(view.questions), section(view.expectations), section(view.wants)];
@@ -223,7 +231,6 @@ export function createPanel({ onNew }) {
     credences = new Map();
     for (const q of parts[1].items) (q.hypotheses || []).forEach((h) => credences.set(h.id, h.credence));
     seen = now;
-    updated.textContent = fill(COPY.mind_updated, { time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) });
     if (fresh.size) {
       window.setTimeout(() => body.querySelectorAll(".new-mark").forEach((m) => m.remove()), NEW_MARK_MS);
       onNew(fresh.size);
@@ -232,13 +239,19 @@ export function createPanel({ onNew }) {
   }
 
   return {
-    async refresh() {
+    // Resolves to what livepass.js needs: {ok, fresh, revision, livePass}.
+    refresh() {
       if (inflight) return inflight;
-      inflight = api.mind().then(render, () => {
+      inflight = api.mind().then((view) => {
+        const data = view && typeof view === "object" ? view : {};
+        revision = data.revision;
+        return { ok: true, fresh: render(data), revision: data.revision, livePass: data.live_pass };
+      }, () => {
         if (seen === null) body.replaceChildren(el("p", "mind-empty", COPY.mind_failed));
-        return 0;
+        return { ok: false, fresh: 0, revision, livePass: undefined };
       }).finally(() => { inflight = null; });
       return inflight;
     },
+    revision: () => revision,
   };
 }

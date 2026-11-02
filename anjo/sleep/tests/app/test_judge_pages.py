@@ -205,3 +205,70 @@ console.log(JSON.stringify({{
     assert out["disputed"] == [True, False] and out["hidden"] == [1, 2, 1]
     assert out["answer"] == "On \u201cWill Mira enter the March festival?\u201d: She submits for March"
     assert out["other"] is True and out["first"] is False
+
+
+# ── MIND's live pass, after each reply ────────────────────────────────────────
+
+
+def test_a_reply_starts_a_watch_for_the_live_pass_not_one_early_refresh() -> None:
+    """The server runs MIND's live pass after the reply's stream ends, so a refresh at that moment
+    reads old state: the page polls until ``revision`` moves and ``live_pass`` stops running."""
+    from anjo.sleep.app.judge_pages import APP_DIR, ASSETS
+
+    live = (APP_DIR / "live.js").read_text()
+    reply = live[live.index("onReply: () => {"):live.index("talker.check();", live.index("onReply: () => {"))]
+    assert "livePass.watch()" in reply and "panel.refresh()" not in reply
+    assert "onSend: () => livePass.mark()" in live  # the revision from before the message
+    watch = (APP_DIR / "livepass.js").read_text()
+    assert "export const POLL_MS = 2000;" in watch and "export const CAP_MS = 60000;" in watch
+    assert "thought.isOpen() ? thought.refresh()" in watch  # her line of thought too, when it's open
+    assert "livepass.js" in ASSETS
+    html = (APP_DIR / "live.html").read_text()
+    assert 'id="live-pass" role="status"' in html
+    assert "Thinking about what you said" in (APP_DIR / "copy.js").read_text()
+    mock = (APP_DIR / "mock.js").read_text()
+    assert "revision:" in mock and 'live_pass: passing(' in mock  # the fake API answers with both fields
+    for name in ("panel.js", "thought.js"):  # a running pass alone redraws nothing (marks and forms stay)
+        assert "contentOf(" in (APP_DIR / name).read_text(), name
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_watch_stops_only_once_the_pass_has_landed() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    cases = [  # (answer, expected stop)
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 4000}, False),
+        ({"base": 3, "revision": 4, "livePass": "running", "sawRunning": True, "elapsed": 4000}, False),
+        ({"base": 3, "revision": 4, "livePass": "idle", "sawRunning": True, "elapsed": 6000}, True),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, False),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": True, "elapsed": 8000}, True),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 10000}, True),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 60000}, True),
+        ({"base": None, "revision": 0, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, True),
+        ({"elapsed": 2000, "fresh": 0}, False),
+        ({"elapsed": 4000, "fresh": 2}, True),
+        ({"base": "a1", "revision": "b2", "livePass": "idle", "sawRunning": False, "elapsed": 2000}, True),
+    ]
+    script = f"""
+const L = await import({json.dumps((APP_DIR / "livepass.js").as_uri())});
+console.log(JSON.stringify({json.dumps([c for c, _ in cases])}.map((c) => L.settled(c))));
+"""
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == [want for _, want in cases]
+
+
+def test_the_judge_pages_call_anjo_her() -> None:
+    """AGENTS.md: Anjo has her own state. The pages never call her "it"."""
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    index = (APP_DIR / "index.html").read_text()
+    assert "She learns while she sleeps." in index and "It learns" not in index
+    copy = "\n".join(line for line in (APP_DIR / "copy.js").read_text().splitlines() if not line.lstrip().startswith("//"))
+    for text in (index, (APP_DIR / "live.html").read_text(), copy):
+        assert not re.search(r"\b(its|itself)\b", text, re.IGNORECASE)
+    for phrase in ("What she's working out about you", "Her bet on herself"):
+        assert phrase in (APP_DIR / "live.html").read_text(), phrase

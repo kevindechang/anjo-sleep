@@ -1,7 +1,8 @@
 // The chat pane: POST /api/chat/start (platform web), then each message streams over
 // POST /api/chat/{sid}/message (sse.js). Text deltas fill Anjo's bubble as they arrive; the done
 // event's full_text replaces them, and its model names who answered (Glimmer, or Muse Spark while
-// Glimmer wakes). After each reply ``onReply`` fires, which refreshes the MIND panel.
+// Glimmer wakes). ``onSend`` fires as a message goes out and ``onReply`` once its reply is in, which
+// starts the watch for MIND's live pass (livepass.js).
 
 import { api } from "./api.js";
 import { COPY } from "./copy.js";
@@ -18,7 +19,7 @@ export function modelName(model) {
   return "";
 }
 
-export function createChat({ onReply }) {
+export function createChat({ onReply, onSend = () => {} }) {
   const log = byId("chat-log");
   const empty = byId("chat-empty");
   const status = byId("chat-status");
@@ -115,6 +116,7 @@ export function createChat({ onReply }) {
     const clean = text.trim();
     if (!clean || busy || asleep) return false;
     busy = true;
+    onSend();
     setEnabled();
     say(status, "");
     const mine = bubble("you", clean);

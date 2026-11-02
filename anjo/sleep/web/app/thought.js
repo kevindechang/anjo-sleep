@@ -3,18 +3,23 @@
 // scorecard on the bets that settled, and the one question she'd most like answered. Each hunch can
 // be disputed, with an optional note (POST .../thought/{id}/dispute), or hidden (.../hide); both
 // show at once and roll back, with the reason beside the item, if the server refuses. A question is
-// answered with a click, and the answer goes into the chat as the judge's own message.
+// answered with a click, and the answer goes into the chat as the judge's own message. Items it
+// hasn't shown before arrive with the MIND panel's entrance and "New" mark; an answer identical to
+// the last one isn't redrawn (an open dispute form keeps what was typed), and none is applied while
+// a dispute or hide is still on its way.
 
-import { api } from "./api.js";
+import { api, contentOf } from "./api.js";
 import { COPY, fill } from "./copy.js";
 import { byId, day, el, percent, say, wireTabs } from "./dom.js";
 import { said, verdict } from "./morning.js";
 
 const NOTE_MAX = 500; // the engine's limit on a dispute's note
+const NEW_MARK_MS = 7000;
 const ANSWERED_KEY = "anjo.judge.answered";
 const DAY_MS = 86400000;
 const list = (value) => (Array.isArray(value) ? value : []);
 const words = (shown) => (shown && !shown.withheld && typeof shown.text === "string" ? shown.text : "");
+
 
 // Whole days from today (the viewer's own calendar) to a YYYY-MM-DD date; null if it isn't one.
 export function daysUntil(date, today = new Date()) {
@@ -137,6 +142,10 @@ export function createThought({ chat, onAnswer, onView }) {
   const drafts = new Map();  // hunch id -> a dispute note the server refused, kept to send again
   let view = null;
   let inflight = null;
+  let last = null;           // the last answer as JSON
+  let seen = null;           // item keys shown so far; null before the first render
+  let fresh = new Set();     // keys new in this render
+  let pending = 0;           // disputes and hides still on their way
   let answered = stored(ANSWERED_KEY);
   let questionStatus = { id: null, text: "", kind: "" };
 
@@ -149,6 +158,15 @@ export function createThought({ chat, onAnswer, onView }) {
     if (focus) tabs[i].focus();
   }
   wireTabs(tabs, selectSide);
+
+  function mark(node, key) {
+    if (!fresh.has(key)) return;
+    node.classList.add("is-new");
+    const label = el("span", "new-mark", COPY.mind_new);
+    const head = node.querySelector(":scope > h3");
+    if (head) head.after(label);
+    else node.prepend(label);
+  }
 
   function hunchItem(h) {
     const row = el("li", `item hunch${h.disputed ? " is-disputed" : ""}`);
@@ -185,6 +203,7 @@ export function createThought({ chat, onAnswer, onView }) {
       error.setAttribute("role", "alert");
       row.append(error);
     }
+    mark(row, `h:${h.id}`);
     return row;
   }
 
@@ -257,6 +276,7 @@ export function createThought({ chat, onAnswer, onView }) {
       choices.append(button);
     }
     box.append(choices, line);
+    mark(box, `q:${q.question_id}`);
     return box;
   }
 
@@ -291,6 +311,7 @@ export function createThought({ chat, onAnswer, onView }) {
   // Dispute or hide: shown at once; put back, with the reason beside it, if the server says no.
   async function act(kind, h, text = "") {
     const before = view;
+    pending += 1;
     errors.delete(h.id);
     drafts.delete(h.id);
     view = kind === "hide" ? withoutHunch(view, h.id) : withDisputed(view, h.id);
@@ -303,6 +324,7 @@ export function createThought({ chat, onAnswer, onView }) {
     try {
       if (kind === "hide") await api.hide(h.id);
       else await api.dispute(h.id, text || null);
+      last = null; // the server's next answer carries the mark: apply it
     } catch (error) {
       if (error.status === 401) return; // signed out: the page is leaving
       notes.delete(h.id);
@@ -318,6 +340,8 @@ export function createThought({ chat, onAnswer, onView }) {
       render();
       const back = body.querySelector(`.hunch[data-id="${CSS.escape(h.id)}"]`);
       if (back) back.querySelector(kind === "hide" ? ".act-hide" : ".dispute-note, .act-hide").focus();
+    } finally {
+      pending -= 1;
     }
   }
 
@@ -330,6 +354,11 @@ export function createThought({ chat, onAnswer, onView }) {
 
   function render() {
     if (!view) return;
+    // A dispute being written survives the redraw: its words reopen with it (focus aside).
+    body.querySelectorAll(".dispute:not([hidden])").forEach((form) => {
+      const id = form.closest(".hunch").dataset.id;
+      if (!drafts.has(id)) drafts.set(id, form.querySelector("textarea").value);
+    });
     body.replaceChildren(
       hunches(list(view.hunches)),
       scorecard(view.scorecard, list(view.settled), String(view.credence_note || "")),
@@ -337,12 +366,26 @@ export function createThought({ chat, onAnswer, onView }) {
     );
   }
 
+  function keys(data) {
+    const found = new Set(list(data.hunches).map((h) => `h:${h.id}`));
+    if (data.question && data.question.question_id) found.add(`q:${data.question.question_id}`);
+    return found;
+  }
+
   function refresh() {
     if (inflight) return inflight;
     inflight = api.thought().then((data) => {
-      view = data && typeof data === "object" ? data : null;
+      const json = contentOf(data);
+      if (!data || typeof data !== "object" || json === last || pending) return view; // nothing to apply now
+      last = json;
+      const now = keys(data);
+      fresh = seen === null ? new Set() : new Set([...now].filter((k) => !seen.has(k)));
+      seen = now;
+      view = data;
       render();
-      if (view) onView(view);
+      if (fresh.size) window.setTimeout(() => body.querySelectorAll(".new-mark").forEach((m) => m.remove()), NEW_MARK_MS);
+      fresh = new Set(); // a later redraw (an action's) doesn't replay the entrance
+      onView(view);
       return view;
     }, (error) => {
       if (!view) body.replaceChildren(el("p", "mind-empty", error.status === 503 ? COPY.thought_off : COPY.thought_failed));
@@ -353,6 +396,7 @@ export function createThought({ chat, onAnswer, onView }) {
 
   return {
     refresh,
+    isOpen: () => !panes[1].hidden,
     // Open "Line of thought" in the side panel (after a wake, its hunches are the news).
     show: () => selectSide(1, false),
   };

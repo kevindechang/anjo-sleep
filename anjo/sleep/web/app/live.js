@@ -6,6 +6,7 @@ import { api, href, ready, signOut, token } from "./api.js";
 import { COPY, fill } from "./copy.js";
 import { byId, say, wireTabs } from "./dom.js";
 import { createChat } from "./chat.js";
+import { createLivePass } from "./livepass.js";
 import { createPanel } from "./panel.js";
 import { createSince } from "./morning.js";
 import { createSleep } from "./sleep.js";
@@ -109,9 +110,11 @@ async function boot() {
   const tabs = createTabs();
   const talker = createTalker();
   const panel = createPanel({ onNew: () => tabs.noteNew() });
+  let livePass = null;
   const chat = createChat({
+    onSend: () => livePass.mark(),
     onReply: () => {
-      panel.refresh();
+      livePass.watch(); // MIND's live pass runs after the reply: poll until it lands
       talker.check();
     },
   });
@@ -121,6 +124,7 @@ async function boot() {
     onAnswer: () => tabs.select("chat"), // on a phone, watch the answer go out
     onView: (view) => since.update(view),
   });
+  livePass = createLivePass({ panel, thought });
   const wake = createWake({ chat, panel, thought, since });
   const sleep = createSleep({
     chat, panel,
@@ -130,7 +134,10 @@ async function boot() {
       wake.show();
     },
     onStatus: (text, kind) => say(status, text, kind),
-    onShow: () => tabs.select("chat"),
+    onShow: () => {
+      livePass.stop(); // the night view refreshes MIND itself
+      tabs.select("chat");
+    },
   });
 
   talker.check();

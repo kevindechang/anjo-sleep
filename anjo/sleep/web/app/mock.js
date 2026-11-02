@@ -8,6 +8,11 @@
 //   mockcase=visit              her line of thought has a "since your last visit" note from the start
 //                               (otherwise only once a night has run)
 //   mockcase=thoughtoff | thoughtfail | thoughtempty | markfail   (markfail: dispute and hide refused)
+//   mockcase=nopass             MIND's live pass never runs after a reply (its allowance spent)
+//
+// As on the server, MIND's live pass starts only once a reply's stream has ended and takes a few
+// seconds (PASS_MS): /me/mind says live_pass "running" meanwhile, and its revision and content
+// move only when the pass lands.
 //   mockspeed=4                 run the night 4x faster
 //   mockat=40                   start a night 40 s in
 //   mockturns=3                 start as if 3 messages had been sent
@@ -22,14 +27,15 @@ const SPEED = Math.max(0.25, Number(params.get("mockspeed")) || 1);
 const AT = Math.max(0, Number(params.get("mockat")) || 0);
 const KEY = "anjo.mock.state";
 const DAY = 86400000;
+const PASS_MS = 4000;
 
 const STAGES = [
   ["extract", 6, "Reading what you said…", "Read 6 messages. Kept 9 pieces of evidence."],
   ["mind_notice", 8, "Looking for what doesn't fit…", "Opened 1 new question: something that stood out."],
   ["mind_choose", 6, "Weighing 3 wants…", "Chose to think through why the call to your sister keeps slipping."],
-  ["mind_inquire", 10, "Testing 3 answers against the evidence…", "Moved its lean to 64%: the last call ended badly."],
+  ["mind_inquire", 10, "Testing 3 answers against the evidence…", "Moved her lean to 64%: the last call ended badly."],
   ["homework", 9, "Reading about restarting contact…", "Studied: how people restart contact after a hard conversation (Muse Wonder)."],
-  ["self_predict", 6, "Deciding how sure it is…", "Bet 70% that practising a gentler opener helps."],
+  ["self_predict", 6, "Deciding how sure she is…", "Bet 70% that practising a gentler opener helps."],
   ["note", 5, "Writing…", "Left a note for the morning."],
   ["practice", 7, "Scene 2 of 4…", "Rehearsed 4 scenes; 3 held up."],
   ["train", 10, "Step 12 of 38…", "Trained your adapter: 38 steps."],
@@ -53,7 +59,13 @@ function load() {
   } catch {
     // no storage: a fresh state each page
   }
-  return { t0: Date.now(), turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false, hidden: [], disputed: [] };
+  return fresh(Date.now());
+}
+// A new judge: ``mockturns`` messages already sent, each with its live pass long done.
+function fresh(now) {
+  const turns = Number(params.get("mockturns")) || 0;
+  return { t0: now, turns, passes: Array.from({ length: turns }, () => [0, 0]), nightStart: null, nights: 0,
+    undone: false, hidden: [], disputed: [] };
 }
 let state = load();
 function save(next) {
@@ -102,9 +114,13 @@ function nightAt(now) {
 
 const reached = (night, name) => Boolean(night && night.stages.find((s) => s.name === name && s.state === "done"));
 
+// How many replies' live passes have landed by ``now``, and whether one is running.
+const passed = (now) => (state.passes || []).filter(([, end]) => end <= now).length;
+const passing = (now) => (state.passes || []).some(([start, end]) => start <= now && now < end);
+
 function mind(now) {
   const night = nightAt(now) || (state.nights ? { stages: STAGES.map(([name]) => ({ name, state: "done" })) } : null);
-  const turns = state.turns;
+  const turns = passed(now); // MIND has seen only the turns its live passes have read
   const questions = [];
   const target = "Why the call to your sister keeps slipping";
   if (turns >= 1 || night) {
@@ -159,9 +175,11 @@ function mind(now) {
     id: "e1", target: text(target), made_at: iso(now), horizon: iso(now + 3 * DAY), p_needed: 0.62, outcome: "open",
   }] : [];
   const section = (items) => ({ state: items.length ? "ok" : "none", items });
-  if (CASE === "mindempty") return { as_of: null, questions: section([]), targets: section([]), wants: { ...section([]), night: null }, choices: section([]), expectations: section([]) };
+  const live = { revision: passed(now) + (night ? night.stages.filter((x) => x.state === "done").length : 0),
+    live_pass: passing(now) ? "running" : "idle" };
+  if (CASE === "mindempty") return { ...live, as_of: null, questions: section([]), targets: section([]), wants: { ...section([]), night: null }, choices: section([]), expectations: section([]) };
   return {
-    as_of: night ? iso(now) : null, questions: section(questions), targets: section([]),
+    ...live, as_of: night ? iso(now) : null, questions: section(questions), targets: section([]),
     wants: { ...section(wants), night: chose ? 1 : null }, choices: section(choices), expectations: section(expectations),
     gates: section([]), timeline: section([]),
   };
@@ -183,6 +201,7 @@ function thought() {
     ? { ...THOUGHT.morning, new_hunches: THOUGHT.morning.new_hunches.filter((id) => shown.has(id)) } : null;
   return {
     ...THOUGHT, hunches, settled: THOUGHT.settled.filter(keep), morning, hidden: hidden.size,
+    revision: hidden.size + disputed.size + state.nights, live_pass: passing(Date.now()) ? "running" : "idle",
     question: THOUGHT.question && keep(THOUGHT.question) ? THOUGHT.question : null,
   };
 }
@@ -230,7 +249,7 @@ async function route(method, path, body, signal) {
     const code = String((body && body.code) || "").trim().toUpperCase();
     if (code === "BUSY") return json(429, { detail: "Too many requests" });
     if (code !== "GLIMMER") return json(403, { detail: "Wrong code" });
-    save({ t0: now, turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false, hidden: [], disputed: [] });
+    save(fresh(now));
     return json(200, { token: "mock-token", user_id: "judge-mock" });
   }
   if (CASE === "expired" && path.startsWith("/api/sleep/me/")) return json(401, { detail: "Not authenticated" });
@@ -252,7 +271,9 @@ async function route(method, path, body, signal) {
     if (CASE === "chatfail") return json(503, { error: "Service temporarily unavailable" });
     const reply = REPLIES[Math.min(state.turns, REPLIES.length - 1)];
     const model = (now - state.t0) / 1000 > 25 || CASE === "warm" ? "glimmer-judge" : "muse-spark";
-    save({ turns: state.turns + 1 });
+    // its live pass starts once the stream below has ended (about 1.3 s plus a word every 65 ms)
+    const start = now + 1300 + reply.split(" ").length * 65 + 300;
+    save({ turns: state.turns + 1, passes: CASE === "nopass" ? state.passes : [...(state.passes || []), [start, start + PASS_MS]] });
     return new Response(stream(reply, model, signal), { status: 200, headers: { "Content-Type": "text/event-stream" } });
   }
   if (path === "/api/sleep/me/sleep-now" && method === "POST") {
@@ -276,9 +297,9 @@ async function route(method, path, body, signal) {
       opener: "I kept coming back to your sister last night. I think the call is hard because the last one ended badly, not because you're busy. Want to plan the first two lines together?",
       self_prediction: { claim: "Practising a gentler opener will make my first reply this morning land better.", p: 0.7, outcome: "true" },
       what_changed: [
-        "Its lean on why the call keeps slipping moved from 52% to 64%.",
-        "It practised a gentler way to open hard topics; the gate kept it, +3 of 5.",
-        "It set one prediction to check in three days.",
+        "Her lean on why the call keeps slipping moved from 52% to 64%.",
+        "She practised a gentler way to open hard topics; the gate kept it, +3 of 5.",
+        "She set one prediction to check in three days.",
       ],
       before_after: {
         question: "I still haven't called her. What should I do?",
