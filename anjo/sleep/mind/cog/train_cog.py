@@ -5,9 +5,10 @@ with a random question asked on ``ask_rate`` of days (its answer joins that day'
 answer head learns it). The core runs the days in order; every ``tbptt`` days the loss of that
 window is backpropagated and the state is detached (truncated BPTT). The loss:
 
-- ``query``: log loss of ``p`` (the heads' mean probability) on the day's queries. With ``soft > 0``
-  a share ``1 - asking_share`` of lives has no asks, and their target is ``soft * oracle_p + (1 -
-  soft) * outcome``. The oracle is the Bayes filter given the person's true parameters on the
+- ``query``: log loss of ``p`` (the heads' mean probability) on the day's queries. A share ``1 -
+  asking_share`` of lives has no asks (as in the eval without an inquirer: a core that always heard
+  answers in training reads their absence wrongly), and with ``soft > 0`` their target is ``soft *
+  oracle_p + (1 - soft) * outcome``. The oracle is the Bayes filter given the person's true parameters on the
   passive events, so in a life without asks ``E[oracle_p | history] = P(y | history)``: the same
   minimizer as the outcome with much less variance (distilling privileged information the core
   never sees at test time). Lives with asks keep the outcome, since the oracle never hears answers
@@ -26,7 +27,8 @@ window is backpropagated and the state is detached (truncated BPTT). The loss:
 - ``self``: squared error of the self-forecast against the mean log loss of the queries that
   resolve the next day.
 
-Early stopping on the dev seeds' query log loss (from ``DEV_SEED``); the best weights are kept.
+Early stopping on the dev seeds' query log loss without asks (``dev``, from ``DEV_SEED``), as the
+eval scores ``mind`` alone; ``dev_ask`` is the same lives with random asks. The best weights are kept.
 """
 from __future__ import annotations
 
@@ -94,7 +96,7 @@ class TrainConfig:
     cms: bool = False
     vocab_lives: int = 300
     soft: float = 0.0  # the oracle's share of the query target in lives without asks (``loss``)
-    asking_share: float = 0.5  # with soft > 0, the share of lives that get random asks
+    asking_share: float = 0.5  # the share of train lives that get random asks; the rest get none
     weights: dict[str, float] = field(default_factory=lambda: dict(WEIGHTS))
 
 
@@ -248,7 +250,28 @@ def _detach(st: CogState) -> CogState:
 def _encode(
     vocab: Vocab, lives: Sequence[Life], rng: np.random.Generator, ask_rate: float, asking_share: float = 1.0,
 ) -> list[LifeArrays]:
-    return [encode_life(vocab, life, rng, ask_rate, asking=bool(rng.random() < asking_share)) for life in lives]
+    return [encode_life(vocab, life, rng, ask_rate, asking=asking_share >= 1.0 or bool(rng.random() < asking_share))
+            for life in lives]
+
+
+def asking_share(cfg: TrainConfig) -> float:
+    """The share of train lives with random asks (the rest hear no answer, whatever the target)."""
+    return cfg.asking_share
+
+
+def dev_batches(
+    vocab: Vocab, lives: Sequence[Life], batch: int, ask_rate: float,
+) -> tuple[list[Batch], list[Batch]]:
+    """The dev lives twice: without asks (what early stopping reads) and with random asks."""
+    rng = np.random.default_rng(DEV_SEED)
+    chunks = [lives[i:i + batch] for i in range(0, len(lives), batch)]
+    passive = [collate([encode_life(vocab, life, rng, 0.0, asking=False) for life in c]) for c in chunks]
+    asking = [collate([encode_life(vocab, life, rng, ask_rate, asking=True) for life in c]) for c in chunks]
+    return passive, asking
+
+
+def _dev_metrics(net: CogNet, passive: Sequence[Batch], asking: Sequence[Batch], u_mode: str) -> dict[str, float]:
+    return {**evaluate(net, passive, u_mode), "dev_ask": evaluate(net, asking, u_mode)["dev"]}
 
 
 def evaluate(net: CogNet, batches: Sequence[Batch], u_mode: str) -> dict[str, float]:
@@ -296,12 +319,10 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
     net = CogNet(CogConfig(vocab_size=len(vocab), dim=cfg.dim, hidden=cfg.hidden, heads=cfg.heads, fast=cfg.fast,
                            cms=cfg.cms, day_scale=float(cfg.n_days), u_mode=cfg.u_mode))
     dev_lives = [world(DEV_SEED + i, cfg.n_days) for i in range(cfg.dev_lives)]
-    dev_rng = np.random.default_rng(DEV_SEED)
-    dev = [collate(_encode(vocab, dev_lives[i:i + cfg.batch], dev_rng, cfg.ask_rate))
-           for i in range(0, len(dev_lives), cfg.batch)]
+    dev, dev_ask = dev_batches(vocab, dev_lives, cfg.batch, cfg.ask_rate)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr)
     gen = torch.Generator().manual_seed(cfg.seed)
-    history: list[dict[str, float]] = [{"epoch": 0.0, **evaluate(net, dev, cfg.u_mode)}]
+    history: list[dict[str, float]] = [{"epoch": 0.0, **_dev_metrics(net, dev, dev_ask, cfg.u_mode)}]
     best, best_state, stale = history[0]["dev"], {k: v.clone() for k, v in net.state_dict().items()}, 0
     seen, t_train = 0, 0.0
     say = log or (lambda _msg: None)
@@ -313,8 +334,7 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
         n_steps = 0
         for start in range(0, len(order), cfg.batch):
             seeds = order[start:start + cfg.batch]
-            share = cfg.asking_share if cfg.soft > 0 else 1.0
-            batch = collate(_encode(vocab, [life(int(s)) for s in seeds], rng, cfg.ask_rate, share))
+            batch = collate(_encode(vocab, [life(int(s)) for s in seeds], rng, cfg.ask_rate, asking_share(cfg)))
             st = net.initial(batch.act.shape[0], batch.act.shape[1])
             acc = _acc(batch)
             dmax = batch.q_mask.shape[1]
@@ -333,7 +353,7 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
             seen += len(seeds)
         t_train += time.perf_counter() - t0
         row = {"epoch": float(epoch), **{f"train_{k}": v / max(n_steps, 1) for k, v in parts_sum.items()},
-               **evaluate(net, dev, cfg.u_mode), "lives_per_sec": seen / max(t_train, 1e-9)}
+               **_dev_metrics(net, dev, dev_ask, cfg.u_mode), "lives_per_sec": seen / max(t_train, 1e-9)}
         history.append(row)
         say(json.dumps({k: round(v, 4) for k, v in row.items()}))
         if row["dev"] < best - 1e-4:
@@ -372,12 +392,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--u-mode", choices=("oracle", "boot"), default="oracle")
     ap.add_argument("--soft", type=float, default=0.0, help="the oracle's share of the query target")
+    ap.add_argument("--asking-share", type=float, default=0.5, help="the share of train lives with random asks")
     ap.add_argument("--no-fast", action="store_true", help="train without the fast memory (the trained lesion)")
     ap.add_argument("--cms", action="store_true", help="train with the continuum memory's night level")
     a = ap.parse_args(argv)
     cfg = TrainConfig(lives=a.lives, epochs=a.epochs, batch=a.batch, dim=a.dim, hidden=a.hidden, tbptt=a.tbptt,
                       dev_lives=a.dev_lives, n_days=a.n_days, seed=a.seed, threads=a.threads, patience=a.patience,
-                      lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms, soft=a.soft)
+                      lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms, soft=a.soft,
+                      asking_share=a.asking_share)
     a.out.mkdir(parents=True, exist_ok=True)
     trained = train(cfg, WORLDS[a.world], a.out, log=lambda m: print(m, flush=True))  # noqa: T201
     print(json.dumps({"out": str(a.out), "lives_per_sec": round(trained.lives_per_sec, 2),  # noqa: T201

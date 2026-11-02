@@ -26,9 +26,10 @@ DEV = range(10_000, 10_024)
 
 @functools.lru_cache(maxsize=1)
 def trained_tiny() -> train_cog.Trained:
-    """A small core trained for a few seconds on toy lives; shared by this file and test_cog_voi."""
+    """A small core trained for a few seconds on toy lives; shared by this file and test_cog_voi. Every
+    life gets asks: with half of 384 lives asking, it hardly learns what a work answer says."""
     cfg = train_cog.TrainConfig(lives=384, epochs=6, batch=32, dim=32, hidden=64, tbptt=28, dev_lives=16, lr=6e-3,
-                                n_days=56, seed=0, threads=1, patience=3)
+                                n_days=56, seed=0, threads=1, patience=3, asking_share=1.0)
     return train_cog.train(cfg, world=train_cog.toy_world)
 
 
@@ -90,6 +91,18 @@ def test_the_oracle_is_the_target_only_in_lives_without_asks() -> None:
     assert np.isclose(parts["query"], float(want), rtol=1e-5)
     _, plain = train_cog.loss(out, batch)
     assert not np.isclose(plain["query"], parts["query"])
+
+
+def test_dev_is_scored_without_asks_like_the_eval_and_also_with_them() -> None:
+    lives = [ToyLife(s, n_days=21) for s in DEV[:6]]
+    passive, asking = train_cog.dev_batches(build_vocab(lives), lives, batch=4, ask_rate=0.5)
+    assert [b.asking.shape[0] for b in passive] == [4, 2] == [b.asking.shape[0] for b in asking]
+    assert not any(bool(b.asking.any()) or int(b.ask_mask.sum()) for b in passive)
+    assert all(bool(b.asking.all()) for b in asking) and sum(int(b.ask_mask.sum()) for b in asking) > 0
+
+
+def test_some_training_lives_never_hear_an_answer_whatever_the_target() -> None:
+    assert train_cog.asking_share(train_cog.TrainConfig(soft=0.0)) == train_cog.TrainConfig().asking_share < 1.0
 
 
 def test_fast_off_never_writes_and_reads_zero() -> None:
