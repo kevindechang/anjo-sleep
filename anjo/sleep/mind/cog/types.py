@@ -64,6 +64,9 @@ class Question:
     text: str  # e.g. "How is work going this week?"
     tokens: tuple[str, ...]
     cost: float  # the interruption cost, in the same units as the inquiry score
+    # Every answer the person could give, as the answer event's tokens; ``answer`` returns an
+    # event whose tokens are exactly one of these. An inquirer weighs a question by them.
+    options: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
