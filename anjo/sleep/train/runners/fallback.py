@@ -20,8 +20,7 @@ Everything else fails the night as ``colab`` does:
   error or a NaN the script reports can't be told from a VM lost mid-run, and a script error would
   fail the same way on Modal;
 - a ``download`` that exits non-zero, or a receipt that isn't one;
-- a refusal before any VM: a real person, the thought channel, a timeout too short, a night past its
-  life's hold;
+- a refusal before any VM: a real person, the thought channel, a timeout too short;
 - ``BudgetStop``, ``Cancelled``, an interrupt;
 - a VM stop that failed. That VM may still run, so stop it by hand before anything else.
 

@@ -404,7 +404,16 @@ def test_the_night_and_the_accelerated_run_train_on_colab_modal(monkeypatch: pyt
     wall = (datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc), datetime(2026, 10, 28, 9, 5, tzinfo=timezone.utc))
     named = {"w": wiring, "s": lambda *args: DayRun(wall, 3, 0, ()), "m": lambda *args: None}
     monkeypatch.setattr(accelerated, "_named", lambda path: named[path])
+    holds: list[float] = []
+    per_life = accelerated._per_life
+
+    def watched(runner: Any, life_s: float) -> Any:
+        holds.append(life_s)
+        return per_life(runner, life_s)
+
+    monkeypatch.setattr(accelerated, "_per_life", watched)
     with pytest.raises(RuntimeError, match="stop here"):
         accelerated.main(["--wiring", "w", "--simulate", "s", "--morning", "m", "--user", "u1", "--persona", "founder",
                           "--days", "1", "--start", start.isoformat()])
     assert isinstance(seen[-1], ColabModalLives)  # one Colab VM per life, as on colab
+    assert holds == [accelerated.LIFE_VM_HOLD_S] == [7200.0]  # each VM holds one night's job, whatever --days says

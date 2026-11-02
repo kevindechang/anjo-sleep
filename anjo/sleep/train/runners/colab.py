@@ -43,10 +43,12 @@ connection, and the timeouts of all calls together fit inside the job's own. Not
 uploaded: never ``.env``, never another file. The finished adapter's upload to the Modal volume
 is ``train_lora``'s step, through Task 4's ``put_adapter``.
 
-An accelerated life keeps one VM for all its nights (``ColabRunner.lives``, ``ColabLives``, Task
+An accelerated life may keep one VM for several nights (``ColabRunner.lives``, ``ColabLives``, Task
 12a): the VM is made and set up on the life's first night, so the base weights download once, and
 it is stopped when the batch ends or when any of the life's nights fails. Every rule above holds per
-night; the life holds its worst case in one reservation, settled at the stop.
+night; each VM holds its worst case in one reservation, settled at its stop. A VM is kept for the
+next night only when that night fits what is left of its hold; otherwise it is stopped, and the next
+night makes a new VM with its own hold.
 """
 from __future__ import annotations
 
@@ -491,8 +493,8 @@ class ColabRunner:
         return {**_receipt(out / colab_train.RECEIPT), "keepalive_pings": pings.sent, "keepalive_failed": pings.failed}
 
     def lives(self, *, life_timeout_s: float) -> ColabLives:
-        """A runner that keeps one VM per life for all its nights (Task 12a); use it as a context
-        manager, so every VM is stopped when the batch ends or fails."""
+        """A runner that may keep one VM per life across its nights (Task 12a), each VM holding at least
+        ``life_timeout_s``; use it as a context manager, so every VM is stopped when the batch ends or fails."""
         return ColabLives(self, life_timeout_s=life_timeout_s)
 
     def _finish(self, vm: _Vm, session: str, reservation: Reservation, started: float) -> float:
@@ -536,16 +538,29 @@ class _Life:
     vm: _Vm = field(default_factory=_Vm)
     idle_since: float | None = None  # when the last night ended on this VM, if it was kept
 
+    @property
+    def hold_s(self) -> float:
+        """The seconds this VM's hold covers, from ``started``."""
+        return self.reservation.bound.timeout_s
+
 
 class ColabLives:
-    """``GpuRunner`` for the ``train_lora`` job that keeps one Colab VM per life (Task 12a).
+    """``GpuRunner`` for the ``train_lora`` job that may keep one Colab VM per life (Task 12a).
 
-    A life's first night makes the VM, installs the packages and trains; its later nights upload only
-    that night's dataset and the previous adapter, and train on the same VM, so Glimmer's base
-    weights download once. The life reserves ``life_timeout_s`` on ``colab_cu`` before its VM exists;
-    a night whose own timeout would run past it is refused before it starts. The VM is stopped, and
-    the hold settled, when a night of the life fails and when the context exits, whether the batch
-    ended or broke. A stop that fails settles the whole hold and raises, as for a single night.
+    A life's first night makes the VM, installs the packages and trains; a later night on a kept VM
+    uploads only that night's dataset and the previous adapter, and trains on the same VM, so
+    Glimmer's base weights download once. Each VM reserves its hold on ``colab_cu`` before it exists:
+    ``life_timeout_s``, or its first night's own timeout when that is longer (a seeded night's).
+    After a night the VM is kept only when the simulated day and scoring before the next night are
+    short (``MAX_IDLE_BETWEEN_NIGHTS_S``) and another full night still fits what is left of its hold;
+    otherwise it is stopped and its hold settled. A night that won't fit a kept VM's hold after all
+    (its day ran longer than the last) stops that VM and makes a new one with its own hold, so no
+    night is refused for its hold. The VM is stopped, and the hold settled, when a night of the life
+    fails and when the context exits, whether the batch ended or broke. A stop that fails settles the
+    whole hold and raises, as for a single night.
+
+    2026-11-02: a life's VM once held all its nights and three more (75 units for a 2-night life), so
+    a final's later holds didn't fit the cap, and a refused hold fails its night.
     """
 
     def __init__(self, runner: ColabRunner, *, life_timeout_s: float) -> None:
@@ -590,22 +605,20 @@ class ColabLives:
         name = config.check_adapter_name(str(inputs["adapter_name"]))
         uploads = _uploads(inputs)
         life = self._lives.get(person)
+        if life is not None and runner._clock() - life.started + timeout_s > life.hold_s:
+            self._stop(person)  # past the kept VM's hold: this night makes a new VM with its own hold
+            life = None
         first = life is None
         setup_s = _setup_s(len(uploads)) if first else _night_setup_s(len(uploads))
         exec_s = timeout_s - setup_s
-        spent = 0.0 if life is None else runner._clock() - life.started
-        refusal = None
         if exec_s < MIN_EXEC_S:
-            refusal = "the job's timeout leaves too little time to train"
-        elif spent + timeout_s > self._life_s:
-            refusal = "this night would run past the life's hold"
-        if refusal is not None:
             if life is not None:
                 self._stop(person)  # a refused night never leaves the VM idling
-            raise ColabError(refusal)
+            raise ColabError("the job's timeout leaves too little time to train")
         if life is None:
             base = f"{HOLD_KINDS[runner.session_prefix][1]}:{inputs['night']}:{person}"
-            reservation = hold(runner._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, self._life_s))
+            bound = Bound(A100_CU_PER_HOUR, max(self._life_s, timeout_s))
+            reservation = hold(runner._ledger, base, (POOL,), bound)
             life = self._lives[person] = _Life(_life_session(person, runner.session_prefix), reservation,
                                                runner._clock())
         out = Path(str(inputs["workdir"])) / "out"
@@ -618,19 +631,22 @@ class ColabLives:
         except BaseException:
             self._stop(person)  # a failed night stops the life's VM; the error is the one that propagates
             raise
-        elapsed = max(0.0, runner._clock() - night_started)
+        ended = runner._clock()
+        elapsed = max(0.0, ended - night_started)
         done = self._done[person] = self._done.get(person, 0) + 1
         day_s = self._day_s.get(person)
         scoring_s = self._scoring_s.get(person)
         # the gap before the next night is a scoring run and a simulated day: both count
-        keep = done > 1 and day_s is not None and day_s + (scoring_s or 0.0) <= MAX_IDLE_BETWEEN_NIGHTS_S
+        gap_s = None if day_s is None else day_s + (scoring_s or 0.0)
+        keep = (done > 1 and gap_s is not None and gap_s <= MAX_IDLE_BETWEEN_NIGHTS_S
+                and ended - life.started + gap_s + timeout_s <= life.hold_s)  # and another night fits the hold
         self._records.setdefault(person, []).append(
             {"night": str(inputs["night"]), "vm_kept": keep, "idle_s_before": idle, "day_s": day_s,
              "scoring_s": scoring_s})
         if keep:
-            life.idle_since = runner._clock()
+            life.idle_since = ended
         else:
-            self._stop(person)  # nothing measured, or a long day ahead: the VM does not idle
+            self._stop(person)  # nothing measured, a long day ahead or no room left: the VM does not idle
         return {
             **receipt, "adapter_dir": str(out), "gpu_minutes": elapsed / 60.0,
             "compute_units": elapsed / 3600.0 * A100_CU_PER_HOUR, "adapter": name,

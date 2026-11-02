@@ -41,7 +41,7 @@ run: the next night goes on, the report says which morning failed, and the comma
 (``UNSCORED_EXIT``) when every night ran but a morning failed. The morning's own refusal
 (``MorningError``: a rerun, or a checkpoint that moved since the night) still stops it. Real runs train synthetic
 people only, on the runner ``ANJO_SLEEP_TRAIN_RUNNER`` names (``train/runners/choice.py``): Modal by
-default, one call a night, or Colab, one VM per life (``ColabLives``).
+default, one call a night, or Colab, a VM per life that holds one night (``ColabLives``, ``LIFE_VM_HOLD_S``).
 
 **A final run** (``--label final``, ``sim/final_batch.py``) scores each life once, on its last night,
 after every life's last night, so every 3x donor has trained its last: the earlier nights' mornings are
@@ -105,7 +105,10 @@ PERSONAS: Final = Path(__file__).parents[1] / "personas"
 REPO: Final = Path(__file__).parents[3]
 GIT_TIMEOUT_S: Final = 10.0
 LIFE_NIGHT_TIMEOUT_S: Final = 2.0 * 3600.0  # one night's Colab job, as the night command's trainer allows
-LIFE_NIGHTS_HELD: Final = 3  # a life's VM hold covers this many nights at the job timeout, plus setup
+# Each life's Colab VM holds one night's job, its setup and stop inside it (``ColabLives``: a seeded night
+# holds its own longer timeout). A final's simulated day is long, so each VM stops after its night anyway;
+# a hold for every night and three more (2026-11-02: 75 units each) left later holds no room in the cap.
+LIFE_VM_HOLD_S: Final = LIFE_NIGHT_TIMEOUT_S
 FAKE_PERSONA: Final = "film_founder"
 FAKE_USER: Final = "fake-life"
 NIGHT_LOGS: Final = "anjo.sleep.app.ownership:night_logs"  # a person's night log folders, read by --resume
@@ -422,8 +425,8 @@ def _vm_record(lives: Any, user_id: str, night: str) -> dict[str, object] | None
 
 @contextmanager
 def _per_life(runner: Any, life_s: float) -> Iterator[tuple[Any, dict[str, Any]]]:
-    """The runner the lives train on, and the rig's VM hooks. Colab keeps one VM per life
-    (``ColabLives``), told how long each day and scoring run took; Modal runs one call a night, so
+    """The runner the lives train on, and the rig's VM hooks. Colab may keep a life's VM between nights
+    (``ColabLives``, each VM holding ``life_s``), told how long each day and scoring run took; Modal runs one call a night, so
     there is no VM to keep between nights and nothing to tell it."""
     from anjo.sleep.train.runners.colab import ColabRunner
     from anjo.sleep.train.runners.fallback import ColabModalRunner
@@ -590,7 +593,6 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     people = [(uid, load_person_file(PERSONAS / f"{name}.json").visible) for uid, name in personas.items()]
     ledger = default_ledger()
     chosen = night_command.chosen_runner(data_dir, ledger, personas)  # synthetic people only: no real one named
-    life_s = LIFE_NIGHT_TIMEOUT_S * (LIFE_NIGHTS_HELD + args.days)
     wiring, simulate, morning = _named(args.wiring), _named(args.simulate), _named(args.morning)
 
     score = morning_scorer(morning, personas, subset)
@@ -605,7 +607,7 @@ def _real(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
     halted: str | None = None
     try:
-        with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, life_s) as (runner, hooks):
+        with swept_night(ledger, chosen.sweep) as swept, _per_life(chosen.runner, LIFE_VM_HOLD_S) as (runner, hooks):
             trainer = LoraTrainer(runner, root=data_dir / "sleep" / "training",
                                   publish=night_command._publisher(chosen.name, chosen.landed),
                                   revision=os.environ.get(REVISION_ENV) or None, cfg=cfg)

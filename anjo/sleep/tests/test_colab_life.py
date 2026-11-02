@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from anjo.sleep.budget import CAPS, Ledger
+from anjo.sleep import budget
+from anjo.sleep.budget import CAPS, Bound, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.serving import config
 from anjo.sleep.stops import BudgetStop
@@ -24,6 +25,7 @@ from anjo.sleep.train.runners.colab import (
     command_label,
     A100_CU_PER_HOUR,
     MAX_IDLE_BETWEEN_NIGHTS_S,
+    SEED_TIMEOUT_S,
     ColabCli,
     ColabLives,
     ColabError,
@@ -45,9 +47,10 @@ class Minute:
         return self.now
 
 
-def _runner(fake: FakeColab, ledger: Ledger, *, allow_real: bool = False) -> ColabRunner:
+def _runner(fake: FakeColab, ledger: Ledger, *, allow_real: bool = False, clock: Minute | None = None) -> ColabRunner:
     return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger,
-                       is_synthetic=lambda uid: uid.startswith("synthetic"), allow_real=allow_real, clock=Minute())
+                       is_synthetic=lambda uid: uid.startswith("synthetic"), allow_real=allow_real,
+                       clock=clock or Minute())
 
 
 def _lives(runner: ColabRunner, life_s: float = LIFE_S, day_s: float | None = SHORT_DAY_S) -> ColabLives:
@@ -237,16 +240,75 @@ def _run(lives: ColabLives, tmp_path: Path, person: str, number: int, timeout_s:
     lives.run(JOB, _night(tmp_path, person, number, warm=number > 1), timeout_s=timeout_s)
 
 
-def test_a_refused_night_stops_the_vm_it_leaves_up(tmp_path: Path) -> None:
+def test_a_vm_is_kept_only_when_another_full_night_fits_its_hold(tmp_path: Path) -> None:
+    """A short day, but a hold with room for one night: each VM stops after its night, and no night is
+    refused for running past a hold (2026-11-02: the old rule kept the VM and refused the next night)."""
     fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
     with _lives(_runner(fake, ledger), NIGHT_S + 60.0) as lives:
-        _run(lives, tmp_path, "synthetic-1", 1)  # the first night stops its VM
-        _run(lives, tmp_path, "synthetic-1", 2)  # a short day: this VM is kept
+        for number in (1, 2, 3):
+            _run(lives, tmp_path, "synthetic-1", number)
+            assert fake.commands()[-1] == "stop"  # no VM idles through the day
+    assert [r["vm_kept"] for r in lives.records("synthetic-1")] == [False, False, False]
+    assert fake.commands().count("new") == fake.commands().count("stop") == 3 and not ledger.open_holds()
+    assert [e["op"] for e in _events(ledger)] == ["reserve", "settle"] * 3
+
+
+def test_a_night_that_would_outrun_its_kept_vms_hold_gets_a_new_vm_not_a_refusal(tmp_path: Path) -> None:
+    fake, ledger, clock = FakeColab(), Ledger(tmp_path / "budget.jsonl"), Minute()
+    with _lives(_runner(fake, ledger, clock=clock), 3 * NIGHT_S) as lives:
+        _run(lives, tmp_path, "synthetic-1", 1)  # nothing measured: stopped
+        _run(lives, tmp_path, "synthetic-1", 2)  # a short day, and another night fits the hold: kept
         assert fake.commands().count("stop") == 1
-        with pytest.raises(ColabError, match="hold"):
-            _run(lives, tmp_path, "synthetic-1", 3)
-        assert fake.commands().count("stop") == 2 and fake.commands()[-1] == "stop"  # no VM idles through the days
-    assert fake.commands().count("stop") == 2 and not ledger.open_holds()
+        clock.now += 2 * NIGHT_S  # the day ran far longer than the one measured before it
+        _run(lives, tmp_path, "synthetic-1", 3)  # this night won't fit the kept VM's hold: a new VM and hold
+        commands = fake.commands()
+        assert commands.count("new") == 3 and commands.count("stop") == 2
+        assert commands[len(commands) - 1 - commands[::-1].index("new") - 1] == "stop"  # the kept VM, before the new one
+    assert fake.commands().count("stop") == 3 and not ledger.open_holds()
+    assert [e["op"] for e in _events(ledger)] == ["reserve", "settle"] * 3
+
+
+def test_a_final_shaped_batch_holds_one_night_per_vm(tmp_path: Path) -> None:
+    """The final: three lives, two nights each, a long simulated day before each next night, on the
+    accelerated run's own per-life runner and hold. Every hold is one night's, never more than three
+    are open at once, and three fit the room the real balance leaves."""
+    from anjo.sleep.sim import accelerated
+
+    ledger = Ledger(tmp_path / "budget.jsonl")
+    open_at_new: list[list[float]] = []
+
+    class Watch(FakeColab):
+        def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+            if list(args)[3] == "new":
+                open_at_new.append([held.bound.amount for held in ledger.open_holds()])
+            return super().__call__(args, timeout_s)
+
+    fake = Watch()
+    one_night = Bound(A100_CU_PER_HOUR, NIGHT_S).amount
+    people = ("synthetic-1", "synthetic-2", "synthetic-3")
+    with accelerated._per_life(_runner(fake, ledger), accelerated.LIFE_VM_HOLD_S) as (lives, hooks):
+        for number in (1, 2):
+            for person in people:
+                _run(lives, tmp_path, person, number)  # none refused, none past its hold
+                hooks["on_day"](person, 3600.0)  # the final's simulated day: far past the idle limit
+    reserves = [e for e in _events(ledger) if e["op"] == "reserve"]
+    assert len(reserves) == 6 and all(e["amount"] == pytest.approx(one_night) for e in reserves)
+    assert len(open_at_new) == 6 and max(len(held) for held in open_at_new) <= 3
+    assert max(sum(held) for held in open_at_new) <= 3 * one_night + 1e-9
+    assert 3 * one_night <= CAPS["colab_cu"] - budget.COLAB_CU_COUNTED_AT_RECONCILE  # inside the real balance's room
+    assert fake.commands().count("new") == fake.commands().count("stop") == 6 and not ledger.open_holds()
+
+
+def test_a_seeded_night_on_a_one_night_hold_holds_its_own_longer_timeout(tmp_path: Path) -> None:
+    from anjo.sleep.sim import accelerated
+
+    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
+    inputs = _night(tmp_path, "synthetic-1", 1, warm=False)
+    inputs["config"] = {"r": 16, "objective": "sft_dpo_seed"}
+    with _lives(_runner(fake, ledger), accelerated.LIFE_VM_HOLD_S) as lives:
+        lives.run(JOB, inputs, timeout_s=NIGHT_S)  # three hours, past the two-hour hold: never refused
+    reserve = _events(ledger)[0]
+    assert reserve["timeout_s"] == SEED_TIMEOUT_S > accelerated.LIFE_VM_HOLD_S and not ledger.open_holds()
 
 
 def test_a_night_with_too_little_time_stops_the_vm_it_leaves_up(tmp_path: Path) -> None:
