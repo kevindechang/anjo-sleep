@@ -32,7 +32,7 @@ from anjo.sleep.train.runners.colab import (
 )
 
 NIGHT_S = 7200.0
-LIFE_S = 6 * 3600.0
+LIFE_S = 5 * 3600.0  # two nights and room to spare; two lives' holds fit the colab_cu cap together
 SHORT_DAY_S = 60.0
 
 

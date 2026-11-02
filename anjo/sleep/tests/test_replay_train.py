@@ -278,7 +278,7 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
     assert settings[0]["current_date"] == thinker.render_night(data).isoformat() and settings[0]["warm_start"] is False
     assert cli.commands().count("new") == 2 and cli.commands().count("stop") == 2
     assert ledger.open_holds() == () and ledger.used("colab_cu") > 0
-    assert found.hold_cu == pytest.approx(15.0)
+    assert found.hold_cu == pytest.approx(17.76)  # two hours at 8.88 CU an hour (`colab usage`, 2026-11-02)
 
 
 def test_replay_trains_in_minds_sessions_which_sleeps_sweep_never_stops(tmp_path: Path) -> None:
@@ -370,7 +370,9 @@ def test_replay_serves_glimmer_on_colab_only() -> None:
 def test_labels_branches_and_arms_hold_their_worst_case_before_they_run(tmp_path: Path) -> None:
     life = fakes.fake_life(0)
     starts = sample.start_states(life, run_arm("M", life, fakes.fake_models()))
-    ledger = Ledger(tmp_path / "ledger.jsonl", caps=CAPS)
+    # Room for every hold: this is about holding before running, not the cap. A fake 4-night arm holds
+    # 77 CU at 8.88 an hour, more than the reconciled colab_cu room leaves after the branches.
+    ledger = Ledger(tmp_path / "ledger.jsonl", caps={**CAPS, "colab_cu": 1000.0})
     holds = spend.Holds(ledger, PRICES, Clock())
     chat = fakes.FakeLabelChat()
     book = resolve.label_all(starts, {life.id: life}, resolve.SparkLabeler(chat=chat), holds=holds)

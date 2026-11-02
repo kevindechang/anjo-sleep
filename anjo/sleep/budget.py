@@ -73,11 +73,18 @@ FIREWORKS_ROOM_USD: Final = FIREWORKS_REMAINING_USD - FIREWORKS_MARGIN_USD  # 58
 FIREWORKS_TOTAL: Final = FIREWORKS_RECORDED_USD + FIREWORKS_ROOM_USD  # 123.51: recorded + room
 FIREWORKS_CREDIT_USD: Final = FIREWORKS_REMAINING_USD + FIREWORKS_RECORDED_USD  # $128.51 as counted
 
+# Colab's compute units as the ledger counts them. 2026-11-02: `colab usage` showed 98.9 units left. The
+# cap is what the ledger had counted at that reading plus the reading less a 5-unit margin, so the room
+# it leaves is what is really left, less the margin. COLAB_CU_COUNTED_AT_RECONCILE is a placeholder:
+# set it to the live ledger's ``used("colab_cu")`` (no hold open) at the reading, before merging.
+COLAB_CU_COUNTED_AT_RECONCILE: Final = 0.0
+COLAB_REAL_BALANCE_AT_RECONCILE: Final = 98.9
+
 CAPS: Final[Mapping[Pool, float]] = MappingProxyType({
     "modal_usd": 500.0,  # of which about $120 is warm hours for the live page in judging week
-    # Training (Task 5) and MIND's synthetic runs (Tasks 17, 17b). The real balance on 2026-10-27 was
-    # 103.97 units (`colab usage`); this is that minus a margin, raised only when Kevin buys more units.
-    "colab_cu": 100.0,
+    # Training (Task 5) and MIND's synthetic runs (Tasks 17, 17b): the reconciled reading above, less a
+    # 5-unit margin; raised only when Kevin buys more units.
+    "colab_cu": COLAB_CU_COUNTED_AT_RECONCILE + COLAB_REAL_BALANCE_AT_RECONCILE - 5.0,
     "meta_usd": 140.0,  # $10 under the $150 credit, for billing lag
     "baseten_sleep_usd": 60.0,  # practice, the simulator, extraction and the brief
     "baseten_mind_usd": 40.0,  # Tasks 17 and 17b

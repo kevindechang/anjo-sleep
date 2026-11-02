@@ -64,9 +64,9 @@ from anjo.sleep.train.lora import DATASET_FILE, JOB
 COLAB_BIN: Final = Path.home() / ".local" / "bin" / "colab"
 AUTH: Final = ("--auth", "oauth2")
 GPU: Final = "A100"
-# Compute units an hour for an A100-80GB high-RAM VM: spec §11.5 (MIND's compute line); `colab
-# usage` on the first session checks it. The hold is the job's hard timeout at this rate.
-A100_CU_PER_HOUR: Final = 7.5
+# Compute units an hour for an A100-80GB high-RAM VM, as `colab usage` read it on 2026-11-02 (spec
+# §11.5's 7.5 was an estimate). The hold is the job's hard timeout at this rate.
+A100_CU_PER_HOUR: Final = 8.88
 POOL: Final = "colab_cu"
 REMOTE_DIR: Final = "/content/anjo"
 SCRIPT: Final = Path(colab_train.__file__)

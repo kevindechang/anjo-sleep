@@ -128,10 +128,10 @@ def test_colab_runner_reserves_worst_case_bound(tmp_path: Path) -> None:
     _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     reserve, settle = _events(ledger)
     assert reserve["pools"] == ["colab_cu"]
-    assert reserve["rate_per_hour"] == A100_CU_PER_HOUR == 7.5  # spec §11.5, MIND's compute line
+    assert reserve["rate_per_hour"] == A100_CU_PER_HOUR == 8.88  # `colab usage`, 2026-11-02
     assert reserve["timeout_s"] == TIMEOUT_S
-    assert reserve["amount"] == pytest.approx(TIMEOUT_S / 3600 * 7.5)
-    assert settle["amount"] == pytest.approx(0.25 * 7.5)  # what the VM ran for
+    assert reserve["amount"] == pytest.approx(TIMEOUT_S / 3600 * 8.88)
+    assert settle["amount"] == pytest.approx(0.25 * 8.88)  # what the VM ran for
     # Every call's timeout together fits inside the job's own, so the hold is the worst case.
     assert sum(timeout for _, timeout in fake.calls) <= TIMEOUT_S
 

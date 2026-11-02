@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from anjo.sleep.budget import Ledger
+from anjo.sleep.budget import CAPS, Ledger
 from anjo.sleep.evidence.jsonl import PLAIN, read_records
 from anjo.sleep.mind.apd import __main__ as cli
 from anjo.sleep.mind.apd import backend as backends
@@ -49,7 +49,8 @@ def test_live_refused_without_flag_and_plan_spends_nothing(tmp_path: Path, monke
         assert code == 0 and text.startswith("Plan:") and text.endswith("Nothing has run. Add --yes to start it.")
         assert "Hold on " in text
         if command[0] in ("run", "timing", "intervene", "kill-resume"):
-            assert "hard timeout 4.0 h" in text and "colab_cu: 30.0 CU" in text and "fireworks_mind_usd" in text
+            # four hours at 8.88 CU an hour (`colab usage`, 2026-11-02)
+            assert "hard timeout 4.0 h" in text and "colab_cu: 35.5 CU" in text and "fireworks_mind_usd" in text
     assert list(tmp_path.iterdir()) == []  # nothing written, nothing held
     assert "meta_usd" in _main([*LIVE, "--data", str(tmp_path), "judge"])[1]
     with pytest.raises(SystemExit):
@@ -224,7 +225,8 @@ def test_timing_measures_throughput_and_projects_against_the_cap_and_the_line(tm
             for replay in ("with", "without"):
                 line = next(line for line in text.splitlines()
                             if line.startswith(f"N={lives}, {control} M-control, {replay} 17b:"))
-                assert "the 100 CU cap" in line and "the 300-unit line" in line and "fireworks_mind_usd cap" in line
+                cap = f"the {CAPS['colab_cu']:.0f} CU cap"  # the reconciled balance less its margin
+                assert cap in line and "the 300-unit line" in line and "fireworks_mind_usd cap" in line
     measured = timing.load(DataDir(tmp_path))
     assert measured is not None and measured.parallel == 4 and measured.thinker_calls > 0 and measured.spark_calls > 0
     ledger = Ledger(tmp_path / "fake-budget.jsonl")
