@@ -125,6 +125,13 @@ export const api = Object.freeze({
   undo: () => request("/api/sleep/me/undo", {
     method: "POST", messages: { 409: COPY.undo_nothing, 423: COPY.undo_running },
   }),
+  thought: () => request("/api/sleep/me/thought", { messages: { 503: COPY.thought_off } }),
+  dispute: (id, note) => request(`/api/sleep/me/thought/${encodeURIComponent(id)}/dispute`, {
+    method: "POST", body: note ? { note } : {}, messages: { 404: COPY.thought_gone, 503: COPY.thought_off },
+  }),
+  hide: (id) => request(`/api/sleep/me/thought/${encodeURIComponent(id)}/hide`, {
+    method: "POST", messages: { 404: COPY.thought_gone, 503: COPY.thought_off },
+  }),
   chatStart: () => {
     const offset = -new Date().getTimezoneOffset();
     return request(`/api/chat/start?platform=web&tz_offset=${offset}`, {

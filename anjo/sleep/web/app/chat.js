@@ -113,7 +113,7 @@ export function createChat({ onReply }) {
 
   async function submit(text) {
     const clean = text.trim();
-    if (!clean || busy || asleep) return;
+    if (!clean || busy || asleep) return false;
     busy = true;
     setEnabled();
     say(status, "");
@@ -136,6 +136,7 @@ export function createChat({ onReply }) {
     setEnabled();
     if (!asleep) box.focus({ preventScroll: true });
     if (ok) onReply();
+    return ok;
   }
 
   form.addEventListener("submit", (event) => {
@@ -157,6 +158,20 @@ export function createChat({ onReply }) {
     // Open the session early so the first message doesn't wait for it.
     warm() {
       ensureSession().catch((error) => say(status, error.message || COPY.chat_start_failed, "error"));
+    },
+    // Send words from elsewhere on the page (an answer to MIND's question) as a normal message.
+    // False when it can't go now: a reply is still arriving, or Anjo is asleep.
+    send: (text) => submit(text),
+    get canSend() { return !busy && !asleep; },
+    get asleep() { return asleep; },
+    // Start a message for them to finish, the cursor at its end.
+    draft(text) {
+      if (asleep) return;
+      box.value = text;
+      grow();
+      box.focus({ preventScroll: true });
+      box.setSelectionRange(text.length, text.length);
+      box.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" });
     },
     setAsleep(value) {
       asleep = value;

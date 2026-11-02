@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/static/home.css" />
   <link rel="stylesheet" href="/sleep/app/app.css" />
   <link rel="stylesheet" href="/sleep/app/panel.css" />
+  <link rel="stylesheet" href="/sleep/app/thought.css" />
   <script type="module" src="/sleep/app/live.js"></script>
 </head>
 <body class="judge-live">
@@ -56,6 +57,17 @@
 
     <div class="live-grid wrap">
       <section class="pane pane-chat" id="pane-chat" role="tabpanel" aria-labelledby="tab-chat">
+        <section class="since" id="since" aria-labelledby="since-heading" hidden>
+          <header class="wake-head">
+            <div>
+              <span class="kicker">Her line of thought</span>
+              <h2 id="since-heading">Since your last visit</h2>
+            </div>
+            <button class="btn btn-ghost btn-small" type="button" id="since-hide" aria-controls="since-body" aria-expanded="true">Hide</button>
+          </header>
+          <div class="since-body" id="since-body"></div>
+        </section>
+
         <section class="wake" id="wake" aria-labelledby="wake-heading" hidden>
           <header class="wake-head">
             <div>
@@ -66,6 +78,10 @@
           </header>
           <div id="wake-body">
             <p class="form-status" id="wake-status" role="status" aria-live="polite"></p>
+            <article class="wake-card wake-morning" id="wake-morning" hidden>
+              <h3 class="label">Since your last visit</h3>
+              <div class="since-body" id="wake-morning-body"></div>
+            </article>
             <div class="wake-grid">
               <article class="wake-card" id="wake-bet" hidden>
                 <h3 class="label">Its bet on itself</h3>
@@ -144,13 +160,28 @@
       </section>
 
       <aside class="pane pane-mind" id="pane-mind" role="tabpanel" aria-labelledby="tab-mind">
-        <header class="mind-head">
-          <span class="kicker">MIND · live</span>
-          <h2>What it's working out about you</h2>
-          <p class="mind-note">Plain line first, its own words second. Credences are its own rough estimates.</p>
-          <p class="mind-updated" id="mind-updated"></p>
-        </header>
-        <div class="mind-body" id="mind-body"></div>
+        <div class="side-tabs" role="tablist" aria-label="MIND">
+          <button class="side-tab" type="button" role="tab" id="side-tab-mind" aria-controls="side-mind" aria-selected="true">Working out</button>
+          <button class="side-tab" type="button" role="tab" id="side-tab-thought" aria-controls="side-thought" aria-selected="false" tabindex="-1">Line of thought</button>
+        </div>
+        <section class="side-pane" id="side-mind" role="tabpanel" aria-labelledby="side-tab-mind">
+          <header class="mind-head">
+            <span class="kicker">MIND · live</span>
+            <h2>What it's working out about you</h2>
+            <p class="mind-note">Plain line first, its own words second. Credences are its own rough estimates.</p>
+            <p class="mind-updated" id="mind-updated"></p>
+          </header>
+          <div class="mind-body" id="mind-body"></div>
+        </section>
+        <section class="side-pane" id="side-thought" role="tabpanel" aria-labelledby="side-tab-thought" hidden>
+          <header class="mind-head">
+            <span class="kicker">MIND · overnight</span>
+            <h2>Her own line of thought</h2>
+            <p class="mind-note">Her open hunches, how her bets have gone, and the one thing she'd most like to ask you. Plain line first, her exact words second.</p>
+          </header>
+          <p class="form-status" id="thought-status" role="status" aria-live="polite"></p>
+          <div class="thought-body" id="thought-body"></div>
+        </section>
       </aside>
     </div>
   </main>

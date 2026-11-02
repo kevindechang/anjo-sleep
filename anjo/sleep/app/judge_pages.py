@@ -45,6 +45,10 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "panel.js": _JS,       # the MIND panel
     "sleep.js": _JS,       # Sleep now and the night view
     "wake.js": _JS,        # the wake view and undo
+    "thought.css": _CSS,   # her line of thought, the side panel's tabs, "since your last visit"
+    "thought.js": _JS,     # her line of thought: hunches (dispute, hide), her scorecard, one question
+    "morning.js": _JS,     # "since your last visit", in the wake and on the next visit
+    "mock_thought.js": _JS,  # her line of thought for ?mock=1 (a synthetic life), loaded only by mock.js
 })
 
 page_router = APIRouter(prefix=PREFIX)

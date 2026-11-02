@@ -5,9 +5,16 @@
 // The judge code is GLIMMER (BUSY answers 429, anything else 403). Extra flags, all optional:
 //   mockcase=cold | warm        the talker label's state (default: waking for 25 s, then warm)
 //   mockcase=sleep429 | sleep409 | nightfail | wakefail | chatfail | expired | mindempty | mindfail
+//   mockcase=visit              her line of thought has a "since your last visit" note from the start
+//                               (otherwise only once a night has run)
+//   mockcase=thoughtoff | thoughtfail | thoughtempty | markfail   (markfail: dispute and hide refused)
 //   mockspeed=4                 run the night 4x faster
 //   mockat=40                   start a night 40 s in
 //   mockturns=3                 start as if 3 messages had been sent
+//
+// Her line of thought is the engine's own output for a synthetic life (mock_thought.js).
+
+import { THOUGHT } from "./mock_thought.js";
 
 const params = new URLSearchParams(window.location.search);
 const CASE = params.get("mockcase") || "";
@@ -46,7 +53,7 @@ function load() {
   } catch {
     // no storage: a fresh state each page
   }
-  return { t0: Date.now(), turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false };
+  return { t0: Date.now(), turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false, hidden: [], disputed: [] };
 }
 let state = load();
 function save(next) {
@@ -160,6 +167,39 @@ function mind(now) {
   };
 }
 
+// Her line of thought with the judge's marks applied, as the route does: hidden items (or a hidden
+// question's bets) leave the view, disputed ones stay flagged. The note waits for a second visit.
+function thought() {
+  const hidden = new Set(state.hidden || []);
+  const disputed = new Set(state.disputed || []);
+  const keep = (x) => !hidden.has(x.id) && !hidden.has(x.question_id);
+  if (CASE === "thoughtempty") {
+    return { ...THOUGHT, hunches: [], settled: [], question: null, morning: null, hidden: 0,
+      scorecard: { scored: 0, right: 0, hit_rate: null, brier: null, enough: false, bins: [], ran_out_of_time: 0 } };
+  }
+  const hunches = THOUGHT.hunches.filter(keep).map((h) => ({ ...h, disputed: disputed.has(h.id) || disputed.has(h.question_id) }));
+  const shown = new Set(hunches.map((h) => h.id));
+  const morning = state.nights > 0 || CASE === "visit"
+    ? { ...THOUGHT.morning, new_hunches: THOUGHT.morning.new_hunches.filter((id) => shown.has(id)) } : null;
+  return {
+    ...THOUGHT, hunches, settled: THOUGHT.settled.filter(keep), morning, hidden: hidden.size,
+    question: THOUGHT.question && keep(THOUGHT.question) ? THOUGHT.question : null,
+  };
+}
+
+async function mark(kind, id, body, now) {
+  const view = thought();
+  const ids = new Set([...view.hunches, ...view.settled].map((x) => x.id));
+  if (view.question) ids.add(view.question.question_id);
+  if (!ids.has(id)) return json(404, { detail: "There's nothing with that id to change." });
+  await delay(600); // long enough to see the change land before a refusal puts it back
+  if (CASE === "markfail") return json(500, {});
+  const key = kind === "hide" ? "hidden" : "disputed";
+  save({ [key]: [...(state[key] || []), id] });
+  const note = body && typeof body.note === "string" ? { note: body.note } : {};
+  return json(200, { kind, item_id: id, at: iso(now), ...note });
+}
+
 function stream(reply, model, signal) {
   const encoder = new TextEncoder();
   const frames = [
@@ -190,7 +230,7 @@ async function route(method, path, body, signal) {
     const code = String((body && body.code) || "").trim().toUpperCase();
     if (code === "BUSY") return json(429, { detail: "Too many requests" });
     if (code !== "GLIMMER") return json(403, { detail: "Wrong code" });
-    save({ t0: now, turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false });
+    save({ t0: now, turns: Number(params.get("mockturns")) || 0, nightStart: null, nights: 0, undone: false, hidden: [], disputed: [] });
     return json(200, { token: "mock-token", user_id: "judge-mock" });
   }
   if (CASE === "expired" && path.startsWith("/api/sleep/me/")) return json(401, { detail: "Not authenticated" });
@@ -201,6 +241,12 @@ async function route(method, path, body, signal) {
     return json(200, { state: "waking", eta_s: Math.max(60, 180 - waited * 4), model: "spark-fallback" });
   }
   if (path === "/api/sleep/me/mind") return CASE === "mindfail" ? json(500, {}) : json(200, mind(now));
+  if (path === "/api/sleep/me/thought") {
+    if (CASE === "thoughtoff") return json(503, { detail: "Her line of thought isn't available yet." });
+    return CASE === "thoughtfail" ? json(500, {}) : json(200, thought());
+  }
+  const marked = /^\/api\/sleep\/me\/thought\/([^/]+)\/(dispute|hide)$/.exec(path);
+  if (marked && method === "POST") return mark(marked[2], decodeURIComponent(marked[1]), body, now);
   if (path === "/api/chat/start") return json(200, { session_id: "mock-session", session_count: 1 });
   if (/^\/api\/chat\/[^/]+\/message$/.test(path)) {
     if (CASE === "chatfail") return json(503, { error: "Service temporarily unavailable" });

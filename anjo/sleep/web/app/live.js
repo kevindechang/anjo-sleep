@@ -4,10 +4,12 @@
 
 import { api, href, ready, signOut, token } from "./api.js";
 import { COPY, fill } from "./copy.js";
-import { byId, say } from "./dom.js";
+import { byId, say, wireTabs } from "./dom.js";
 import { createChat } from "./chat.js";
 import { createPanel } from "./panel.js";
+import { createSince } from "./morning.js";
 import { createSleep } from "./sleep.js";
+import { createThought } from "./thought.js";
 import { createWake } from "./wake.js";
 
 const TALKER_POLL_MS = 15000;
@@ -51,16 +53,7 @@ function createTabs() {
     if (view === "mind") badge.hidden = true;
   }
 
-  tabs.forEach((tab, i) => {
-    tab.addEventListener("click", () => select(tab.id.slice(4)));
-    tab.addEventListener("keydown", (event) => {
-      const keys = { ArrowRight: 1, ArrowLeft: -1, Home: -i, End: tabs.length - 1 - i };
-      if (!(event.key in keys)) return;
-      event.preventDefault();
-      const next = tabs[(i + keys[event.key] + tabs.length) % tabs.length];
-      select(next.id.slice(4), true);
-    });
-  });
+  wireTabs(tabs, (i, focus) => select(tabs[i].id.slice(4), focus));
 
   return {
     select,
@@ -122,9 +115,16 @@ async function boot() {
       talker.check();
     },
   });
-  const wake = createWake({ chat, panel });
+  const since = createSince();
+  const thought = createThought({
+    chat,
+    onAnswer: () => tabs.select("chat"), // on a phone, watch the answer go out
+    onView: (view) => since.update(view),
+  });
+  const wake = createWake({ chat, panel, thought, since });
   const sleep = createSleep({
     chat, panel,
+    onFinish: () => thought.refresh(),
     onAwake: () => {
       tabs.select("chat");
       wake.show();
@@ -135,6 +135,7 @@ async function boot() {
 
   talker.check();
   panel.refresh();
+  thought.refresh();
   chat.warm();
   sleep.resume();
 }

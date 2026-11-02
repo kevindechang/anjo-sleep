@@ -28,7 +28,7 @@ export function clock(total) {
   return `${m}:${s}`;
 }
 
-export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {} }) {
+export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {}, onFinish = () => {} }) {
   const button = byId("sleep-now");
   const confirm = byId("sleep-confirm");
   const view = byId("night");
@@ -143,6 +143,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {} 
     setButton();
     chat.setAsleep(false);
     panel.refresh();
+    onFinish();
     show(true); // it may have finished while the judge was reading the chat or MIND
     if (night.status === "done") {
       say(end, `${COPY.night_done_line} ${night.adapter_live ? COPY.night_adapter_live : COPY.night_adapter_kept}`, "ok");

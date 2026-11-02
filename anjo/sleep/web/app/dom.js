@@ -26,3 +26,17 @@ export function day(iso) {
 }
 
 export const percent = (value) => (typeof value === "number" && Number.isFinite(value) ? Math.round(value * 100) : null);
+
+// Arrow keys, Home and End move between the tabs of one tablist (the WAI-ARIA tabs pattern);
+// ``select(i)`` shows tab i and is given the focus.
+export function wireTabs(tabs, select) {
+  tabs.forEach((tab, i) => {
+    tab.addEventListener("click", () => select(i, false));
+    tab.addEventListener("keydown", (event) => {
+      const keys = { ArrowRight: 1, ArrowLeft: -1, Home: -i, End: tabs.length - 1 - i };
+      if (!(event.key in keys)) return;
+      event.preventDefault();
+      select((i + keys[event.key] + tabs.length) % tabs.length, true);
+    });
+  });
+}

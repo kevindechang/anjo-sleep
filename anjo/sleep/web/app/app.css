@@ -113,7 +113,7 @@ button, input, textarea, select { font-family: inherit; }
 @media (max-width: 959.98px) {
   .tabs {
     position: sticky; top: var(--nav-h); z-index: 15; display: flex; gap: var(--s2);
-    height: var(--tabs-h); align-items: center; background: rgba(0, 0, 0, .96);
+    height: var(--tabs-h); align-items: center; background: var(--canvas);
     border-bottom: 1px solid var(--line);
   }
   .tab {
@@ -152,7 +152,7 @@ button, input, textarea, select { font-family: inherit; }
 .chat-log:empty { padding: 0; }
 .msg { display: grid; gap: 6px; max-width: min(46rem, 100%); scroll-margin-bottom: 112px; animation: msg-in .36s var(--ease) both; }
 .msg-you .msg-meta { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }  /* read out, not shown */
-.msg-meta { font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted-2); }
+.msg-meta { font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .msg-text { font-size: 16.5px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 .msg-you { justify-self: end; justify-items: end; }
 .msg-you .msg-text {
@@ -181,7 +181,7 @@ button, input, textarea, select { font-family: inherit; }
 .composer textarea:focus { outline: none; border-color: var(--accent); }
 .composer textarea:disabled { opacity: .55; }
 .composer .btn { height: 46px; flex: none; }
-.composer-hint { margin: 0; font: 500 11px/1.6 var(--mono); letter-spacing: .03em; color: var(--muted-2); }
+.composer-hint { margin: 0; font: 500 11px/1.6 var(--mono); letter-spacing: .03em; color: var(--muted); }
 
 @keyframes msg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes phase-run { 0% { transform: scaleX(.15); opacity: .4; } 50% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(.15); opacity: .4; } }
