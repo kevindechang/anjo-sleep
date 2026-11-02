@@ -121,6 +121,13 @@
             <h2 id="night-heading" tabindex="-1">Getting ready to sleep</h2>
             <p class="night-meta" id="night-meta" aria-live="off"></p>
           </header>
+          <div class="night-story" aria-label="The night, in three parts">
+            <article class="story" id="story-choose" data-state="pending"><h3 class="label">What she chose</h3><p class="story-text" aria-live="polite"></p></article>
+            <article class="story" id="story-practice" data-state="pending"><h3 class="label">What she practised</h3><p class="story-text" aria-live="polite"></p></article>
+            <article class="story" id="story-gate" data-state="pending"><h3 class="label">What the gate decided</h3><p class="story-text" aria-live="polite"></p></article>
+          </div>
+          <details class="night-steps" id="night-steps" open>
+          <summary>Every step of the night <span class="steps-count" id="steps-count"></span></summary>
           <div class="night-phase" id="phase-1">
             <h3><span class="phase-n">Phase 1</span> Thinking</h3>
             <p class="phase-note">About 2 minutes, all on what you said.</p>
@@ -131,6 +138,7 @@
             <p class="phase-note">A small weight update to your own Glimmer adapter, kept only if it does better.</p>
             <ol class="night-stages" id="stages-2"></ol>
           </div>
+          </details>
           <p class="night-end" id="night-end" role="status" aria-live="polite"></p>
           <div class="night-actions">
             <button class="btn btn-primary" type="button" id="wake-up" hidden>Wake up</button>

@@ -87,6 +87,32 @@
 .night-head h2:focus { outline: none; }
 .night-meta { margin: var(--s3) 0 0; font: 500 12px/1.4 var(--mono); letter-spacing: .04em; color: var(--muted); font-variant-numeric: tabular-nums; }
 .night-meta:empty { display: none; }
+/* the causal story: three parts, each from the stages behind it */
+.night-story { display: grid; gap: 1px; margin-top: var(--s5); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--line); }
+.story { display: grid; align-content: start; gap: var(--s2); padding: var(--s4); background: var(--canvas); transition: background .4s var(--ease); }
+.story .label { display: flex; align-items: center; gap: 8px; margin: 0; }
+.story-text { margin: 0; font-size: 15px; line-height: 1.5; color: var(--text); text-wrap: pretty; }
+.story[data-state="pending"] .story-text, .story[data-state="skipped"] .story-text { color: var(--muted); }
+.story[data-state="running"] { background: color-mix(in srgb, var(--accent-2) 6%, var(--canvas)); }
+.story[data-state="running"] .label { color: var(--accent-2); }
+.story[data-state="running"] .label::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2); animation: p-breathe 1.6s ease-in-out infinite; }
+.story[data-state="done"] .label { color: var(--accent); }
+.story[data-state="failed"] .label, .story[data-state="failed"] .story-text { color: var(--alert); }
+.story[data-state="skipped"] .label { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+@media (min-width: 640px) { .night-story { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.night-steps { margin-top: var(--s5); }
+.night-steps summary {
+  display: flex; align-items: center; gap: var(--s3); padding: var(--s2) 0; cursor: pointer; list-style: none;
+  font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+}
+.night-steps summary::-webkit-details-marker { display: none; }
+.night-steps summary::before { content: "+"; width: 1em; color: var(--accent); transition: transform .25s var(--ease); }
+.night-steps[open] summary::before { transform: rotate(45deg); }
+.night-steps summary:hover { color: var(--text); }
+.night-steps summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.steps-count { color: var(--muted-2); letter-spacing: .06em; }
+
 .night-phase { margin-top: var(--s6); transition: opacity .4s var(--ease); }
 .night-phase.is-later { opacity: .5; }
 .night-phase h3 { display: flex; align-items: baseline; gap: var(--s3); margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
@@ -122,7 +148,6 @@
 .stage[data-state="skipped"] .stage-name { text-decoration: line-through; text-decoration-color: var(--line-strong); }
 .stage[data-state="failed"]::before { border-color: transparent; background: var(--alert); }
 .stage[data-state="failed"] .stage-name, .stage[data-state="failed"] .stage-summary { color: var(--alert); }
-.stage-summary.is-typing::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -2px; background: var(--accent-2); animation: caret 1s steps(1) infinite; }
 
 .night-end { margin: var(--s5) 0 0; font-size: 16px; color: var(--text); max-width: 56ch; }
 .night-end:empty { display: none; }
@@ -130,7 +155,6 @@
 .night-actions { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s5); }
 
 @keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
-@keyframes caret { 50% { opacity: 0; } }
 
 /* ── the wake ───────────────────────────────────────────────────────────── */
 
@@ -172,7 +196,8 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .is-new, .is-new .bar-fill, .wake, .stage[data-state="running"]::before, .stage-think .scan::after,
-  .stage-summary.is-typing::after { animation: none; }
+  .story[data-state="running"] .label::after { animation: none; }
+  .story, .night-steps summary::before { transition: none; }
   .new-mark { animation: none; }
   .bar-fill, .night-phase { transition: none; }
 }

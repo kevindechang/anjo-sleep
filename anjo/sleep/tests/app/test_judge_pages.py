@@ -436,3 +436,41 @@ def test_the_panel_shows_each_live_pass_from_its_own_counts() -> None:
     assert out["old"] is None and out["failedChoice"] is None
     panel = (APP_DIR / "panel.js").read_text()
     assert "view.live" in panel and "view.targets" in panel  # both blocks the API sends are drawn
+
+
+_STORY = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const S = await import(SLEEP);
+const st = (name, state, summary = "") => ({ name, state, summary });
+console.log(JSON.stringify({
+  pending: S.storyPart([st("mind_choose", "pending")]),
+  chose: S.storyPart([st("mind_choose", "done", "Chose to think through the job offers.")]),
+  practising: S.storyPart([st("practice", "done", "Rehearsed 4 scenes."), st("train", "running", "Step 3 of 38")]),
+  skipped: S.storyPart([st("practice", "skipped"), st("train", "skipped")]),
+  failed: S.storyPart([st("gate", "failed", "The gate couldn't run."), st("promote", "skipped")]),
+  kept: S.storyPart([st("gate", "done", "Gate kept it: +3 of 5."), st("promote", "done", "Promoted.")]),
+  missing: S.storyPart([undefined]),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_night_tells_its_story_from_the_stages_own_summaries() -> None:
+    """What she chose, practised and what the gate decided: from the stages' summaries, with
+    skipped work and failures said plainly and nothing claimed before it ran."""
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _STORY.replace("SLEEP", json.dumps((APP_DIR / "sleep.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["pending"] == {"state": "pending", "text": "Not yet."}
+    assert out["chose"] == {"state": "done", "text": "Chose to think through the job offers."}
+    assert out["practising"] == {"state": "running", "text": "Rehearsed 4 scenes."}
+    assert out["skipped"] == {"state": "skipped", "text": "Skipped tonight."}
+    assert out["failed"] == {"state": "failed", "text": "The gate couldn't run."}
+    assert out["kept"] == {"state": "done", "text": "Gate kept it: +3 of 5. Promoted."}
+    assert out["missing"]["state"] == "pending"
