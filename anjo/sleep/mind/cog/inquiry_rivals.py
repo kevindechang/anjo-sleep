@@ -13,10 +13,17 @@ from __future__ import annotations
 import math
 import zlib
 from collections.abc import Sequence
+from typing import Protocol
 
 import numpy as np
 
-from anjo.sleep.mind.cog.types import LifeMeta, Prediction, Predictor, Query, Question
+from anjo.sleep.mind.cog.types import LifeMeta, Prediction, Query, Question
+
+
+class Predicts(Protocol):
+    """All ``MaxUncertainty`` needs of a predictor."""
+
+    def predict(self, queries: Sequence[Query]) -> Sequence[Prediction]: ...
 
 
 class NeverAsk:
@@ -43,20 +50,21 @@ class RandomAsk:
         rng = np.random.default_rng([self.seed, day, zlib.crc32(ids.encode("utf-8"))])
         if rng.random() >= self.p_ask:
             return None
-        return questions[int(rng.integers(len(questions)))].question_id
+        chosen: str = questions[int(rng.integers(len(questions)))].question_id
+        return chosen
 
 
 def _uncertainty(pred: Prediction) -> float:
     if pred.u is not None:
         return float(pred.u)
-    p = min(max(pred.p, 1e-12), 1 - 1e-12)
+    p = min(max(float(pred.p), 1e-12), 1 - 1e-12)
     return -(p * math.log(p) + (1 - p) * math.log(1 - p))
 
 
 class MaxUncertainty:
     name = "max_uncertainty"
 
-    def __init__(self, predictor: Predictor) -> None:
+    def __init__(self, predictor: Predicts) -> None:
         self.predictor = predictor
         self.topics: frozenset[str] = frozenset()
 
@@ -80,4 +88,5 @@ class MaxUncertainty:
                 return math.inf
             return per_subject.get(question.subject, overall)
 
-        return max(questions, key=score).question_id
+        chosen: str = max(questions, key=score).question_id
+        return chosen

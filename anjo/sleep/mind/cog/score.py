@@ -45,11 +45,13 @@ DEFAULT_BOOT = 2000
 def log_loss(p: np.ndarray, y: np.ndarray) -> np.ndarray:
     p = np.clip(np.asarray(p, dtype=float), EPS, 1 - EPS)
     y = np.asarray(y, dtype=bool)
-    return -np.where(y, np.log(p), np.log1p(-p))
+    out: np.ndarray = -np.where(y, np.log(p), np.log1p(-p))
+    return out
 
 
 def brier(p: np.ndarray, y: np.ndarray) -> np.ndarray:
-    return (np.asarray(p, dtype=float) - np.asarray(y, dtype=float)) ** 2
+    out: np.ndarray = (np.asarray(p, dtype=float) - np.asarray(y, dtype=float)) ** 2
+    return out
 
 
 def ece(p: np.ndarray, y: np.ndarray, n_bins: int = N_BINS) -> float:
@@ -140,6 +142,11 @@ def summarize_run(records: Sequence[LifeRecord]) -> dict[str, Any]:
         out["spearman_u_excess"] = spearman(u, a["excess"])
     else:
         out["aurc"], out["spearman_u_excess"] = None, None
+    usage: dict[str, float] = {}
+    for r in records:
+        for k, v in r.usage.items():
+            usage[k] = usage.get(k, 0.0) + float(v)
+    out["usage"] = usage
     asks = [ask for r in records for ask in r.asks]
     out["asks"] = {"n": len(asks), "per_life": len(asks) / len(records) if records else 0.0,
                    "cost": float(sum(ask.cost for ask in asks)),
@@ -338,7 +345,7 @@ def _compare_t4(a: Sequence[LifeRecord], b: Sequence[LifeRecord], margin: float,
         vals = [s[key] for s in shifts if s[key] is not None]
         return float(np.mean(vals)) if vals else None
 
-    out = {"n_lives": len(keys)}
+    out: dict[str, Any] = {"n_lives": len(keys)}
     for key in ("recovery_days", "gap14"):
         diffs = [(life_mean(ta[k], key), life_mean(tb[k], key)) for k in keys]
         vals = np.array([x - y for x, y in diffs if x is not None and y is not None])
@@ -386,12 +393,13 @@ def build_report(runs: Mapping[str, Sequence[LifeRecord]], *, reference: str | N
                    for x, y in pairs]
     t3_comparisons = []
     for x, y in itertools.combinations([n for n in names if bases[n] is not None], 2):
-        if bases[x] != bases[y]:
+        base = bases[x]
+        if base is None or base != bases[y]:
             continue
-        ux = _t3_per_life(runs[x], runs[bases[x]], window)
-        uy = _t3_per_life(runs[y], runs[bases[y]], window)
+        ux = _t3_per_life(runs[x], runs[base], window)
+        uy = _t3_per_life(runs[y], runs[base], window)
         diffs = np.array([ux[k] - uy[k] for k in ux if k in uy])
-        t3_comparisons.append({"a": x, "b": y, "base_run": bases[x], "n_lives": len(diffs),
+        t3_comparisons.append({"a": x, "b": y, "base_run": base, "n_lives": len(diffs),
                                "utility_diff": _mean_ci(diffs, n_boot, seed)})
     return {"config": {"margin": margin, "window": window, "n_boot": n_boot, "seed": seed,
                        "reference": reference, "eps": EPS, "n_bins": N_BINS},

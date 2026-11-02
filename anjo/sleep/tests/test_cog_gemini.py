@@ -28,7 +28,8 @@ class FakeGemini:
     """Answers every query id in the prompt with ``p``, inside a fenced block; keeps the prompts."""
 
     def __init__(self, p: float = 0.7, drop: int = 0) -> None:
-        self.p, self.drop, self.prompts = p, drop, []
+        self.p, self.drop = p, drop
+        self.prompts: list[str] = []
 
     def __call__(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -38,7 +39,8 @@ class FakeGemini:
 
 class FakeChooser:
     def __init__(self, reply: str) -> None:
-        self.reply, self.prompts = reply, []
+        self.reply = reply
+        self.prompts: list[str] = []
 
     def __call__(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -225,3 +227,12 @@ def test_gemini_inquirer_in_the_run_loop_counts_its_usage() -> None:
                    GeminiInquirer(reply, cache_dir=None, model_label="m"))
     assert rec.asks == () and rec.inquirer == "gemini" and rec.usage["inquirer.calls"] == 5
     assert "Day 4" in reply.prompts[-1]
+
+
+def test_a_corrupt_cache_file_fails_loudly(tmp_path: Path) -> None:
+    life = FakeLife(9, n_days=3)
+    run_life(life, GeminiPredictor(FakeGemini(), cache_dir=tmp_path, model_label="m"))
+    for path in (tmp_path / "m").glob("*.json"):
+        path.write_text(json.dumps({"response": None}))
+    with pytest.raises(ValueError, match="no text response"):
+        run_life(life, GeminiPredictor(FakeGemini(), cache_dir=tmp_path, model_label="m"))

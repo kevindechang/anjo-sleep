@@ -136,7 +136,8 @@ def parse_probabilities(text: str, qids: Sequence[str]) -> tuple[dict[str, float
 # -- Platt scaling --
 def _logit(p: np.ndarray) -> np.ndarray:
     p = np.clip(p, 1e-4, 1 - 1e-4)
-    return np.log(p / (1 - p))
+    out: np.ndarray = np.log(p / (1 - p))
+    return out
 
 
 def apply_platt(p: float, platt: tuple[float, float]) -> float:
@@ -254,7 +255,9 @@ class CachedClient:
         path = self.dir / f"{key}.json"
         if not path.exists():
             return None
-        response = json.loads(path.read_text(encoding="utf-8"))["response"]
+        response = json.loads(path.read_text(encoding="utf-8")).get("response")
+        if not isinstance(response, str):
+            raise ValueError(f"cache file {path} holds no text response; delete it to re-ask")
         self.memory[key] = response
         return response
 
@@ -356,7 +359,7 @@ class GeminiInquirer:
         ids = {q.question_id for q in questions}
         if isinstance(ask, str) and ask in ids:
             self._counts["asks"] += 1
-            chosen: str | None = ask
+            chosen: str | None = str(ask)
         else:
             self._counts["silent" if ask is None and isinstance(obj, dict) else "invalid"] += 1
             chosen = None

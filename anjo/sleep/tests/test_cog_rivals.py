@@ -1,7 +1,9 @@
+# mypy: disallow-untyped-decorators=False
 """The rival predictors (rivals.py) and rival inquirers (inquiry_rivals.py), on the fake life."""
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from functools import partial
 
 import numpy as np
@@ -12,6 +14,7 @@ from anjo.sleep.mind.cog.inquiry_rivals import MaxUncertainty, NeverAsk, RandomA
 from anjo.sleep.mind.cog.rivals import (
     Counter,
     FeatureSpec,
+    LogisticPopulation,
     OnlineLogistic,
     PersonHistory,
     PopulationPrior,
@@ -20,7 +23,7 @@ from anjo.sleep.mind.cog.rivals import (
     is_late,
     token_ints,
 )
-from anjo.sleep.mind.cog.run import run_life, run_many
+from anjo.sleep.mind.cog.run import LifeRecord, QueryRecord, run_life, run_many
 from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
 from anjo.sleep.tests.test_cog_run import FakeLife, FreqPredictor
 
@@ -38,15 +41,19 @@ def train() -> list[FakeLife]:
     return [_life(s) for s in range(40)]
 
 
+Runs = dict[str, tuple[LifeRecord, ...]]
+
+
 @pytest.fixture(scope="module")
-def population(train: list[FakeLife]) -> object:
+def population(train: list[FakeLife]) -> LogisticPopulation:
     return OnlineLogistic.fit_population(train)
 
 
 @pytest.fixture(scope="module")
-def dev_runs(population: object) -> dict[str, tuple]:
+def dev_runs(population: LogisticPopulation) -> Runs:
     dev = [_life(s) for s in range(1000, 1020)]
-    prior = population.spec.prior  # type: ignore[attr-defined]
+    prior = population.spec.prior
+    assert prior is not None
     return {
         "population": run_many(dev, partial(PopulationPrior, prior)),
         "counter": run_many(dev, partial(Counter, prior)),
@@ -135,7 +142,10 @@ def test_counter_learns_a_person_unlike_the_population() -> None:
     prior = run_life(life, PopulationPrior(table))
     late_c = [q for q in rec.queries if q.asked_day >= 28]
     late_p = [q for q in prior.queries if q.asked_day >= 28]
-    loss = lambda qs: float(score.log_loss(np.array([q.p for q in qs]), np.array([q.outcome for q in qs])).mean())  # noqa: E731
+
+    def loss(qs: list[QueryRecord]) -> float:
+        return float(score.log_loss(np.array([q.p for q in qs]), np.array([q.outcome for q in qs])).mean())
+
     assert loss(late_c) < loss(late_p) - 0.1
     first, last = rec.queries[0].u, rec.queries[-1].u
     assert first is not None and last is not None and last < first
@@ -152,13 +162,13 @@ def test_counter_uses_the_kept_rate_for_plan_queries() -> None:
 
 
 # -- the logistic rivals --
-def test_online_logistic_beats_the_counter_and_the_prior(dev_runs: dict[str, tuple]) -> None:
+def test_online_logistic_beats_the_counter_and_the_prior(dev_runs: Runs) -> None:
     ll = {name: score.summarize_run(recs)["log_loss"] for name, recs in dev_runs.items()}
     assert ll["online_lr"] < ll["counter"] - 0.01
     assert ll["counter"] < ll["population"] - 0.03
 
 
-def test_online_logistic_uncertainty_shrinks_with_data(dev_runs: dict[str, tuple]) -> None:
+def test_online_logistic_uncertainty_shrinks_with_data(dev_runs: Runs) -> None:
     # u is parameter uncertainty only; whether it tracks the real error is T2's question, not a given
     qs = [q for r in dev_runs["online_lr"] for q in r.queries]
     week0 = np.mean([q.u for q in qs if q.asked_day < 7])
@@ -166,9 +176,9 @@ def test_online_logistic_uncertainty_shrinks_with_data(dev_runs: dict[str, tuple
     assert all(q.u is not None and q.u > 0 for q in qs) and later < week0
 
 
-def test_online_logistic_predict_has_no_side_effects(population: object) -> None:
+def test_online_logistic_predict_has_no_side_effects(population: LogisticPopulation) -> None:
     life = FakeLife(7, n_days=10)
-    a, b = OnlineLogistic(population), OnlineLogistic(population)  # type: ignore[arg-type]
+    a, b = OnlineLogistic(population), OnlineLogistic(population)
     for m in (a, b):
         m.begin(life.meta)
     for d in range(10):
@@ -181,12 +191,12 @@ def test_online_logistic_predict_has_no_side_effects(population: object) -> None
     np.testing.assert_array_equal(a.m, b.m)
 
 
-def test_a_busy_answer_lowers_the_run_after_the_population_saw_asks(population: object) -> None:
+def test_a_busy_answer_lowers_the_run_after_the_population_saw_asks(population: LogisticPopulation) -> None:
     life = FakeLife(11, n_days=14)
     q = Query("q", 6, 7, "run", "Will they run?", ("query", "run"), "hidden")
     ps = {}
     for word in ("calm", "busy"):
-        m = OnlineLogistic(population)  # type: ignore[arg-type]
+        m = OnlineLogistic(population)
         m.begin(life.meta)
         for d in range(7):
             m.observe(d, life.events(d))
@@ -202,10 +212,10 @@ def test_online_logistic_runs_without_a_population() -> None:
     assert all(0 < q.p < 1 and q.u is not None for q in rec.queries)
 
 
-def test_surprise_raises_the_learning_rate_after_a_shift(population: object) -> None:
+def test_surprise_raises_the_learning_rate_after_a_shift(population: LogisticPopulation) -> None:
     life = FakeLife(9, n_days=56, shift_day=28)
-    online = OnlineLogistic(population)  # type: ignore[arg-type]
-    surprised = SurpriseLR(population, gain=5.0)  # type: ignore[arg-type]
+    online = OnlineLogistic(population)
+    surprised = SurpriseLR(population, gain=5.0)
     r_on, r_su = run_life(life, online), run_life(life, surprised)
     after = [i for i, q in enumerate(r_on.queries) if q.asked_day >= 28]
     assert max(c for d, c in surprised.cpp_trace) > surprised.hazard
@@ -213,7 +223,7 @@ def test_surprise_raises_the_learning_rate_after_a_shift(population: object) -> 
     assert surprised.name == "surprise_lr" and np.trace(surprised.cov) > np.trace(online.cov)
 
 
-def test_logistic_rivals_run_the_same_in_a_process_pool(population: object) -> None:
+def test_logistic_rivals_run_the_same_in_a_process_pool(population: LogisticPopulation) -> None:
     lives = [_life(s, n_days=14) for s in (1, 2, 3)]
     factory = partial(SurpriseLR, population)
     assert run_many(lives, factory) == run_many(lives, factory, workers=2)
@@ -234,7 +244,7 @@ class _Fixed:
     def __init__(self, table: dict[str, tuple[float, float | None]]) -> None:
         self.table = table
 
-    def predict(self, queries: list[Query]) -> list[Prediction]:
+    def predict(self, queries: Sequence[Query]) -> Sequence[Prediction]:
         return [Prediction(q.qid, *self.table[q.qid]) for q in queries]
 
 

@@ -128,6 +128,7 @@ def test_t4_recovery_is_the_first_post_shift_week_within_margin() -> None:
     # weeks starting 0, 1, 2, 3 days after the shift have mean gaps 3/7, 2/7, 1/7, 0
     rec = _shift_life([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     t4 = score.t4_recovery([rec], margin=0.05)
+    assert t4 is not None
     assert t4["n_shifts"] == 1 and t4["recovered_share"] == 1.0
     assert t4["recovery_days_mean"] == 3
     assert t4["gap14_mean"] == pytest.approx(3 / 14)
@@ -136,6 +137,7 @@ def test_t4_recovery_is_the_first_post_shift_week_within_margin() -> None:
 def test_t4_censors_a_predictor_that_never_recovers_and_scores_untouched_subjects() -> None:
     rec = _shift_life([0.5] * 10)
     t4 = score.t4_recovery([rec], margin=0.05)
+    assert t4 is not None
     assert t4["recovered_share"] == 0.0
     assert t4["recovery_days_mean"] == 4  # censored: four full weeks fit after the shift, none within margin
     untouched = t4["untouched"]
@@ -145,6 +147,7 @@ def test_t4_censors_a_predictor_that_never_recovers_and_scores_untouched_subject
 
 def test_t4_skips_recovery_when_no_full_week_follows_the_shift() -> None:
     t4 = score.t4_recovery([_shift_life([0.5] * 5)], margin=0.05)
+    assert t4 is not None
     assert t4["n_shifts"] == 1 and t4["n_recovery"] == 0 and t4["recovery_days_mean"] is None
     assert t4["gap14_mean"] == pytest.approx(0.5)
 
@@ -200,3 +203,11 @@ def test_report_with_a_reference_compares_everyone_to_it() -> None:
     assert [(c["a"], c["b"]) for c in report["comparisons"]] == [("b", "ref"), ("c", "ref")]
     with pytest.raises(ValueError, match="reference"):
         score.build_report(runs, reference="nope")
+
+
+def test_summary_totals_usage_over_lives() -> None:
+    a = _rec("g", [_q("x", 0, 0.6, True)])
+    b = _rec("g", [_q("y", 0, 0.6, True)], seed=1)
+    a = LifeRecord(**{**a.__dict__, "usage": {"calls": 2.0, "prompt_chars": 100.0}})
+    b = LifeRecord(**{**b.__dict__, "usage": {"calls": 3.0}})
+    assert score.summarize_run([a, b])["usage"] == {"calls": 5.0, "prompt_chars": 100.0}

@@ -119,14 +119,13 @@ class PersonHistory:
             (self.did if e.kind == "did" else self.skipped)[d].add(a)
         elif e.kind == "plan":
             self._activity(a)
-            target = self._day_of(e, default=d + 1)
-            self.plans[(a, target)] = d
+            planned = self._day_of(e)
+            self.plans[(a, planned if planned is not None else d + 1)] = d
         elif e.kind == "cancel":
             self._activity(a)
-            target = self._day_of(e, default=None)
-            if target is None:
-                live = sorted(t for (pa, t) in self.plans if pa == a and t >= d)
-                target = live[0] if live else d
+            named = self._day_of(e)
+            live = sorted(t for (pa, t) in self.plans if pa == a and t >= d)
+            target = named if named is not None else (live[0] if live else d)
             self.plan_cancels[(a, target)] = d
             self.cancels[d].append(a)
         elif e.kind == "mood":
@@ -141,11 +140,12 @@ class PersonHistory:
             self.answers.append((d, tuple(e.tokens)))
 
     @staticmethod
-    def _day_of(e: Event, default: int | None) -> int | None:
+    def _day_of(e: Event) -> int | None:
+        """The day a plan or cancel is for: its value, else the first later day a token names."""
         if e.value is not None:
             return int(e.value)
         later = [n for n in token_ints(e.tokens) if n > e.day]
-        return later[0] if later else default
+        return later[0] if later else None
 
     # -- reads, as of a day --
     def outcome(self, activity: str, day: int, absent_is_negative: bool = True) -> int | None:
@@ -158,11 +158,12 @@ class PersonHistory:
     def count(self, store: Mapping[int, set[str]], activity: str, as_of: int, days: int) -> int:
         return sum(activity in store.get(j, ()) for j in range(as_of - days + 1, as_of + 1))
 
-    def total(self, store: Mapping[int, object], as_of: int, days: int) -> int:
+    def total(self, store: Mapping[int, int | set[str] | list[str]], as_of: int, days: int) -> int:
+        """Events in the store over the last ``days`` days: a count, or how many items a day holds."""
         out = 0
         for j in range(as_of - days + 1, as_of + 1):
-            v = store.get(j)
-            out += v if isinstance(v, int) else len(v or ())
+            v = store.get(j, 0)
+            out += v if isinstance(v, int) else len(v)
         return out
 
     def cancel_count(self, activity: str, as_of: int, days: int) -> int:
@@ -221,9 +222,12 @@ def query_kind(query: Query, hist: PersonHistory, as_of: int) -> str:
 
 
 # -- the population prior --
+PriorKey = tuple[str | int, ...]
+
+
 @dataclass(frozen=True)
 class PriorTable:
-    cells: Mapping[tuple, tuple[float, float]]  # key -> (times happened, queries)
+    cells: Mapping[PriorKey, tuple[float, float]]  # key -> (times happened, queries)
     smoothing: float = 10.0
 
     def p(self, kind: str, subject: str, weekday: int, horizon: int) -> float:
@@ -234,7 +238,7 @@ class PriorTable:
         return est
 
 
-def _prior_keys(kind: str, subject: str, weekday: int, horizon: int) -> tuple[tuple, ...]:
+def _prior_keys(kind: str, subject: str, weekday: int, horizon: int) -> tuple[PriorKey, ...]:
     return ((), (kind,), (kind, subject), (kind, subject, weekday), (kind, subject, weekday, horizon))
 
 
@@ -246,7 +250,7 @@ class PopulationPrior:
 
     @classmethod
     def fit_population(cls, train_lives: Iterable[Life], *, smoothing: float = 10.0) -> PriorTable:
-        cells: dict[tuple, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        cells: dict[PriorKey, list[float]] = defaultdict(lambda: [0.0, 0.0])
         for life in train_lives:
             hist = PersonHistory(life.meta)
             for d in range(life.meta.n_days):
@@ -344,7 +348,8 @@ class FeatureSpec:
         """Which weights may differ from person to person: the trust in the person's own counts
         (which already carry their base rates) against their recent weeks, and each activity's
         response to late nights and mood (where a person can go against the population)."""
-        return np.array([n in PERSONAL_FEATURES or n.endswith(("*late3", "*mood3")) for n in self.names])
+        mask: np.ndarray = np.array([n in PERSONAL_FEATURES or n.endswith(("*late3", "*mood3")) for n in self.names])
+        return mask
 
 
 def _hash(token: str, dims: int) -> int:
@@ -381,7 +386,7 @@ def features(spec: FeatureSpec, hist: PersonHistory, subject: str, as_of: int, t
                 act_answers[_hash(f"{a}|{tok.lower()}", spec.hash_dims)] += 1.0
     names_day = any(target in token_ints(toks) for day, toks in hist.answers if day <= d)
     names_subject = any(a in toks for _, toks in recent)
-    return np.array([
+    x: np.ndarray = np.array([
         1.0, *wd, (target - d) / 7.0, *act,
         hist.count(hist.did, a, d, 1), hist.count(hist.did, a, d, 3), hist.count(hist.did, a, d, 7),
         hist.count(hist.skipped, a, d, 1), hist.count(hist.skipped, a, d, 3),
@@ -394,8 +399,9 @@ def features(spec: FeatureSpec, hist: PersonHistory, subject: str, as_of: int, t
         float(hist.total(hist.cancels, d, 7)),
         float(hist.live_plan(a, target, d)), float(kind == "plan"), logit((kept_k + 1) / (kept_n + 2)),
         *answers, *act_answers, float(names_day), float(names_subject),
-        *(x * late3 for x in act), *(x * m3 for x in act),
+        *(v * late3 for v in act), *(v * m3 for v in act),
     ], dtype=float)
+    return x
 
 
 @dataclass(frozen=True, eq=False)
@@ -421,7 +427,8 @@ def _fit_logistic(z: np.ndarray, y: np.ndarray, l2: float, iters: int = 50) -> n
         w -= step
         if np.max(np.abs(step)) < 1e-7:
             break
-    return w
+    out: np.ndarray = w
+    return out
 
 
 def _replay(life: Life, spec: FeatureSpec, ask_rate: float, rng: np.random.Generator) -> tuple[list[np.ndarray], list[float]]:
@@ -509,7 +516,8 @@ class OnlineLogistic:
         self.hist.add(events)
 
     def _z(self, subject: str, as_of: int, target: int, kind: str) -> np.ndarray:
-        return (features(self.spec, self.hist, subject, as_of, target, kind) - self._mean) / self._scale
+        z: np.ndarray = (features(self.spec, self.hist, subject, as_of, target, kind) - self._mean) / self._scale
+        return z
 
     def _predictive(self, z: np.ndarray) -> tuple[float, float]:
         mu, var = float(self.m @ z), float(z @ self.cov @ z)

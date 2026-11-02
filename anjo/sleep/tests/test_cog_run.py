@@ -11,8 +11,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -260,7 +265,7 @@ class RecordingPredictor(FreqPredictor):
     name = "recording"
 
     def __init__(self) -> None:
-        self.calls: list[tuple] = []
+        self.calls: list[tuple[Any, ...]] = []
 
     def begin(self, meta: LifeMeta) -> None:
         super().begin(meta)
@@ -521,3 +526,48 @@ def test_cli_rejects_an_unknown_predictor(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         cli.main(["eval", "--predictor", "nope", "--seeds", "1", "--out", str(tmp_path)],
                  make_life=make_fake_life)
+
+
+def fake_gemini_client(prompt: str) -> str:
+    """A client the CLI can import by path: 0.6 for every query id in the prompt."""
+    return json.dumps({q: 0.6 for q in re.findall(r"^- (\S+) \(about Day", prompt, re.MULTILINE)})
+
+
+def test_cli_runs_gemini_through_an_imported_client(tmp_path: Path) -> None:
+    from anjo.sleep.mind.cog import cli
+
+    out = tmp_path / "g"
+    assert cli.main(["eval", "--predictor", "gemini_stats", "--inquirer", "gemini", "--seeds", "40-41",
+                     "--n-days", "10", "--out", str(out), "--query-every", "3", "--train-seeds", "0",
+                     "--set", "client=anjo.sleep.tests.test_cog_run:fake_gemini_client",
+                     "--set", "model=fake-model"], make_life=make_fake_life) == 0
+    recs = load_records(out / "gemini_stats.jsonl")
+    assert {q.asked_day for r in recs for q in r.queries} == {2, 5, 8}
+    assert all(q.p == pytest.approx(0.6) for r in recs for q in r.queries)
+    assert len(list((out / "gemini_cache" / "fake-model").glob("*.json"))) > 0
+    report = json.loads((out / "report.json").read_text())
+    assert report["runs"]["gemini_stats"]["usage"]["calls"] == 6
+    assert report["runs"]["gemini_stats+gemini"]["usage"]["inquirer.silent"] == 20
+
+
+def test_cli_gemini_needs_a_client_and_every_setting_must_be_read(tmp_path: Path) -> None:
+    from anjo.sleep.mind.cog import cli
+
+    with pytest.raises(ValueError, match="client"):
+        cli.main(["eval", "--predictor", "gemini", "--seeds", "1", "--out", str(tmp_path)],
+                 make_life=make_fake_life)
+    with pytest.raises(ValueError, match="no builder reads --set typo"):
+        cli.main(["eval", "--predictor", "population", "--seeds", "1", "--train-seeds", "0-1",
+                  "--n-days", "7", "--out", str(tmp_path), "--set", "typo=1"], make_life=make_fake_life)
+
+
+def test_python_dash_m_reports_saved_records(tmp_path: Path) -> None:
+    recs = run_many([50, 51], FreqPredictor, make_life=make_fake_life)
+    save_records(tmp_path / "freq.jsonl", recs)
+    root = Path(__file__).resolve().parents[3]
+    env = {**os.environ, "PYTHONPATH": str(root)}
+    done = subprocess.run([sys.executable, "-m", "anjo.sleep.mind.cog", "report", "--records",
+                           str(tmp_path / "freq.jsonl"), "--out", str(tmp_path / "r.json"), "--n-boot", "50"],
+                          capture_output=True, text=True, env=env, cwd=root, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert json.loads((tmp_path / "r.json").read_text())["runs"]["freq"]["n_lives"] == 2
