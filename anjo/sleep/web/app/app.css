@@ -243,6 +243,9 @@ button, input, textarea, select { font-family: inherit; }
 @media (max-width: 380px) {
   .code-row .btn { width: 100%; }
 }
+@media (max-width: 520px) {
+  .hero-code .code-row .btn { flex: 1 1 100%; }
+}
 @media (prefers-reduced-motion: reduce) {
   .talker-dot, .msg-phase::after { animation: none; }
   .msg { animation: none; }
