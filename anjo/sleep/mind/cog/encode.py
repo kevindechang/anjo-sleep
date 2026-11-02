@@ -197,12 +197,17 @@ class LifeArrays:
     y: tuple[np.ndarray, ...]  # per day, (Q,) outcomes
     oracle: tuple[np.ndarray, ...]  # per day, (Q,) oracle_p
     asks: tuple[tuple[QuestionArrays, int] | None, ...]  # per day, the question asked and the answer's index
+    asking: bool = True  # whether this life's days could have asks at all
 
 
-def encode_life(vocab: Vocab, life: Life, rng: np.random.Generator, ask_rate: float = 0.2) -> LifeArrays:
+def encode_life(
+    vocab: Vocab, life: Life, rng: np.random.Generator, ask_rate: float = 0.2, asking: bool = True,
+) -> LifeArrays:
     """The life as arrays, with a random question asked on about ``ask_rate`` of days (its answer is
-    the last event of that day)."""
+    the last event of that day) when ``asking``."""
     meta = life.meta
+    if not asking:
+        ask_rate = 0.0
     days, probe, qs, ys, ors, asks = [], [], [], [], [], []
     for d in range(meta.n_days):
         events = list(life.events(d))
@@ -224,7 +229,7 @@ def encode_life(vocab: Vocab, life: Life, rng: np.random.Generator, ask_rate: fl
         asks.append(ask)
     return LifeArrays(meta.n_days, meta.start_weekday, tuple(days),
                       np.array([vocab.id(a) for a in meta.activities], dtype=np.int64),
-                      np.stack(probe), tuple(qs), tuple(ys), tuple(ors), tuple(asks))
+                      np.stack(probe), tuple(qs), tuple(ys), tuple(ors), tuple(asks), asking)
 
 
 @dataclass(frozen=True)
@@ -256,6 +261,7 @@ class Batch:
     ask_opt: Tensor  # (B, D, O, T)
     ask_opt_mask: Tensor  # (B, D, O) bool
     ask_answer: Tensor  # (B, D)
+    asking: Tensor  # (B,) bool, lives whose days could have asks
 
 
 def collate(lives: Sequence[LifeArrays]) -> Batch:
@@ -313,4 +319,5 @@ def collate(lives: Sequence[LifeArrays]) -> Batch:
         q_tok=t(q_tok), q_subj=t(q_subj), q_target=t(q_target), q_mask=t(q_mask), q_y=t(q_y),
         q_oracle=t(q_oracle), ask_mask=t(ask_mask), ask_tok=t(ask_tok), ask_subj=t(ask_subj),
         ask_opt=t(ask_opt), ask_opt_mask=t(ask_opt_mask), ask_answer=t(ask_answer),
+        asking=torch.tensor([x.asking for x in lives], dtype=torch.bool),
     )

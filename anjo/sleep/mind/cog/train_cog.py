@@ -5,8 +5,13 @@ with a random question asked on ``ask_rate`` of days (its answer joins that day'
 answer head learns it). The core runs the days in order; every ``tbptt`` days the loss of that
 window is backpropagated and the state is detached (truncated BPTT). The loss:
 
-- ``query``: log loss of ``p`` (the heads' mean probability) on the day's queries, outcomes from
-  ``Life.resolve``;
+- ``query``: log loss of ``p`` (the heads' mean probability) on the day's queries. With ``soft > 0``
+  a share ``1 - asking_share`` of lives has no asks, and their target is ``soft * oracle_p + (1 -
+  soft) * outcome``. The oracle is the Bayes filter given the person's true parameters on the
+  passive events, so in a life without asks ``E[oracle_p | history] = P(y | history)``: the same
+  minimizer as the outcome with much less variance (distilling privileged information the core
+  never sees at test time). Lives with asks keep the outcome, since the oracle never hears answers
+  (with soft targets everywhere the toy core learned to ignore them);
 - ``u``: how the heads learn to disagree. ``u_mode="oracle"`` (default): the fair CRPS of the K
   heads' logits against the logit of the query's ``oracle_p`` (clipped to +-6), which makes the
   heads draws from the core's belief about what the oracle (the person's true parameters) would
@@ -88,6 +93,8 @@ class TrainConfig:
     fast: bool = True
     cms: bool = False
     vocab_lives: int = 300
+    soft: float = 0.0  # the oracle's share of the query target in lives without asks (``loss``)
+    asking_share: float = 0.5  # with soft > 0, the share of lives that get random asks
     weights: dict[str, float] = field(default_factory=lambda: dict(WEIGHTS))
 
 
@@ -192,14 +199,16 @@ def _masked_mean(v: Tensor, m: Tensor) -> Tensor:
 
 def loss(
     out: Unrolled, batch: Batch, d0: int = 0, *, u_mode: str = "oracle", weights: dict[str, float] | None = None,
-    gen: torch.Generator | None = None,
+    gen: torch.Generator | None = None, soft: float = 0.0,
 ) -> tuple[Tensor, dict[str, float]]:
     w = WEIGHTS if weights is None else weights
     dw = out.query_logits.shape[1]
     sl = slice(d0, d0 + dw)
     qm, y = batch.q_mask[:, sl].float(), batch.q_y[:, sl]
     ql = out.query_logits
-    query = _masked_mean(_bce(mean_prob(ql), y), qm)
+    passive = (~batch.asking).float()[:, None, None] * soft
+    target = y if soft == 0.0 else passive * batch.q_oracle[:, sl] + (1.0 - passive) * y
+    query = _masked_mean(_bce(mean_prob(ql), target), qm)
     if u_mode == "oracle":
         tgt = torch.logit(batch.q_oracle[:, sl].clamp(1e-6, 1 - 1e-6)).clamp(-U_LOGIT_CLIP, U_LOGIT_CLIP)
         u = _masked_mean(fair_crps(ql, tgt), qm)
@@ -236,8 +245,10 @@ def _detach(st: CogState) -> CogState:
 # ── training ─────────────────────────────────────────────────────────────────
 
 
-def _encode(vocab: Vocab, lives: Sequence[Life], rng: np.random.Generator, ask_rate: float) -> list[LifeArrays]:
-    return [encode_life(vocab, life, rng, ask_rate) for life in lives]
+def _encode(
+    vocab: Vocab, lives: Sequence[Life], rng: np.random.Generator, ask_rate: float, asking_share: float = 1.0,
+) -> list[LifeArrays]:
+    return [encode_life(vocab, life, rng, ask_rate, asking=bool(rng.random() < asking_share)) for life in lives]
 
 
 def evaluate(net: CogNet, batches: Sequence[Batch], u_mode: str) -> dict[str, float]:
@@ -302,14 +313,15 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
         n_steps = 0
         for start in range(0, len(order), cfg.batch):
             seeds = order[start:start + cfg.batch]
-            batch = collate(_encode(vocab, [life(int(s)) for s in seeds], rng, cfg.ask_rate))
+            share = cfg.asking_share if cfg.soft > 0 else 1.0
+            batch = collate(_encode(vocab, [life(int(s)) for s in seeds], rng, cfg.ask_rate, share))
             st = net.initial(batch.act.shape[0], batch.act.shape[1])
             acc = _acc(batch)
             dmax = batch.q_mask.shape[1]
             for d0 in range(0, dmax, cfg.tbptt):
                 d1 = min(d0 + cfg.tbptt, dmax)
                 window, acc = run_days(net, batch, st, d0, d1, acc)
-                total, parts = loss(window, batch, d0, u_mode=cfg.u_mode, weights=cfg.weights, gen=gen)
+                total, parts = loss(window, batch, d0, u_mode=cfg.u_mode, weights=cfg.weights, gen=gen, soft=cfg.soft)
                 opt.zero_grad()
                 total.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), cfg.clip)
@@ -326,6 +338,8 @@ def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, l
         say(json.dumps({k: round(v, 4) for k, v in row.items()}))
         if row["dev"] < best - 1e-4:
             best, best_state, stale = row["dev"], {k: v.clone() for k, v in net.state_dict().items()}, 0
+            if out is not None:  # the best so far is on disk, whatever happens to the run
+                save_checkpoint(out / "cog_core.pt", net, vocab, {"train": asdict(cfg), "history": history})
         else:
             stale += 1
             if stale >= cfg.patience:
@@ -357,12 +371,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--patience", type=int, default=3)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--u-mode", choices=("oracle", "boot"), default="oracle")
+    ap.add_argument("--soft", type=float, default=0.0, help="the oracle's share of the query target")
     ap.add_argument("--no-fast", action="store_true", help="train without the fast memory (the trained lesion)")
     ap.add_argument("--cms", action="store_true", help="train with the continuum memory's night level")
     a = ap.parse_args(argv)
     cfg = TrainConfig(lives=a.lives, epochs=a.epochs, batch=a.batch, dim=a.dim, hidden=a.hidden, tbptt=a.tbptt,
                       dev_lives=a.dev_lives, n_days=a.n_days, seed=a.seed, threads=a.threads, patience=a.patience,
-                      lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms)
+                      lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms, soft=a.soft)
     a.out.mkdir(parents=True, exist_ok=True)
     trained = train(cfg, WORLDS[a.world], a.out, log=lambda m: print(m, flush=True))  # noqa: T201
     print(json.dumps({"out": str(a.out), "lives_per_sec": round(trained.lives_per_sec, 2),  # noqa: T201

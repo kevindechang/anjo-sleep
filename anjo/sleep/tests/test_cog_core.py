@@ -73,6 +73,25 @@ def test_unroll_shapes_and_determinism_by_seed() -> None:
     assert not torch.equal(train_cog.unroll(net_c, batch).query_logits, out_a.query_logits)
 
 
+def test_the_oracle_is_the_target_only_in_lives_without_asks() -> None:
+    net, lives = _tiny_net(3)
+    vocab = build_vocab(lives)
+    rng = np.random.default_rng(0)
+    arrays = [encode_life(vocab, life, rng, 0.5, asking=(i % 2 == 0)) for i, life in enumerate(lives)]
+    assert not any(a is not None for a in arrays[1].asks)
+    batch = collate(arrays)
+    out = train_cog.unroll(net, batch)
+    p = core.mean_prob(out.query_logits)
+    m = batch.q_mask.float()
+    asking = batch.asking.float()[:, None, None]
+    target = asking * batch.q_y + (1 - asking) * batch.q_oracle
+    want = (-(target * p.log() + (1 - target) * (1 - p).log()) * m).sum() / m.sum()
+    _, parts = train_cog.loss(out, batch, soft=1.0)
+    assert np.isclose(parts["query"], float(want), rtol=1e-5)
+    _, plain = train_cog.loss(out, batch)
+    assert not np.isclose(plain["query"], parts["query"])
+
+
 def test_fast_off_never_writes_and_reads_zero() -> None:
     net, lives = _tiny_net(0, fast=False)
     vocab = build_vocab(lives)
