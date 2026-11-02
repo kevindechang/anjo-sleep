@@ -26,13 +26,15 @@ one counts as the judge being present (``judge_talker.arrive``), so a cold Glimm
 - ``GET /api/sleep/me/mind``: their MIND state (``judge_views.mind_payload``);
 - ``GET /api/sleep/me/wake``: what Anjo opens with after a night (``judge_views.wake_payload``);
 - ``POST /api/sleep/me/undo``: the previous version serves again (``api.undo``'s; 409 when none);
-- ``GET /api/sleep/me/talker``: ``{state: warm|waking|cold, eta_s, model, reason}``;
+- ``GET /api/sleep/me/talker``: ``{state: warm|waking|cold, eta_s, model, reason, fallback_via}`` (``model``
+  is ``glimmer`` or ``spark-fallback``; ``fallback_via`` names what answers under that label);
 - ``POST /api/sleep/me/heartbeat``: the page's every 60 s while its tab shows; returns the talker's
   status. With no heartbeat (or any other judge call) from any judge for
   ``ANJO_SLEEP_JUDGE_IDLE_MINUTES``, Glimmer's GPU stops (``judge_talker``);
-- ``GET /api/sleep/me/thought``, ``POST /api/sleep/me/thought/{id}/dispute`` (``{note?}``) and
-  ``POST /api/sleep/me/thought/{id}/hide``: her own line of thought and the person's marks on it
-  (``judge_thought``; 503 until its engine lands, 404 for an id their view doesn't show).
+- ``GET /api/sleep/me/thought``, ``POST /api/sleep/me/thought/{id}/dispute`` (``{note?}``, at most
+  ``thought.MAX_NOTE`` = 500 characters, 422 over it) and ``POST /api/sleep/me/thought/{id}/hide``:
+  her own line of thought and the person's marks on it (``judge_thought``; 404 for an id not in her
+  log, 500 for a log that can't be read whole or doesn't replay to its digests).
 
 ``TurnWatch`` sees each judge's chat message (``POST /api/chat/{sid}/message``): presence as it
 starts, and MIND's live pass (``live_mind``) once it has answered.
@@ -65,6 +67,7 @@ from anjo.sleep.app.judge_cohort import (
     judge_ids,
     setting,
 )
+from anjo.sleep.mind.thought import MAX_NOTE
 
 logger = logging.getLogger(__name__)
 
@@ -254,25 +257,30 @@ def my_heartbeat(user_id: str = Depends(judge_user)) -> dict[str, Any]:
     return status
 
 
-# ── Her own line of thought (judge_thought; 503 until its engine lands) ───────
+# ── Her own line of thought (judge_thought) ──────────────────────────────────
 
-THOUGHT_OFF: Final = "Her line of thought isn't available yet."
 NOT_SHOWN: Final = "There's nothing with that id to change."
+UNREADABLE: Final = "Her line of thought can't be read right now."
+
+
+TOO_LONG: Final = f"A note can be at most {MAX_NOTE} characters."
 
 
 class DisputeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    note: str | None = Field(default=None, max_length=2000)
+    note: str | None = Field(default=None, max_length=MAX_NOTE)  # the engine's own limit: longer is a 422
 
 
 def _thought(run: Any) -> dict[str, Any]:
-    from anjo.sleep.app.judge_thought import ThoughtUnavailable
+    from anjo.sleep.app.judge_thought import LogUnreadable, NoteTooLong, UnknownItem
 
     try:
         done: dict[str, Any] = run()
-    except ThoughtUnavailable:
-        raise HTTPException(status_code=503, detail=THOUGHT_OFF) from None
-    except ValueError:  # not an item their view shows, or the engine refused the id
+    except LogUnreadable:
+        raise HTTPException(status_code=500, detail=UNREADABLE) from None
+    except NoteTooLong:
+        raise HTTPException(status_code=422, detail=TOO_LONG) from None
+    except UnknownItem:
         raise HTTPException(status_code=404, detail=NOT_SHOWN) from None
     return done
 

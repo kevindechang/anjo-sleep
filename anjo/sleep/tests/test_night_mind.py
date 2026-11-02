@@ -23,7 +23,8 @@ from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.mind.inquiry import types as it
 from anjo.sleep.night.deps import MindCall, NightSettings
 from anjo.sleep.night.meter import WonderMeter
-from anjo.sleep.night.mind import tonight
+from anjo.sleep.mind.inquiry.steps import Budget
+from anjo.sleep.night.mind import LIVE_DECIDER, tonight
 from anjo.sleep.night.run import run_night_batch_with
 from anjo.sleep.ownership.delete import delete_all, erase_stored
 from anjo.sleep.personas.model import load_person_file
@@ -46,7 +47,7 @@ from anjo.sleep.tests.mind_night_fakes import (
     mind_night,
     workspace,
 )
-from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, step, steps, summary, thread
+from anjo.sleep.tests.night_fakes import NIGHT, Homework, World, own, step, steps, summary, thread
 from anjo.sleep.tests.test_ownership import Ports
 from anjo.sleep.types import NightResult, Target
 
@@ -524,6 +525,31 @@ def test_a_notice_pass_that_fails_after_its_reply_still_spends_tonights_tokens(t
     notice = step(rerun.log_path, "notice")
     assert notice["new"] == 3 and notice["questions_opened"] == 1  # its items are offered again
     assert notice["budget"]["tokens_used"] == 1500 + 1500  # the failed pass counts
+
+
+def test_a_live_pass_spends_its_own_budget_and_never_tonights(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    thinker = LifeThinker(targets=(f"{UID}-t1",), notices=2, tokens=1500)
+    mind = mind_night(world, thinker)
+    said = own(UID, NIGHT, 9)
+    live = mind.notice_live(mind_call(world, UID, NIGHT, said.created_at), [said], Budget(tokens_used=500, token_cap=12_000))
+    assert live["new"] == 1 and live["questions_opened"] == 1
+    events = workspace(world, UID).events()
+    start = events[0].step.entry
+    assert isinstance(start, it.RunStart) and start.decider == LIVE_DECIDER and start.budget.tokens_used == 500
+    assert sum(e.step.tokens for e in events) == 1500 and tonight(events, NIGHT) == Budget()
+
+    night = step(_night(world, mind).log_path, "notice")
+    assert night["new"] == 3 and night["budget"]["tokens_used"] == 1500  # the night's own pass alone
+
+
+def test_a_live_pass_stops_at_its_own_cap(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    thinker = LifeThinker(targets=(f"{UID}-t1",))
+    mind = mind_night(world, thinker)
+    said = own(UID, NIGHT, 9)
+    spent = mind.notice_live(mind_call(world, UID, NIGHT, said.created_at), [said], Budget(tokens_used=100, token_cap=100))
+    assert spent["questions_opened"] == 0 and thinker.prompts == []  # the thinker is never asked
 
 
 def test_killed_inquiry_resumes_its_cut_off_tool(tmp_path: Path) -> None:

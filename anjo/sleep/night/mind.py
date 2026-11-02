@@ -108,6 +108,9 @@ SEARCH_POOL: Final = 100  # items asked of the store before practice scenes are 
 MIND_FAILURES: Final = (ModelApiError, ValueError, LookupError)
 
 SparkWrap = Callable[[ChatFn], ChatFn]
+# A notice pass run between nights under its own budget (``MindNight.notice_live``; the judge
+# product's live MIND): its ``RunStart`` names this decider, and tonight's budget leaves it out.
+LIVE_DECIDER: Final = "live"
 
 
 @dataclass(frozen=True)
@@ -131,18 +134,35 @@ class NightLog(WorkspaceLog, Protocol):
     def extend(self, events: Sequence[WorkspaceEvent]) -> None: ...
 
 
+def _is_live(entry: object) -> bool:
+    return isinstance(entry, RunStart) and entry.decider == LIVE_DECIDER
+
+
 def _first_run(events: Sequence[WorkspaceEvent], night: date) -> int | None:
-    return next((n for n, e in enumerate(events) if isinstance(e.step.entry, RunStart) and e.step.entry.night == night),
-                None)
+    return next((n for n, e in enumerate(events) if isinstance(e.step.entry, RunStart) and e.step.entry.night == night
+                 and not _is_live(e.step.entry)), None)
+
+
+def _night_steps(events: Sequence[WorkspaceEvent]) -> list[Step]:
+    """``events``' steps, less those of the live passes among them (``LIVE_DECIDER``)."""
+    steps: list[Step] = []
+    live = False
+    for event in events:
+        if isinstance(event.step.entry, RunStart):
+            live = _is_live(event.step.entry)
+        if not live:
+            steps.append(event.step)
+    return steps
 
 
 def tonight(events: Sequence[WorkspaceEvent], night: date) -> Budget:
     """The night's one budget, shared by its notice pass and its inquiries: from the first
-    ``RunStart`` naming ``night``, a cycle per distinct cycle number and every token logged since."""
+    ``RunStart`` naming ``night``, a cycle per distinct cycle number and every token logged since.
+    A live pass between nights has its own budget and is never counted here (``LIVE_DECIDER``)."""
     first = _first_run(events, night)
     if first is None:
         return Budget()
-    since = [event.step for event in events[first:]]
+    since = _night_steps(events[first:])
     return Budget().spend(cycles=len({s.cycle for s in since if s.cycle is not None}),
                           tokens=sum(s.tokens for s in since))
 
@@ -333,6 +353,14 @@ class MindNight:
     # ── step 2b ──────────────────────────────────────────────────────────────
 
     def notice(self, call: MindCall, new: Sequence[Evidence]) -> Mapping[str, object]:
+        return self._notice(call, new, None)
+
+    def notice_live(self, call: MindCall, new: Sequence[Evidence], budget: Budget) -> Mapping[str, object]:
+        """The same pass between nights, under its own ``budget``, tagged ``LIVE_DECIDER`` so no
+        night's budget counts it."""
+        return self._notice(call, new, budget)
+
+    def _notice(self, call: MindCall, new: Sequence[Evidence], live: Budget | None) -> Mapping[str, object]:
         log = self._log(call.user_id)
         events = log.events()
         ws = kernel.fold(events)
@@ -344,8 +372,10 @@ class MindNight:
         step = self._step(call, batched, research=None)
         targets = call.targets.open_targets(call.as_of)
         try:
-            run = self._held(call, step, lambda: loop.notice(
-                ws, fresh, step.ports, tonight(events, call.night), night=call.night, targets=targets, as_of=call.as_of))
+            budget = tonight(events, call.night) if live is None else live
+            run = self._held(call, step, lambda: loop.notice_by(
+                None if live is None else LIVE_DECIDER, ws, fresh, step.ports, budget, night=call.night,
+                targets=targets, as_of=call.as_of))
             batched.commit()
         except BudgetStop:
             return {"new": len(fresh), "questions_opened": 0, "stopped": "budget", **step.meters.counts()}

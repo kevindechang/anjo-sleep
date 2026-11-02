@@ -83,7 +83,8 @@ PING_TTL_S: Final = 20.0
 TICK_S: Final = 30.0
 SPEND_FILE: Final = "spend.json"
 ALERTS_FILE: Final = "alerts.jsonl"
-FRONTIER_LABEL: Final = "frontier-fallback"  # no Spark key: the chat route's own fallback answers
+VIA_SPARK: Final = "muse-spark"  # what answers under SPARK_LABEL with ANJO_META_API_KEY set
+VIA_FRONTIER: Final = "frontier"  # without it: the chat route's own frontier fallback
 RETRY_STOP: Final = frozenset({"in_flight", "recent_turn"})  # a stop skipped for a turn: try again next tick
 UNSEEN_STOP: Final = frozenset({"untracked", "unreadable", "no_data_dir"})  # skipped blind: she idles out
 
@@ -291,17 +292,24 @@ class WindowFile:
 
 @dataclass(frozen=True)
 class TalkerStatus:
+    """What answers a judge now. ``model`` is ``glimmer`` or always ``SPARK_LABEL`` while she isn't
+    up; ``fallback_via`` names the model under that label (``fallback_via()``), ``None`` when warm."""
+
     state: State
     model: str
     eta_s: int | None = None
     reason: str | None = None
+    fallback_via: str | None = None
 
     def view(self) -> dict[str, Any]:
-        return {"state": self.state, "eta_s": self.eta_s, "model": self.model, "reason": self.reason}
+        return {"state": self.state, "eta_s": self.eta_s, "model": self.model, "reason": self.reason,
+                "fallback_via": self.fallback_via}
 
 
-def fallback_label() -> str:
-    return SPARK_LABEL if spark_configured() else FRONTIER_LABEL
+def fallback_via() -> str:
+    """The model behind the ``spark-fallback`` label: Muse Spark when its key is set, else the
+    chat route's own frontier fallback."""
+    return VIA_SPARK if spark_configured() else VIA_FRONTIER
 
 
 def _in_thread(name: str) -> Callable[[Callable[[], None]], None]:
@@ -395,21 +403,25 @@ class JudgeTalker:
 
     def status(self) -> TalkerStatus:
         now = self._clock()
-        fallback = fallback_label()
+        via = fallback_via()
+
+        def fallback(state: State, *, eta_s: int | None = None, reason: str | None = None) -> TalkerStatus:
+            return TalkerStatus(state, SPARK_LABEL, eta_s=eta_s, reason=reason, fallback_via=via)
+
         if self._serving is None:
-            return TalkerStatus("cold", fallback, reason="no_backend")
+            return fallback("cold", reason="no_backend")
         if self.capped(now):
-            return TalkerStatus("cold", fallback, reason="budget")
+            return fallback("cold", reason="budget")
         if self.up(ask=True):
             return TalkerStatus("warm", "glimmer")
         since = self._waking_since
         if since is not None:
-            return TalkerStatus("waking", fallback, eta_s=max(0, round(self.settings.wake_eta_s - (now - since))))
+            return fallback("waking", eta_s=max(0, round(self.settings.wake_eta_s - (now - since))))
         if not self.settings.wake_on:
-            return TalkerStatus("cold", fallback, reason="wake_off")
+            return fallback("cold", reason="wake_off")
         if counters().count(None, "wakes") >= self.settings.wakes_per_day:
-            return TalkerStatus("cold", fallback, reason="wakes_spent")
-        return TalkerStatus("cold", fallback, eta_s=round(self.settings.wake_eta_s))
+            return fallback("cold", reason="wakes_spent")
+        return fallback("cold", eta_s=round(self.settings.wake_eta_s))
 
     # ── presence ──────────────────────────────────────────────────────────────
 

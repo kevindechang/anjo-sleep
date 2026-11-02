@@ -122,7 +122,7 @@ def test_a_judges_own_routes(api: Any, talker: Rig) -> None:
     token = _start(api).json()["token"]
     talking = api.get("/api/sleep/me/talker", headers=_bearer(token))
     assert talking.status_code == 200
-    assert set(talking.json()) == {"state", "eta_s", "model", "reason"}
+    assert set(talking.json()) == {"state", "eta_s", "model", "reason", "fallback_via"}
     assert talking.json()["state"] == "waking" and talking.json()["model"] == "spark-fallback"
     talker.run_wakes()
     assert api.post("/api/sleep/me/heartbeat", headers=_bearer(token)).json()["model"] == "glimmer"
