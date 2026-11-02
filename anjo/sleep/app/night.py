@@ -60,6 +60,7 @@ served brief and leaving notes only the morning arm 2A reads. Off, the night hol
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -110,7 +111,7 @@ from anjo.sleep.evidence.jsonl import canonical
 from anjo.sleep.gates import EVAL_DAY, THRESHOLDS
 from anjo.sleep.gates.base_cache import FILE_NAME as GATE_BASE_FILE
 from anjo.sleep.gates.base_cache import BaseCache, JsonlBaseStore
-from anjo.sleep.gates.collapse import CollapseGate
+from anjo.sleep.gates.collapse import CollapseGate, CollapsePair
 from anjo.sleep.gates.general import GeneralGate
 from anjo.sleep.gates.safety import SafetyGate
 from anjo.sleep.mind.choose import StateChooser
@@ -144,7 +145,7 @@ from anjo.sleep.serving import backend, config, soft_tokens
 from anjo.sleep.serving.stop import GpuStop, ModalCli
 from anjo.sleep.serving.wake import window_path
 from anjo.sleep.serving.client import TOP_K, TOP_P, ServingError, VllmClient
-from anjo.sleep.types import Probe
+from anjo.sleep.types import CheckpointRef, Probe
 
 PRICES_ENV: Final = "ANJO_SLEEP_PRICES"  # "spark_in,spark_out,train_gpu_hour,serve_gpu_hour", USD list prices
 FIELDS_ENV: Final = "ANJO_SLEEP_FIELDS"  # a real person's field domains for the collapse gate, comma-separated
@@ -202,7 +203,8 @@ class SealedProbes:
 
 class AppGates:
     """The three gates on one server. General and safety keep the base side for the whole run;
-    collapse is per person, over their fields."""
+    collapse is per person, over their fields, and hands its paired replies to ``on_pairs`` when set
+    (``with_pairs``: a judge's night keeps one for the wake)."""
 
     def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]], *, workers: int,
                  cache: BaseCache | None = None, demo: DemoProfile | None = None) -> None:
@@ -215,10 +217,17 @@ class AppGates:
         general = None if demo is None else demo.general_set()
         self._general = GeneralGate(client, items=general, cache=cache)  # log-probabilities only: the server's concurrency
         self._safety = SafetyGate(client, load_cases, workers=workers, cache=cache, enabled=gate_on())
+        self._on_pairs: Callable[[CheckpointRef, list[CollapsePair]], None] | None = None
+
+    def with_pairs(self, on_pairs: Callable[[CheckpointRef, list[CollapsePair]], None]) -> AppGates:
+        """These gates, with collapse handing its paired replies to ``on_pairs``."""
+        paired = copy.copy(self)
+        paired._on_pairs = on_pairs
+        return paired
 
     def for_person(self, user_id: str) -> Mapping[str, GateCheck]:
         collapse = CollapseGate(self._client, self._fields(user_id), prompts=self._collapse, workers=self._workers,
-                                cache=self._cache)
+                                cache=self._cache, on_pairs=self._on_pairs)
         return {"general": self._general.check, "collapse": collapse.check, "safety": self._safety.check}
 
 

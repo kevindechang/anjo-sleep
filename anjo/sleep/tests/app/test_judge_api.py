@@ -321,3 +321,12 @@ def test_register_sleep_wires_the_judge_product(monkeypatch: pytest.MonkeyPatch)
     finally:
         register.unregister_hooks()
     assert judge_talker.judge_route not in assignment.ROUTE_OVERRIDES
+
+
+def test_the_wake_names_the_two_models_and_whether_the_gate_promoted(api: Any) -> None:
+    body = _start(api).json()
+    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new", night="2026-11-03",
+                                   before_model="base Glimmer", after_model="p-aaaaaaaaaaaa-n1", promoted=False)
+    wake = api.get("/api/sleep/me/wake", headers=_bearer(body["token"])).json()
+    assert wake["before_after"] == {"question": "q?", "before": "old", "after": "new", "before_model": "base Glimmer",
+                                    "after_model": "p-aaaaaaaaaaaa-n1", "promoted": False}

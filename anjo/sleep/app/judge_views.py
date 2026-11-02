@@ -12,7 +12,9 @@ picked; ``self_prediction`` is her latest bet about her own practice (``mind.sel
 claim, the probability she gave it when she made it (her credences then, over P(claim | each
 alternative)), and how it resolved; ``what_changed`` is the plain lines since their first day
 (``ownership.what_changed``); ``before_after`` is the pair the night saved
-(``judge_cohort.save_before_after``), when there is one.
+(``judge_cohort.save_before_after``: one prompt from that night's collapse gate, answered by base
+Glimmer and by the night's adapter), when there is one, with ``before_model``, ``after_model`` and
+whether the gate ``promoted`` the adapter when the night recorded them.
 """
 from __future__ import annotations
 
@@ -163,5 +165,6 @@ def wake_payload(user_id: str) -> dict[str, Any]:
     }
     pair = load_before_after(user_id)
     if pair is not None:
-        out["before_after"] = {"question": pair["question"], "before": pair["before"], "after": pair["after"]}
+        out["before_after"] = {"question": pair["question"], "before": pair["before"], "after": pair["after"],
+                               **{k: pair[k] for k in ("before_model", "after_model", "promoted") if k in pair}}
     return out
