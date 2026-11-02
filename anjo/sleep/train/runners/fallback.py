@@ -10,8 +10,9 @@ failed: what it raised and how long it ran. Only these fall back:
 - any failure of a call made before the training runs: ``new`` (no A100 to assign, a VM that never
   came up), ``install``, ``mkdir`` (the exec that makes the remote folders), ``upload`` or the
   ``launch`` that starts the detached training, whether it exited non-zero, hung past its hard
-  timeout or found no CLI. A launch that failed may have started the training, but the VM is
-  stopped before Modal trains, so the night never trains twice;
+  timeout, found no CLI or exited 0 with no launch line (``ColabLaunchFailed``). A launch that failed
+  may have started the training, but the VM is stopped before Modal trains, so no adapter of the
+  night comes from both;
 - a timeout: any later call that hung past its hard timeout (the ``launch`` that starts the detached
   training among them), or the training past its own time, killed (``ColabTrainingTimeout``);
 - a VM lost mid-run (``ColabVmLost``): ``LOST_POLLS`` polls in a row found no training on the VM.
@@ -63,6 +64,7 @@ from anjo.sleep.train.runners.colab import (
     POLL_PERIOD_S,
     ColabCli,
     ColabError,
+    ColabLaunchFailed,
     ColabLives,
     ColabRunner,
     ColabTrainingTimeout,
@@ -126,6 +128,8 @@ def fallback_reason(error: BaseException, failed: Sequence[Failed]) -> str | Non
         return "colab VM lost mid-run"
     if isinstance(error, ColabTrainingTimeout):
         return "colab training ran past its timeout"
+    if isinstance(error, ColabLaunchFailed):  # exit 0 with no launch line: the VM is stopped before Modal trains
+        return "colab launch started no training"
     first = next((call for call in failed if call.command not in NOT_THE_NIGHT), None)
     if first is None or first.error is not error:
         return None

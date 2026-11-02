@@ -198,6 +198,15 @@ def test_a_launch_that_fails_trains_the_night_on_modal_after_the_vm_is_stopped(t
     assert ledger.open_holds() == () and runner.landed(NAME)
 
 
+def test_a_launch_that_prints_no_launch_line_trains_the_night_on_modal(tmp_path: Path) -> None:
+    colab = TimedColab(readings=["done 0"])
+    colab.answers = {**getattr(colab, "answers", {}), "launch": "Traceback (most recent call last):\n"}
+    runner, calls, ledger = _rig(tmp_path, colab)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["runner"] == "modal" and out["fallback_reason"] == "colab launch started no training"
+    assert colab.commands()[-1] == "stop" and "poll" not in colab.commands() and ledger.open_holds() == ()
+
+
 def test_a_lost_vm_drops_the_dead_session_before_the_stop(tmp_path: Path) -> None:
     colab = TimedColab(readings=["running", "fail", "fail", "fail"])
     runner, calls, ledger = _rig(tmp_path, colab)

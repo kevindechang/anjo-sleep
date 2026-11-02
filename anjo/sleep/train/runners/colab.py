@@ -195,6 +195,12 @@ class ColabTrainingTimeout(ColabError):
     """The detached training ran past its own time, and was killed."""
 
 
+class ColabLaunchFailed(ColabError):
+    """The launch exec exited 0 but printed no launch line (the kernel's code raised: the CLI exits 0
+    then), so no training is known to run. Colab's side failed before the training, as a ``new`` that
+    fails does."""
+
+
 def run_cli(args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
     """One CLI call under a hard timeout; ``TimeoutExpired`` kills it and propagates."""
     return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout_s, check=False)
@@ -532,7 +538,7 @@ class ColabRunner:
             launched = cli.call("exec", "-s", session, "-f", str(scripts.launch), "--timeout", str(LAUNCH_EXEC_S),
                                 *flags, timeout_s=LAUNCH_EXEC_S + EXEC_MARGIN_S)
             if detached.read_launch(launched) is None:
-                raise ColabError("the launcher started no training on the VM")
+                raise ColabLaunchFailed("the launcher started no training on the VM")
             code, rounds = self._await(session, scripts, train_s)
             if code != 0:
                 raise ColabError(f"the training on the VM exited {code}; {self._log_tail(session, scripts, workdir)}")
