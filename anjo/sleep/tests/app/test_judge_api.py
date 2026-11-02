@@ -65,6 +65,15 @@ def test_off_the_sleep_host_there_is_nothing(api: Any, monkeypatch: pytest.Monke
     assert _start(api).status_code == 404
 
 
+def test_each_of_several_codes_lets_a_judge_in(api: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One code per judge, or a new code mid-judging, without touching the accounts already made.
+    monkeypatch.setenv(judge_cohort.CODE_ENV, " first-code , second-code ,")
+    assert _start(api, "second-code").status_code == 200
+    assert _start(api, "first-code").status_code == 200
+    assert _start(api, "third-code").status_code == 403
+    assert _start(api, "first-code , second-code").status_code == 403
+
+
 def test_the_right_code_makes_a_judge_the_apps_auth_accepts(api: Any, talker: Rig) -> None:
     from anjo.core.ai_consent import CURRENT_VERSION
     from anjo.core.db import get_db

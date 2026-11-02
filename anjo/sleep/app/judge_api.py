@@ -99,17 +99,23 @@ class StartOut(BaseModel):
     user_id: str
 
 
-def _code() -> str | None:
-    code = os.environ.get(CODE_ENV, "").strip()
-    return code or None
+def _codes() -> tuple[str, ...]:
+    """The judge codes, comma-separated in the setting: one per judge, or a new one mid-judging."""
+    return tuple(code for code in (part.strip() for part in os.environ.get(CODE_ENV, "").split(",")) if code)
 
 
-def _product_on() -> str:
-    """The judge code, or 404: the product is off without it, and everywhere but the sleep host."""
-    code = _code()
-    if not sleep_host() or code is None:
+def _product_on() -> tuple[str, ...]:
+    """The judge codes, or 404: the product is off without one, and everywhere but the sleep host."""
+    codes = _codes()
+    if not sleep_host() or not codes:
         raise HTTPException(status_code=404, detail="Not Found")
-    return code
+    return codes
+
+
+def _code_matches(given: str, codes: tuple[str, ...]) -> bool:
+    """Every code compared in constant time, so the answer's timing names none of them."""
+    given_bytes = given.strip().encode()
+    return sum(hmac.compare_digest(given_bytes, code.encode()) for code in codes) > 0
 
 
 def _client(request: Request) -> str:
@@ -168,12 +174,12 @@ def _choose_glimmer(user_id: str) -> None:
 
 @router.post("/judge/start")
 def judge_start(body: StartRequest, request: Request) -> StartOut:
-    code = _product_on()
+    codes = _product_on()
     try:
         counters().claim(None, Check("start", _client(request), setting(START_PER_IP_ENV), "start_spent_today"))
     except CapReached as refused:
         raise _refuse(refused) from None
-    if not hmac.compare_digest(body.code.strip().encode(), code.encode()):
+    if not _code_matches(body.code, codes):
         raise HTTPException(status_code=403, detail=WRONG_CODE)
     if len(judge_ids()) >= setting(MAX_ACCOUNTS_ENV):
         raise _refuse(CapReached(429, "judges_full"))
