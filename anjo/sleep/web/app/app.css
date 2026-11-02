@@ -163,13 +163,17 @@ button, input, textarea, select { font-family: inherit; }
 .chat-empty { padding: var(--s6) 0 var(--s5); border-top: 1px solid var(--line); }
 .chat-empty h2 { margin: 0; font-weight: 600; font-size: clamp(28px, 3.4vw, 40px); line-height: 1.04; letter-spacing: -0.04em; }
 .chat-empty p { margin: var(--s3) 0 0; max-width: 52ch; color: var(--muted); font-size: 16px; }
-.starters { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s5); }
+.starters-label { margin: var(--s5) 0 0; font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.chat-empty p.starters-label { margin-top: var(--s6); max-width: none; font-size: 11px; color: var(--muted); }
+.starters { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
 .starter {
   min-height: 38px; padding: 8px 16px; border: 1px solid var(--line-strong); border-radius: var(--r-full);
   background: transparent; color: var(--ink-soft); font-size: 14px; line-height: 1.35; text-align: left; cursor: pointer;
   transition: border-color .2s, color .2s, background .2s;
 }
+.starter::after { content: " +"; color: var(--accent); }
 .starter:hover { border-color: var(--text); color: var(--text); background: var(--surface-2); }
+.starter:active:not(:disabled) { transform: scale(.98); }
 .starter:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .chat-log { display: grid; gap: var(--s4); margin: 0; padding: var(--s5) 0 var(--s4); list-style: none; }

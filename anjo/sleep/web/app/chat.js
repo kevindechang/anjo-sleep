@@ -10,6 +10,7 @@ import { byId, el, reducedMotion, say } from "./dom.js";
 import { streamMessage } from "./sse.js";
 
 const MAX_ROWS_PX = 168;
+const BLANK = "___";
 
 // Who answered, from the done event's model id; nothing for an id it doesn't recognise.
 export function modelName(model) {
@@ -141,6 +142,18 @@ export function createChat({ onReply, onSend = () => {} }) {
     return ok;
   }
 
+  // Start a message for them to finish: the first blank ("___") selected, else the cursor at the end.
+  function draft(text) {
+    if (asleep) return;
+    box.value = text;
+    grow();
+    box.focus({ preventScroll: true });
+    const blank = text.indexOf(BLANK);
+    if (blank >= 0) box.setSelectionRange(blank, blank + BLANK.length);
+    else box.setSelectionRange(text.length, text.length);
+    box.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submit(box.value);
@@ -152,8 +165,9 @@ export function createChat({ onReply, onSend = () => {} }) {
     }
   });
   box.addEventListener("input", grow);
+  // A starter is a frame to finish, never a message sent for them: the blanks are theirs.
   document.querySelectorAll(".starter").forEach((button) => {
-    button.addEventListener("click", () => submit(button.textContent));
+    button.addEventListener("click", () => draft(button.dataset.draft || button.textContent));
   });
 
   return {
@@ -166,15 +180,7 @@ export function createChat({ onReply, onSend = () => {} }) {
     send: (text) => submit(text),
     get canSend() { return !busy && !asleep; },
     get asleep() { return asleep; },
-    // Start a message for them to finish, the cursor at its end.
-    draft(text) {
-      if (asleep) return;
-      box.value = text;
-      grow();
-      box.focus({ preventScroll: true });
-      box.setSelectionRange(text.length, text.length);
-      box.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" });
-    },
+    draft,
     setAsleep(value) {
       asleep = value;
       say(status, value ? COPY.chat_during_night : "", "");

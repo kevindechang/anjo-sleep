@@ -140,12 +140,13 @@
 
         <div class="chat" id="chat">
           <div class="chat-empty" id="chat-empty">
-            <h2>Say anything.</h2>
-            <p>Talk the way you would to someone getting to know you. When something doesn't add up yet, MIND opens a question about it<span class="wide-only">, on the right</span><span class="narrow-only">, in the Mind tab</span>.</p>
-            <div class="starters" id="starters">
-              <button class="starter" type="button">I'm building something. Ask me about it.</button>
-              <button class="starter" type="button">How I like feedback: short, blunt, no cheerleading.</button>
-              <button class="starter" type="button">I'm torn between two options. Help me think it through.</button>
+            <h2>Give her something worth learning.</h2>
+            <p>Tell her what you're working toward, what makes it difficult, and how you want help. After each reply, MIND reads it and shows what she kept<span class="wide-only">, on the right</span><span class="narrow-only">, in the Mind tab</span>.</p>
+            <p class="starters-label" id="starters-label">Start from a frame, then fill in the blanks</p>
+            <div class="starters" id="starters" role="group" aria-labelledby="starters-label">
+              <button class="starter" type="button" data-draft="I'm working toward ___. I keep getting stuck on ___. When you help me, please ___.">What I'm working toward</button>
+              <button class="starter" type="button" data-draft="I'm choosing between ___ and ___. What pulls me toward the first is ___, and what holds me back is ___.">A choice I'm stuck on</button>
+              <button class="starter" type="button" data-draft="How I like help: ___. What doesn't work for me: ___.">How I like help</button>
             </div>
           </div>
           <ol class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></ol>
