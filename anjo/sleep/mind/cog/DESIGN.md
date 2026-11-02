@@ -94,3 +94,17 @@ once.
 - No reading `.env`, `~/AnjoSleepData` or `ops/`. Data a run writes goes under the path it is given.
 - Run only your own test files (`pytest anjo/sleep/tests/test_cog_<x>.py`); never the full suite.
 - Commit on your own branch with `<type>: <description>` messages and no co-author lines. Never push.
+
+## Guarding against a world built for MIND (added 2026-11-02, after a reviewer's note)
+
+The main world is ours, and it was built so that inferring hidden structure pays. A win there shows
+MIND recovers hidden structure when it exists; it does not show MIND beats Gemini in general. So:
+
+- **An independent world** (`world_indep.py`, branch `cog/world2`): written by a separate agent
+  from a neutral brief ("realistic lives"), with access to `types.py` only, never to MIND's code or
+  this design. Same model family as the lead (disclosed). MIND is scored there zero-shot (trained on
+  the main world) and, separately, trained on it. The result is reported whatever it is.
+- **The strongest LLM rival**: Gemini given the history plus per-person computed statistics
+  (`gemini_stats`), so a loss can't be put down to the LLM not counting.
+- **Scoped claims**: the write-up states that the main world is ours and favors latent-structure
+  inference, and leads with the independent-world result next to the main one.
