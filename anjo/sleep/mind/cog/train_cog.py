@@ -15,7 +15,9 @@ window is backpropagated and the state is detached (truncated BPTT). The loss:
   Bernoulli(0.5) mask of the queries (and no ``query`` term);
 - ``probe``: log loss of tomorrow's per-activity probes (the next-day-event auxiliary, which is also
   what gates the fast memory's writes);
-- ``answer``: cross-entropy of the answer head on the asked questions;
+- ``answer``: cross-entropy of the answer head on the asked questions, from the belief before the
+  answer; ``kept``: the same from the belief after it, so the belief learns to keep what it heard
+  (without it the toy core's predictions hardly moved with an answer: 1e-6 nats of information);
 - ``self``: squared error of the self-forecast against the mean log loss of the queries that
   resolve the next day.
 
@@ -44,7 +46,7 @@ from anjo.sleep.mind.cog.types import Life
 
 DEV_SEED: Final = 10_000
 DEFAULT_OUT: Final = Path("/private/tmp/claude-501/-Users-k/f8dbbf52-df21-4aab-acb6-f342415fbeb3/scratchpad/mind_research/runs")
-WEIGHTS: Final = {"query": 1.0, "u": 0.3, "probe": 0.5, "answer": 0.3, "self": 0.1}
+WEIGHTS: Final = {"query": 1.0, "u": 0.3, "probe": 0.5, "answer": 0.3, "kept": 0.3, "self": 0.1}
 U_LOGIT_CLIP: Final = 6.0
 
 World = Callable[[int, int], Life]  # (seed, n_days) -> Life
@@ -57,9 +59,9 @@ def toy_world(seed: int, n_days: int) -> Life:
 
 
 def real_world(seed: int, n_days: int) -> Life:
-    from anjo.sleep.mind.cog import world  # type: ignore[attr-defined]  # lands from the world branch
+    from anjo.sleep.mind.cog import world
 
-    return world.make_life(seed, population="base", n_days=n_days)  # type: ignore[no-any-return]
+    return world.make_life(seed, population="base", n_days=n_days)
 
 
 WORLDS: Final[dict[str, World]] = {"toy": toy_world, "real": real_world}
@@ -81,7 +83,7 @@ class TrainConfig:
     patience: int = 3
     lr: float = 3e-3
     clip: float = 1.0
-    ask_rate: float = 0.2
+    ask_rate: float = 0.5
     u_mode: str = "oracle"
     fast: bool = True
     cms: bool = False
@@ -103,7 +105,8 @@ class Unrolled(NamedTuple):
 
     query_logits: Tensor  # (B, Dw, Q, K)
     probe_logits: Tensor  # (B, Dw, A, K) made on each day, about the next
-    answer_logits: Tensor  # (B, Dw, O)
+    answer_logits: Tensor  # (B, Dw, O) from the belief before the answer
+    kept_logits: Tensor  # (B, Dw, O) from the belief after it: does the belief keep what it heard?
     self_pred: Tensor  # (B, Dw)
     self_target: Tensor  # (B, Dw)
     self_mask: Tensor  # (B, Dw)
@@ -112,7 +115,7 @@ class Unrolled(NamedTuple):
 
 def _day(batch: Batch, d: int) -> DayInput:
     return DayInput(batch.ev_tok[:, d], batch.ev_kind[:, d], batch.ev_val[:, d], batch.ev_subj[:, d],
-                    batch.ev_plan[:, d], batch.ev_answer[:, d], batch.ev_mask[:, d])
+                    batch.ev_plan[:, d], batch.ev_span[:, d], batch.ev_answer[:, d], batch.ev_mask[:, d])
 
 
 def _bce(p: Tensor, y: Tensor) -> Tensor:
@@ -129,17 +132,18 @@ def run_days(
     b, o = batch.ask_opt_mask.shape[0], batch.ask_opt_mask.shape[2]
     use_cms = net.cfg.cms if cms is None else cms
     acc_sum, acc_cnt = acc
-    ql_all, pl_all, al_all, sp_all, st_all, sm_all = [], [], [], [], [], []
+    ql_all, pl_all, al_all, kept_all, sp_all, st_all, sm_all = [], [], [], [], [], [], []
     for d in range(d0, d1):
         asked = bool(batch.ask_mask[:, d].any())
         out = net.day_step(st, _day(batch, d), d, wd0, batch.act, batch.act_mask, batch.probe_y[:, d],
                            fast=fast, cms=cms, want_pre=asked)
         st = out.state
         if out.h_pre is not None:
-            al = net.answer_logits(out.h_pre, batch.ask_tok[:, d], batch.ask_subj[:, d], batch.ask_opt[:, d],
-                                   batch.ask_opt_mask[:, d])
+            ask = (batch.ask_tok[:, d], batch.ask_subj[:, d], batch.ask_opt[:, d], batch.ask_opt_mask[:, d])
+            al = net.answer_logits(out.h_pre, *ask)
+            kept = net.answer_logits(st.h, *ask)
         else:
-            al = torch.zeros(b, o)
+            al = kept = torch.zeros(b, o)
         ql, _ = net.query_logits(st, batch.q_tok[:, d], batch.q_subj[:, d], batch.q_target[:, d], d, wd0,
                                  fast=fast, cms=cms)
         with torch.no_grad():
@@ -152,14 +156,15 @@ def run_days(
         ql_all.append(ql)
         pl_all.append(out.probe_logits)
         al_all.append(al)
+        kept_all.append(kept)
         sp_all.append(sp)
         st_all.append(acc_sum[:, nxt] / acc_cnt[:, nxt].clamp(min=1.0))
         sm_all.append((acc_cnt[:, nxt] > 0).float())
         if use_cms:
             st = net.consolidate(st)
     stack = torch.stack
-    return Unrolled(stack(ql_all, 1), stack(pl_all, 1), stack(al_all, 1), stack(sp_all, 1), stack(st_all, 1),
-                    stack(sm_all, 1), st), (acc_sum, acc_cnt)
+    return Unrolled(stack(ql_all, 1), stack(pl_all, 1), stack(al_all, 1), stack(kept_all, 1), stack(sp_all, 1),
+                    stack(st_all, 1), stack(sm_all, 1), st), (acc_sum, acc_cnt)
 
 
 def _acc(batch: Batch) -> tuple[Tensor, Tensor]:
@@ -212,10 +217,13 @@ def loss(
     logp = torch.log_softmax(out.answer_logits, dim=-1)
     ans_ll = -logp.gather(-1, batch.ask_answer[:, sl, None])[..., 0]
     answer = _masked_mean(ans_ll, am)
+    kept_ll = -torch.log_softmax(out.kept_logits, dim=-1).gather(-1, batch.ask_answer[:, sl, None])[..., 0]
+    kept = _masked_mean(kept_ll, am)
     selfl = _masked_mean((out.self_pred - out.self_target).pow(2), out.self_mask)
-    parts = {"query": query, "u": u, "probe": probe, "answer": answer, "self": selfl}
+    parts = {"query": query, "u": u, "probe": probe, "answer": answer, "kept": kept, "self": selfl}
     q_w = w["query"] if u_mode == "oracle" else 0.0
-    total = q_w * query + w["u"] * u + w["probe"] * probe + w["answer"] * answer + w["self"] * selfl
+    total = (q_w * query + w["u"] * u + w["probe"] * probe + w["answer"] * answer + w["kept"] * kept
+             + w["self"] * selfl)
     if u_mode == "boot":
         total = total + (1.0 - w["u"]) * u  # the bootstrap heads' loss is the main term
     return total, {k: float(v.detach()) for k, v in parts.items()}
@@ -261,6 +269,8 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def train(cfg: TrainConfig, world: World = toy_world, out: Path | None = None, log: Callable[[str], None] | None = None) -> Trained:
+    if not 0 < cfg.lives <= DEV_SEED:
+        raise ValueError(f"train lives are seeds 0..{DEV_SEED - 1}")
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.threads)
     rng = np.random.default_rng(cfg.seed)
@@ -336,7 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT / "cog_core")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--world", choices=sorted(WORLDS), default="toy")
+    ap.add_argument("--world", choices=sorted(WORLDS), default="real")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--dim", type=int, default=64)
     ap.add_argument("--hidden", type=int, default=128)

@@ -17,8 +17,10 @@
    step to the level's pending sum, applied at the night (``consolidate``; ``core.cms`` eq. 71).
 3. **The belief.** A GRU over days reads the pooled day, the weekday and the day index.
 4. **The episodic buffer.** The last ``window`` days' events stay as keys and values for the query
-   to attend (four heads), with structured match features: same subject, a plan or cancel for the
-   query's target day, the same weekday, age, and the products of the subject match with the other two.
+   to attend (four heads), with structured match features: same subject, an event pointing at the
+   query's target day (a plan, a cancel, an answer's ``in=k``), the same weekday, age, the products
+   of the subject match with the pointing and weekday ones, and the target inside an event's span
+   (``left=k``).
 5. **Tomorrow's probes** are predicted from the new state, for the next day's write.
 
 **A query** reads its tokens, its subject, its target weekday and horizon, the belief, the fast
@@ -56,7 +58,7 @@ _EPS: Final = 1e-6
 P_FLOOR: Final = 1e-4  # predictions are kept in [P_FLOOR, 1 - P_FLOOR]
 POOL_HEADS: Final = 4
 EPI_HEADS: Final = 4
-N_FLAGS: Final = 6
+N_FLAGS: Final = 7
 U_MODES: Final = ("oracle", "boot")
 
 
@@ -116,6 +118,7 @@ class CogState(NamedTuple):
     epi_wd: Tensor  # (B, N) long
     epi_subj: Tensor  # (B, N) long
     epi_plan: Tensor  # (B, N) float, NO_PLAN where none
+    epi_span: Tensor  # (B, N) float, NO_PLAN where none
     epi_mask: Tensor  # (B, N) bool
 
 
@@ -125,6 +128,7 @@ class DayInput(NamedTuple):
     val: Tensor  # (B, E, 3)
     subj: Tensor  # (B, E)
     plan: Tensor  # (B, E)
+    span: Tensor  # (B, E)
     answer: Tensor  # (B, E) bool
     mask: Tensor  # (B, E) bool
 
@@ -201,7 +205,8 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
             levels=z(batch, 2 if self.cfg.cms else 0, d, d), probe_logits=z(batch, n_act, k),
             probe_key=z(batch, n_act, d), probe_ok=z(batch, n_act), epi_key=z(batch, 0, d), epi_val=z(batch, 0, d),
             epi_day=z(batch, 0, dtype=torch.long), epi_wd=z(batch, 0, dtype=torch.long),
-            epi_subj=z(batch, 0, dtype=torch.long), epi_plan=z(batch, 0), epi_mask=z(batch, 0, dtype=torch.bool),
+            epi_subj=z(batch, 0, dtype=torch.long), epi_plan=z(batch, 0), epi_span=z(batch, 0),
+            epi_mask=z(batch, 0, dtype=torch.bool),
         )
 
     # ── pieces ───────────────────────────────────────────────────────────────
@@ -277,7 +282,8 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
             epi_key=cat([st.epi_key, self.epi_k(e)], 1), epi_val=cat([st.epi_val, self.epi_v(e)], 1),
             epi_day=cat([st.epi_day, torch.full((b, n), day, dtype=torch.long)], 1),
             epi_wd=cat([st.epi_wd, weekday[:, None].expand(b, n)], 1), epi_subj=cat([st.epi_subj, ev.subj], 1),
-            epi_plan=cat([st.epi_plan, ev.plan], 1), epi_mask=cat([st.epi_mask, ev.mask], 1),
+            epi_plan=cat([st.epi_plan, ev.plan], 1), epi_span=cat([st.epi_span, ev.span], 1),
+            epi_mask=cat([st.epi_mask, ev.mask], 1),
         )
         stale = ((st.epi_day < keep_from) | ~st.epi_mask).all(dim=0)
         drop = int(torch.cumprod(stale.to(torch.long), dim=0).sum())
@@ -300,7 +306,9 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
         match = (st.epi_plan[:, None, :] == target[:, :, None].float()).float()
         same_wd = (st.epi_wd[:, None, :] == wd_t[:, :, None]).float()
         age = (target[:, :, None] - st.epi_day[:, None, :]).float() / self.cfg.window
-        flags = torch.stack([same, match, same_wd, age, same * same_wd, same * match], dim=-1)  # (B, Q, N, F)
+        tf = target[:, :, None].float()
+        within = ((st.epi_span[:, None, :] >= tf) & (st.epi_day[:, None, :].float() <= tf)).float()
+        flags = torch.stack([same, match, same_wd, age, same * same_wd, same * match, within], dim=-1)  # (B, Q, N, F)
         score = score + self.epi_flag_score(flags).permute(0, 1, 3, 2)
         score = score.masked_fill(~st.epi_mask[:, None, None, :], -1e9)
         null = self.epi_null.view(1, 1, nh, 1).expand(b, q, nh, 1)
@@ -427,7 +435,7 @@ def day_input(vocab: Vocab, events: Sequence[Event]) -> DayInput:
     a = encode_day(vocab, events)
     t = torch.from_numpy
     return DayInput(t(a.tok)[None], t(a.kind)[None], t(a.val)[None], t(a.subj)[None], t(a.plan)[None],
-                    t(a.answer)[None], torch.ones(1, len(events), dtype=torch.bool))
+                    t(a.span)[None], t(a.answer)[None], torch.ones(1, len(events), dtype=torch.bool))
 
 
 @dataclass(frozen=True)
