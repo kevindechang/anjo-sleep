@@ -283,3 +283,24 @@ def test_one_call_citing_two_fresh_threads_catches_both() -> None:
     result = evaluate.score([evaluate.LifeTrace(life.life_id, calls, ())], [stream], 0.5)
     assert (result.caught, result.recall, result.repeats, result.false) == (2, 1.0, 1, 0)
     assert result.by_family == (("gap", 2, 2),)
+
+
+def test_the_fast_switch_measures_the_cores_memory_on_against_off_with_cms_off(tmp_path: Path) -> None:
+    # 2026-11-02: MIND's memory (fast weights) on against N-nofast on the real latents, pre-registered
+    from anjo.sleep.tools import mind_cms_eval as eval_cms
+
+    cms_plan, fast_plan = eval_cms.Plan(), eval_cms.Plan(switch="fast")
+    assert cms_plan.switch == "cms" and eval_cms.SWITCHES == ("cms", "fast")
+    assert eval_cms.arm_config(cms_plan, "on", 4) == CoreConfig(dim_in=4, width=64, slots=8, cms=True)
+    assert eval_cms.arm_config(cms_plan, "off", 4) == CoreConfig(dim_in=4, width=64, slots=8)
+    assert eval_cms.arm_config(fast_plan, "on", 4) == CoreConfig(dim_in=4, width=64, slots=8)
+    assert eval_cms.arm_config(fast_plan, "off", 4) == CoreConfig(dim_in=4, width=64, slots=8, fast=False)
+    tiny = dataclasses.replace(fast_plan, seeds=(0,), epochs=1, patience=1, width=8, slots=2, lives_per_epoch=4,
+                               val_lives=2, test_lives=4, pairs=2, chains=1, links=2, fillers=(0,), probes=3,
+                               rehearsal_lives=1)
+    results, text = eval_cms.run(tiny)
+    assert sorted(arm for arm, _, _ in results) == ["off", "on"]
+    assert text.startswith("MIND fast weights (the core's memory) off vs on")
+    with pytest.raises(SystemExit):
+        eval_cms._parser().parse_args(["--switch", "memory"])
+    assert eval_cms._parser().parse_args(["--switch", "fast"]).switch == "fast"

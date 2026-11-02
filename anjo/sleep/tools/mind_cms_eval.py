@@ -23,6 +23,9 @@ mean over seeds with a 95% t-interval, and the paired difference (on minus off, 
   locked threshold. Nested Learning's claim for a continuum memory is that the slower levels keep
   what the fast one has overwritten, so this is where it should show.
 
+``--switch fast`` measures the core's own memory instead: arm ``on`` is the default core (fast weights),
+arm ``off`` is N-nofast (``CoreConfig.fast`` off), the continuum memory off in both (2026-11-02).
+
 ``--export DIR --latents DIR`` runs the same on an export's lives read through the real encoder:
 ``latents`` is a folder that ``python -m anjo.sleep.mind.core.latents encode`` wrote on the GPU (it
 plans first and holds the budget; this script never loads a model or calls a service). The lives
@@ -55,6 +58,9 @@ from anjo.sleep.mind.core.state import CoreState
 from anjo.sleep.mind.core.types import CoreConfig, LabelledStream, ThreadLabel
 
 ARMS: Final = ("off", "on")
+SWITCHES: Final = ("cms", "fast")  # what the arms turn off and on: the continuum memory, or the fast weights
+TITLES: Final = {"cms": "MIND continuum memory (ANJO_SLEEP_MIND_CMS) off vs on",
+                 "fast": "MIND fast weights (the core's memory) off vs on, continuum memory off"}
 # Student's t at 0.975 by degrees of freedom; past the table, the normal 1.96.
 _T975: Final = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228)
 Metrics = dict[str, float | None]
@@ -80,6 +86,7 @@ class Plan:
     rehearsal_lives: int = 32
     export: Path | None = None
     latents: Path | None = None
+    switch: str = "cms"  # one of SWITCHES
 
 
 @dataclass(frozen=True)
@@ -210,12 +217,21 @@ def _retention(core: Core, lives: Lives, fillers: Sequence[int], probes: int) ->
     return out
 
 
+def arm_config(plan: Plan, arm: str, dim: int) -> CoreConfig:
+    """The core an arm trains: the plan's switch on or off, everything else the default core's."""
+    if plan.switch not in SWITCHES:
+        raise ValueError(f"the switch is one of {SWITCHES}")
+    if plan.switch == "fast":
+        return CoreConfig(dim_in=dim, width=plan.width, slots=plan.slots, fast=arm == "on")
+    return CoreConfig(dim_in=dim, width=plan.width, slots=plan.slots, cms=arm == "on")
+
+
 def job(plan: Plan, arm: str, seed: int) -> tuple[str, int, Metrics]:
-    """One core, trained and scored: ``arm`` is the switch, off or on."""
+    """One core, trained and scored: ``arm`` is the plan's switch, off or on."""
     torch.set_num_threads(1)
     lives = _toy_lives(plan) if plan.export is None else _export_lives(plan, seed)
     dim = lives.val[0].events[0].vec.shape[0]
-    config = CoreConfig(dim_in=int(dim), width=plan.width, slots=plan.slots, cms=arm == "on")
+    config = arm_config(plan, arm, int(dim))
     start = time.perf_counter()
     trained = train.train_shared(lives.fit, lives.val, config, seed=seed, epochs=plan.epochs, patience=plan.patience,
                                  batch_size=16)
@@ -268,8 +284,9 @@ def _cell(held: tuple[float, float, float] | None, sign: str = "") -> str:
     return f"{mean:{sign}.3f} [{low:{sign}.3f}, {high:{sign}.3f}]" if low != high else f"{mean:{sign}.3f}"
 
 
-def table(summary: Mapping[str, Mapping[str, tuple[float, float, float] | None]], seeds: Sequence[int]) -> str:
-    lines = [f"MIND continuum memory (ANJO_SLEEP_MIND_CMS) off vs on; seeds {list(seeds)}; mean [95% t-interval]",
+def table(summary: Mapping[str, Mapping[str, tuple[float, float, float] | None]], seeds: Sequence[int],
+          switch: str = "cms") -> str:
+    lines = [f"{TITLES[switch]}; seeds {list(seeds)}; mean [95% t-interval]",
              f"{'metric':<38} {'off':<28} {'on':<28} {'on - off (paired)':<28}"]
     lines.extend(f"{name:<38} {_cell(row['off']):<28} {_cell(row['on']):<28} {_cell(row['on_minus_off'], '+'):<28}"
                  for name, row in summary.items())
@@ -283,7 +300,7 @@ def run(plan: Plan, *, jobs: int = 1) -> tuple[list[tuple[str, int, Metrics]], s
     else:
         with ProcessPoolExecutor(max_workers=jobs, mp_context=get_context("spawn")) as pool:
             results = list(pool.map(job, [plan] * len(tasks), *zip(*tasks)))
-    return results, table(summarize(results), plan.seeds)
+    return results, table(summarize(results), plan.seeds, plan.switch)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -298,6 +315,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--probes", type=int, default=Plan.probes)
     p.add_argument("--export", type=Path, default=None, help="an export's lives instead of toy lives")
     p.add_argument("--latents", type=Path, default=None, help="the export's latents, from the real encoder")
+    p.add_argument("--switch", choices=SWITCHES, default=Plan.switch,
+                   help="what the arms turn off and on: the continuum memory (cms) or the fast weights (fast)")
     p.add_argument("--jobs", type=int, default=1, help="cores trained at once, one process each")
     p.add_argument("--out", type=Path, default=None, help="the table, as text")
     p.add_argument("--json", type=Path, default=None, help="every seed's metrics, as JSON")
@@ -316,7 +335,7 @@ def main(argv: Sequence[str] | None = None, *, emit: Callable[[str], object] = p
         emit("error: --export and --latents go together")
         return 2
     plan = Plan(seeds=tuple(args.seeds), epochs=args.epochs, patience=args.patience, fillers=tuple(args.fillers),
-                probes=args.probes, export=args.export, latents=args.latents)
+                probes=args.probes, export=args.export, latents=args.latents, switch=args.switch)
     try:
         results, text = run(plan, jobs=args.jobs)
     except (data.DataError, OSError, ValueError) as error:
