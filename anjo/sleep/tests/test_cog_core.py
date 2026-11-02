@@ -80,6 +80,33 @@ def test_fast_off_never_writes_and_reads_zero() -> None:
     assert float(out.final.mem.abs().sum()) == 0.0
 
 
+def test_the_continuum_memory_accumulates_by_day_and_steps_at_night() -> None:
+    net, lives = _tiny_net(0, cms=True)
+    vocab = build_vocab(lives)
+    batch = collate([encode_life(vocab, lives[0], np.random.default_rng(0))])
+    st = net.initial(1, 2)
+    out, _ = train_cog.run_days(net, batch, st, 0, 5, train_cog._acc(batch))  # nights between days
+    loss, _ = train_cog.loss(out, batch)
+    loss.backward()
+    assert net.cms_rate.grad is not None and net.cms_mix.grad is not None
+    st = out.final
+    assert float(st.levels[:, 0].detach().abs().sum()) > 0.0
+    day, _ = train_cog.run_days(net, batch, st, 5, 6, train_cog._acc(batch), cms=True)
+    pending = day.final.levels[:, 1]
+    after = net.consolidate(day.final)
+    assert torch.allclose(after.levels[:, 0], day.final.levels[:, 0] - pending)
+    assert float(after.levels[:, 1].detach().abs().sum()) == 0.0
+
+
+def test_the_predictor_refuses_a_continuum_memory_the_core_lacks() -> None:
+    net, lives = _tiny_net(0)
+    ck = core.Checkpoint(net, build_vocab(lives))
+    with pytest.raises(ValueError):
+        core.MindPredictor(ck, cms=True)
+    with pytest.raises(ValueError):
+        core.MindPredictor(ck, ensemble=6)
+
+
 # ── a trained core on the toy world ──────────────────────────────────────────
 
 
@@ -189,9 +216,9 @@ def test_self_forecast_is_a_positive_loss() -> None:
 
 
 def test_priorities_follow_surprise_times_need() -> None:
-    x, lg = np.zeros(4), np.zeros(3)
-    items = (Replayed(x, lg, 1.0, 2.0, "run", 9), Replayed(x, lg, 1.0, 0.1, "run", 9),
-             Replayed(x, lg, 1.0, 2.0, "gym", 9), Replayed(x, lg, 1.0, 2.0, "run", 2))
+    lg = np.zeros(3)
+    items = (Replayed(lg, 1.0, 2.0, "run", 9), Replayed(lg, 1.0, 0.1, "run", 9),
+             Replayed(lg, 1.0, 2.0, "gym", 9), Replayed(lg, 1.0, 2.0, "run", 2))
     pr = priorities(items, today=9, counts={"run": 9, "gym": 1})
     assert pr[0] > pr[1] and pr[0] > pr[2] and pr[0] > pr[3]
     assert np.isclose(pr.sum(), 1.0)
@@ -199,12 +226,12 @@ def test_priorities_follow_surprise_times_need() -> None:
 
 def test_night_moves_the_adapter_toward_what_surprised_it() -> None:
     rng = np.random.default_rng(0)
-    x = rng.normal(size=(40, 6))
-    items = tuple(Replayed(x[i], np.full(3, -2.0), 1.0, 2.1, "run", i) for i in range(40))
-    start = Adapter.zero(6)
+    items = tuple(Replayed(np.full(3, -2.0), 1.0, 2.1, "run", i, (0, i % 7)) for i in range(40))
+    start = Adapter.zero(2)
+    cells = np.array([(0, wd) for wd in range(7)])
     for mode in ("uniform", "surprise"):
         after = night(start, items, today=40, mode=mode, rng=np.random.default_rng(1), counts={"run": 40})
-        assert float(np.mean(after.shift(x))) > 0.0
+        assert float(np.min(after.shift(cells))) > 0.0
     t0 = time.perf_counter()
     night(start, items, today=40, mode="surprise", rng=np.random.default_rng(1), counts={"run": 40})
     assert time.perf_counter() - t0 < 0.2
@@ -218,19 +245,17 @@ def _shifted_stream(mode: str, seed: int) -> list[float]:
     run query per weekday is predicted (base plus the adapter), resolves, and the night runs. The
     log losses of days 21-34, the two weeks after the shift."""
     rng = np.random.default_rng(seed)
-    feats = rng.normal(size=(7, 8))
-    adapter, items, counts, losses = Adapter.zero(8, 2), [], {"run": 0}, []
+    adapter, items, counts, losses = Adapter.zero(2), [], {"run": 0}, []
     for day in range(42):
         habit = (0, 1, 2) if day < 21 else (4, 5, 6)
         for wd in range(7):
             base = np.full(3, 1.5 if wd < 3 else -2.0)
-            x = feats[wd] + 0.1 * rng.normal(size=8)
-            p = float(np.mean(1 / (1 + np.exp(-(base + adapter.shift(x[None], np.array([[0, wd]]))[0])))))
+            p = float(np.mean(1 / (1 + np.exp(-(base + adapter.shift(np.array([[0, wd]]))[0])))))
             y = float(rng.random() < (0.85 if wd in habit else 0.08))
             loss = -np.log(p if y else 1 - p)
             if 21 <= day < 35:
                 losses.append(loss)
-            items.append(Replayed(x, base, y, loss, "run", day, (0, wd)))
+            items.append(Replayed(base, y, loss, "run", day, (0, wd)))
             counts["run"] += 1
         adapter = night(adapter, items, today=day, mode=mode, rng=rng, counts=counts)
     return losses
@@ -251,6 +276,25 @@ def test_the_night_does_not_forget_stable_habits() -> None:
             rows = _run(core.MindPredictor(trained, night=mode), life)
             out.append(_logloss(np.array([r[2] for r in rows]), np.array([r[4] for r in rows])))
     assert np.mean(loss["surprise"]) < np.mean(loss["off"]) + 0.02
+
+
+def test_predict_has_no_side_effects() -> None:
+    trained = trained_tiny()
+    life = ToyLife(10_005)
+    plain = _run(core.MindPredictor(trained), life)
+    busy = core.MindPredictor(trained)
+    busy.begin(life.meta)
+    rows = []
+    for d in range(life.meta.n_days):
+        busy.observe(d, life.events(d))
+        later = [q for dd in range(d, min(d + 5, life.meta.n_days)) for q in life.queries(dd)]
+        busy.predict(later)  # an inquirer peeking at many queries, many times
+        busy.predict(later)
+        for q, pr in zip(life.queries(d), busy.predict(life.queries(d)), strict=True):
+            r = life.resolve(q.qid)
+            rows.append((d, q.subject, pr.p, pr.u, float(r.outcome), r.oracle_p))
+        busy.end_day(d)
+    assert rows == plain
 
 
 def test_predictions_are_predictions() -> None:
