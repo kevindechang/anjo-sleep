@@ -82,7 +82,6 @@ from types import TracebackType
 from pathlib import Path
 from typing import Final, Literal
 
-from anjo.core.best_effort import best_effort
 from anjo.sleep.budget import Bound, Ledger, Reservation
 from anjo.sleep.night.holds import hold
 from anjo.sleep.serving import config
@@ -408,8 +407,10 @@ class _Rounds:
 def _forget_lost(cli: ColabCli) -> None:
     """``colab sessions``: the CLI's own listing drops a session the server no longer has, so the stop
     that follows finds none to stop, rather than failing on a VM that is gone."""
-    with best_effort("colab sessions after a lost VM"):
+    try:
         cli.call("sessions", timeout_s=LIST_TIMEOUT_S)
+    except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # optional: the stop that follows still runs
+        logger.warning("colab sessions after a lost VM failed: %s: %s", type(error).__name__, error)
 
 
 def _not_found(session: str) -> str:
@@ -592,29 +593,36 @@ class ColabRunner:
             return
         rounds.pings += 1
         pinged = False
-        with best_effort("a keep-alive ping", session=session):
-            try:
-                self._cli.call(KEEPALIVE, session, timeout_s=KEEPALIVE_TIMEOUT_S)
-                pinged = True
-            except KeepaliveOff as off:
-                rounds.pinging = False
-                logger.warning("%s: %s trains without keep-alive pings", off, session)
+        try:
+            self._cli.call(KEEPALIVE, session, timeout_s=KEEPALIVE_TIMEOUT_S)
+            pinged = True
+        except KeepaliveOff as off:
+            rounds.pinging = False
+            logger.warning("%s: %s trains without keep-alive pings", off, session)
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # counted below, never raised
+            logger.warning("a keep-alive ping failed: %s: %s (session=%s)", type(error).__name__, error, session)
         if not pinged:
             rounds.pings_failed += 1
 
     def _kill(self, session: str, script: Path) -> None:
-        with best_effort("killing the training past its time", session=session):
+        try:
             self._cli.call("exec", "-s", session, "-f", str(script), "--timeout", str(KILL_EXEC_S),
                            timeout_s=KILL_EXEC_S + EXEC_MARGIN_S)
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # the VM's stop still ends it
+            logger.warning("killing the training past its time failed: %s: %s (session=%s)",
+                           type(error).__name__, error, session)
 
     def _log_tail(self, session: str, scripts: detached.Scripts, workdir: Path) -> str:
         """Bring the training log's last lines into the night's folder; where they are, for the error."""
         tail = workdir / LOG_TAIL_NAME
-        with best_effort("the training log's last lines", session=session):
+        try:
             printed = self._cli.call("exec", "-s", session, "-f", str(scripts.log_tail), "--timeout",
                                      str(LOG_TAIL_EXEC_S), timeout_s=LOG_TAIL_EXEC_S + EXEC_MARGIN_S)
             tail.write_text(printed, encoding="utf-8")
             return f"its log's last lines are in {tail}"
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # the error that follows names what failed
+            logger.warning("the training log's last lines failed: %s: %s (session=%s)",
+                           type(error).__name__, error, session)
         return "its log's last lines could not be brought back"
 
     def lives(self, *, life_timeout_s: float) -> ColabLives:
