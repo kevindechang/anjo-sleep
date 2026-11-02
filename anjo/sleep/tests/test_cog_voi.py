@@ -71,8 +71,10 @@ def test_the_week_ahead_counts_once_the_inquirer_knows_the_person() -> None:
     useful = _q("a", "x", 0.1, (("x", "hi"), ("x", "lo")))
     alone = inq.values(5, (useful,), UPCOMING)["a"]
     inq.begin(meta)
-    week = inq.week_queries(5)
-    assert sorted((q.subject, q.target_day) for q in week) == sorted((a, d) for a in ("run", "gym") for d in (6, 7, 8, 9))
+    assert inq.week_queries(5) == ()  # no query shown yet: no activity's family is known
+    inq.values(5, (useful,), UPCOMING)
+    week = inq.week_queries(5)  # only "run" has been queried
+    assert sorted((q.subject, q.target_day, q.family) for q in week) == [("run", d, "hidden") for d in (6, 7, 8, 9)]
     assert all(q.asked_day == 5 and f"h={q.target_day - 5}" in q.tokens and f"dow={(2 + q.target_day) % 7}" in q.tokens
                for q in week)
     assert math.isclose(inq.values(5, (useful,), UPCOMING)["a"], alone * (3 + len(week)) / 3, rel_tol=1e-9)

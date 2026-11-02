@@ -16,7 +16,7 @@ import pytest
 import torch
 
 from anjo.sleep.mind.cog import core, train_cog
-from anjo.sleep.mind.cog.encode import activity_kinds, build_vocab, collate, encode_life
+from anjo.sleep.mind.cog.encode import Vocab, activity_kinds, build_vocab, collate, encode_life, encode_queries
 from anjo.sleep.mind.cog.night import NO_GAIN, Adapter, Replayed, night, paid, priorities, served, update_gain
 from anjo.sleep.mind.cog.toy_life import ToyLife
 from anjo.sleep.mind.cog.types import Life, Prediction
@@ -124,6 +124,17 @@ def test_tallies_count_each_activity_by_weekday_and_both_paths_agree() -> None:
     rows = _run(core.MindPredictor(core.Checkpoint(net, vocab), night="off"), life)
     p_batch = core.mean_prob(out.query_logits)[batch.q_mask].numpy()
     assert np.allclose([r[2] for r in rows], np.clip(p_batch, core.P_FLOOR, 1 - core.P_FLOOR), atol=1e-5)
+
+
+def test_a_query_carries_its_family_when_the_vocabulary_knows_it() -> None:
+    lives = [ToyLife(s, n_days=21) for s in range(2)]
+    vocab = build_vocab(lives)
+    q = lives[0].queries(3)[0]
+    assert vocab.id(f"family={q.family}") not in (0, 1)
+    assert vocab.id(f"family={q.family}") in encode_queries(vocab, [q]).tok[0]
+    old = Vocab(tuple(t for t in vocab.tokens if not t.startswith("family=")))  # a checkpoint from before
+    assert encode_queries(old, [q]).tok[0].tolist() == [old.id(x) for x in q.tokens] + [0] * (
+        encode_queries(old, [q]).tok.shape[1] - len(q.tokens))
 
 
 def test_fast_off_never_writes_and_reads_zero() -> None:

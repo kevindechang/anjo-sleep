@@ -63,6 +63,11 @@ class Vocab:
         return Vocab(tuple(json.loads(text)))
 
 
+def family_token(query: Query) -> str:
+    """A query's family (``count`` or ``hidden``, in every ``Query``, as the rivals read it) as a token."""
+    return f"family={query.family}"
+
+
 def _life_tokens(life: Life) -> Iterable[str]:
     meta = life.meta
     yield from (*meta.activities, *meta.people, *meta.topics)
@@ -73,6 +78,7 @@ def _life_tokens(life: Life) -> Iterable[str]:
         for q in life.queries(d):
             yield q.subject
             yield from q.tokens
+            yield family_token(q)
         for qu in life.questions(d):
             yield qu.subject
             yield from qu.tokens
@@ -174,9 +180,16 @@ class QueryArrays:
     asked: np.ndarray  # (Q,) the asked day
 
 
+def _query_ids(vocab: Vocab, q: Query) -> list[int]:
+    """The query's tokens and its family token (left out when the vocabulary predates it, so an
+    older checkpoint reads its queries as it was trained to)."""
+    fam = family_token(q)
+    return vocab.ids((*q.tokens, fam)) if fam in vocab.index else vocab.ids(q.tokens)
+
+
 def encode_queries(vocab: Vocab, queries: Sequence[Query]) -> QueryArrays:
     return QueryArrays(
-        tok=_pad_tokens([vocab.ids(q.tokens) for q in queries]),
+        tok=_pad_tokens([_query_ids(vocab, q) for q in queries]),
         subj=np.array([vocab.id(q.subject) for q in queries], dtype=np.int64),
         target=np.array([q.target_day for q in queries], dtype=np.int64),
         asked=np.array([q.asked_day for q in queries], dtype=np.int64),

@@ -19,7 +19,7 @@ largest ``value - lam * cost`` if its value is more than ``lam * cost``, else re
 **Which queries.** The caller's upcoming ones (``run.py`` passes today's, since tomorrow's would
 read the future) and, once ``begin`` has given the person's activities, the inquirer's own
 hypothetical week: "will <activity> happen" on each of the next ``week`` days, written from the
-meta alone. The score counts a week of queries after an ask (T3), and an answer about work moves
+meta and the families of the queries it has been shown (an activity not yet queried is left out). The score counts a week of queries after an ask (T3), and an answer about work moves
 all of them; on today's queries alone the real-world inquirer asked 0.16 times a life and each ask
 saved 0.49 nats on the week, far above its cost: the value it saw was too small.
 """
@@ -31,7 +31,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
+from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, QueryFamily, Question
 
 _FLOOR = 1e-6
 
@@ -63,9 +63,10 @@ class MindInquirer:
             raise ValueError("lam is the price of a unit of cost, at least 0")
         self.predictor, self.lam, self.week, self.name = predictor, lam, week, name
         self._meta: LifeMeta | None = None
+        self._family: dict[str, QueryFamily] = {}
 
     def begin(self, meta: LifeMeta) -> None:
-        self._meta = meta
+        self._meta, self._family = meta, {}
 
     def week_queries(self, day: int) -> tuple[Query, ...]:
         """The hypothetical week: each activity on each of the next ``week`` days in the life."""
@@ -73,13 +74,16 @@ class MindInquirer:
         if m is None:
             return ()
         return tuple(Query(f"voi/d{day}/{a}/h{h}", day, day + h, a, "",
-                           ("query", "happen", a, f"h={h}", f"dow={(m.start_weekday + day + h) % 7}"), "hidden")
-                     for a in m.activities for h in range(1, self.week + 1) if day + h < m.n_days)
+                           ("query", "happen", a, f"h={h}", f"dow={(m.start_weekday + day + h) % 7}"),
+                           self._family[a])
+                     for a in m.activities if a in self._family
+                     for h in range(1, self.week + 1) if day + h < m.n_days)
 
     def values(self, day: int, questions: Sequence[Question], upcoming: Sequence[Query]) -> dict[str, float]:
         """Each question's value in nats (questions without options are worth 0)."""
         pred = self.predictor
         live = pred.live
+        self._family.update({q.subject: q.family for q in upcoming})
         targets = (*upcoming, *self.week_queries(day)) if upcoming else ()
         out: dict[str, float] = {}
         for q in questions:
