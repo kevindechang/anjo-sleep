@@ -1,7 +1,7 @@
 """Her own line of thought, for the person (thought.py): pure views over the workspace log."""
 import json
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 import pytest
 
@@ -198,12 +198,53 @@ def test_every_free_text_goes_through_the_filter() -> None:
         assert phrase not in blob
 
 
-def test_a_tampered_log_is_refused() -> None:
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_tampered_log_is_refused(field: str) -> None:
     L = life()
     events = list(L.events)
-    events[3] = replace(events[3], after="0" * 64)
+    events[3] = replace(events[3], **{field: "0" * 64})
     with pytest.raises(ValueError):
         thought.thought_view(tuple(events), (), now=night(6))
+
+
+def test_steps_after_the_night_clock_are_left_out() -> None:
+    from anjo.sleep.mind import thought_demo as demo
+
+    events, now = demo.demo_events(), demo._night(4)
+    upto = tuple(e for e in events if e.step.at <= now)
+    assert len(upto) < len(events)
+    assert thought.thought_view(events, (), now=now, since=demo.SINCE) == thought.thought_view(
+        upto, (), now=now, since=demo.SINCE)
+
+
+def test_a_new_hunch_is_listed_even_past_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    L = life()
+    monkeypatch.setattr(thought, "MAX_HUNCHES", 0)
+    v = view(L, now=night(4), since=night(3) + timedelta(hours=1))
+    wrap = next(x.id for x in L.w.ws.predictions if x.claim == WRAP)
+    assert v["morning"]["new_hunches"] == [wrap]
+    assert [h["id"] for h in v["hunches"]] == [wrap]
+
+
+def test_due_dates_are_read_on_the_night_clock_s_own_zone() -> None:
+    L = life()
+    horizon = night(2) + timedelta(days=9)  # CUT settles at 23:00 UTC
+    now = (horizon - timedelta(hours=7)).astimezone(timezone(timedelta(hours=8)))  # already the next day there
+    h = view(L, now=now)["hunches"][0]
+    assert h["due_in_days"] == 0
+    assert h["due"] == now.date().isoformat()
+
+
+def test_a_finding_revised_overnight_shows_once_as_its_latest_words_with_a_new_id() -> None:
+    L = life()
+    first = view(L, since=night(2) + timedelta(hours=1))["morning"]["findings"]
+    L.w.start(7)
+    h = L.w.ids(L.q2)[0]
+    for said in ("She sends a rough cut first", "She sends the cut late"):
+        L.w.ok(it.ConcludeOp(L.q2, h, "suspicion", said, ("e2",)), at=night(7))
+    found = view(L, now=night(7), since=night(6))["morning"]["findings"]
+    assert [f["statement"]["text"] for f in found] == ["She sends the cut late"]
+    assert found[0]["id"] not in {f["id"] for f in first}
 
 
 def test_the_view_is_plain_json() -> None:

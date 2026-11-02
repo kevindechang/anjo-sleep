@@ -13,7 +13,8 @@
 
 It is pure, with no model and no clock: ``now`` is the night clock, as everywhere in MIND. The log
 is replayed once through ``kernel.apply`` with every logged digest checked, so a tampered log is
-refused, and a bet settled before a wipe still counts.
+refused, and a bet settled before a wipe still counts. Steps logged after ``now`` are checked too,
+but left out of the view.
 
 Her credences are her own heuristic estimates, never calibrated odds. ``CREDENCE_NOTE`` travels
 with every view so the page can say so beside any percentage.
@@ -129,7 +130,7 @@ def hide(events: Sequence[WorkspaceEvent], item_id: str, *, at: datetime) -> Mar
 
 
 def _mark(events: Sequence[WorkspaceEvent], kind: MarkKind, item_id: str, at: datetime, note: str | None) -> Mark:
-    if item_id not in _replay(events, None).known:
+    if item_id not in _replay(events, None, None).known:
         raise ValueError(f"no hunch or question {item_id!r} in her log")
     return Mark.from_json(Mark(kind, item_id, at, note).to_json())
 
@@ -180,8 +181,10 @@ def implied(ws: Workspace, prediction: Prediction) -> float:
     return math.fsum(h.credence * given.get(h.id, fallback) for h in ws.hypotheses_of(prediction.question_id))
 
 
-def _replay(events: Sequence[WorkspaceEvent], since: datetime | None) -> _Replay:
-    ws, rules = Workspace(), FULL_RULES
+def _replay(events: Sequence[WorkspaceEvent], since: datetime | None, now: datetime | None) -> _Replay:
+    """Every step replayed with both its digests checked; only the steps up to ``now`` (all of them
+    when ``None``) enter the view."""
+    ws, current, rules = Workspace(), Workspace(), FULL_RULES
     bets: dict[str, _Bet] = {}
     settled: list[_Settled] = []
     found: list[_Found] = []
@@ -192,31 +195,40 @@ def _replay(events: Sequence[WorkspaceEvent], since: datetime | None) -> _Replay
         if isinstance(step.entry, RunStart):
             rules = step.entry.rules
         result = kernel.apply(ws, step, rules=rules)
-        if not isinstance(result, Applied) or result.event.after != event.after:
-            raise ValueError(f"step {step.seq} doesn't replay to the digest her log holds")
-        after = result.ws
-        for p in after.predictions:
+        if not isinstance(result, Applied) or (result.event.before, result.event.after) != (event.before, event.after):
+            raise ValueError(f"step {step.seq} doesn't replay to the digests her log holds")
+        before, ws = ws, result.ws
+        if now is not None and step.at > now:
+            continue  # checked, but after the night clock: not in this view
+        for p in ws.predictions:
             if p.id not in bets:
-                bets[p.id] = _Bet(p.id, p.question_id, p.claim, implied(after, p))
-        known.update(bets, (q.id for q in after.questions))
+                bets[p.id] = _Bet(p.id, p.question_id, p.claim, implied(ws, p))
+        known.update(bets, (q.id for q in ws.questions))
         entry = step.entry
         if isinstance(entry, Resolved) and entry.outcome in ("true", "false"):
             settled.append(_Settled(bets[entry.prediction_id], entry.outcome, step.at))
         censored += isinstance(entry, Resolved) and entry.outcome == "censored"
-        found.extend(_new_findings(ws, after, step.at))
+        found.extend(_new_findings(before, ws, step.at, step.seq))
         if since is not None and step.at <= since:
-            then = after
-        ws = after
-    return _Replay(ws, tuple(settled), censored, tuple(found), then, frozenset(known))
+            then = ws
+        current = ws
+    return _Replay(current, tuple(settled), censored, tuple(found), then, frozenset(known))
 
 
-def _new_findings(before: Workspace, after: Workspace, at: datetime) -> list[_Found]:
+def _new_findings(before: Workspace, after: Workspace, at: datetime, seq: int) -> list[_Found]:
+    """Findings this step reached or reworded, each id naming the finding and the step."""
     out = []
     for f in after.findings:
         old = before.finding_of(f.question_id)
         if old is None or (old.kind, old.statement) != (f.kind, f.statement):
-            out.append(_Found(f"{f.id}:{f.kind}", f.question_id, f.kind, f.statement, f.p, at))
+            out.append(_Found(f"{f.id}@{seq}", f.question_id, f.kind, f.statement, f.p, at))
     return out
+
+
+def _latest(found: Sequence[_Found]) -> list[_Found]:
+    """One entry per question, its last words, in the order she reached them."""
+    last = {f.question_id: f for f in found}
+    return sorted(last.values(), key=lambda f: found.index(f))
 
 
 # ── The view ──────────────────────────────────────────────────────────────────
@@ -228,13 +240,15 @@ def thought_view(
 ) -> dict[str, Any]:
     """Her line of thought as plain JSON (module docstring). ``ValueError`` on a log whose
     digests don't replay."""
-    r = _replay(events, since)
+    r = _replay(events, since, now)
     hidden = frozenset(m.item_id for m in marks if m.kind == "hide" and m.item_id in r.known)
     disputed = frozenset(m.item_id for m in marks if m.kind == "dispute")
     subjects = {q.id: q.subject for q in r.final.questions}
     shown = [p for p in r.final.predictions if p.pending and not _is_hidden(p.id, p.question_id, hidden)]
     shown.sort(key=lambda p: (p.horizon, p.id))
-    hunches = [_hunch(r.final, p, subjects, disputed, now, text) for p in shown[:MAX_HUNCHES]]
+    fresh = [p.id for p in shown if since is not None and since < p.committed_at <= now]
+    listed = [p for n, p in enumerate(shown) if n < MAX_HUNCHES or p.id in fresh]  # a new one is never cut
+    hunches = [_hunch(r.final, p, subjects, disputed, now, text) for p in listed]
     settled = [s for s in reversed(r.settled) if not _is_hidden(s.bet.id, s.bet.question_id, hidden)]
     return {
         "version": VERSION,
@@ -244,7 +258,7 @@ def thought_view(
         "settled": [_settled(s, text) for s in settled[:MAX_SETTLED]],
         "scorecard": _scorecard(r.settled, r.censored),
         "question": _question(r.final, hidden, disputed, text),
-        "morning": None if since is None else _morning(r, since, now, hidden, shown, text),
+        "morning": None if since is None else _morning(r, since, now, hidden, fresh, text),
         "hidden": len(hidden),
     }
 
@@ -269,17 +283,18 @@ def _hunch(ws: Workspace, p: Prediction, subjects: Mapping[str, str], disputed: 
     words = _words(claim)
     said = odds(chance).capitalize()
     line = f"{said}: {words}." if words else f"{said}: a hunch kept back here."
+    due = p.horizon.astimezone(now.tzinfo)  # dates on the night clock's own zone
     return {
         "id": p.id,
         "question_id": p.question_id,
-        "plain": f"{line} I'll know by {_day(p.horizon)}.",
+        "plain": f"{line} I'll know by {_day(due)}.",
         "exact": words or "",
         "about": text(subjects.get(p.question_id, "")),
         "claim": claim,
         "p": chance,
         "odds": odds(chance),
-        "due": p.horizon.date().isoformat(),
-        "due_in_days": (p.horizon.date() - now.date()).days,
+        "due": due.date().isoformat(),
+        "due_in_days": (due.date() - now.date()).days,
         "disputed": p.id in disputed or p.question_id in disputed,
     }
 
@@ -375,13 +390,13 @@ def _choices(ws: Workspace, question_id: str, ranked: Sequence[Hypothesis], text
 
 
 def _morning(r: _Replay, since: datetime, now: datetime, hidden: frozenset[str],
-             shown: Sequence[Prediction], text: Text) -> dict[str, Any]:
+             fresh: Sequence[str], text: Text) -> dict[str, Any]:
     window = [s for s in r.settled if since < s.at <= now and not _is_hidden(s.bet.id, s.bet.question_id, hidden)]
-    found = [f for f in r.found if since < f.at <= now and f.question_id not in hidden]
+    found = _latest([f for f in r.found if since < f.at <= now and f.question_id not in hidden])
     morning = {
         "since": since.isoformat(),
         "settled": [s.bet.id for s in window],
-        "new_hunches": [p.id for p in shown[:MAX_HUNCHES] if since < p.committed_at <= now],
+        "new_hunches": list(fresh),
         "shifts": _shifts(r.then or Workspace(), r.final, hidden, text),
         "findings": [_finding(f, text) for f in found],
     }
