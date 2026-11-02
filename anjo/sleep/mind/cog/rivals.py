@@ -520,7 +520,7 @@ class OnlineLogistic:
         return z
 
     def _predictive(self, z: np.ndarray) -> tuple[float, float]:
-        mu, var = float(self.m @ z), float(z @ self.cov @ z)
+        mu, var = float(self.m @ z), max(float(z @ self.cov @ z), 0.0)  # rounding can dip below 0
         return sigmoid(mu / math.sqrt(1.0 + math.pi * var / 8.0)), var
 
     def predict(self, queries: Sequence[Query]) -> list[Prediction]:
