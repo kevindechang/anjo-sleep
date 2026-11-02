@@ -26,7 +26,7 @@
     <div class="home-nav-inner">
       <a class="brand" href="/sleep/app">Anjo</a>
       <div class="nav-links">
-        <a class="lnk" href="#ways">Two ways in</a>
+        <a class="lnk" href="#grow">Start</a>
         <a class="lnk" href="#new">What's new</a>
         <a class="lnk" href="/sleep/demo">Teo's Anjo</a>
       </div>
@@ -40,44 +40,22 @@
       <div class="wrap hero-inner">
         <h1>She learns while she sleeps.</h1>
         <p class="lede">Anjo is a personal intelligence that grows with you.<br />Talk to her, then send her to sleep.<br />She wakes up changed, and shows you why.</p>
-        <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="/sleep/demo">Meet Teo's Anjo</a>
-          <a class="btn btn-ghost btn-lg" href="#grow" id="grow-jump">Grow your own</a>
-        </div>
+        <form class="code-form hero-code" id="code-form" novalidate>
+          <label class="field-label" for="code" id="code-label">Your judge code, from the submission form</label>
+          <div class="code-row hero-actions" id="grow">
+            <input class="field-input" id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" required aria-describedby="code-status" placeholder="Judge code" />
+            <button class="btn btn-primary btn-lg" type="submit" id="code-submit">Try a night with your Anjo</button>
+          </div>
+          <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
+          <p class="hero-fine">A fresh, private Anjo: no email, no password. She lives in this browser tab.</p>
+        </form>
+        <a class="hero-alt" href="/sleep/demo">Or see Teo's completed week <span aria-hidden="true">&rarr;</span></a>
+        <ol class="flow" aria-label="How a night works">
+          <li>Tell her something</li><li>Watch her choose</li><li>Sleep</li><li>Compare</li>
+        </ol>
         <p class="hero-note">Built at the Meta hackathon · Oct 27 – Nov 4, 2026 · a step toward personal superintelligence</p>
-        <div class="readout" aria-hidden="true"><span>Chat by day</span><span>Learn by night</span><span>Wake changed</span></div>
       </div>
     </header>
-
-    <section class="sect" id="ways" aria-labelledby="ways-heading">
-      <div class="wrap">
-        <div class="sect-head">
-          <span class="kicker">Two ways in</span>
-          <h2 id="ways-heading">Meet one that already grew. <em>Or grow your own.</em></h2>
-        </div>
-        <ul class="frontier ways">
-          <li>
-            <span class="chip live">Instant</span>
-            <h3>Meet Teo's Anjo</h3>
-            <p>Teo is a synthetic person. His Anjo spent a week alone with what he said. See what she noticed, what she practised and how she changed. No sign-in.</p>
-            <a class="btn btn-primary way-go" href="/sleep/demo">Open Teo's Anjo</a>
-          </li>
-          <li id="grow">
-            <span class="chip research">Judge code</span>
-            <h3>Grow your own</h3>
-            <p>Enter the code from the submission form. You get a fresh, private Anjo: no email, no password. She lives in this browser tab.</p>
-            <form class="code-form" id="code-form" novalidate>
-              <label class="field-label" for="code">Judge code</label>
-              <div class="code-row">
-                <input class="field-input" id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" required aria-describedby="code-status" />
-                <button class="btn btn-primary" type="submit" id="code-submit">Start my Anjo</button>
-              </div>
-              <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
-            </form>
-          </li>
-        </ul>
-      </div>
-    </section>
 
     <section class="sect" id="new" aria-labelledby="new-heading">
       <div class="wrap">

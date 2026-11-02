@@ -16,7 +16,7 @@ function say(text, kind = "") {
 
 function focusCode() {
   input.focus({ preventScroll: true });
-  document.getElementById("grow").scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  form.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 }
 
 async function start(event) {
@@ -53,11 +53,11 @@ function boot() {
     input.removeAttribute("aria-invalid");
     if (status.dataset.kind === "error") say("");
   });
-  document.getElementById("grow-jump").addEventListener("click", (event) => {
+  document.querySelectorAll('a[href="#grow"]').forEach((link) => link.addEventListener("click", (event) => {
     event.preventDefault();
     window.history.replaceState(null, "", "#grow");
     focusCode();
-  });
+  }));
   if (window.location.hash === "#grow") focusCode();
   const reason = new URLSearchParams(window.location.search).get("signed_out");
   if (reason === "1") say(COPY.signed_out, "error");
@@ -69,11 +69,10 @@ function boot() {
     form.append(hint);
   }
   if (token() && reason !== "1") {
-    const go = document.querySelector(".ways #grow h3");
-    if (go) go.textContent = COPY.back_heading;
+    document.getElementById("code-label").textContent = COPY.back_heading;
     submit.textContent = COPY.back_new;
     const back = document.createElement("a");
-    back.className = "btn btn-ghost";
+    back.className = "btn btn-ghost btn-lg";
     back.href = href("/sleep/app/live");
     back.textContent = COPY.back_go;
     form.querySelector(".code-row").append(back);

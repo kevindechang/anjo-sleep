@@ -54,11 +54,35 @@ button, input, textarea, select { font-family: inherit; }
 
 /* ── the landing ────────────────────────────────────────────────────────── */
 
-.judge-landing .home-hero .lede { max-width: 100%; }
-.ways li { gap: var(--s4); }
-.ways .btn { align-self: flex-start; margin-top: auto; }
-.code-form { margin-top: auto; }
+.judge-landing .home-hero .lede { max-width: 100%; margin-top: var(--s6); }
 .code-row { display: flex; gap: var(--s3); flex-wrap: wrap; }
+
+/* the hero's primary action: the judge code, then the started week as the quieter way in */
+.hero-code { width: min(100%, 600px); margin-top: var(--s8); text-align: left; }
+.hero-code .field-label { color: rgba(255, 255, 255, .62); }
+.judge-landing .home-hero .hero-code .hero-actions { margin-top: 0; justify-content: flex-start; }
+.hero-code .field-input { height: 52px; background: rgba(0, 0, 0, .72); border-color: rgba(255, 255, 255, .26); backdrop-filter: blur(6px); }
+.hero-code .field-input:hover { border-color: rgba(255, 255, 255, .42); }
+.hero-code .code-row .btn { height: 52px; }
+.judge-landing .home-hero .hero-code .btn-primary { background: var(--text); color: var(--canvas); border-color: var(--text); }
+.judge-landing .home-hero .hero-code .btn-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+.hero-fine { margin: var(--s2) 0 0; font: 500 12px/1.5 var(--mono); color: rgba(255, 255, 255, .5); }
+.hero-alt {
+  display: inline-flex; gap: 8px; margin-top: var(--s5); padding: 6px 2px; font-size: 15px; color: var(--ink-soft);
+  border-bottom: 1px solid var(--line-strong); transition: color .2s, border-color .2s;
+}
+.hero-alt span { display: inline-block; transition: transform .25s var(--ease); }
+.hero-alt:hover { color: var(--text); border-color: var(--accent); }
+.hero-alt:hover span { transform: translateX(3px); }
+.hero-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
+.flow {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2) 0; margin: var(--s8) 0 0; padding: 0; list-style: none;
+  font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: rgba(255, 255, 255, .7);
+}
+.flow li + li::before { content: "\2192"; margin: 0 var(--s3); color: var(--accent); }
+.judge-landing .home-hero .hero-note { margin-top: var(--s5); }
+.judge-landing .sect { padding-top: var(--s12); padding-bottom: var(--s10); }
+.judge-landing .index > li { padding: var(--s5) 0; }
 .code-row .field-input { flex: 1 1 12rem; text-transform: uppercase; }
 .code-row .btn { height: 46px; flex: 0 0 auto; }
 .chip.existing { color: var(--muted); }
@@ -199,5 +223,5 @@ button, input, textarea, select { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .talker-dot, .msg-phase::after { animation: none; }
   .msg { animation: none; }
-  .field-input, .composer textarea, .starter, .tab { transition: none; }
+  .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span { transition: none; }
 }
