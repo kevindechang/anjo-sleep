@@ -74,6 +74,7 @@ def test_summary_scores_families_weeks_and_skips_aurc_without_u() -> None:
     assert s["n_lives"] == 2 and s["n_queries"] == 3
     assert s["log_loss"] == pytest.approx(np.mean([-math.log(0.8), -math.log(0.6), -math.log(0.6)]))
     assert s["by_family"]["hidden"]["n"] == 1
+    assert s["by_family"]["hidden"]["ece"] == pytest.approx(0.4)  # one query at 0.4 that did not happen
     assert s["by_family"]["count"]["log_loss"] == pytest.approx(np.mean([-math.log(0.8), -math.log(0.6)]))
     assert [w["week"] for w in s["learning_curve"]] == [0, 1]
     assert s["learning_curve"][1]["n"] == 1
