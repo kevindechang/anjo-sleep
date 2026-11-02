@@ -1,30 +1,22 @@
 /* The live demo page's Dailies: the morning sheet a film crew reads before the day's shoot. Built on
    demo.css's tokens: a slate with a clapper stripe, then three numbered takes in a margin, like
-   scene numbers on a call sheet. Her new weights keep the product green; the evening before stays
-   ink; the cost reads like a production report, figures in mono, the total under a double rule. */
+   scene numbers on a call sheet. Her new weights keep the product teal; the evening before stays
+   neutral; the cost reads like a production report, figures in mono, the total under a double rule.
+   One dark palette, as on the main site: no prefers-color-scheme: dark override is needed. */
 
 :root {
-  --clap-a: #1d1b18;
-  --clap-b: #f2ede3;
+  --clap-a: var(--ink-soft);
+  --clap-b: var(--paper-raised);
   --take-margin: 3.25rem;
-  --sheet-edge: #c9bea9;
-  --meter-track: #ded6c6;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --clap-a: #eee6d6;
-    --clap-b: #1e1b17;
-    --sheet-edge: #463f35;
-    --meter-track: #2e2924;
-  }
+  --sheet-edge: var(--rule-strong);
+  --meter-track: #1c1b1a;
 }
 
 .dailies {
-  max-width: 76rem;
+  max-width: var(--w);
   margin: 0 auto var(--space-6);
-  padding: var(--space-6) var(--gutter) var(--space-5);
-  border-top: 1px solid var(--rule-strong);
+  padding: var(--space-8) var(--gutter) var(--space-5);
+  border-top: 1px solid var(--rule);
 }
 
 .dailies-head {
@@ -36,7 +28,7 @@
 @media (min-width: 48rem) {
   .dailies-head { grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem); }
 }
-.dailies-head h2 { margin: var(--space-3) 0 0; font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.25rem); line-height: 1.1; max-width: 24ch; }
+.dailies-head h2 { margin: var(--space-4) 0 0; font-size: clamp(1.75rem, 1.2rem + 2.4vw, 2.75rem); line-height: 1.04; letter-spacing: -0.04em; max-width: 24ch; }
 .dailies-title > .note { margin-top: var(--space-3); max-width: var(--measure); }
 .dailies-pick select:disabled { opacity: 0.6; cursor: default; }
 
@@ -45,7 +37,9 @@
 .sheet {
   margin-top: var(--space-5);
   background: var(--paper-raised);
+  overflow: hidden;
   border: 1px solid var(--sheet-edge);
+  border-radius: var(--r-md);
   box-shadow: var(--lift);
   transition: opacity var(--duration) var(--ease);
 }
@@ -62,7 +56,7 @@
   display: grid;
   grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr);
   margin: 0;
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 1px solid var(--rule-strong);
 }
 .slate-cell { padding: var(--space-3) var(--space-4); border-right: 1px solid var(--rule); min-width: 0; }
 .slate-cell:last-child { border-right: 0; }
@@ -73,7 +67,7 @@
   .slate-status { grid-column: auto; border-top: 0; }
 }
 .slate-cell dt { font: 600 0.625rem/1.2 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
-.slate-cell dd { margin: var(--space-1) 0 0; font: 600 clamp(1.25rem, 1rem + 1vw, 1.75rem)/1.15 var(--serif); }
+.slate-cell dd { margin: var(--space-1) 0 0; font: 600 clamp(1.25rem, 1rem + 1vw, 1.75rem)/1.15 var(--serif); letter-spacing: var(--track-tight); }
 .slate-night dd { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .slate-morning dd { font-family: var(--mono); font-weight: 500; font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem); padding-top: 0.2em; }
 .status-promoted dd { color: var(--product); }
@@ -146,10 +140,10 @@
 .beaten .reason { margin-left: var(--space-2); }
 .chose { font: 400 var(--text-reply)/1.55 var(--serif); color: var(--ink); max-width: var(--measure); }
 .asked { margin: var(--space-4) 0 0; padding-left: var(--space-4); border-left: 2px solid var(--accent); }
-.asked-text { display: block; margin-top: var(--space-1); font: italic 400 1.0625rem/1.45 var(--serif); }
+.asked-text { display: block; margin-top: var(--space-1); font: 400 1.0625rem/1.45 var(--serif); }
 
 /* 02 one line she'd now say differently */
-.cue { padding: var(--space-3) var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
+.cue { padding: var(--space-3) var(--space-4); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-sm); }
 .cue-title { margin-top: var(--space-2); font: 600 0.6875rem/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
 .cue-prompt { margin-top: var(--space-1); font: 400 1rem/1.5 var(--serif); color: var(--ink-soft); max-width: var(--measure); }
 
@@ -165,7 +159,7 @@
 .versus-arrow { align-self: center; justify-self: center; font: 400 1.5rem/1 var(--serif); color: var(--rule-strong); transform: rotate(90deg); }
 @media (min-width: 48rem) { .versus-arrow { transform: none; } }
 
-.side-take { margin: 0; padding: var(--space-4); border-left: 3px solid var(--rule-strong); background: var(--paper); }
+.side-take { margin: 0; padding: var(--space-4); border-left: 2px solid var(--rule-strong); border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--paper); }
 .side-before { border-left-style: dashed; }
 .side-before .line-text { color: var(--ink-soft); }
 .side-after { border-left-color: var(--product); background: var(--paper-raised); box-shadow: var(--lift); }
@@ -201,14 +195,15 @@
 }
 .cost-table tbody tr:hover { background: var(--paper); }
 
-.projection { padding: var(--space-4); background: var(--paper); border: 1px solid var(--rule); }
+.projection { padding: var(--space-4); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-sm); }
 .projection > * + * { margin-top: var(--space-3); }
 .projection-line { font: 400 1.0625rem/1.45 var(--serif); }
 
-.meter { position: relative; height: 0.75rem; margin-top: var(--space-6); background: var(--meter-track); border-radius: 1px; }
+.meter { position: relative; height: 0.75rem; margin-top: var(--space-6); background: var(--meter-track); border-radius: var(--r-full); }
 .meter-fill {
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   background: var(--product);
   transform: scaleX(var(--v, 0));
   transform-origin: left center;
