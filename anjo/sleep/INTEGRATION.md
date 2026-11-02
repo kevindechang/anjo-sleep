@@ -20,6 +20,15 @@ At line 154, added by `feat: boundary check and publish pipeline for anjo-sleep 
 +ops/sleep/publish_state.json
 ```
 
+## `AGENTS.md` (+2 -1)
+
+At line 51, added by `docs: Anjo may reach out on her own when her state derives it (owner ruling 2026-10-30)`:
+
+```diff
++  sign-up and minor safety. Anjo may reach out on her own when the wish comes from her own state;
++  no hard-coded rule blocks it (owner ruling 2026-10-30). `confidant` positioning stays out of
+```
+
 ## `anjo/core/anjo_model/assignment.py` (+16 -3)
 
 At line 115, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
@@ -240,6 +249,14 @@ At line 323, added by `feat: evidence store, targets and extraction [task3]`:
 +
 ```
 
+## `anjo/core/generated_surfaces.py` (+1 -0)
+
+At line 218, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
++    "anjo.sleep.mind.apd.backend": "offline APD pilot generation and blind evaluation on synthetic lives; never a person-facing surface",
+```
+
 ## `anjo/core/history.py` (+17 -0)
 
 At line 184, added by `feat: evidence store, targets and extraction [task3]`:
@@ -326,7 +343,7 @@ existing: def get_pending_outreach(user_id: str) -> str | None:
 +        return None
 ```
 
-## `anjo/core/surfacing.py` (+16 -0)
+## `anjo/core/surfacing.py` (+17 -0)
 
 At line 247, added by `feat: evidence store, targets and extraction [task3]`:
 
@@ -334,7 +351,13 @@ At line 247, added by `feat: evidence store, targets and extraction [task3]`:
 +    {"source_subsystem": "sleep_evidence", "evidence": "anjo/sleep/app/history_source.py extract_day + anjo/sleep/evidence (Anjo Sleep's evidence store, target log and extraction, only with ANJO_SLEEP_HOST=1)"},
 ```
 
-At line 982, added by `fix: wrap the surfacing glue under the boundary's line cap [task5]`:
+At line 256, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
++    "anjo/sleep/tests/": "offline test fixtures that seed state for throwaway users, never a production computation",
+```
+
+At line 983, added by `fix: wrap the surfacing glue under the boundary's line cap [task5]`:
 
 ```diff
 +    FeltMomentRegistration(source_subsystem="sleep_evidence", surface="infra", confidence_gate="n/a", silent_infra=True,
@@ -380,13 +403,13 @@ existing: def _is_available(user_id: str, choice: str) -> bool:
 
 ## `anjo/dashboard/app.py` (+11 -0)
 
-At line 216, added by `fix: open only the live demo to anonymous visitors on the sleep host [task13a]`:
+At line 216, added by `fix: open only the live demo to anonymous visitors on the sleep host [task13a]`; `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
 
 ```diff
 existing: async def dispatch(self, request: Request, call_next):
 +        # Exact path prefixes a host's own registration opens to anonymous visitors (Anjo Sleep's
 +        # live demo, on its host only); none elsewhere. Normalized paths only: no //, . or .. form.
-+        path, public = request.url.path, getattr(request.app.state, "public_prefixes", ())
++        path, public = request.url.path, getattr(getattr(request.scope.get("app"), "state", None), "public_prefixes", ())
 +        if posixpath.normpath(path) == path and any(path == p or path.startswith(p + "/") for p in public):
 +            return await call_next(request)
 ```
@@ -489,7 +512,7 @@ At line 41, added by `chore: register Glimmer's licence in the training registry
 +    },
 ```
 
-## `pyproject.toml` (+14 -2)
+## `pyproject.toml` (+20 -1)
 
 At line 56, added by `feat: MIND's neural core: slots, a surprise-driven fast-weight memory, hazard, missing-step and self-error heads, dreaming, deterministic CPU training and the offline evaluation, on toy lives with counterfactual pairs [mind-core]`:
 
@@ -509,19 +532,25 @@ At line 74, added by `feat: shared types, ports and model API clients for anjo/s
 +testpaths = ["tests", "anjo/sleep/tests"]
 ```
 
-At line 189, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
+At line 189, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
 
 ```diff
-+    "anjo.sleep.serving", "anjo.sleep.serving.**", "anjo.sleep.app", "anjo.sleep.app.**",
++    "anjo.sleep",
 ```
 
-At line 191, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 193, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
 
 ```diff
-+forbidden_modules = ["anjo.training", "anjo.sleep.train"]
++[[tool.importlinter.contracts]]
++name = "Sleep serving and app do not import the Sleep trainer"
++type = "forbidden"
++source_modules = ["anjo.core", "anjo.memory", "anjo.reflection", "anjo.graph", "anjo.dashboard", "anjo.inner_world", "anjo.research", "anjo.vision", "anjo.voice", "anjo.cli", "anjo.admin_mcp", "anjo.mind", "anjo.personal_policy", "anjo.agent",
++    "anjo.sleep.serving", "anjo.sleep.serving.**", "anjo.sleep.app", "anjo.sleep.app.**"]
++forbidden_modules = ["anjo.sleep.train"]
++
 ```
 
-At line 206, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 213, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +[[tool.importlinter.contracts]]
@@ -534,8 +563,61 @@ At line 206, added by `feat: shared types, ports and model API clients for anjo/
 +
 ```
 
-At line 261, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
+At line 268, added by `feat: shared types, ports and model API clients for anjo/sleep [task1a]`:
 
 ```diff
 +    "anjo/sleep",
+```
+
+## `scripts/flag_defaults.py` (+11 -1)
+
+At line 456, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
+existing: def _parse(root: Path, package: str) -> tuple[_Index, list[_Site]]:
++        if module.name.startswith("anjo.sleep."):
++            from anjo.sleep.tools.flag_inventory import prepare
++
++            prepare(module, tree)
+```
+
+At line 470, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
+existing: def _scan_reads(root: Path, package: str) -> tuple[list[tuple[str, Read]], list[Read]]:
++    if package == PACKAGE and root == REPO:
++        from anjo.sleep.tools.flag_inventory import expand_collections
++
++        expand_collections(idx, sites)
+```
+
+At line 562, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
+existing: def inventory() -> dict[str, Any]:
++    from anjo.sleep.tools.flag_inventory import declared_capability_reads
++
++    return _build([*reads, *_manifest_reads(), *_cohort_reads(), *declared_capability_reads(REPO)], rest)
+```
+
+## `scripts/mind_scan.py` (+1 -1)
+
+At line 102, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
++EXCLUDED = ("anjo/evals/", "anjo/sleep/tests/")  # Sleep tests also use throwaway state.
+```
+
+## `tests/test_flag_docs_match_defaults.py` (+7 -2)
+
+At line 265, added by `fix: repo-wide inventories and contracts account for Sleep (flags, surfaces, writers, import-linter split)`:
+
+```diff
++# (e.g. a marker or a key that only shares the prefix).
++_NOT_ENV_VARS: dict[str, str] = {
++    "ANJO_STEP_OK": "Colab stdout completion marker, not an environment variable",
++    "ANJO_TRAIN_": "Environment-name prefix used to filter inherited training settings",
++    "ANJO_OTHER_ENABLED": "Test-only alternate manifest name used to reject conflicting declarations",
++    "ANJO_SLEEP_MATCH_MINUTES": "Test-only retired setting: verifies the objective ignores it",
++}
 ```
