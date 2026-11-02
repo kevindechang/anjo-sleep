@@ -195,6 +195,24 @@ button, input, textarea, select { font-family: inherit; }
 .msg.is-error .msg-text { border-left-color: var(--alert); color: var(--ink-soft); }
 .chat-status[data-kind="error"] { color: var(--alert); }
 
+/* on a phone: what MIND last did, one tap from the Mind tab */
+.mind-line {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin: var(--s2) 0 0; padding: 10px 12px;
+  border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--r-sm);
+  background: var(--surface-2); color: var(--ink-soft); text-align: left; cursor: pointer;
+  font: 500 12px/1.45 var(--mono); transition: border-color .18s, background .18s;
+}
+.mind-line-k { flex: none; color: var(--accent); letter-spacing: .14em; }
+.mind-line-text { flex: 1 1 auto; min-width: 0; }
+.mind-line-go { flex: none; color: var(--muted); transition: transform .25s var(--ease); }
+.mind-line[data-busy="true"] .mind-line-text { color: var(--accent-2); }
+.mind-line:hover { border-color: var(--line-strong); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.mind-line:hover .mind-line-go { transform: translateX(3px); }
+.mind-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (min-width: 960px) { .chat .mind-line { display: none; } }
+.live-foot { margin-top: 0; }
+.judge-live footer { padding-top: var(--s5); padding-bottom: var(--s5); }
+
 .composer {
   position: sticky; bottom: 0; z-index: 5;
   display: flex; align-items: flex-end; gap: var(--s3);
@@ -227,5 +245,5 @@ button, input, textarea, select { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .talker-dot, .msg-phase::after { animation: none; }
   .msg { animation: none; }
-  .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span { transition: none; }
+  .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span, .mind-line, .mind-line-go { transition: none; }
 }

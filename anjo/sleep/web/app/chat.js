@@ -11,6 +11,7 @@ import { streamMessage } from "./sse.js";
 
 const MAX_ROWS_PX = 168;
 const BLANK = "___";
+const FOLLOW_SLACK_PX = 160;
 
 // Who answered, from the done event's model id; nothing for an id it doesn't recognise.
 export function modelName(model) {
@@ -31,9 +32,12 @@ export function createChat({ onReply, onSend = () => {} }) {
   let starting = null;
   let busy = false;
   let asleep = false;
+  let held = false; // a night is being admitted: nothing goes out until it starts or is refused
 
+  // Whether the reader is following the conversation: the log's end, not the page's (the footer
+  // below the chat would otherwise stop the follow early).
   function nearBottom() {
-    return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+    return log.getBoundingClientRect().bottom - window.innerHeight < FOLLOW_SLACK_PX + form.offsetHeight;
   }
 
   function follow(node, force = false) {
@@ -56,7 +60,7 @@ export function createChat({ onReply, onSend = () => {} }) {
   }
 
   function setEnabled() {
-    const off = busy || asleep;
+    const off = busy || asleep || held;
     box.disabled = asleep;
     send.disabled = off;
     document.querySelectorAll(".starter").forEach((b) => { b.disabled = off; });
@@ -115,7 +119,7 @@ export function createChat({ onReply, onSend = () => {} }) {
 
   async function submit(text) {
     const clean = text.trim();
-    if (!clean || busy || asleep) return false;
+    if (!clean || busy || asleep || held) return false;
     busy = true;
     onSend();
     setEnabled();
@@ -178,7 +182,12 @@ export function createChat({ onReply, onSend = () => {} }) {
     // Send words from elsewhere on the page (an answer to MIND's question) as a normal message.
     // False when it can't go now: a reply is still arriving, or Anjo is asleep.
     send: (text) => submit(text),
-    get canSend() { return !busy && !asleep; },
+    get canSend() { return !busy && !asleep && !held; },
+    // Hold sending while a night is being admitted (Sleep now), and let go if it's refused.
+    hold(value) {
+      held = value;
+      setEnabled();
+    },
     get asleep() { return asleep; },
     draft,
     setAsleep(value) {

@@ -44,6 +44,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   let backoff = POLL_MS;
   let polls = 0;
   let running = false;
+  let starting = false;
   let startedAt = null;
 
   byId("sleep-confirm-text").textContent = COPY.sleep_confirm;
@@ -198,9 +199,18 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
     poll();
   }
 
+  // A night starts only between replies, once: chat holds while the server admits it.
   async function begin() {
+    if (starting || running) return;
+    if (!chat.canSend) {
+      onStatus(chat.asleep ? COPY.sleep_409 : COPY.sleep_wait_reply, "");
+      return;
+    }
+    starting = true;
     confirm.hidden = true;
     button.disabled = true;
+    byId("sleep-yes").disabled = true;
+    chat.hold(true);
     onStatus(COPY.sleep_starting, "");
     try {
       const data = await api.sleepNow();
@@ -216,13 +226,21 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
         onStatus(error.message || COPY.server, "error");
       }
     } finally {
+      starting = false;
+      chat.hold(false);
       button.disabled = false;
+      byId("sleep-yes").disabled = false;
     }
   }
 
   button.addEventListener("click", () => {
     if (running) {
       show(true);
+      return;
+    }
+    if (starting) return;
+    if (!chat.canSend) { // a reply is still arriving: sleep once it's in
+      onStatus(COPY.sleep_wait_reply, "");
       return;
     }
     confirm.hidden = !confirm.hidden;

@@ -64,6 +64,25 @@ function createTabs() {
   };
 }
 
+// On a phone, one line in the Chat tab on what MIND last did (or is doing); a tap opens Mind.
+function createMindLine(open) {
+  const line = byId("mind-line");
+  const text = byId("mind-line-text");
+  let summary = "";
+  let busy = "";
+  const draw = () => {
+    const words = busy || summary;
+    text.textContent = words;
+    line.hidden = !words;
+    line.dataset.busy = String(Boolean(busy));
+  };
+  line.addEventListener("click", open);
+  return {
+    summary(words) { summary = words; draw(); },
+    busy(words) { busy = words; draw(); },
+  };
+}
+
 // "Glimmer is waking (~N min), replies from Muse Spark meanwhile", or nothing once it is warm.
 function createTalker() {
   const box = byId("talker");
@@ -109,7 +128,8 @@ async function boot() {
   const status = byId("live-status");
   const tabs = createTabs();
   const talker = createTalker();
-  const panel = createPanel({ onNew: () => tabs.noteNew() });
+  const mindLine = createMindLine(() => tabs.select("mind", true));
+  const panel = createPanel({ onNew: () => tabs.noteNew(), onActivity: (words) => mindLine.summary(words) });
   let livePass = null;
   const chat = createChat({
     onSend: () => livePass.mark(),
@@ -124,7 +144,7 @@ async function boot() {
     onAnswer: () => tabs.select("chat"), // on a phone, watch the answer go out
     onView: (view) => since.update(view),
   });
-  livePass = createLivePass({ panel, thought });
+  livePass = createLivePass({ panel, thought, onLine: (words) => mindLine.busy(words) });
   const wake = createWake({ chat, panel, thought, since });
   const sleep = createSleep({
     chat, panel,

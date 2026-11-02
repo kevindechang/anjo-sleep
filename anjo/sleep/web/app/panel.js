@@ -69,6 +69,15 @@ export function liveChoice(live) {
   return live.choice.action ? { kind: "pick", action: live.choice.action, target: live.choice.target } : { kind: "none" };
 }
 
+// The whole pass in one line, for the Chat tab on a phone.
+export function activityLine(live) {
+  if (!live) return "";
+  const choice = liveChoice(live);
+  const pick = !choice ? "" : choice.kind === "none" ? COPY.pass_short_none
+    : fill(COPY.pass_short_pick, { action: word("pick", choice.action, COPY.pick_other) });
+  return [passLine(live), pick].filter(Boolean).join(" · ");
+}
+
 export function createPanel({ onNew, onActivity = () => {} }) {
   const body = byId("mind-body");
   const updated = byId("mind-updated");
@@ -299,7 +308,7 @@ export function createPanel({ onNew, onActivity = () => {} }) {
     const fresh = seen === null ? new Set() : new Set([...now].filter((k) => !seen.has(k)));
     const parts = [section(view.choices), section(view.questions), section(view.expectations), section(view.wants)];
     const targets = section(view.targets);
-    onActivity(live ? passLine(live) : "");
+    onActivity(activityLine(live));
     if (!live && !targets.items.length && parts.every((p) => !p.items.length && p.state !== "unavailable")) {
       body.replaceChildren(el("p", "mind-empty", COPY.mind_empty));
     } else {
