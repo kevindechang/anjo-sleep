@@ -128,7 +128,8 @@ def summarize_run(records: Sequence[LifeRecord]) -> dict[str, Any]:
     for fam in sorted({q.family for q in queries}):
         sel = np.array([q.family == fam for q in queries])
         families[fam] = {"n": int(sel.sum()), "log_loss": _mean(a["loss"][sel]),
-                         "brier": _mean(a["brier"][sel]), "oracle_log_loss": _mean(a["oracle_loss"][sel])}
+                         "brier": _mean(a["brier"][sel]), "oracle_log_loss": _mean(a["oracle_loss"][sel]),
+                         "ece": ece(a["p"][sel], a["y"][sel])}
     out["by_family"] = families
     weeks = np.array([q.asked_day // 7 for q in queries], dtype=int)
     out["learning_curve"] = [

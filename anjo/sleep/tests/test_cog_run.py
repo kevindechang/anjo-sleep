@@ -111,9 +111,10 @@ class FakeLife:
     def _make_events(self, day: int) -> tuple[Event, ...]:
         out: list[Event] = []
         for a in ACTIVITIES:
+            # every activity has an outcome every day here, so a day without it done is a skip
             if self._outcomes[(a, day)]:
                 out.append(Event(day, "did", a, f"I did my {a} today.", ("did", a)))
-            elif self.scheduled(a, day):
+            else:
                 out.append(Event(day, "skipped", a, f"I skipped {a} today.", ("skipped", a)))
         for (a, target), made in sorted(self._plans.items()):
             if made == day:

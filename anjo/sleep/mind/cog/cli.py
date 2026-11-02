@@ -76,25 +76,28 @@ def _population(ctx: BuildContext) -> PredictorFactory:
 
 def _counter(ctx: BuildContext) -> PredictorFactory:
     table = PopulationPrior.fit_population(ctx.train_lives(), smoothing=ctx.option("smoothing", 10.0, float))
-    return partial(Counter, table, strength=ctx.option("strength", 4.0, float),
-                   plan_strength=ctx.option("plan_strength", 4.0, float))
+    return partial(Counter, table, strength=ctx.option("strength", 6.0, float),
+                   count_strength=ctx.option("count_strength", 100.0, float),
+                   weekday_strength=ctx.option("weekday_strength", 100.0, float))
 
 
 def _logistic_population(ctx: BuildContext) -> Any:
     return OnlineLogistic.fit_population(
         ctx.train_lives(), l2=ctx.option("l2", 1.0, float), ask_rate=ctx.option("ask_rate", 0.25, float),
-        smoothing=ctx.option("smoothing", 10.0, float), counter_strength=ctx.option("strength", 4.0, float))
+        smoothing=ctx.option("smoothing", 10.0, float), strength=ctx.option("strength", 6.0, float),
+        count_strength=ctx.option("count_strength", 100.0, float),
+        weekday_strength=ctx.option("weekday_strength", 100.0, float))
 
 
 def _online_lr(ctx: BuildContext) -> PredictorFactory:
-    return partial(OnlineLogistic, _logistic_population(ctx), prior_var=ctx.option("prior_var", 0.03, float),
-                   shared_var=ctx.option("shared_var", 1e-4, float))
+    return partial(OnlineLogistic, _logistic_population(ctx), prior_var=ctx.option("prior_var", 1e-3, float),
+                   shared_var=ctx.option("shared_var", 1e-6, float))
 
 
 def _surprise_lr(ctx: BuildContext) -> PredictorFactory:
     return partial(SurpriseLR, _logistic_population(ctx), hazard=ctx.option("hazard", 0.02, float),
                    gain=ctx.option("gain", 1.0, float), decay=ctx.option("decay", 0.7, float),
-                   prior_var=ctx.option("prior_var", 0.03, float), shared_var=ctx.option("shared_var", 1e-4, float))
+                   prior_var=ctx.option("prior_var", 1e-3, float), shared_var=ctx.option("shared_var", 1e-6, float))
 
 
 def load_client(path: str) -> Complete:
