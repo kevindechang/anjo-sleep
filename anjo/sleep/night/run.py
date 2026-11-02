@@ -64,7 +64,8 @@ import math
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 
@@ -81,6 +82,7 @@ from anjo.sleep.night.core_steps import CoreSteps
 from anjo.sleep.harness import harness_on
 from anjo.sleep.harness.loop import HARNESS_MAX_CALLS, HarnessCall, run_harness
 from anjo.sleep.night.holds import SPARK_MAX_OUT_TOKENS, held, spark_worst_usd, usd
+from anjo.sleep.night.demo import PROBES_SKIPPED
 from anjo.sleep.night.sweep import Sweep
 from anjo.sleep.practice.full import TEACHER_ALARM_SHARE
 from anjo.sleep.night.gpu import batch_digest
@@ -120,6 +122,7 @@ from anjo.sleep.model_api import ModelApiError
 from anjo.sleep.sim.day import DayRun
 from anjo.sleep.night.nightlog import NightLog, Uses, gate_record, night_folder, summaries
 from anjo.sleep.practice.run import PracticeRun
+from anjo.sleep.note.hold import HELD_BACK_LINE, HeldNote
 from anjo.sleep.note.hold import SOURCE as NOTE_SOURCE
 from anjo.sleep.note.hold import Fact, write_note
 from anjo.sleep.stops import BudgetStop, Cancelled
@@ -161,6 +164,11 @@ USES: Final[Mapping[str, tuple[Uses, str | None]]] = {
     "promote": ("new", None),
     "note": ("existing", "outreach"),
     "finish": ("new", None),
+    # A judge's night only (``night/demo.py``): the background study's end, MIND's early commitment and
+    # the note's rewrite after the gates.
+    "homework": ("new", None),
+    "self_predict": ("new", None),
+    "refine": ("existing", "outreach"),
 }
 # Worst cases for the paid steps' holds (holds.py): Spark Open calls per step, and the rest.
 EXTRACT_MAX_CALLS: Final = 2  # the day's one call, and one retry
@@ -203,12 +211,44 @@ class _Focus:
     history: tuple[Mapping[str, object], ...] = ()
 
 
+@dataclass(frozen=True)
+class _Study:
+    """A judge's study running in the background (``night/demo.py``): what it studies, the Wonder calls
+    spent before it started, and the call itself, which only touches the night's Wonder meter."""
+
+    target: Target
+    choice: Choice
+    calls_before: int
+    future: Future[StudyOutcome] = field(compare=False)
+
+
+@dataclass(frozen=True)
+class _Written:
+    """A judge's phase-1 note and what it was written from, for its rewrite after the gates."""
+
+    choice: Choice
+    note: HeldNote
+    topic: str
+    facts: tuple[Fact, ...]
+
+
+def _kept_note(kept: _Written, error: str) -> dict[str, Any]:
+    """The refine step's receipt when the phase-1 note stands because the rewrite or its queueing failed."""
+    return {"outcome": "kept", "note_id": kept.note.id, "note_error": error}
+
+
 class NightRunner(CoreSteps):
     """Runs a batch of nights over one set of ports."""
 
     def __init__(self, deps: NightDeps) -> None:
         self.deps = deps
         self._timer = deps.timer or time.monotonic
+        # A judge's night only (``settings.demo``): each person's background study, the MIND loop's
+        # commitment made in phase 1, and the phase-1 note. Empty on every other night.
+        self._studies: dict[str, _Study] = {}
+        self._early: dict[str, _Focus] = {}
+        self._written: dict[str, _Written] = {}
+        self.observer_errors: list[str] = []  # each observer failure's step and error type (the view only)
 
     # ── the batch ────────────────────────────────────────────────────────────
 
@@ -292,8 +332,9 @@ class NightRunner(CoreSteps):
                 *((("inquire", self._quiet_inquire),) if self.deps.settings.quiet_inquiry and self._mind() else ()),
                 *((("agent", self._agent),) if self.deps.baseline is not None else ()),
                 ("brief", self._brief),
+                *self._phase_one(),
             ):
-                if (why := put_off(self.deps, p, step)) is not None:
+                if (why := put_off(self.deps, p, step) or self._demo_skips(step)) is not None:
                     self._skip(p, step, why)
                     continue
                 self._do(p, step, fn)
@@ -312,9 +353,93 @@ class NightRunner(CoreSteps):
                 p.status = p.status or "nothing_new"
                 for step in GPU_STEPS:
                     self._skip(p, step, why)
-            self._do(p, "note", self._note)
+            if self.deps.settings.demo is None:
+                self._do(p, "note", self._note)
+            else:  # a judge's note was written in phase 1: the gates' verdict may rewrite it
+                self._do(p, "refine", self._refine)
             results[p.uid] = self._finish(p)
         return results
+
+    # ── a judge's night (``night/demo.py``) ─────────────────────────────────
+
+    def _phase_one(self) -> tuple[tuple[str, Callable[[PersonNight], Mapping[str, Any]]], ...]:
+        """The steps only a judge's night adds to phase 1, after the brief: the background study's end,
+        MIND's commitment about her own practice, and the note. None on any other night."""
+        if self.deps.settings.demo is None:
+            return ()
+        return (("homework", self._homework), ("self_predict", self._self_predict), ("note", self._early_note))
+
+    def _demo_skips(self, step: str) -> str | None:
+        """Why a judge's night skips ``step`` (only the probes, unless its profile writes them)."""
+        demo = self.deps.settings.demo
+        return PROBES_SKIPPED if demo is not None and step == "probes" and not demo.probes else None
+
+    def _homework(self, p: PersonNight) -> Mapping[str, Any]:
+        """Wait for the study ``choose`` started in the background, and keep what it found."""
+        pending = self._studies.pop(p.uid, None)
+        if pending is None:
+            return {"noop": True, "why": "no study was chosen tonight"}
+        outcome = pending.future.result()  # the call catches its own failures (``_study_call``)
+        done = dict(self._study_end(p, pending.target, outcome, pending.calls_before))
+        done["receipt"] = receipt.record(pending.choice, study_outcome(outcome.stopped))
+        return done
+
+    def _self_predict(self, p: PersonNight) -> Mapping[str, Any]:
+        """MIND's loop commits its prediction about her own practice in phase 1, before practice
+        (which then resolves it); a night that won't practise commits nothing."""
+        if p.napped or not p.due:
+            return {"noop": True, "why": "no practice tonight, so nothing to predict"}
+        loop = self._early[p.uid] = self._focus(p)
+        if loop.record is None:
+            return {"noop": True, "why": "MIND's loop is off"}
+        return {"loop": loop.record, "committed": [
+            {"target_id": c.target_id, "label": c.label, "prediction_id": c.prediction_id, "claim": c.claim}
+            for c in loop.commitment.predictions]}
+
+    def _early_note(self, p: PersonNight) -> Mapping[str, Any]:
+        """The note at the end of phase 1, Glimmer woken first (her writer is Glimmer). A wake that
+        fails leaves the note's own write to fail and be recorded; it never fails the night."""
+        woke: dict[str, Any] = {}
+        if self.deps.wake is not None:
+            try:
+                p.wake_seconds = self.deps.wake().seconds
+            except Exception as error:  # the note records its own failure; the night goes on to practice
+                woke = {"wake_error": note_error("wake", error)}
+        return {**self._note(p), **woke}
+
+    def _refine(self, p: PersonNight) -> Mapping[str, Any]:
+        """After the gates: a kept night's note is written again by the promoted adapter; a rejected
+        night's phase-1 note gets the held-back line; any other night's note stands. A rewrite that fails
+        or is declined keeps the phase-1 note, and never fails the night."""
+        kept = self._written.get(p.uid)
+        if kept is None:
+            return {"noop": True, "why": "no note was written in phase 1"}
+        if p.status == "rejected":
+            text = f"{kept.note.text}\n\n{HELD_BACK_LINE}"
+            return self._requeue(p, kept, text, "held_back_line")
+        if p.status != "promoted":
+            return {"noop": True, "why": "nothing was promoted tonight: the phase-1 note stands"}
+        interim = NightResult(status="promoted", failed_at=None, checkpoint=p.checkpoint, gates=p.gates,
+                              choices=tuple(p.choices), cost_usd=0.0, cost_parts={}, log_path=p.log.path)
+        rate, started = self.deps.prices.serve_gpu_per_hour, self._timer()
+        try:
+            with held(self.deps.ledger, self._job(p, "refine"), ("modal_usd",), usd(rate * NOTE_MAX_S / 3600.0),
+                      lambda: rate * max(0.0, self._timer() - started) / 3600.0):
+                note, outcome = write_note(p.uid, kept.choice, interim, writer=self.deps.note_writer, topic=kept.topic,
+                                           facts=kept.facts, night=p.night, check=self.deps.note_check)
+        except Exception as error:  # the phase-1 note stands
+            return _kept_note(kept, note_error("rewrite", error))
+        if note is None:
+            return {"outcome": "kept", "note_id": kept.note.id, "why": f"the rewrite was {outcome}"}
+        return self._requeue(p, replace(kept, note=note), note.text, "refined")
+
+    def _requeue(self, p: PersonNight, kept: _Written, text: str, outcome: str) -> Mapping[str, Any]:
+        try:
+            self.deps.notifier.queue(p.uid, text, NOTE_SOURCE)
+        except Exception as error:  # the phase-1 note was queued already and stands
+            return _kept_note(kept, note_error("queue", error))
+        self._written[p.uid] = replace(kept, note=replace(kept.note, text=text))
+        return {"outcome": outcome, "note_id": kept.note.id, "sources": len(kept.note.sources)}
 
     def _gpu_job(self, due: list[PersonNight]) -> None:
         """Practice, dataset, training and gates for the due people, in one GPU session."""
@@ -428,6 +553,7 @@ class NightRunner(CoreSteps):
             return False
         if self.deps.cancel(p.uid):
             return self._fail(p, step, Cancelled("the night was cancelled"))
+        self._observe(p, step, "running", {})
         try:
             receipt = dict(fn(p))
         except Exception as error:  # a failure stops this person's night at this step (RF1)
@@ -447,7 +573,20 @@ class NightRunner(CoreSteps):
             **receipt,
         )
         p.receipts[step] = receipt
+        self._observe(p, step, "failed" if KEPT in receipt else "ok", {**receipt, "noop": noop})
         return True
+
+    def _observe(self, p: PersonNight, step: str, state: str, receipt: Mapping[str, Any]) -> None:
+        """Tell the observer (a judge's night view) a step's state. It never changes the night: an
+        observer that fails is logged and the night goes on."""
+        observer = self.deps.observer
+        if observer is None:
+            return
+        try:
+            observer(p.uid, step, state, receipt)
+        except Exception as error:  # the view is optional; the night is not
+            self.observer_errors.append(note_error(step, error))
+            logger.warning("the night's observer failed at %s (%s)", step, type(error).__name__)
 
     def _cancelled_mid_step(self, p: PersonNight, step: str) -> bool:
         """The person was deleted while ``step`` ran (RF2): remove whatever it wrote, record nothing
@@ -462,11 +601,13 @@ class NightRunner(CoreSteps):
         p.failed_at, p.status = step, "failed"
         uses, system = USES[step]
         p.log.step(step, "failed", uses=uses, system=system, error=safe_error(error))
+        self._observe(p, step, "failed", {"error": safe_error(error)})
         return False
 
     def _skip(self, p: PersonNight, step: str, why: str) -> None:
         uses, system = USES[step]
         p.log.step(step, "skipped", uses=uses, system=system, why=why)
+        self._observe(p, step, "skipped", {"why": why})
 
     # ── steps 1 to 4 and the brief ──────────────────────────────────────────
 
@@ -673,7 +814,9 @@ class NightRunner(CoreSteps):
             "expectation": self._expect(p, raw, choice),
         }
         outcome: receipt.Outcome | None = None
-        if action in STUDY_ACTIONS:
+        if action in STUDY_ACTIONS and deps.settings.demo is not None:  # a judge's: the study runs alongside
+            done.update(self._study_start(p, state, choice))
+        elif action in STUDY_ACTIONS:
             done.update(self._study(p, state, choice))
             outcome = study_outcome(p.study.stopped if p.study is not None else None)
         elif action == "inquire":
@@ -685,21 +828,42 @@ class NightRunner(CoreSteps):
         return done
 
     def _study(self, p: PersonNight, state: WantSnapshot, choice: Choice) -> Mapping[str, Any]:
-        deps = self.deps
         target = next(t for t in state.targets if t.id == choice.target_id)
         p.actions_left -= 1  # a study that started is a spent action, even if it then fails
         p.paid_actions += 1
         calls_before = p.wonder.calls
+        return self._study_end(p, target, self._study_call(p, target, choice), calls_before)
+
+    def _study_start(self, p: PersonNight, state: WantSnapshot, choice: Choice) -> Mapping[str, Any]:
+        """A judge's study, started in the background (only the Wonder calls run there; what it found
+        is kept on this thread at ``homework``). The action is spent now, as ``_study`` spends it."""
+        target = next(t for t in state.targets if t.id == choice.target_id)
+        p.actions_left -= 1
+        p.paid_actions += 1
+        calls_before = p.wonder.calls
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="night-study")
+        future = pool.submit(self._study_call, p, target, choice)
+        pool.shutdown(wait=False)  # the thread finishes its one call; ``homework`` (or ``_finish``) waits
+        self._studies[p.uid] = _Study(target, choice, calls_before, future)
+        self._observe(p, "homework", "running", {"background": True})
+        return {"study": {"background": True}}
+
+    def _study_call(self, p: PersonNight, target: Target, choice: Choice) -> StudyOutcome:
+        """The study's Wonder calls, its failures caught: they stop the study, never the night."""
         try:
-            outcome = deps.homework.study(
+            return self.deps.homework.study(
                 p.uid, target, p.night, p.wonder, action=choice.action or "", at=p.stamp
             )
         except WonderSpent:
-            outcome = StudyOutcome(result=None, stopped="budget")
+            return StudyOutcome(result=None, stopped="budget")
         except STUDY_FAILURES as error:  # the study failed, not the night: its calls stay debited
-            outcome = StudyOutcome(
+            return StudyOutcome(
                 result=None, stopped="failed", receipt={"error": type(error).__name__}
             )
+
+    def _study_end(
+        self, p: PersonNight, target: Target, outcome: StudyOutcome, calls_before: int
+    ) -> Mapping[str, Any]:
         if (
             outcome.stopped is not None and p.wonder.calls == calls_before
         ):  # it never started: no action spent
@@ -825,7 +989,8 @@ class NightRunner(CoreSteps):
         runner, channel = channel_night.practice(
             self.deps, p.uid, p.spend.wrap_chat(self.deps.spark_chat), p.night
         )
-        loop = self._focus(p)  # the MIND loop's commitments, before any scene exists
+        # the MIND loop's commitments, before any scene exists (a judge's were made in phase 1)
+        loop = self._early.pop(p.uid) if p.uid in self._early else self._focus(p)
         scene_kwargs = {"focus": loop.targets} if loop.targets else {}  # off, practice is called as today
         with self._metered(p, "practice", "practice", runner.max_spark_calls + (1 if loop.targets else 0)):
             run = runner.run(p.uid, p.night, seeded := self._seeded(p), None, at=p.stamp, **scene_kwargs)
@@ -1035,7 +1200,9 @@ class NightRunner(CoreSteps):
         for name, check in self.deps.gates.for_person(p.uid).items():
             p.gates[name] = check(p.checkpoint)
         p.gated = True
+        demo = self.deps.settings.demo
         return {
+            **({} if demo is None else {"fast_gate": demo.gate_receipt()}),
             "gates": {name: gate_record(result) for name, result in p.gates.items()},
             **self._serving(p, "gates", started),
             **({} if woke is None else {"wake_seconds": woke}),
@@ -1141,13 +1308,14 @@ class NightRunner(CoreSteps):
                 usd(rate * NOTE_MAX_S / 3600.0),
                 lambda: rate * max(0.0, self._timer() - started) / 3600.0,
             ):
+                topic, facts = self._topic(p, target_id), self._facts(p, target_id)
                 note, outcome = write_note(
                     p.uid,
                     choice,
                     interim,
                     writer=self.deps.note_writer,
-                    topic=self._topic(p, target_id),
-                    facts=self._facts(p, target_id),
+                    topic=topic,
+                    facts=facts,
                     night=p.night,
                     check=self.deps.note_check,
                 )
@@ -1158,6 +1326,8 @@ class NightRunner(CoreSteps):
                 self.deps.notifier.queue(p.uid, note.text, NOTE_SOURCE)
             except Exception as error:
                 return self._note_failed(choice, target_id, "queue", error)
+            if self.deps.settings.demo is not None:  # a judge's: the gates' verdict may rewrite it (``_refine``)
+                self._written[p.uid] = _Written(choice, note, topic, tuple(facts))
         pushed, push_error = False, None
         if note is not None:
             p.actions_left -= 1
@@ -1224,6 +1394,9 @@ class NightRunner(CoreSteps):
         )
 
     def _finish(self, p: PersonNight) -> NightResult:
+        pending = self._studies.pop(p.uid, None)  # a judge's night that stopped before ``homework``
+        if pending is not None and (error := pending.future.exception()) is not None:  # waits for it to end
+            logger.warning("tonight's background study failed (%s)", type(error).__name__)  # not kept either way
         parts = p.spend.parts()
         if p.agent is None:  # off: no cost line, so a night without the arm is byte-identical
             parts.pop("agent", None)

@@ -50,6 +50,7 @@ from anjo.sleep.mind.self_predict import (
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindReading, MindState
 from anjo.sleep.night.day_dreams import DayDreamSource, NoDayDreams
+from anjo.sleep.night.demo import DemoProfile
 from anjo.sleep.night.dreams import DreamSource, NoDreams, Terms
 from anjo.sleep.night.meter import ExtractChat, SpendMeter, WonderMeter
 from anjo.sleep.night.sleep_pressure import SleepPolicy, SleepState, sleep_pressure
@@ -430,6 +431,12 @@ class NightSettings:
     mind_inquiry: bool = False  # MIND's inquiry in the night (Task 17: steps 2b, 4 and 10); off is Task 7a's night
     quiet_inquiry: bool = False  # accelerated alone nights: run the controller even without a chosen question
     force_deep: bool = False  # a deep sleep tonight whatever the pressure (``--force-deep``); the month's cap still wins
+    demo: DemoProfile | None = None  # a judge's two-phase night (``night/demo.py``); None for every other night
+
+
+# Told each step as it starts (``running``) and ends (``ok``, ``failed``, ``skipped``), with the step's
+# receipt: (user id, step, state, receipt). A judge's night view reads it; it never changes the night.
+StepObserver = Callable[[str, str, str, Mapping[str, object]], None]
 
 
 @dataclass(frozen=True)
@@ -502,6 +509,8 @@ class NightDeps:
     # setup. Either None is today's night: no soft tokens, no ``core`` on any row.
     mind_state: MindState | None = None
     channel: ChannelSetup | None = None
+    # Each step's start and end, for a judge's live night view (``StepObserver``); None tells no one.
+    observer: StepObserver | None = None
 
 
 @dataclass(frozen=True)
@@ -512,7 +521,8 @@ class NightOptions:
     ``practice_scenes`` and ``practice_teacher`` set full practice for the night (Task 7);
     ``mind_inquiry`` turns on MIND's inquiry (Task 17); ``force_deep`` makes tonight a deep sleep
     whatever its pressure (``night/sleep_pressure.py``); ``practice_roles`` who plays practice's roles
-    (``practice.roles``; None reads ``ANJO_SLEEP_PRACTICE_ROLES``, as the night does)."""
+    (``practice.roles``; None reads ``ANJO_SLEEP_PRACTICE_ROLES``, as the night does); ``demo`` makes it a
+    judge's two-phase night (``night/demo.py``)."""
 
     night: date
     personas: Mapping[str, str]
@@ -522,6 +532,7 @@ class NightOptions:
     mind_inquiry: bool = False
     force_deep: bool = False
     practice_roles: Roles | None = None
+    demo: DemoProfile | None = None  # a judge's night (``night/demo.py``): a real person run without a persona
 
 
 Wiring = Callable[[Trainer, NightOptions], NightDeps]

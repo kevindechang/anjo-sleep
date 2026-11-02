@@ -33,6 +33,7 @@ from anjo.sleep.app.demo_api import page_router as demo_page_router
 from anjo.sleep.app.demo_api import router as demo_router
 from anjo.sleep.app.delivery import held
 from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_enabled_for
+from anjo.sleep.app.judge_night_api import router as judge_night_router
 from anjo.sleep.app.ownership import remote_cleanup
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
@@ -92,6 +93,7 @@ def register_sleep(app: Any) -> None:
     with best_effort("mark the host's Glimmer turns as tracked"):  # unmarked, the night's GPU stop never stops
         track(glimmer_turns())
     app.include_router(router, prefix="/api")
+    app.include_router(judge_night_router, prefix="/api")  # judges' "Sleep now": 404 for anyone else
     app.include_router(demo_router, prefix="/api")
     app.include_router(demo_page_router)
     app.state.public_prefixes = DEMO_PUBLIC

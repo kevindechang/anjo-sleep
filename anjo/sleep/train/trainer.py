@@ -19,7 +19,7 @@ from anjo.sleep.night.deps import TrainingData
 from anjo.sleep.ports import GpuRunner
 from anjo.sleep.train import channel_train, modal_job
 from anjo.sleep.train.dataset import Dataset
-from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, train_lora_with_receipt
+from anjo.sleep.train.lora import AdapterPublisher, LoraCfg, StepPlan, train_lora_with_receipt
 from anjo.sleep.types import CheckpointRef
 
 
@@ -33,13 +33,14 @@ OPTIONAL_KEYS: Final = ("terms", "surprise_weights", "match", "projector", "chan
 class LoraTrainer:
     def __init__(
         self, runner: GpuRunner, *, root: Path, publish: AdapterPublisher, revision: str | None,
-        cfg: LoraCfg | None = None,
+        cfg: LoraCfg | None = None, steps: StepPlan | None = None,
     ) -> None:
         self._runner = runner
         self._root = root
         self._publish = publish
         self._revision = revision
         self._cfg = cfg if cfg is not None else LoraCfg()
+        self._steps = steps  # a fixed step plan (a judge's night: night/demo.py); None derives it per night
 
     def train(
         self, user_id: str, night: date, prev: CheckpointRef | None, data: TrainingData, name: str,
@@ -63,7 +64,7 @@ class LoraTrainer:
         ckpt, receipt = train_lora_with_receipt(
             prev, data, self._cfg, self._runner, person_id=user_id, night=night, name=name,
             workdir=self._root / "work" / name, adapter_cache=self._root / "adapters",
-            publish=self._publish, revision=self._revision, **channel,
+            publish=self._publish, revision=self._revision, steps=self._steps, **channel,
         )
         done = dataclasses.asdict(receipt)
         for key in OPTIONAL_KEYS:  # each only when it applies: a night with every switch off logs today's receipt

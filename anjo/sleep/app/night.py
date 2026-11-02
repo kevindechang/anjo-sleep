@@ -122,6 +122,7 @@ from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.core_dreams import core_dreams, dreams_channel
 from anjo.sleep.night.day_dreams import SWITCH_ENV as DAY_DREAMS_ENV
 from anjo.sleep.night.day_dreams import GlimmerDayDreams, NoDayDreams
+from anjo.sleep.night.demo import DEMO_MIN_SCENES, DemoProfile
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
 from anjo.sleep.night.sleep_pressure import policy_from
@@ -134,7 +135,7 @@ from anjo.sleep.homework.agent import MetaWonder, WonderHomework
 from anjo.sleep.homework.research import WonderResearch
 from anjo.sleep.homework.tools import SafeFetcher, WikipediaSearch
 from anjo.sleep.practice.critics import ThirdPartyCritic, deepseek_critic, held_critic
-from anjo.sleep.practice.full import CappedChat, FullPractice
+from anjo.sleep.practice.full import MIN_SCENES, CappedChat, FullPractice
 from anjo.sleep.practice.roles import practice_roles
 from anjo.sleep.probes.decontam import OverlapDecontaminator
 from anjo.sleep.probes.generate import generate_day_probes, load_sealed, seal_probes
@@ -204,16 +205,20 @@ class AppGates:
     collapse is per person, over their fields."""
 
     def __init__(self, client: VllmClient, fields: Callable[[str], tuple[str, ...]], *, workers: int,
-                 cache: BaseCache | None = None) -> None:
+                 cache: BaseCache | None = None, demo: DemoProfile | None = None) -> None:
         self._client = client
         self._fields = fields
         self._workers = workers  # the generation gates' calls at once (ANJO_SLEEP_CONCURRENCY)
         self._cache = cache
-        self._general = GeneralGate(client, cache=cache)  # log-probabilities only: the server's concurrency
+        # A judge's night gates on the profile's fixed subsets at the registered thresholds (night/demo.py).
+        self._collapse = None if demo is None else demo.collapse_set()
+        general = None if demo is None else demo.general_set()
+        self._general = GeneralGate(client, items=general, cache=cache)  # log-probabilities only: the server's concurrency
         self._safety = SafetyGate(client, load_cases, workers=workers, cache=cache, enabled=gate_on())
 
     def for_person(self, user_id: str) -> Mapping[str, GateCheck]:
-        collapse = CollapseGate(self._client, self._fields(user_id), workers=self._workers, cache=self._cache)
+        collapse = CollapseGate(self._client, self._fields(user_id), prompts=self._collapse, workers=self._workers,
+                                cache=self._cache)
         return {"general": self._general.check, "collapse": collapse.check, "safety": self._safety.check}
 
 
@@ -351,7 +356,9 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
     serving = backend.from_env()  # SageMaker, or Modal (ANJO_SLEEP_BACKEND)
     client = serving.client().on(options.night)  # prompts dated on the night's clock
     night_settings = replace(settings(), practice_scenes=options.practice_scenes, practice_teacher=options.practice_teacher,
-                             mind_inquiry=options.mind_inquiry, force_deep=options.force_deep)
+                             mind_inquiry=options.mind_inquiry, force_deep=options.force_deep, demo=options.demo)
+    if options.demo is not None:  # a judge's night: its token cap, and the serving GPU left as it is
+        night_settings = replace(night_settings, token_cap=options.demo.token_cap)
     sleep_policy = policy_from(os.environ)  # a setting it can't use stops the night before it starts
     night_prices = prices()
     recall = MiniLmRecall(evidence_store, until=options.night)
@@ -367,7 +374,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
                             snapshot=context.snapshot, seed=night_settings.seed, scenes=night_settings.practice_scenes,
                             teacher=night_settings.practice_teacher, concurrency=calls,
                             glimmer_person=roles.person == "glimmer", critic=critic, third_party=is_synthetic,
-                            lazy_teacher=roles.teacher == "lazy")
+                            lazy_teacher=roles.teacher == "lazy",
+                            floor=MIN_SCENES if options.demo is None else DEMO_MIN_SCENES)
 
     core = build_core(os.environ, data_root() / SLEEP_DIR, core_people(options), workspace=workspace_log,
                       synthetic=is_synthetic)
@@ -388,7 +396,8 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         probes=SealedProbes(Path(_env(SEALED_ENV)), options.personas, seed=night_settings.seed, chat=meta_api.chat),
         chooser=StateChooser(), policy=build_policy(), practice=practice,
         decontam=OverlapDecontaminator(), trainer=trainer, gates=AppGates(
-            gate_client, field_domains(options.personas), workers=calls, cache=gate_cache(serving, gate_client)),
+            gate_client, field_domains(options.personas), workers=calls, cache=gate_cache(serving, gate_client),
+            demo=options.demo),
         registry=registry, notifier=OutreachNotifier(),
         note_writer=GlimmerNoteWriter(client, registry.last_promoted, seed=night_settings.seed),
         note_check=passes_reply_check, ledger=ledger,
@@ -397,7 +406,9 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         strategies=strategy_store, glimmer=client,
         gpu=ReservedGpu(ledger, options.night, usd_per_hour=gpu_rate), mind_state=mind_state, channel=channel,
         intentions=LedgerIntentions(), homework=homework,
-        wake=serving.wake, sleep=serving.sleep_now, gpu_stop=gpu_stop(serving, os.environ, ledger), retries=client.retries,
+        wake=serving.wake, retries=client.retries,
+        sleep=serving.sleep_now if options.demo is None else None,
+        gpu_stop=gpu_stop(serving, os.environ, ledger) if options.demo is None else None,
         inquiry=mind or NoInquiry(), notice=mind or NoNotice(), sleep_policy=sleep_policy, turns=own_turn_count,
         core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
                                       channel=dreams_channel(os.environ, channel)),

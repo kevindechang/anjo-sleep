@@ -220,8 +220,11 @@ class ModalRunner:
         self, *, calls: ModalCalls, ledger: Ledger, records: CallRecords, is_synthetic: Callable[[str], bool],
         allow_real: Collection[str] = (), clock: Callable[[], float] = time.monotonic,
         usd_per_hour: float = A100_USD_PER_HOUR, hold_kind: str = HOLD_KIND,
+        digest: Callable[[], str] = modal_job.files_digest, app_name: str = modal_job.APP_NAME,
     ) -> None:
         self.allow_real = frozenset(allow_real)
+        self._digest = digest  # the checkout's digest of the files the app's image carries (the judges' warm app: its own)
+        self._app_name = app_name
         self._hold_kind = hold_kind
         self._calls = calls
         self._ledger = ledger
@@ -297,8 +300,8 @@ class ModalRunner:
         if result.get("adapter") != name or not isinstance(files, Mapping) or not isinstance(receipt, dict):
             raise ModalTrainError("the training call returned no adapter record")
         deployed = result.get(modal_job.DIGEST_KEY)
-        if deployed is not None and deployed != modal_job.files_digest():
-            raise ModalTrainError(f"{modal_job.APP_NAME} was deployed with other training files than this checkout's; "
+        if deployed is not None and deployed != self._digest():
+            raise ModalTrainError(f"{self._app_name} was deployed with other training files than this checkout's; "
                                   "redeploy it (deploy/dev_host.md §1.7)")
         out = Path(str(inputs["workdir"])) / "out"
         out.mkdir(parents=True, exist_ok=True)

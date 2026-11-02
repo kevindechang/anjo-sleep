@@ -562,3 +562,27 @@ def test_the_final_recipe_records_the_judge_the_app_selects() -> None:
     from anjo.sleep.sim.final_batch import RECIPE_ENV
 
     assert JUDGE_ENV in RECIPE_ENV
+
+
+def test_a_judges_night_runs_the_profile_and_leaves_the_serving_gpu_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_embedder: Any,
+) -> None:
+    from anjo.sleep.app import night
+    from anjo.sleep.night.demo import DEMO_MIN_SCENES, DemoProfile
+    from anjo.sleep.night.deps import NightOptions
+
+    _night_env(monkeypatch, tmp_path)
+    profile = DemoProfile()
+    deps: Any = night.build(NoTrainer(), NightOptions(night=date(2026, 11, 3), personas={}, allow_real=True,
+                                                      practice_scenes=profile.practice_scenes, demo=profile))
+    assert deps.settings.demo == profile and deps.settings.token_cap == profile.token_cap == 5000
+    assert deps.gpu_stop is None and deps.sleep is None and deps.wake is not None  # the warm server stays up
+    assert deps.gates._general._items == profile.general_set() and len(deps.gates._general._items) == 40
+    assert deps.gates._collapse == profile.collapse_set()
+    practice: Any = deps.practice(lambda *a, **k: None, date(2026, 11, 3))
+    assert practice.max_spark_calls == 1 + 2 * profile.practice_scenes
+    with pytest.raises(ValueError, match=f"{DEMO_MIN_SCENES} to"):
+        night.build(NoTrainer(), NightOptions(night=date(2026, 11, 3), personas={}, allow_real=True, practice_scenes=3,
+                                              demo=profile)).practice(lambda *a, **k: None, date(2026, 11, 3))
+    every: Any = night.build(NoTrainer(), NightOptions(night=date(2026, 11, 3), personas={}, allow_real=True))
+    assert every.settings.demo is None and every.sleep is not None and len(every.gates._general._items) == 200

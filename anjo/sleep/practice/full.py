@@ -1,11 +1,11 @@
 """Full practice (Task 7, from Oct 29): more scenes, a teacher candidate, a critic and pairs.
 
 It keeps Task 5's cue-free scene prompt (``scenes_v1.md``, asked for ``SCENES_ASKED`` messages)
-and the same F (``practice_f``), and runs ``scenes`` of them, 16 to 20. Each scene's message gets
-four candidates on one shared prefix (F as the system message, then the message), so the server
-caches it: three from her personal Glimmer (the adapter that serves her) and one from Spark Open,
-the teacher. A candidate cut at max tokens is never a candidate. With no Glimmer candidate left
-the scene is dropped, so the teacher alone never trains.
+and the same F (``practice_f``), and runs ``scenes`` of them, 16 to 20 (a judge's night lowers the
+floor, ``floor``). Each scene's message gets four candidates on one shared prefix (F as the system
+message, then the message), so the server caches it: three from her personal Glimmer (the adapter
+that serves her) and one from Spark Open, the teacher. A candidate cut at max tokens is never a
+candidate. With no Glimmer candidate left the scene is dropped, so the teacher alone never trains.
 
 **Critic.** Spark Open, at temperature 0, scores the candidates blind (letters only, in an order
 seeded per scene) and lists those that miss a constraint stated in F (``critic_v1.md``). The best
@@ -113,6 +113,7 @@ CRITIC_PATH: Final = Path(__file__).parent / "prompts" / "critic_v1.md"
 SCENES_ASKED: Final = 20
 MIN_SCENES: Final = 16
 MAX_SCENES: Final = 20
+LOWEST_FLOOR: Final = 4  # a judge's night may lower the floor this far (``floor``; night/demo.py's DEMO_MIN_SCENES)
 GLIMMER_CANDIDATES: Final = 3
 CANDIDATE_TEMPERATURE: Final = 1.0  # registered sampling, as for every arm
 CRITIC_TEMPERATURE: Final = 0.0
@@ -316,9 +317,12 @@ class FullPractice:
         f_cap: int = PRACTICE_F_CAP, concurrency: int = 1, spark_caps: Mapping[str, int] = SPARK_CAPS,
         glimmer_person: bool = False, critic: ThirdPartyCritic | None = None,
         third_party: Callable[[str], bool] = lambda user_id: False, lazy_teacher: bool = False,
+        floor: int = MIN_SCENES,
     ) -> None:
-        if not MIN_SCENES <= scenes <= MAX_SCENES:
-            raise ValueError(f"full practice runs {MIN_SCENES} to {MAX_SCENES} scenes a night, not {scenes}")
+        if not LOWEST_FLOOR <= floor <= MIN_SCENES:
+            raise ValueError(f"practice's floor is {LOWEST_FLOOR} to {MIN_SCENES} scenes, not {floor}")
+        if not floor <= scenes <= MAX_SCENES:
+            raise ValueError(f"full practice runs {floor} to {MAX_SCENES} scenes a night, not {scenes}")
         if concurrency < 1:
             raise ValueError("practice runs at least one call at a time")
         self._chat = chat

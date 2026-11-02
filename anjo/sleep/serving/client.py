@@ -781,6 +781,13 @@ class VllmClient:
         self._requests.unload_adapter(name)
         self._ensure_loaded(name)
 
+    def ensure_served(self, adapter: CheckpointRef) -> None:
+        """Make ``adapter`` servable now, before anyone's turn asks for it: refused under another
+        rendering, loaded from the server's folder, and staged onto its own disk first where the backend
+        stages (Modal's; a turn's ``once`` client never stages). A backend that loads adapters itself
+        (SageMaker's) has nothing to do."""
+        self._served(adapter, lambda model: None)
+
     @property
     def adapters_dir(self) -> str | None:
         """The folder the server reads adapters from, or ``None`` when the backend loads them itself."""

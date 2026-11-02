@@ -17,22 +17,31 @@ bound forever, and its Colab VM or Modal call may still run. So ``swept_night``,
 The lock is held until the run ends. The night log records the counts (``sweep``), never a key.
 A step that also runs on its own (the simulated day) takes ``night_lock``: inside a night run it
 runs under the run's lock; on its own it takes the lock, so no night start sweeps its live holds.
+
+**Judges' nights** (``shared_night``) may run side by side, each in its own process, so they share
+the lock: a night command, which takes it alone, never starts while one runs, and none starts while
+a night command runs (it waits, then stops with ``NightBusy``). The first one in sweeps: when it can
+take the lock alone nothing else runs on this host, so it sweeps exactly as a night command's start
+does, then shares. One that finds others sharing sweeps nothing, since their holds are live.
 """
 from __future__ import annotations
 
 import fcntl
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import BinaryIO, Final
 
 from anjo.sleep.budget import Ledger
 
 NIGHT_KINDS: Final = ("night:", "night_gpu:", "colab_train:", "colab_life:", "modal_train:", "morning:", "sim:",
                       "dailies:")  # the last: the morning's pre-generated line for the live page (app.demo_pairs)
 LOCK_NAME: Final = "night.lock"
+SHARED_WAIT_S: Final = 20 * 60.0  # how long a judge's night waits for a night command to finish
+SHARED_POLL_S: Final = 2.0
 _HELD: ContextVar[frozenset[Path]] = ContextVar("night_lock_held", default=frozenset())
 
 
@@ -115,6 +124,58 @@ def night_lock(ledger: Ledger) -> Iterator[None]:
         yield
 
 
+def _swept(ledger: Ledger, stop_sessions: Callable[[], Stopped | tuple[int, int]]) -> Sweep:
+    found = stop_sessions()  # VMs first: a hold is settled only once its VM is down
+    if isinstance(found, Stopped):
+        stopped, not_ours, skipped = found.sessions_stopped, found.sessions_not_ours, found.skipped
+    else:
+        stopped, not_ours, skipped = found[0], found[1], None
+    return Sweep(_settle_stale(ledger), stopped, not_ours, skipped)
+
+
+def _take_shared(lock: BinaryIO, ledger: Ledger, stop_sessions: Callable[[], Stopped | tuple[int, int]],
+                 deadline: float, clock: Callable[[], float], sleep: Callable[[float], None]) -> Sweep | None:
+    """Hold ``lock`` shared, sweeping first when it can be taken alone (nothing else runs then)."""
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            swept = _swept(ledger, stop_sessions)
+            try:  # flock's change from alone to shared isn't atomic: a night command may take it between
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                return swept
+            except BlockingIOError:
+                pass
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return None
+        except BlockingIOError:
+            if clock() >= deadline:
+                raise NightBusy("a night command is live on this host; the judge's night didn't start") from None
+            sleep(SHARED_POLL_S)
+
+
+@contextmanager
+def shared_night(
+    ledger: Ledger, stop_sessions: Callable[[], Stopped | tuple[int, int]], *, wait_s: float = SHARED_WAIT_S,
+    clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+) -> Iterator[Sweep | None]:
+    """The night lock, shared, for one judge's night (the module's docstring): yields the sweep when
+    this night was alone and swept, else None. A night command still live after ``wait_s`` stops it."""
+    path = _lock_path(ledger)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+b") as lock:
+        swept = _take_shared(lock, ledger, stop_sessions, clock() + wait_s, clock, sleep)
+        token = _HELD.set(_HELD.get() | {path})
+        try:
+            yield swept
+        finally:
+            _HELD.reset(token)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 @contextmanager
 def swept_night(
     ledger: Ledger, stop_sessions: Callable[[], Stopped | tuple[int, int]],
@@ -123,9 +184,4 @@ def swept_night(
     runner's list that couldn't be read may be reported as skipped (``Stopped.skipped``): the night
     goes on without it, and its log says so."""
     with _locked(ledger):
-        found = stop_sessions()  # VMs first: a hold is settled only once its VM is down
-        if isinstance(found, Stopped):
-            stopped, not_ours, skipped = found.sessions_stopped, found.sessions_not_ours, found.skipped
-        else:
-            stopped, not_ours, skipped = found[0], found[1], None
-        yield Sweep(_settle_stale(ledger), stopped, not_ours, skipped)
+        yield _swept(ledger, stop_sessions)
