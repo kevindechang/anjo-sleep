@@ -11,33 +11,40 @@ It drives the ``colab`` CLI (``~/.local/bin/colab``, OAuth). One training job is
    (``holds.hold``). With no room, the night stops (``BudgetStop``);
 3. ``new`` an A100 session, ``install`` the pinned training packages, make the remote folders
    (``mkdir``: a small ``exec``, once a VM), ``upload`` the night's
-   dataset (and, for a warm start, the previous adapter's two files), ``exec`` the training script
-   (``colab_train.py``) with the recipe in its environment, and ``download`` the adapter and its
-   receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries as one
+   dataset (and, for a warm start, the previous adapter's two files), train the script
+   (``colab_train.py``) detached with the recipe in its environment (below), and ``download`` the
+   adapter and its receipt. A seeded night (``sft_dpo_seed``) also uploads the files Modal's image carries as one
    archive, at Modal's paths, unpacked on the VM before the entry runs, so its loss, fold and
    protect files load beside it;
 4. ``stop`` the session in a ``finally``, on success, failure or cancel, then settle what the VM
    ran for. A stop that fails settles the whole hold and raises, so a VM that may still run is
    never silent.
 
-**The watch.** 2026-11-02: an A100 running a training ``exec`` was gone server-side about 35 minutes
-in, while the local ``colab exec`` waited on toward its kernel timeout (two hours), and the CLI
-sends no keep-alive. While the training ``exec`` runs, and only then, a thread watches the session,
-each call one process, ``colab_ping.py`` on the CLI's own python (the ``colab`` entry point's
-shebang, or the CLI's uv tool python behind a shell wrapper), under its own hard timeout:
+**Detached training.** 2026-11-02: on two CPU VMs, one long ``colab exec`` died at about 58 minutes
+("Connection was lost") while both VMs stayed assigned: the CLI's runtime proxy token expires about
+an hour after ``new`` and is refreshed only when a CLI process starts, so no exec outlives it, and an
+A100's training exec was gone at about 35 minutes. So the training runs detached on the VM
+(``colab_detached``), and every call is short, each a fresh CLI process:
 
-- a keep-alive ping every ``KEEPALIVE_PERIOD_S``, the first one period in;
-- a VM check every ``VM_CHECK_PERIOD_S``: whether the account's assignments still hold the
-  session's VM. A VM missing on ``VM_LOST_CHECKS`` readings in a row stops the exec at once (the
-  exec runs on the CLI's stoppable path, ``run_until``) and it raises ``ColabVmLost``; the night
-  then lists the sessions (``colab sessions``, which drops the dead one, so the stop goes through)
-  and stops the VM as always. A check that fails gives no reading: it neither counts nor resets.
+- ``launch``: one exec starts the training in its own session on the VM and returns at once. Its
+  ``--env`` flags set the night's environment, which the training alone gets. The launch counts as
+  the training started;
+- ``poll``: every ``POLL_PERIOD_S`` an exec reads it: running, done with its exit code, or missing.
+  A poll that fails (an exit code, a hang past its hard timeout, a session the CLI no longer has),
+  prints no reading or finds the training missing counts as one miss; ``LOST_POLLS`` in a row raise
+  ``ColabVmLost``, after ``colab sessions`` has dropped a dead session so the stop goes through. One
+  miss, or two, stops nothing;
+- the training's own time is the job's less every call's (``_setup_s``). Past it, a ``kill`` exec
+  ends it (best effort) and ``ColabTrainingTimeout`` is raised;
+- done with 0: the downloads, as before. Done with any other code: the night fails as a script error
+  does, with the log's last lines (``logtail``) kept in the night's folder (``LOG_TAIL_NAME``).
 
-A ping or check that fails is logged and counted (``keepalive_pings``, ``keepalive_failed``,
-``vm_checks``, ``vm_checks_failed`` in the job's outputs), never raised: the exec decides the night.
-Their calls count as ``keepalive`` and ``vmcheck`` (``command_label``), so the fallback's tracing
-never takes one for the night's failure. With neither python the night trains unwatched, and says
-so.
+A keep-alive ping (``colab_ping.py``, on the CLI's own python: the ``colab`` entry point's shebang,
+or the CLI's uv tool python behind a shell wrapper) follows each poll that finds the training
+running; one that fails is counted, never raised. The job's outputs count both (``polls``,
+``polls_failed``, ``keepalive_pings``, ``keepalive_failed``). Each call has its own label
+(``command_label``), so the fallback's tracing never takes a poll, a ping, a kill or a log tail for
+the night's failure.
 
 A run killed hard runs no ``finally``. Every session is named ``anjo-sleep-<adapter>``, so the
 night command's sweep (``stop_leftover_sessions``) stops any a killed run left before it starts.
@@ -68,10 +75,8 @@ import re
 import subprocess
 import logging
 import tarfile
-import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import TracebackType
 from pathlib import Path
@@ -85,6 +90,7 @@ from anjo.sleep.train import colab_train, modal_job
 # The pins live with the training script (one source for every runner); torch comes with Colab's image.
 from anjo.sleep.train.colab_train import TRAIN_PACKAGES as TRAIN_PACKAGES
 from anjo.sleep.train.lora import DATASET_FILE, JOB
+from anjo.sleep.train.runners import colab_detached as detached
 
 COLAB_BIN: Final = Path.home() / ".local" / "bin" / "colab"
 # The python of the CLI's own uv tool environment, for the watch when ``COLAB_BIN`` names none (a
@@ -138,28 +144,32 @@ REMOTE_DIRS: Final = (REMOTE_DIR, f"{REMOTE_DIR}/prev")
 MKDIR_SCRIPT: Final = f"import os\nfor path in {REMOTE_DIRS!r}:\n    os.makedirs(path, exist_ok=True)\n"
 MIN_EXEC_S: Final = 1800.0
 _OUTPUT_FILES: Final = (*config.ADAPTER_FILES, colab_train.RECEIPT)
-# The watch (see above): a ping a minute and a VM check every two while the training exec runs, each
-# its own process under a hard timeout. The exec's end waits for the one in flight, so the job's time
-# counts one (``WATCH_CALL_S``). A lost VM is seen within two check periods of its last present
-# reading, and the exec stopped within ``STOP_POLL_S`` of that: at most about 4.5 minutes, not 2 hours.
+# The detached training (see above): each call is a short exec of one of the runner's own scripts,
+# under its hard timeout (its ``--timeout`` and the CLI's margin).
+LAUNCH: Final = "launch"  # the calls' commands, as ``command_label`` names them
+POLL: Final = "poll"
+KILL: Final = "kill"
+LOG_TAIL: Final = "logtail"
+_SCRIPT_LABELS: Final = {MKDIR_FILE: MKDIR, detached.LAUNCH_FILE: LAUNCH, detached.POLL_FILE: POLL,
+                         detached.KILL_FILE: KILL, detached.LOG_TAIL_FILE: LOG_TAIL}
+LAUNCH_EXEC_S: Final = 120.0
+POLL_EXEC_S: Final = 30.0
+KILL_EXEC_S: Final = 30.0
+LOG_TAIL_EXEC_S: Final = 30.0
+POLL_PERIOD_S: Final = 90.0
+LOST_POLLS: Final = 3  # misses in a row that lose the VM
+LOG_TAIL_NAME: Final = "colab-train-log-tail.txt"
 KEEPALIVE: Final = "keepalive"  # a ping's command, as ``call`` and ``command_label`` name it
-KEEPALIVE_PERIOD_S: Final = 60.0
 KEEPALIVE_TIMEOUT_S: Final = 30.0
-VM_CHECK: Final = "vmcheck"  # a VM check's command, likewise
-VM_CHECK_PERIOD_S: Final = 120.0
-VM_CHECK_TIMEOUT_S: Final = 30.0
-VM_LOST_CHECKS: Final = 2  # "missing" readings in a row that stop the exec
-PRESENT: Final = "present"  # a check's two readings, as the ping script prints them
-MISSING: Final = "missing"
-WATCH_CALL_S: Final = max(KEEPALIVE_TIMEOUT_S, VM_CHECK_TIMEOUT_S)
-WATCH_THREAD: Final = "colab-watch"
-STOP_POLL_S: Final = 1.0  # how often a stoppable call looks at its stop
+# The training calls' share of the job's time: the launch, and past the training's own deadline a
+# poll under way, its ping and the last poll. A kill, a log tail or a dead session's listing runs
+# instead of the downloads, and takes less than they do.
+TRAIN_CALLS_S: Final = (LAUNCH_EXEC_S + EXEC_MARGIN_S) + 2 * (POLL_EXEC_S + EXEC_MARGIN_S) + KEEPALIVE_TIMEOUT_S
 PING_SCRIPT: Final = Path(__file__).with_name("colab_ping.py")
 _PYTHON: Final = re.compile(r"python[0-9.]*")
 logger = logging.getLogger(__name__)
 
 CliRun = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"]
-CliRunUntil = Callable[[Sequence[str], float, threading.Event], "subprocess.CompletedProcess[str]"]
 
 
 class ColabError(RuntimeError):
@@ -176,44 +186,17 @@ class KeepaliveOff(ColabError):
 
 
 class ColabVmLost(ColabError):
-    """The session's VM was missing from the account's assignments on ``VM_LOST_CHECKS`` checks in a
-    row, so the training exec was stopped: Colab's infrastructure failed, as a timeout does."""
+    """``LOST_POLLS`` polls in a row found no training on the VM: Colab's infrastructure failed, as a
+    timeout does."""
+
+
+class ColabTrainingTimeout(ColabError):
+    """The detached training ran past its own time, and was killed."""
 
 
 def run_cli(args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
     """One CLI call under a hard timeout; ``TimeoutExpired`` kills it and propagates."""
     return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout_s, check=False)
-
-
-def run_cli_until(args: Sequence[str], timeout_s: float, stop: threading.Event) -> subprocess.CompletedProcess[str]:
-    """``run_cli`` that ``stop`` also ends: the process is killed, and its exit is the kill's. The
-    hard timeout still kills it and raises ``TimeoutExpired``, and so does anything else that ends the
-    call early (an interrupt), as ``subprocess.run`` does. Its output is read as it comes."""
-    deadline = time.monotonic() + timeout_s
-    with subprocess.Popen(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
-        try:
-            while True:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise subprocess.TimeoutExpired(list(args), timeout_s)
-                try:
-                    out, err = process.communicate(timeout=min(STOP_POLL_S, left))
-                except subprocess.TimeoutExpired:
-                    if not stop.is_set():
-                        continue
-                    process.kill()
-                    out, err = process.communicate()
-                return subprocess.CompletedProcess(list(args), process.returncode, out, err)
-        finally:
-            if process.poll() is None:
-                process.kill()
-
-
-def _unstoppable(run: CliRun) -> CliRunUntil:
-    """A test's ``run`` with no stoppable path: the call runs on it, to its own end."""
-    def until(args: Sequence[str], timeout_s: float, stop: threading.Event) -> subprocess.CompletedProcess[str]:
-        return run(args, timeout_s)
-    return until
 
 
 def keepalive_command(binary: Path = COLAB_BIN, tool_python: Path = COLAB_TOOL_PYTHON) -> tuple[str, ...] | None:
@@ -240,41 +223,34 @@ def _shebang_python(binary: Path) -> Path | None:
 
 
 class ColabCli:
-    """``colab --auth oauth2 <command> ...``, every call with a finite timeout. ``KEEPALIVE`` and
-    ``VM_CHECK`` are the commands the CLI lacks: ``call(KEEPALIVE, session)`` and ``call(VM_CHECK,
-    session)`` run the ping script, on ``keepalive`` (the command before its arguments) or, by
-    default, ``keepalive_command(binary, tool_python)``. A call given ``vm_lost`` runs on the stoppable path
-    (``run_until``; by default ``run_cli_until``, or a test's ``run`` to its end) and is stopped when
-    ``vm_lost`` is set: it then raises ``ColabVmLost``."""
+    """``colab --auth oauth2 <command> ...``, every call with a finite timeout. ``KEEPALIVE`` is the one
+    command the CLI lacks: ``call(KEEPALIVE, session)`` runs the ping, on ``keepalive`` (the command
+    before the session's name) or, by default, ``keepalive_command(binary, tool_python)``."""
 
     def __init__(
-        self, binary: Path = COLAB_BIN, *, run: CliRun = run_cli, run_until: CliRunUntil | None = None,
-        keepalive: Sequence[str] | None = None, tool_python: Path = COLAB_TOOL_PYTHON,
+        self, binary: Path = COLAB_BIN, *, run: CliRun = run_cli, keepalive: Sequence[str] | None = None,
+        tool_python: Path = COLAB_TOOL_PYTHON,
     ) -> None:
         self._binary = binary
         self._tool_python = tool_python
         self._run = run
-        self._run_until = run_until or (run_cli_until if run is run_cli else _unstoppable(run))
         self._keepalive = None if keepalive is None else tuple(keepalive)
 
-    def call(self, *args: str, timeout_s: float, vm_lost: threading.Event | None = None) -> str:
+    def call(self, *args: str, timeout_s: float) -> str:
         if not (0 < timeout_s < math.inf):
             raise ValueError("every colab call has a finite timeout")
-        label = command_label(args)
-        argv = self._ping(args) if label in (KEEPALIVE, VM_CHECK) else [str(self._binary), *AUTH, *args]
-        done = self._run(argv, timeout_s) if vm_lost is None else self._run_until(argv, timeout_s, vm_lost)
+        argv = self._ping(args) if command_label(args) == KEEPALIVE else [str(self._binary), *AUTH, *args]
+        done = self._run(argv, timeout_s)
         if done.returncode != 0:
-            if vm_lost is not None and vm_lost.is_set():
-                raise ColabVmLost(f"colab {label} stopped: the session's VM is gone")
-            raise ColabError(f"colab {label} failed with exit {done.returncode}")
+            raise ColabError(f"colab {command_label(args)} failed with exit {done.returncode}")
         return done.stdout
 
     def _ping(self, args: Sequence[str]) -> list[str]:
         command = self._keepalive or keepalive_command(self._binary, self._tool_python)
         if command is None:
-            raise KeepaliveOff(f"no python to watch the session with: {self._binary}'s first line names none, "
+            raise KeepaliveOff(f"no python to ping the session with: {self._binary}'s first line names none, "
                                f"and {self._tool_python} is missing")
-        return [*command, *(("--check",) if args[0] == VM_CHECK else ()), *args[1:]]
+        return [*command, *args[1:]]
 
 
 def hold_base(night: str, person_id: str, prefix: str = SESSION_PREFIX) -> str:
@@ -382,15 +358,18 @@ def _uploads(inputs: Mapping[str, object]) -> list[tuple[Path, str]]:
 
 
 def _setup_s(uploads: int) -> float:
+    """A first night's fixed call time: the VM, its packages and folders, the uploads, the training's
+    calls, the downloads and the stop. The training has the rest of the job's time."""
     return (NEW_TIMEOUT_S + INSTALL_TIMEOUT_S + MKDIR_TIMEOUT_S + EXEC_MARGIN_S + uploads * UPLOAD_TIMEOUT_S
-            + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S + EXEC_MARGIN_S + WATCH_CALL_S)
+            + TRAIN_CALLS_S + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + STOP_TIMEOUT_S)
 
 
 def command_label(args: Sequence[str]) -> str:
-    """A CLI call's command (``args[0]``: ``KEEPALIVE`` for a keep-alive ping, ``VM_CHECK`` for a VM
-    check), or ``MKDIR`` for the ``exec`` that makes the remote folders."""
-    if args and args[0] == "exec" and "-f" in args and Path(args[list(args).index("-f") + 1]).name == MKDIR_FILE:
-        return MKDIR
+    """A CLI call's command (``args[0]``: ``KEEPALIVE`` for a keep-alive ping) or, for an ``exec`` of
+    one of the runner's own scripts, that script's: ``MKDIR`` (the remote folders), ``LAUNCH``,
+    ``POLL``, ``KILL`` or ``LOG_TAIL``."""
+    if args and args[0] == "exec" and "-f" in args:
+        return _SCRIPT_LABELS.get(Path(args[list(args).index("-f") + 1]).name, args[0])
     return args[0]
 
 
@@ -404,102 +383,19 @@ def _make_remote_dirs(cli: ColabCli, session: str, workdir: Path) -> None:
         script.unlink(missing_ok=True)
 
 
-def _exec_script(workdir: Path, seed: bool) -> Path:
-    """The file ``colab exec -f`` reads: the script itself, or a seeded night's entry that runs the
-    uploaded script at its remote path, so ``__file__`` and its siblings' paths are the VM's."""
-    if not seed:
-        return SCRIPT
-    path = workdir / ".seed-entry.py"
-    path.write_text(SEED_ENTRY, encoding="utf-8")
-    return path
-
-
 @dataclass
-class _Watch:
-    """What the watch did, as counts; ``lost`` is set when the VM was missing ``VM_LOST_CHECKS`` times
-    in a row, and stops the exec."""
+class _Rounds:
+    """What the polls and pings did, as counts (the job's outputs)."""
 
-    lost: threading.Event = field(default_factory=threading.Event)
-    off: bool = False  # no python for the ping script: nothing more is tried
+    polls: int = 0
+    polls_failed: int = 0  # polls that found no training: a failed call, no reading, or missing
     pings: int = 0
     pings_failed: int = 0
-    checks: int = 0
-    checks_failed: int = 0
-    missing: int = 0  # "missing" readings in a row
+    pinging: bool = True  # False once there is no python to ping with
 
     def outputs(self) -> dict[str, int]:
-        return {"keepalive_pings": self.pings, "keepalive_failed": self.pings_failed, "vm_checks": self.checks,
-                "vm_checks_failed": self.checks_failed}
-
-
-_WATCH_STEPS: Final = {KEEPALIVE: "a keep-alive ping", VM_CHECK: "a VM check"}
-
-
-def _watched_call(cli: ColabCli, watch: _Watch, *args: str, timeout_s: float) -> str | None:
-    """One ping or check: its output, or None when it failed (logged by ``best_effort``)."""
-    out: str | None = None
-    with best_effort(_WATCH_STEPS[args[0]], session=args[1]):
-        try:
-            out = cli.call(*args, timeout_s=timeout_s)
-        except KeepaliveOff as off:
-            watch.off = True
-            logger.warning("%s: %s trains without keep-alive pings or VM checks", off, args[1])
-    return out
-
-
-def _read_check(watch: _Watch, out: str | None) -> None:
-    reading = None if out is None else out.strip()
-    if reading == PRESENT:
-        watch.missing = 0
-    elif reading == MISSING:
-        watch.missing += 1
-        if watch.missing >= VM_LOST_CHECKS:
-            watch.lost.set()
-    else:  # no reading: it neither counts nor resets
-        watch.checks_failed += 1
-        if out is not None:
-            logger.warning("a VM check printed something it never prints; no reading")
-
-
-def _watch_each(cli: ColabCli, session: str, periods: tuple[float, float], stop: threading.Event,
-                watch: _Watch) -> None:
-    ping_s, check_s = periods
-    started = time.monotonic()
-    due = [started + ping_s, started + check_s]
-    while not stop.wait(max(0.0, min(due) - time.monotonic())):
-        if due[0] <= time.monotonic():
-            due[0] += ping_s
-            watch.pings += 1
-            if _watched_call(cli, watch, KEEPALIVE, session, timeout_s=KEEPALIVE_TIMEOUT_S) is None:
-                watch.pings_failed += 1
-        if watch.off:
-            return
-        if due[1] <= time.monotonic() and not stop.is_set():
-            due[1] += check_s
-            watch.checks += 1
-            _read_check(watch, _watched_call(cli, watch, VM_CHECK, session, timeout_s=VM_CHECK_TIMEOUT_S))
-        if watch.off:
-            return
-        if watch.lost.is_set():
-            logger.warning("%s's VM was missing on %d checks in a row; stopping its exec", session, VM_LOST_CHECKS)
-            return
-
-
-@contextmanager
-def _watching(cli: ColabCli, session: str, ping_s: float, check_s: float) -> Iterator[_Watch]:
-    """Watch ``session`` from a thread while the block runs: a ping every ``ping_s`` and a VM check every
-    ``check_s``, each first one period in. The thread is stopped and joined when the block ends,
-    however it ends."""
-    watch, stop = _Watch(), threading.Event()
-    thread = threading.Thread(target=_watch_each, args=(cli, session, (ping_s, check_s), stop, watch),
-                              name=WATCH_THREAD, daemon=True)
-    thread.start()
-    try:
-        yield watch
-    finally:
-        stop.set()
-        thread.join()
-        logger.info("watch of %s: %s", session, watch.outputs())
+        return {"polls": self.polls, "polls_failed": self.polls_failed, "keepalive_pings": self.pings,
+                "keepalive_failed": self.pings_failed}
 
 
 def _forget_lost(cli: ColabCli) -> None:
@@ -529,14 +425,17 @@ class ColabRunner:
         self, *, cli: ColabCli, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
         packages: Sequence[str] = TRAIN_PACKAGES, session_prefix: str = SESSION_PREFIX,
-        keepalive_period_s: float = KEEPALIVE_PERIOD_S, vm_check_period_s: float = VM_CHECK_PERIOD_S,
+        poll_period_s: float = POLL_PERIOD_S, poll_clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if session_prefix not in SESSION_PREFIXES:
             raise ValueError(f"a session prefix is one of {', '.join(SESSION_PREFIXES)}")
-        if not (0 < keepalive_period_s < math.inf and 0 < vm_check_period_s < math.inf):
-            raise ValueError("the watch has finite periods")
+        if not (0 < poll_period_s < math.inf):
+            raise ValueError("the polls have a finite period")
         self.session_prefix = session_prefix
-        self._watch_periods = (keepalive_period_s, vm_check_period_s)
+        self._poll_period_s = poll_period_s
+        self._poll_clock = poll_clock  # the poll loop's own: the training's deadline and the waits
+        self._sleep = sleep
         self._cli = cli
         self._ledger = ledger
         self._is_synthetic = is_synthetic
@@ -555,8 +454,8 @@ class ColabRunner:
         timeout_s = _job_timeout(inputs, timeout_s)
         name = config.check_adapter_name(str(inputs["adapter_name"]))
         uploads = _uploads(inputs)
-        exec_s = timeout_s - _setup_s(len(uploads))
-        if exec_s < MIN_EXEC_S:
+        train_s = timeout_s - _setup_s(len(uploads))
+        if train_s < MIN_EXEC_S:
             raise ColabError("the job's timeout leaves too little time to train")
         base = hold_base(str(inputs["night"]), str(inputs["person_id"]), self.session_prefix)
         reservation = hold(self._ledger, base, (POOL,), Bound(A100_CU_PER_HOUR, timeout_s))
@@ -565,7 +464,7 @@ class ColabRunner:
         started = self._clock()
         vm = _Vm()
         try:
-            receipt = self._train(vm, session, uploads, inputs, out, exec_s)
+            receipt = self._train(vm, session, uploads, inputs, out, train_s)
         finally:
             elapsed = self._finish(vm, session, reservation, started)
         return {
@@ -575,10 +474,10 @@ class ColabRunner:
 
     def _train(
         self, vm: _Vm, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object],
-        out: Path, exec_s: float,
+        out: Path, train_s: float,
     ) -> dict[str, object]:
         self._boot(vm, session, Path(str(inputs["workdir"])))
-        return self._night(session, uploads, inputs, out, exec_s)
+        return self._night(session, uploads, inputs, out, train_s)
 
     def _boot(self, vm: _Vm, session: str, workdir: Path) -> None:
         """Make the VM, install the pinned packages and make the remote folders the uploads go to."""
@@ -595,12 +494,13 @@ class ColabRunner:
 
     def _night(
         self, session: str, uploads: list[tuple[Path, str]], inputs: Mapping[str, object], out: Path,
-        exec_s: float,
+        train_s: float,
     ) -> dict[str, object]:
-        """Upload, train and bring the results off a VM that is up."""
+        """Upload, train detached for at most ``train_s`` and bring the results off a VM that is up."""
         cli = self._cli
         for local, remote in uploads:
             cli.call("upload", "-s", session, str(local), remote, timeout_s=UPLOAD_TIMEOUT_S)
+        workdir = Path(str(inputs["workdir"]))
         warm = inputs.get("prev_adapter_dir") is not None
         env = {
             "ANJO_TRAIN_CONFIG": json.dumps(inputs["config"], sort_keys=True),
@@ -609,23 +509,89 @@ class ColabRunner:
             **({"ANJO_TRAIN_PREV": f"{REMOTE_DIR}/prev"} if warm else {}),
         }
         flags = [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
-        seed = _seeded(inputs)
-        entry = _exec_script(Path(str(inputs["workdir"])), seed)
-        try:
-            with _watching(cli, session, *self._watch_periods) as watch:
-                cli.call("exec", "-s", session, "-f", str(entry), "--timeout", str(exec_s), *flags,
-                         timeout_s=exec_s + EXEC_MARGIN_S, vm_lost=watch.lost)
-        except ColabVmLost:
-            _forget_lost(cli)
-            raise
-        finally:
-            if seed:
-                entry.unlink(missing_ok=True)
+        entry = SEED_ENTRY if _seeded(inputs) else SCRIPT.read_text(encoding="utf-8")
+        with detached.written(workdir, REMOTE_DIR, entry, tuple(env)) as scripts:
+            launched = cli.call("exec", "-s", session, "-f", str(scripts.launch), "--timeout", str(LAUNCH_EXEC_S),
+                                *flags, timeout_s=LAUNCH_EXEC_S + EXEC_MARGIN_S)
+            if detached.read_launch(launched) is None:
+                raise ColabError("the launcher started no training on the VM")
+            code, rounds = self._await(session, scripts, train_s)
+            if code != 0:
+                raise ColabError(f"the training on the VM exited {code}; {self._log_tail(session, scripts, workdir)}")
         out.mkdir(parents=True, exist_ok=True)
         for name in _OUTPUT_FILES:
             cli.call("download", "-s", session, f"{REMOTE_DIR}/out/{name}", str(out / name),
                      timeout_s=DOWNLOAD_TIMEOUT_S)
-        return {**_receipt(out / colab_train.RECEIPT), **watch.outputs()}
+        return {**_receipt(out / colab_train.RECEIPT), **rounds.outputs()}
+
+    def _await(self, session: str, scripts: detached.Scripts, train_s: float) -> tuple[int, _Rounds]:
+        """Poll the training until it is done: its exit code. ``LOST_POLLS`` misses in a row raise
+        ``ColabVmLost``; past ``train_s`` the training is killed and ``ColabTrainingTimeout`` raised."""
+        rounds, misses = _Rounds(), 0
+        deadline = self._poll_clock() + train_s
+        while True:
+            reading = self._poll(session, scripts.poll, rounds)
+            if reading is not None and reading.state == "done" and reading.code is not None:
+                logger.info("training on %s done with %d: %s", session, reading.code, rounds.outputs())
+                return reading.code, rounds
+            misses = 0 if reading is not None and reading.state == "running" else misses + 1
+            if misses >= LOST_POLLS:
+                logger.warning("%d polls in a row found no training on %s: %s", misses, session, rounds.outputs())
+                _forget_lost(self._cli)
+                raise ColabVmLost(f"{misses} polls in a row found no training on {session}'s VM")
+            if self._poll_clock() >= deadline:
+                self._kill(session, scripts.kill)
+                raise ColabTrainingTimeout(f"the training on {session} ran past its {train_s:.0f} seconds")
+            if misses == 0:
+                self._ping(session, rounds)
+            self._sleep(max(0.0, min(self._poll_period_s, deadline - self._poll_clock())))
+
+    def _poll(self, session: str, script: Path, rounds: _Rounds) -> detached.Reading | None:
+        """One poll's reading, or None when the call failed or printed none; a miss either way."""
+        rounds.polls += 1
+        try:
+            printed = self._cli.call("exec", "-s", session, "-f", str(script), "--timeout", str(POLL_EXEC_S),
+                                     timeout_s=POLL_EXEC_S + EXEC_MARGIN_S)
+        except (ColabError, subprocess.TimeoutExpired, OSError) as error:  # a miss: counted, and logged
+            rounds.polls_failed += 1
+            logger.warning("a poll of %s failed (%s)", session, type(error).__name__)
+            return None
+        reading = detached.read_poll(printed)
+        if reading is None or reading.state == "missing":
+            rounds.polls_failed += 1
+            logger.warning("a poll of %s found %s", session, "no reading" if reading is None else "no training")
+        return reading
+
+    def _ping(self, session: str, rounds: _Rounds) -> None:
+        """One keep-alive ping, while there is a python to ping with; a failure is counted, never raised."""
+        if not rounds.pinging:
+            return
+        rounds.pings += 1
+        pinged = False
+        with best_effort("a keep-alive ping", session=session):
+            try:
+                self._cli.call(KEEPALIVE, session, timeout_s=KEEPALIVE_TIMEOUT_S)
+                pinged = True
+            except KeepaliveOff as off:
+                rounds.pinging = False
+                logger.warning("%s: %s trains without keep-alive pings", off, session)
+        if not pinged:
+            rounds.pings_failed += 1
+
+    def _kill(self, session: str, script: Path) -> None:
+        with best_effort("killing the training past its time", session=session):
+            self._cli.call("exec", "-s", session, "-f", str(script), "--timeout", str(KILL_EXEC_S),
+                           timeout_s=KILL_EXEC_S + EXEC_MARGIN_S)
+
+    def _log_tail(self, session: str, scripts: detached.Scripts, workdir: Path) -> str:
+        """Bring the training log's last lines into the night's folder; where they are, for the error."""
+        tail = workdir / LOG_TAIL_NAME
+        with best_effort("the training log's last lines", session=session):
+            printed = self._cli.call("exec", "-s", session, "-f", str(scripts.log_tail), "--timeout",
+                                     str(LOG_TAIL_EXEC_S), timeout_s=LOG_TAIL_EXEC_S + EXEC_MARGIN_S)
+            tail.write_text(printed, encoding="utf-8")
+            return f"its log's last lines are in {tail}"
+        return "its log's last lines could not be brought back"
 
     def lives(self, *, life_timeout_s: float) -> ColabLives:
         """A runner that may keep one VM per life across its nights (Task 12a), each VM holding at least
@@ -660,9 +626,9 @@ def _life_session(person_id: str, prefix: str = SESSION_PREFIX) -> str:
 
 
 def _night_setup_s(uploads: int) -> float:
-    """A later night's fixed call time on a VM that is up: uploads, downloads, the exec margin and the
-    watch's last call. The VM's stop comes after it (``_Life.fits``)."""
-    return uploads * UPLOAD_TIMEOUT_S + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S + EXEC_MARGIN_S + WATCH_CALL_S
+    """A later night's fixed call time on a VM that is up: uploads, the training's calls and the
+    downloads. The VM's stop comes after it (``_Life.fits``)."""
+    return uploads * UPLOAD_TIMEOUT_S + TRAIN_CALLS_S + len(_OUTPUT_FILES) * DOWNLOAD_TIMEOUT_S
 
 
 @dataclass
@@ -749,8 +715,8 @@ class ColabLives:
             life = None
         first = life is None
         setup_s = _setup_s(len(uploads)) if first else _night_setup_s(len(uploads))
-        exec_s = timeout_s - setup_s
-        if exec_s < MIN_EXEC_S:
+        train_s = timeout_s - setup_s
+        if train_s < MIN_EXEC_S:
             if life is not None:
                 self._stop(person)  # a refused night never leaves the VM idling
             raise ColabError("the job's timeout leaves too little time to train")
@@ -766,7 +732,7 @@ class ColabLives:
         try:
             if first:
                 runner._boot(life.vm, life.session, Path(str(inputs["workdir"])))
-            receipt = runner._night(life.session, uploads, inputs, out, exec_s)
+            receipt = runner._night(life.session, uploads, inputs, out, train_s)
         except BaseException:
             self._stop(person)  # a failed night stops the life's VM; the error is the one that propagates
             raise

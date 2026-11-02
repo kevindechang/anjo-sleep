@@ -51,12 +51,14 @@ def test_the_colab_runner_installs_the_pins_and_never_names_a_smoke_model(tmp_pa
     calls: list[list[str]] = []
 
     def fake(args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        calls.append([*args[:3], colab.command_label(list(args)[3:]), *args[4:]])
+        label = colab.command_label(list(args)[3:])
+        calls.append([*args[:3], label, *args[4:]])
         if args[3] == "download" and Path(args[-1]).name == colab_train.RECEIPT:
             Path(args[-1]).write_text(json.dumps({"steps": 1}))
         elif args[3] == "download":
             Path(args[-1]).write_bytes(b"{}")
-        return subprocess.CompletedProcess(list(args), 0, "", "")
+        detached = {colab.LAUNCH: "anjo-train: launched 1\n", colab.POLL: "anjo-train: done 0\n"}
+        return subprocess.CompletedProcess(list(args), 0, detached.get(label, ""), "")
 
     work = tmp_path / "work"
     work.mkdir()
@@ -68,7 +70,7 @@ def test_the_colab_runner_installs_the_pins_and_never_names_a_smoke_model(tmp_pa
                      "prev_adapter_dir": None}, timeout_s=7200.0)
     install = next(args for args in calls if args[3] == "install")
     assert install[-len(colab_train.TRAIN_PACKAGES):] == list(colab_train.TRAIN_PACKAGES)
-    run = next(args for args in calls if args[3] == "exec")
+    run = next(args for args in calls if args[3] == colab.LAUNCH)
     assert not any(colab_train.SMOKE_ENV in part for part in run)
 
 

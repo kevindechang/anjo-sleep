@@ -108,8 +108,8 @@ def test_one_vm_per_accelerated_life(tmp_path: Path) -> None:
     # night 1 has nothing measured, so its VM stops; nights 2 and 3 share one VM (base weights once)
     assert commands.count("new") == 2 and commands.count("install") == 2
     assert commands.count("mkdir") == commands.count("new")  # the remote folders once a VM, never on a warm night
-    assert commands.count("exec") == 3 and commands[-1] == "stop" and commands.count("stop") == 2
-    assert commands.index("stop") < commands.index("exec", commands.index("exec") + 1)
+    assert commands.count("launch") == 3 and commands[-1] == "stop" and commands.count("stop") == 2
+    assert commands.index("stop") < commands.index("launch", commands.index("launch") + 1)
     assert [e["op"] for e in _events(ledger)] == ["reserve", "settle", "reserve", "settle"]
 
 
@@ -165,7 +165,7 @@ def test_colab_runner_refuses_non_synthetic_person(tmp_path: Path, kind: str) ->
 
 @pytest.mark.parametrize("kind", ["night", "life"])
 def test_colab_runner_stops_vm_on_failure(tmp_path: Path, kind: str) -> None:
-    fake, ledger = FailNth("exec", 1), Ledger(tmp_path / "budget.jsonl")
+    fake, ledger = FailNth("launch", 1), Ledger(tmp_path / "budget.jsonl")
     runner = _runner(fake, ledger)
     with pytest.raises(ColabError):
         if kind == "night":
@@ -178,7 +178,7 @@ def test_colab_runner_stops_vm_on_failure(tmp_path: Path, kind: str) -> None:
 
 
 def test_a_failed_night_stops_that_lifes_vm_and_the_next_night_starts_a_fresh_one(tmp_path: Path) -> None:
-    fake, ledger = FailNth("exec", 2), Ledger(tmp_path / "budget.jsonl")
+    fake, ledger = FailNth("launch", 2), Ledger(tmp_path / "budget.jsonl")
     with _lives(_runner(fake, ledger)) as lives:
         _run(lives, tmp_path, "synthetic-1", 1)
         with pytest.raises(ColabError):

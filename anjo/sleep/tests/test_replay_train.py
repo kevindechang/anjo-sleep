@@ -33,7 +33,7 @@ from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import colab_train, thinker
 from anjo.sleep.train.dataset import Dataset
 from anjo.sleep.train.lora import LoraCfg, TrainError, plan_steps, training_config
-from anjo.sleep.train.runners.colab import SESSION_PREFIX, ColabCli, RealPersonRefused, command_label
+from anjo.sleep.train.runners.colab import LAUNCH, POLL, SESSION_PREFIX, ColabCli, RealPersonRefused, command_label
 
 BRIEF = load_brief()
 LAMBDA = settings.token_penalty()
@@ -199,7 +199,8 @@ class FakeColab:
         self.calls: list[list[str]] = []
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        self.calls.append([*args[:3], command_label(list(args)[3:]), *args[4:]])
+        label = command_label(list(args)[3:])
+        self.calls.append([*args[:3], label, *args[4:]])
         if args[3] == "download":
             local = Path(args[-1])
             if local.name == colab_train.RECEIPT:
@@ -209,7 +210,8 @@ class FakeColab:
                 local.write_text(json.dumps({"peft_type": "LORA", "r": 16, framing.RENDERING_KEY: self.rendering}))
             else:
                 local.write_bytes(b"weights")
-        return subprocess.CompletedProcess(list(args), 0, "", "")
+        detached = {LAUNCH: "anjo-train: launched 1\n", POLL: "anjo-train: done 0\n"}  # trained at once
+        return subprocess.CompletedProcess(list(args), 0, detached.get(label, ""), "")
 
     def commands(self) -> list[str]:
         return [args[3] for args in self.calls]
@@ -268,7 +270,7 @@ def test_both_adapters_train_on_colab_from_one_recipe_and_record_their_rendering
     for ref in refs:
         config.check_adapter_name(ref.id)
         assert ref.night == thinker.render_night(data)
-    settings = [json.loads(arg.split("=", 1)[1]) for args in cli.calls if args[3] == "exec"
+    settings = [json.loads(arg.split("=", 1)[1]) for args in cli.calls if args[3] == LAUNCH
                 for arg in args if arg.startswith("ANJO_TRAIN_CONFIG=")]
     assert len(settings) == 2 and settings[0] == settings[1]  # the same settings for both, max_steps too
     assert settings[0]["max_steps"] == found.adapters[0].steps == found.adapters[1].steps

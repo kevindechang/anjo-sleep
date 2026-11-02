@@ -1,9 +1,9 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """``ANJO_SLEEP_TRAIN_RUNNER=colab_modal``: Colab trains, and Modal trains the same job when Colab's
-infrastructure fails before the training script starts (no A100, install, upload) or times out. A
-training-script failure, a refusal, a budget stop, a VM that won't stop and ``Cancelled`` fail the
-night as ``colab`` does. Both pools' holds are settled, the receipt names the runner that trained,
+infrastructure fails before the training starts (no A100, install, upload), times out, or loses the
+VM mid-run. A training that exits non-zero, a refusal, a budget stop, a VM that won't stop and
+``Cancelled`` fail the night as ``colab`` does. Both pools' holds are settled, the receipt names the runner that trained,
 and the ``modal`` and ``colab`` settings are as they were. The CLI and Modal are fakes: no VM, no
 container, no network."""
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import subprocess
-import time
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -24,7 +23,7 @@ from anjo.sleep.night.sweep import Stopped
 from anjo.sleep.serving import config, framing
 from anjo.sleep.stops import BudgetStop, Cancelled
 from anjo.sleep.tests.test_colab_life import _night
-from anjo.sleep.tests.test_colab_runner import FakeColab
+from anjo.sleep.tests.test_colab_runner import FakeColab, PollClock
 from anjo.sleep.tests.test_lora import REVISION, _examples
 from anjo.sleep.tests.test_modal_runner import NAME, RENDERING, Clock, FakeCalls, _inputs
 from anjo.sleep.tests.test_train_runner_choice import NoColab, _EmptyColab, _FlakyColab
@@ -33,12 +32,14 @@ from anjo.sleep.train.runners import choice
 from anjo.sleep.train.runners.colab import (
     A100_CU_PER_HOUR,
     KEEPALIVE,
+    LOST_POLLS,
     PING_SCRIPT,
-    VM_CHECK,
+    POLL,
     ColabCli,
-    ColabVmLost,
     ColabError,
     ColabRunner,
+    ColabTrainingTimeout,
+    ColabVmLost,
     RealPersonRefused,
     command_label,
 )
@@ -49,9 +50,7 @@ from anjo.sleep.train.trainer import OPTIONAL_KEYS, LoraTrainer
 TIMEOUT_S = 7200.0
 NIGHT = date(2026, 10, 28)
 MINUTE_S = 60.0
-# The kernel's own --timeout for a cold night with only the dataset to upload (colab._setup_s(1)).
-# 60 + 60: mkdir; 30: a keep-alive ping still running when the exec ends
-KERNEL_S = TIMEOUT_S - (600.0 + 900.0 + 60.0 + 60.0 + 300.0 + 3 * 300.0 + 180.0 + 60.0 + 30.0)
+PING = ("/cli/bin/python", "-I", str(PING_SCRIPT))
 
 
 def _synthetic(uid: str) -> bool:
@@ -59,22 +58,26 @@ def _synthetic(uid: str) -> bool:
 
 
 class TimedColab(FakeColab):
-    """``FakeColab`` on a clock that moves only as its calls take it: an ``exec`` ``exec_s``, a call that
-    hangs its whole timeout, any other a minute. ``error`` is what ``fail`` raises instead of exiting 1,
-    ``stops`` False makes every stop exit 1, and the adapter it downloads records the night's rendering."""
+    """``FakeColab`` on a clock that moves only as its calls take it: the ``launch`` the training's
+    ``train_s``, a call that hangs its whole timeout, any other a minute; the polls wait on their own
+    clock (``polls``). ``error`` is what ``fail`` raises instead of exiting 1, ``stops`` False makes
+    every stop exit 1, and the adapter it downloads records the night's rendering."""
 
-    def __init__(self, fail: str | None = None, *, timeout: bool = False, exec_s: float = 600.0,
-                 error: BaseException | None = None, stops: bool = True) -> None:
-        super().__init__(fail, timeout=timeout)
-        self.clock = Clock()
-        self.exec_s, self.error, self.stops = exec_s, error, stops
+    def __init__(self, fail: str | None = None, *, timeout: bool = False, train_s: float = 600.0,
+                 error: BaseException | None = None, stops: bool = True,
+                 readings: Sequence[str] = ("done 0",)) -> None:
+        super().__init__(fail, timeout=timeout, readings=readings)
+        self.clock, self.polls = Clock(), PollClock()
+        self.train_s, self.error, self.stops = train_s, error, stops
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
         args = list(args)
-        args[3] = command_label(args[3:])  # the remote folders' exec counts as mkdir
+        if args[1] == "-I":  # a keep-alive ping
+            return super().__call__(args, timeout_s)
+        args[3] = command_label(args[3:])  # each exec of the runner's own scripts counts as its own
         command = args[3]
         hangs = command == self.fail and self.timeout
-        self.clock.now += timeout_s if hangs else self.exec_s if command == "exec" else MINUTE_S
+        self.clock.now += timeout_s if hangs else self.train_s if command == "launch" else MINUTE_S
         if command == self.fail and self.error is not None:
             self.calls.append((args, timeout_s))
             raise self.error
@@ -92,18 +95,19 @@ def _modal(tmp_path: Path, calls: FakeCalls, ledger: Ledger) -> ModalRunner:
                        clock=calls.clock)
 
 
-def _rig(tmp_path: Path, colab: TimedColab, *, ledger: Ledger | None = None,
-         allow_real: bool = False) -> tuple[ColabModalRunner, FakeCalls, Ledger]:
+def _rig(tmp_path: Path, colab: TimedColab, *, ledger: Ledger | None = None, allow_real: bool = False,
+         keepalive: Sequence[str] | None = None) -> tuple[ColabModalRunner, FakeCalls, Ledger]:
     calls, ledger = FakeCalls(), ledger or Ledger(tmp_path / "budget.jsonl")
-    runner = ColabModalRunner(cli=ColabCli(Path("/fake/colab"), run=colab), modal=_modal(tmp_path, calls, ledger),
-                              ledger=ledger, is_synthetic=_synthetic, allow_real=allow_real, clock=colab.clock)
+    runner = ColabModalRunner(cli=ColabCli(Path("/fake/colab"), run=colab, keepalive=keepalive),
+                              modal=_modal(tmp_path, calls, ledger), ledger=ledger, is_synthetic=_synthetic,
+                              allow_real=allow_real, clock=colab.clock, poll_clock=colab.polls, sleep=colab.polls.sleep)
     return runner, calls, ledger
 
 
 def _colab_alone(tmp_path: Path, colab: TimedColab) -> ColabRunner:
     """The ``colab`` setting's runner, on its own ledger."""
     return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=colab), ledger=Ledger(tmp_path / "alone.jsonl"),
-                       is_synthetic=_synthetic, clock=colab.clock)
+                       is_synthetic=_synthetic, clock=colab.clock, poll_clock=colab.polls, sleep=colab.polls.sleep)
 
 
 def _warm(tmp_path: Path) -> Path:
@@ -128,7 +132,7 @@ def test_a_night_colab_trains_never_reaches_modal_and_makes_the_colab_settings_c
     assert out["runner"] == "colab" and "fallback_reason" not in out and out["steps"] == 9
     assert calls.spawned == [] and not runner.landed(NAME)
     assert ledger.open_holds() == () and ledger.used("modal_usd") == 0.0
-    assert ledger.used("colab_cu") == pytest.approx(_cu(8 * MINUTE_S + 600.0))  # what the VM ran for (mkdir: a minute)
+    assert ledger.used("colab_cu") == pytest.approx(_cu(9 * MINUTE_S + 600.0))  # what the VM ran for (mkdir: a minute)
     # The same calls, in the same order with the same timeouts, and the same outputs as on ``colab``.
     alone = TimedColab()
     assert dict(_colab_alone(tmp_path / "alone", alone).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)) == {
@@ -153,7 +157,7 @@ def test_a_colab_failure_before_training_trains_the_same_job_on_modal(
     runner, calls, ledger = _rig(tmp_path, colab)
     out = runner.run(JOB, _inputs(tmp_path, prev=_warm(tmp_path)), timeout_s=TIMEOUT_S)
     assert out["runner"] == "modal" and out["fallback_reason"] == reason and runner.landed(NAME)
-    assert colab.commands()[-1] == "stop" and "exec" not in colab.commands()  # Colab's own cleanup ran first
+    assert colab.commands()[-1] == "stop" and "launch" not in colab.commands()  # Colab's own cleanup ran first
     # The job Modal runs on the ``modal`` setting: the dataset, the recipe, the warm start, the name, the time.
     alone = FakeCalls()
     _modal(tmp_path / "alone", alone, Ledger(tmp_path / "alone.jsonl")).run(
@@ -167,140 +171,77 @@ def test_a_colab_failure_before_training_trains_the_same_job_on_modal(
     assert CallRecords(tmp_path / CALLS_DIR).items() == []  # the call finished: nothing left to sweep
 
 
-@pytest.mark.parametrize(("fail", "exec_s", "timeout", "reason"), [
-    ("exec", 600.0, True, "colab exec timed out"),  # the CLI hung past the exec's hard timeout
-    ("exec", KERNEL_S + 30.0, False, "colab exec ran past its timeout"),  # the kernel's own timeout ended it
-    ("download", 600.0, True, "colab download timed out"),
+@pytest.mark.parametrize(("fail", "readings", "reason"), [
+    ("launch", ["done 0"], "colab launch timed out"),  # the CLI hung past the launch's hard timeout
+    ("download", ["done 0"], "colab download timed out"),
+    ("download", ["fail", "done 0"], "colab download timed out"),  # a failed poll before it is never the night's
+    (None, ["running"], "colab training ran past its timeout"),  # killed at its own deadline
+    (None, ["running", "fail", "hang", "missing"], "colab VM lost mid-run"),  # three misses in a row
 ])
-def test_a_colab_timeout_trains_the_night_on_modal(
-    tmp_path: Path, fail: str, exec_s: float, timeout: bool, reason: str,
+def test_a_colab_timeout_or_a_lost_vm_trains_the_night_on_modal(
+    tmp_path: Path, fail: str | None, readings: list[str], reason: str,
 ) -> None:
-    colab = TimedColab(fail, timeout=timeout, exec_s=exec_s)
+    colab = TimedColab(fail, timeout=True, readings=readings)
     runner, calls, ledger = _rig(tmp_path, colab)
     out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert out["runner"] == "modal" and out["fallback_reason"] == reason and len(calls.spawned) == 1
-    assert colab.commands()[-1] == "stop" and ledger.open_holds() == ()
+    assert colab.commands()[-1] == "stop" and ledger.open_holds() == () and runner.landed(NAME)
     assert 0 < ledger.used("colab_cu") <= Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount and ledger.used("modal_usd") > 0
 
 
-class PingsFail(TimedColab):
-    """``TimedColab`` whose ``exec`` takes ``wall_s`` of real time, so keep-alive pings run, and whose every
-    ping (the CLI's python running the ping script) exits 1."""
-
-    def __init__(self, fail: str | None = None, *, timeout: bool = False, wall_s: float = 0.2) -> None:
-        super().__init__(fail, timeout=timeout)
-        self.wall_s, self.pings = wall_s, 0
-
-    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if args[1] == "-I":
-            self.pings += 1
-            return subprocess.CompletedProcess(args, 1, "", "boom")
-        if command_label(args[3:]) == "exec":
-            time.sleep(self.wall_s)
-        return super().__call__(args, timeout_s)
+def test_a_lost_vm_drops_the_dead_session_before_the_stop(tmp_path: Path) -> None:
+    colab = TimedColab(readings=["running", "fail", "fail", "fail"])
+    runner, calls, ledger = _rig(tmp_path, colab)
+    assert runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)["fallback_reason"] == "colab VM lost mid-run"
+    assert colab.commands()[-2:] == ["sessions", "stop"] and colab.commands().count("poll") == 1 + LOST_POLLS
 
 
-def _pinging_rig(tmp_path: Path, colab: TimedColab) -> tuple[ColabModalRunner, FakeCalls, Ledger]:
-    calls, ledger = FakeCalls(), Ledger(tmp_path / "budget.jsonl")
-    cli = ColabCli(Path("/fake/colab"), run=colab, keepalive=("/cli/bin/python", "-I", str(PING_SCRIPT)))
-    runner = ColabModalRunner(cli=cli, modal=_modal(tmp_path, calls, ledger), ledger=ledger, is_synthetic=_synthetic,
-                              clock=colab.clock, keepalive_period_s=0.02)
-    return runner, calls, ledger
+@pytest.mark.parametrize("readings", [["running", "fail", "running", "done 0"], ["hang", "missing", "done 0"]])
+def test_fewer_than_three_misses_never_fall_back(tmp_path: Path, readings: list[str]) -> None:
+    colab = TimedColab(readings=readings)
+    runner, calls, ledger = _rig(tmp_path, colab)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["runner"] == "colab" and out["polls_failed"] == 2 - (readings[0] == "running") and calls.spawned == []
 
 
-@pytest.mark.parametrize(("fail", "timeout", "trained", "reason"), [
-    (None, False, "colab", None),  # the exec trained: the failed pings change nothing
-    ("exec", True, "modal", "colab exec timed out"),  # a timeout still falls back, though failed pings came first
-])
-def test_a_failed_keepalive_ping_is_never_the_nights_failure(
-    tmp_path: Path, fail: str | None, timeout: bool, trained: str, reason: str | None,
-) -> None:
+def test_failed_pings_never_decide_the_night(tmp_path: Path) -> None:
     assert command_label((KEEPALIVE, "anjo-sleep-x")) == KEEPALIVE == "keepalive"  # pings carry their own label
-    colab = PingsFail(fail, timeout=timeout)
-    runner, calls, ledger = _pinging_rig(tmp_path, colab)
+    colab = TimedColab(readings=["running", "running", "done 0"])
+    colab.ping_code = 1
+    runner, calls, ledger = _rig(tmp_path, colab, keepalive=PING)
     out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert colab.pings > 0 and out["runner"] == trained and out.get("fallback_reason") == reason
-    assert len(calls.spawned) == (trained == "modal") and ledger.open_holds() == ()
-    if trained == "colab":
-        assert out["keepalive_failed"] == out["keepalive_pings"] == colab.pings
+    assert out["runner"] == "colab" and out["keepalive_failed"] == out["keepalive_pings"] == len(colab.pings) == 2
+    assert calls.spawned == [] and ledger.open_holds() == ()
 
 
-class LosesVm(TimedColab):
-    """``TimedColab`` whose VM is gone after ``present`` checks: its exec runs on the stoppable path and
-    waits up to ten seconds of real time for its stop."""
-
-    def __init__(self, present: int = 1) -> None:
-        super().__init__()
-        self.present, self.checks = present, 0
-        self.exec_ran_s: float | None = None
-
-    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if args[1] == "-I":
-            if args[3] != "--check":
-                return subprocess.CompletedProcess(args, 0, "", "")
-            self.checks += 1
-            return subprocess.CompletedProcess(args, 0, "present\n" if self.checks <= self.present else "missing\n", "")
-        return super().__call__(args, timeout_s)
-
-    def until(self, args: Sequence[str], timeout_s: float, stop: Any) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if command_label(args[3:]) != "exec":
-            return self(args, timeout_s)
-        started = time.monotonic()
-        stopped = stop.wait(10.0)
-        self.exec_ran_s = time.monotonic() - started
-        if not stopped:
-            return self(args, timeout_s)
-        self.calls.append((args, timeout_s))
-        return subprocess.CompletedProcess(args, -9, "", "")
-
-
-def test_a_vm_lost_mid_run_stops_the_exec_and_trains_the_night_on_modal(tmp_path: Path) -> None:
-    colab = LosesVm()
-    calls, ledger = FakeCalls(), Ledger(tmp_path / "budget.jsonl")
-    cli = ColabCli(Path("/fake/colab"), run=colab, run_until=colab.until,
-                   keepalive=("/cli/bin/python", "-I", str(PING_SCRIPT)))
-    runner = ColabModalRunner(cli=cli, modal=_modal(tmp_path, calls, ledger), ledger=ledger, is_synthetic=_synthetic,
-                              clock=colab.clock, keepalive_period_s=0.02, vm_check_period_s=0.05)
-    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert out["runner"] == "modal" and out["fallback_reason"] == "colab VM lost mid-run" and len(calls.spawned) == 1
-    assert colab.checks == 3 and colab.exec_ran_s is not None and colab.exec_ran_s < 2.0  # two checks, not ten seconds
-    assert colab.commands()[-2:] == ["sessions", "stop"] and ledger.open_holds() == ()
-    assert 0 < ledger.used("colab_cu") < Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount and runner.landed(NAME)
-
-
-def test_a_lost_vm_is_a_fallback_reason_and_a_failed_check_never_is() -> None:
-    lost = ColabVmLost("colab exec stopped: the session's VM is gone")
-    check = ColabError("colab vmcheck failed with exit 1")
-    assert fallback_reason(lost, [Failed(VM_CHECK, check, 1.0), Failed("exec", lost, 300.0, 6000.0)]) == (
-        "colab VM lost mid-run")
-    assert fallback_reason(check, [Failed(VM_CHECK, check, 1.0)]) is None
-
-
-def test_an_exec_that_fails_after_failed_pings_fails_with_its_own_error(tmp_path: Path) -> None:
-    colab = PingsFail("exec")
-    runner, calls, ledger = _pinging_rig(tmp_path, colab)
-    with pytest.raises(ColabError, match="colab exec failed with exit 1"):
-        runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert colab.pings > 0 and calls.spawned == [] and ledger.open_holds() == ()
+def test_a_lost_vm_and_a_training_past_its_time_fall_back_and_a_failed_poll_never_does() -> None:
+    poll = ColabError("colab poll failed with exit 1")
+    lost, late = ColabVmLost("3 polls in a row found no training"), ColabTrainingTimeout("ran past its 3810 seconds")
+    assert fallback_reason(lost, [Failed(POLL, poll, 1.0)] * 3) == "colab VM lost mid-run"
+    assert fallback_reason(late, []) == "colab training ran past its timeout"
+    assert fallback_reason(poll, [Failed(POLL, poll, 1.0)]) is None
+    exited = ColabError("the training on the VM exited 1")
+    assert fallback_reason(exited, [Failed(POLL, poll, 1.0)]) is None  # a script error fails on Modal too
 
 
 # ── Everything else fails the night as on ``colab`` ─────────────────────────
 
 
-@pytest.mark.parametrize("fail", ["exec", "download"])
-def test_a_training_failure_on_colab_fails_the_night_without_modal(tmp_path: Path, fail: str) -> None:
-    """An exec that exits non-zero before its timeout: the CLI gives only the exit code, so a Python
-    error or a NaN the script reports can't be told from a lost VM, and would fail on Modal too."""
-    colab = TimedColab(fail)
+@pytest.mark.parametrize(("fail", "readings", "match"), [
+    (None, ["running", "done 1"], "the training on the VM exited 1"),  # a Python error or a NaN: Modal's too
+    ("launch", ["done 0"], "colab launch failed with exit 1"),  # the training counts as started
+    ("download", ["done 0"], "colab download failed with exit 1"),
+])
+def test_a_training_failure_on_colab_fails_the_night_without_modal(
+    tmp_path: Path, fail: str | None, readings: list[str], match: str,
+) -> None:
+    colab = TimedColab(fail, readings=readings)
     runner, calls, ledger = _rig(tmp_path, colab)
-    with pytest.raises(ColabError, match=f"colab {fail} failed with exit 1"):
+    with pytest.raises(ColabError, match=match):
         runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert calls.spawned == [] and not runner.landed(NAME) and ledger.open_holds() == ()
-    alone = TimedColab(fail)
-    with pytest.raises(ColabError, match=f"colab {fail} failed with exit 1"):
+    alone = TimedColab(fail, readings=readings)
+    with pytest.raises(ColabError, match=match):
         _colab_alone(tmp_path / "alone", alone).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert alone.calls == colab.calls  # exactly as the colab setting fails
 

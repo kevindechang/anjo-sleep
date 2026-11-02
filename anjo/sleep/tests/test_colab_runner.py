@@ -13,8 +13,6 @@ import math
 import subprocess
 import sys
 import tarfile
-import threading
-import time
 import types
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,6 +27,7 @@ from anjo.sleep.stops import BudgetStop
 from anjo.sleep.train import modal_job
 from anjo.sleep.train.lora import DATASET_FILE, JOB, adapter_name
 from anjo.sleep.train.runners import colab
+from anjo.sleep.train.runners import colab_detached as detached
 from anjo.sleep.train.runners.colab import (
     command_label,
     A100_CU_PER_HOUR,
@@ -36,6 +35,8 @@ from anjo.sleep.train.runners.colab import (
     ColabCli,
     ColabError,
     ColabRunner,
+    ColabTrainingTimeout,
+    ColabVmLost,
     RealPersonRefused,
     hold_base,
     stop_leftover_sessions,
@@ -46,26 +47,58 @@ TIMEOUT_S = 7200.0
 NAME = adapter_name("p1", 1, 0)
 
 
-class FakeColab:
-    """Records every call; ``fail`` makes one subcommand exit 1 or time out."""
+ANSWERS = {colab.LAUNCH: f"{detached.MARK} launched 4242\n", colab.KILL: f"{detached.MARK} killed\n",
+           colab.LOG_TAIL: f"{detached.MARK} log tail 2\nloss nan\nValueError: the loss is nan\n"}
 
-    def __init__(self, fail: str | None = None, *, timeout: bool = False) -> None:
+
+def _literal(script: str, name: str) -> Any:
+    """The value a generated script assigns to ``name``."""
+    for node in ast.parse(script).body:
+        if isinstance(node, ast.Assign) and [getattr(target, "id", None) for target in node.targets] == [name]:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"the script assigns no {name}")
+
+
+class FakeColab:
+    """Records every call; ``fail`` makes one subcommand exit 1 or time out. The detached training's
+    polls read ``readings`` in turn, the last one repeating: ``running``, ``done <code>``, ``missing``,
+    ``fail`` (the poll exits 1, as for a session the CLI no longer has) or ``hang`` (it times out). A
+    keep-alive ping (the CLI's python, ``-I``) is recorded apart, in ``pings``."""
+
+    def __init__(self, fail: str | None = None, *, timeout: bool = False, readings: Sequence[str] = ("done 0",),
+                 answers: dict[str, str] | None = None) -> None:
         self.calls: list[tuple[list[str], float]] = []
         self.fail = fail
         self.timeout = timeout
-        self.executed = ""
+        self.readings = list(readings)
+        self.answers = {**ANSWERS, **(answers or {})}
+        self.executed = ""  # the training entry the launcher starts
+        self.keys: tuple[str, ...] = ()  # the environment names it passes on to the training
+        self.scripts: dict[str, str] = {}  # each exec's script, by its command
+        self.pings: list[list[str]] = []
+        self.ping_code = 0
 
     def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
         args = list(args)
-        args[3] = command_label(args[3:])  # the remote folders' exec counts as mkdir
+        if args[1] == "-I":
+            self.pings.append(args)
+            return subprocess.CompletedProcess(args, self.ping_code, "", "")
+        args[3] = command_label(args[3:])  # each exec of the runner's own scripts counts as its own
         self.calls.append((args, timeout_s))
         command = args[3]
-        if command == "exec":
-            self.executed = Path(args[args.index("-f") + 1]).read_text(encoding="utf-8")
+        if "-f" in args:
+            self.scripts[command] = Path(args[args.index("-f") + 1]).read_text(encoding="utf-8")
+        if command == colab.LAUNCH:
+            self.executed = _literal(self.scripts[command], "ENTRY_SOURCE")
+            self.keys = _literal(self.scripts[command], "KEYS")
         if command == self.fail:
             if self.timeout:
                 raise subprocess.TimeoutExpired(args, timeout_s)
             return subprocess.CompletedProcess(args, 1, "", "boom")
+        if command == colab.POLL:
+            return self._poll(args, timeout_s)
+        if command in self.answers:
+            return subprocess.CompletedProcess(args, 0, self.answers[command], "")
         if command == "download":
             local = Path(args[-1])
             if local.name == "receipt.json":
@@ -76,8 +109,31 @@ class FakeColab:
                 local.write_bytes(b"{}")
         return subprocess.CompletedProcess(args, 0, "", "")
 
+    def _poll(self, args: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        reading = self.readings.pop(0) if len(self.readings) > 1 else self.readings[0]
+        if reading == "hang":
+            raise subprocess.TimeoutExpired(args, timeout_s)
+        if reading == "fail":
+            return subprocess.CompletedProcess(args, 1, "", "[colab] Session not found.\n")
+        return subprocess.CompletedProcess(args, 0, f"{detached.MARK} {reading}\n", "")
+
     def commands(self) -> list[str]:
         return [args[3] for args, _ in self.calls]
+
+
+class PollClock:
+    """The poll loop's own clock: only its sleeps move it on."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
 
 
 class Clock:
@@ -97,17 +153,20 @@ def _inputs(tmp_path: Path, person: str = "synthetic-1", prev: Path | None = Non
             "workdir": str(work), "config": {"r": 16}, "prev_adapter_dir": None if prev is None else str(prev)}
 
 
-def _runner(fake: FakeColab, ledger: Ledger, *, allow_real: bool = False) -> ColabRunner:
-    return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake), ledger=ledger,
-                       is_synthetic=lambda uid: uid.startswith("synthetic"), allow_real=allow_real, clock=Clock())
+def _runner(fake: FakeColab, ledger: Ledger, *, allow_real: bool = False, polls: PollClock | None = None,
+            keepalive: Sequence[str] | None = None) -> ColabRunner:
+    polls = polls or PollClock()
+    return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake, keepalive=keepalive), ledger=ledger,
+                       is_synthetic=lambda uid: uid.startswith("synthetic"), allow_real=allow_real, clock=Clock(),
+                       poll_clock=polls, sleep=polls.sleep)
 
 
 def _events(ledger: Ledger) -> list[dict[str, Any]]:
     return read_records(ledger.path, PLAIN)
 
 
-@pytest.mark.parametrize(("fail", "timeout"), [(None, False), ("exec", False), ("exec", True),
-                                               ("new", True), ("upload", False), ("download", False)])
+@pytest.mark.parametrize(("fail", "timeout"), [(None, False), ("launch", False), ("launch", True), ("poll", False),
+                                               ("poll", True), ("new", True), ("upload", False), ("download", False)])
 def test_colab_runner_always_stops_vm(tmp_path: Path, fail: str | None, timeout: bool) -> None:
     fake, ledger = FakeColab(fail, timeout=timeout), Ledger(tmp_path / "budget.jsonl")
     runner = _runner(fake, ledger)
@@ -169,8 +228,7 @@ def test_only_the_dataset_and_a_warm_starts_adapter_go_up(tmp_path: Path) -> Non
     _runner(fake, ledger).run(JOB, _inputs(tmp_path, prev=prev), timeout_s=TIMEOUT_S)
     uploaded = [Path(args[-2]) for args, _ in fake.calls if args[3] == "upload"]
     assert uploaded == [tmp_path / "work" / DATASET_FILE, *(prev / f for f in config.ADAPTER_FILES)]
-    executed = next(args for args, _ in fake.calls if args[3] == "exec")
-    assert Path(executed[executed.index("-f") + 1]) == colab.SCRIPT
+    assert fake.executed == colab.SCRIPT.read_text(encoding="utf-8")
     assert not any(".env" in part for args, _ in fake.calls for part in args)
     with pytest.raises(ColabError):
         bad = _inputs(tmp_path)
@@ -198,7 +256,8 @@ def test_every_runner_call_passes_a_finite_timeout(tmp_path: Path) -> None:
     fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
     _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert all(0 < timeout < math.inf for _, timeout in fake.calls)
-    assert fake.commands() == ["new", "install", "mkdir", "upload", "exec", "download", "download", "download", "stop"]
+    assert fake.commands() == ["new", "install", "mkdir", "upload", "launch", "poll", "download", "download", "download",
+                               "stop"]
 
 
 class Both(FakeColab):
@@ -367,8 +426,9 @@ def test_a_seeded_night_ships_the_shared_files_and_runs_modal_entry(tmp_path: Pa
     assert sorted(members) == sorted(remote.lstrip("/") for _, remote in modal_job.TRAIN_FILES)
     assert fake.executed == colab.SEED_ENTRY and modal_job.REMOTE_SCRIPT in fake.executed
     assert colab.SEED_ARCHIVE_ENTRY in fake.executed  # unpacked before the entry runs
-    executed = next(args for args, _ in fake.calls if args[3] == "exec")
+    executed = next(args for args, _ in fake.calls if args[3] == colab.LAUNCH)
     env = _env(executed)
+    assert fake.keys == tuple(env)  # the training gets this night's environment, and no other's
     assert env == {
         "ANJO_TRAIN_CONFIG": json.dumps(inputs["config"], sort_keys=True),
         "ANJO_TRAIN_DATASET": f"{colab.REMOTE_DIR}/{DATASET_FILE}",
@@ -386,13 +446,11 @@ def test_a_warm_seed_night_leaves_at_least_100_minutes_to_train(tmp_path: Path) 
     prev.mkdir()
     for file in config.ADAPTER_FILES:
         (prev / file).write_text("{}")
-    fake, ledger = FakeColab(), Ledger(tmp_path / "budget.jsonl")
-    _runner(fake, ledger).run(JOB, _seeded_inputs(tmp_path, prev=prev), timeout_s=TIMEOUT_S)
-    executed = next(args for args, _ in fake.calls if args[3] == "exec")
-    exec_s = float(executed[executed.index("--timeout") + 1])
-    assert exec_s >= 6000.0  # the base weights' download and 4-bit load, then a 27-minute night
-    # 120: mkdir; 30: a keep-alive ping still running when the exec ends
-    assert exec_s == SEED_TIMEOUT_S - 600.0 - 900.0 - 120.0 - 4 * 300.0 - 3 * 300.0 - 180.0 - 60.0 - 30.0
+    fake, ledger, polls = FakeColab(readings=["running"]), Ledger(tmp_path / "budget.jsonl"), PollClock()
+    with pytest.raises(ColabTrainingTimeout):  # run to its own deadline, which the poll clock then shows
+        _runner(fake, ledger, polls=polls).run(JOB, _seeded_inputs(tmp_path, prev=prev), timeout_s=TIMEOUT_S)
+    assert polls.now >= 6000.0  # the base weights' download and 4-bit load, then a 27-minute night
+    assert polls.now == _train_s(SEED_TIMEOUT_S, uploads=4)
 
 
 def test_the_seed_archive_refuses_a_file_outside_the_shared_list(tmp_path: Path) -> None:
@@ -459,89 +517,124 @@ def test_a_new_vm_makes_the_remote_folders_before_any_upload(tmp_path: Path) -> 
     assert not (tmp_path / colab.MKDIR_FILE).exists()  # the script never stays in the night's folder
 
 
-# ── The keep-alive (2026-11-02: an A100 vanished about 35 minutes into a training exec) ──────────────
+# ── A detached night (2026-11-02: one long exec dies when the CLI's proxy token expires, ~1 h in) ────
 
 PING = ("/cli/bin/python", "-I", str(colab.PING_SCRIPT))
-PERIOD_S = 0.02
+DONE = ["running", "running", "done 0"]
 
 
-class SlowExec(FakeColab):
-    """An ``exec`` that takes ``exec_s`` of real time (and exits ``exec_code``); a ping (the CLI's python
-    running the ping script) exits ``ping_code``. Pings are recorded apart, each with whether it came
-    inside the exec's window: after the uploads, before any download or stop (the watch is joined
-    before either, so this holds by construction, not by timing)."""
-
-    def __init__(self, *, exec_s: float = 0.3, exec_code: int = 0, ping_code: int = 0) -> None:
-        super().__init__()
-        self.exec_s, self.exec_code, self.ping_code = exec_s, exec_code, ping_code
-        self.pings: list[tuple[list[str], float, bool]] = []
-
-    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if args[1] == "-I":
-            self.pings.append((args, timeout_s, self.inside()))
-            return subprocess.CompletedProcess(args, self.ping_code, "", "")
-        if command_label(args[3:]) != "exec":
-            return super().__call__(args, timeout_s)
-        time.sleep(self.exec_s)
-        if self.exec_code:
-            self.calls.append((args, timeout_s))
-            return subprocess.CompletedProcess(args, self.exec_code, "", "boom")
-        return super().__call__(args, timeout_s)
-
-    def inside(self) -> bool:
-        """Whether a ping or check now is inside the exec's window."""
-        commands = self.commands()
-        return bool(commands) and commands[-1] in ("upload", "exec")
+def _train_s(timeout_s: float, *, uploads: int) -> float:
+    """The training's own time: the job's timeout less every call's, at the constants' values (new,
+    install, mkdir, the uploads, the launch, a poll under way, its ping and the last poll, the
+    downloads, the stop)."""
+    return timeout_s - 600.0 - 900.0 - 120.0 - uploads * 300.0 - 180.0 - 2 * 90.0 - 30.0 - 3 * 300.0 - 180.0
 
 
-def _pinging(fake: FakeColab, ledger: Ledger, period_s: float = PERIOD_S) -> ColabRunner:
-    return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake, keepalive=PING), ledger=ledger,
-                       is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(), keepalive_period_s=period_s)
+def test_a_night_trains_detached_and_is_polled_until_it_is_done(tmp_path: Path) -> None:
+    fake, ledger, polls = FakeColab(readings=DONE), Ledger(tmp_path / "budget.jsonl"), PollClock()
+    out = _runner(fake, ledger, polls=polls, keepalive=PING).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["steps"] == 9
+    assert fake.commands() == ["new", "install", "mkdir", "upload", "launch", "poll", "poll", "poll",
+                               "download", "download", "download", "stop"]
+    assert polls.slept == [colab.POLL_PERIOD_S] * 2 and colab.POLL_PERIOD_S == 90.0
+    assert fake.pings == [[*PING, f"anjo-sleep-{NAME}"]] * 2  # one after each poll that found it running
+    assert (out["polls"], out["polls_failed"], out["keepalive_pings"], out["keepalive_failed"]) == (3, 0, 2, 0)
+    launch = next((args, timeout) for args, timeout in fake.calls if args[3] == colab.LAUNCH)
+    poll = next((args, timeout) for args, timeout in fake.calls if args[3] == colab.POLL)
+    assert launch[0][launch[0].index("--timeout") + 1] == str(colab.LAUNCH_EXEC_S) == "120.0"
+    assert launch[1] == colab.LAUNCH_EXEC_S + colab.EXEC_MARGIN_S
+    assert poll[0][poll[0].index("--timeout") + 1] == "30.0" and poll[1] == 90.0
+    assert fake.executed == colab.SCRIPT.read_text(encoding="utf-8")
+    assert fake.keys == tuple(_env(launch[0])) == ("ANJO_TRAIN_CONFIG", "ANJO_TRAIN_DATASET", "ANJO_TRAIN_OUT")
+    assert fake.scripts[colab.LAUNCH] == detached.launch_script(colab.REMOTE_DIR, fake.executed, fake.keys)
+    assert fake.scripts[colab.POLL] == detached.poll_script(colab.REMOTE_DIR)
+    assert not list((tmp_path / "work").glob(".anjo-*"))  # no script stays in the night's folder
+    assert ledger.open_holds() == ()
 
 
-def _watch_threads() -> list[threading.Thread]:
-    return [thread for thread in threading.enumerate() if thread.name == colab.WATCH_THREAD]
+def test_three_polls_in_a_row_that_find_no_training_lose_the_vm(tmp_path: Path) -> None:
+    fake, ledger = FakeColab(readings=["running", "fail", "hang", "missing"]), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabVmLost, match="3 polls in a row"):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    commands = fake.commands()
+    assert commands.count("poll") == 4 and colab.LOST_POLLS == 3
+    assert commands[-2:] == ["sessions", "stop"] and "download" not in commands  # the CLI drops a dead session
+    assert ledger.open_holds() == () and 0 < ledger.used("colab_cu") < Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount
 
 
-def test_a_training_exec_pings_its_sessions_keepalive_with_the_clis_python(tmp_path: Path) -> None:
-    fake, ledger = SlowExec(), Ledger(tmp_path / "budget.jsonl")
-    out = _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert len(fake.pings) >= 3  # 0.3 s of exec at a 0.02 s period
-    assert all(args == [*PING, f"anjo-sleep-{NAME}"] for args, _, _ in fake.pings)
-    assert all(timeout == colab.KEEPALIVE_TIMEOUT_S for _, timeout, _ in fake.pings)
-    assert all(during for _, _, during in fake.pings)  # only while the training exec runs
-    assert (out["keepalive_pings"], out["keepalive_failed"]) == (len(fake.pings), 0)
-    assert fake.commands() == ["new", "install", "mkdir", "upload", "exec", "download", "download", "download", "stop"]
-    pinged = len(fake.pings)
-    time.sleep(10 * PERIOD_S)
-    assert len(fake.pings) == pinged and _watch_threads() == []  # stopped when the exec returned
+@pytest.mark.parametrize("readings", [
+    ["fail", "running", "done 0"],
+    ["running", "hang", "fail", "running", "done 0"],
+    ["missing", "fail", "done 0"],
+    ["running", "fail", "fail", "running", "missing", "missing", "done 0"],
+])
+def test_fewer_than_three_misses_in_a_row_never_stop_the_training(tmp_path: Path, readings: list[str]) -> None:
+    fake, ledger = FakeColab(readings=readings), Ledger(tmp_path / "budget.jsonl")
+    out = _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["steps"] == 9 and out["polls"] == len(readings)
+    assert out["polls_failed"] == sum(reading in ("fail", "hang", "missing") for reading in readings)
+    assert fake.commands()[-4:] == ["download", "download", "download", "stop"]
 
 
-def test_the_keepalive_stops_when_the_exec_fails(tmp_path: Path) -> None:
-    fake, ledger = SlowExec(exec_code=1), Ledger(tmp_path / "budget.jsonl")
-    with pytest.raises(ColabError, match="colab exec failed"):
-        _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert fake.pings and all(during for _, _, during in fake.pings)
-    pinged = len(fake.pings)
-    time.sleep(10 * PERIOD_S)
-    assert len(fake.pings) == pinged and _watch_threads() == []
-    assert fake.commands()[-1] == "stop" and [e["op"] for e in _events(ledger)] == ["reserve", "settle"]
+def test_a_poll_that_prints_no_reading_is_a_miss(tmp_path: Path) -> None:
+    fake, ledger = FakeColab(readings=["sleeping"]), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabVmLost):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.commands().count("poll") == colab.LOST_POLLS
+
+
+def test_past_its_own_time_the_training_is_killed_and_the_night_times_out(tmp_path: Path) -> None:
+    fake, ledger, polls = FakeColab(readings=["running"]), Ledger(tmp_path / "budget.jsonl"), PollClock()
+    with pytest.raises(ColabTrainingTimeout, match="ran past its"):
+        _runner(fake, ledger, polls=polls).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    commands = fake.commands()
+    assert commands[-2:] == ["kill", "stop"] and "download" not in commands
+    assert polls.now == _train_s(TIMEOUT_S, uploads=1) == 3810.0  # its last poll at the deadline, then the kill
+    assert commands.count("poll") == math.ceil(polls.now / colab.POLL_PERIOD_S) + 1
+    assert fake.scripts[colab.KILL] == detached.kill_script(colab.REMOTE_DIR)
+    assert ledger.open_holds() == ()
+
+
+def test_a_kill_that_fails_still_times_the_night_out(tmp_path: Path) -> None:
+    fake, ledger = FakeColab("kill", readings=["running"]), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabTrainingTimeout):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert fake.commands()[-2:] == ["kill", "stop"]
+
+
+def test_a_training_that_exits_non_zero_fails_the_night_and_keeps_its_logs_last_lines(tmp_path: Path) -> None:
+    fake, ledger = FakeColab(readings=["running", "done 1"]), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabError, match="the training on the VM exited 1") as raised:
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert not isinstance(raised.value, (ColabVmLost, ColabTrainingTimeout))
+    commands = fake.commands()
+    assert commands[-2:] == ["logtail", "stop"] and "download" not in commands
+    tail = tmp_path / "work" / colab.LOG_TAIL_NAME
+    assert "the loss is nan" in tail.read_text() and "the loss is nan" not in str(raised.value)
+    assert str(tail) in str(raised.value) and ledger.open_holds() == ()
+
+
+def test_a_log_tail_that_fails_leaves_the_trainings_own_failure(tmp_path: Path) -> None:
+    fake, ledger = FakeColab("logtail", readings=["done 2"]), Ledger(tmp_path / "budget.jsonl")
+    with pytest.raises(ColabError, match="exited 2; its log's last lines could not be brought back"):
+        _runner(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert not (tmp_path / "work" / colab.LOG_TAIL_NAME).exists()
+
+
+def test_a_launch_that_starts_no_training_fails_the_night_before_any_poll(tmp_path: Path) -> None:
+    fake = FakeColab(answers={colab.LAUNCH: "Traceback (most recent call last):\n"})
+    with pytest.raises(ColabError, match="started no training"):
+        _runner(fake, Ledger(tmp_path / "budget.jsonl")).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert "poll" not in fake.commands() and fake.commands()[-1] == "stop"
 
 
 def test_a_failed_ping_is_counted_and_never_fails_the_night(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    fake, ledger = SlowExec(ping_code=1), Ledger(tmp_path / "budget.jsonl")
+    fake, ledger = FakeColab(readings=DONE), Ledger(tmp_path / "budget.jsonl")
+    fake.ping_code = 1
     with caplog.at_level(logging.WARNING):
-        out = _pinging(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert out["steps"] == 9 and out["keepalive_pings"] == out["keepalive_failed"] == len(fake.pings) > 0
+        out = _runner(fake, ledger, keepalive=PING).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["steps"] == 9 and out["keepalive_pings"] == out["keepalive_failed"] == len(fake.pings) == 2
     assert "keep-alive" in caplog.text
-
-
-def test_no_ping_runs_before_one_period_into_the_exec(tmp_path: Path) -> None:
-    fake, ledger = SlowExec(exec_s=0.05), Ledger(tmp_path / "budget.jsonl")
-    out = _pinging(fake, ledger, period_s=colab.KEEPALIVE_PERIOD_S).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert fake.pings == [] and (out["keepalive_pings"], out["keepalive_failed"]) == (0, 0)
-    assert colab.KEEPALIVE_PERIOD_S == 60.0 and colab.KEEPALIVE_TIMEOUT_S < colab.KEEPALIVE_PERIOD_S
 
 
 def _entry(tmp_path: Path, shebang: str, *, python: bool = True) -> Path:
@@ -582,22 +675,22 @@ def test_a_launcher_in_front_of_the_cli_pings_on_the_cli_tools_own_python(tmp_pa
     first = colab.keepalive_command(_entry(tmp_path, f"#!{python}"), tool)
     assert first is not None and first[0] == str(python)  # the shebang's python comes first
     assert colab.COLAB_TOOL_PYTHON == Path.home() / ".local/share/uv/tools/google-colab-cli/bin/python"
-    fake, ledger = SlowExec(), Ledger(tmp_path / "budget.jsonl")
+    fake, ledger, polls = FakeColab(readings=DONE), Ledger(tmp_path / "budget.jsonl"), PollClock()
     runner = ColabRunner(cli=ColabCli(_entry(tmp_path, "#!/bin/sh"), run=fake, tool_python=tool), ledger=ledger,
-                         is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(),
-                         keepalive_period_s=PERIOD_S)
+                         is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(), poll_clock=polls,
+                         sleep=polls.sleep)
     out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert fake.pings and all(args[:3] == list(command) for args, _, _ in fake.pings)
+    assert len(fake.pings) == 2 and all(args[:3] == list(command) for args in fake.pings)
     assert out["keepalive_pings"] == len(fake.pings) and out["keepalive_failed"] == 0
 
 
 def test_without_a_python_shebang_the_night_trains_without_pings_and_says_so(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    fake, ledger = SlowExec(), Ledger(tmp_path / "budget.jsonl")
+    fake, ledger, polls = FakeColab(readings=DONE), Ledger(tmp_path / "budget.jsonl"), PollClock()
     runner = ColabRunner(cli=ColabCli(_entry(tmp_path, "#!/bin/sh"), run=fake, tool_python=tmp_path / "no-tool"),
                          ledger=ledger, is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(),
-                         keepalive_period_s=PERIOD_S)
+                         poll_clock=polls, sleep=polls.sleep)
     with caplog.at_level(logging.WARNING):
         out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
     assert out["steps"] == 9 and fake.pings == []
@@ -664,169 +757,3 @@ def test_the_ping_script_gets_the_sessions_keepalive_and_a_read_timeout_counts(m
         _ping_module(monkeypatch, {"anjo-sleep-x": "e"}, refused).main(["anjo-sleep-x"])
     unknown = _ping_module(monkeypatch, {}, issue)
     assert unknown.main(["anjo-sleep-y"]) not in (0, 1) and unknown.main([]) not in (0, 1)
-
-
-
-# ── The VM-lost watchdog (2026-11-02: the A100's exec waited ~2 h on a VM Colab no longer had) ───────
-
-CHECK_S = 0.05
-
-
-class Watched(SlowExec):
-    """``SlowExec`` whose exec runs on the stoppable path (``until``): it waits up to ``exec_s`` for its
-    stop. Its VM checks read ``readings`` in turn, the last one again once they run out: "present",
-    "missing", or "fail" (the check exits 1)."""
-
-    def __init__(self, readings: Sequence[str], *, exec_s: float = 5.0, exec_code: int = 0) -> None:
-        super().__init__(exec_s=exec_s, exec_code=exec_code)
-        self.readings = list(readings)
-        self.checks: list[tuple[list[str], float, bool]] = []
-        self.exec_ran_s: float | None = None
-
-    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if args[1] == "-I" and args[3] == "--check":
-            self.checks.append((args, timeout_s, self.inside()))
-            reading = self.readings.pop(0) if len(self.readings) > 1 else self.readings[0]
-            if reading == "fail":
-                return subprocess.CompletedProcess(args, 1, "", "boom")
-            return subprocess.CompletedProcess(args, 0, f"{reading}\n", "")
-        return super().__call__(args, timeout_s)
-
-    def until(self, args: Sequence[str], timeout_s: float, stop: threading.Event) -> subprocess.CompletedProcess[str]:
-        args = list(args)
-        if command_label(args[3:]) != "exec":
-            return self(args, timeout_s)
-        started = time.monotonic()
-        stopped = stop.wait(self.exec_s)
-        self.exec_ran_s = time.monotonic() - started
-        if stopped:
-            self.calls.append((args, timeout_s))
-            return subprocess.CompletedProcess(args, -9, "", "")
-        if self.exec_code:
-            self.calls.append((args, timeout_s))
-            return subprocess.CompletedProcess(args, self.exec_code, "", "boom")
-        return FakeColab.__call__(self, args, timeout_s)
-
-
-def _watched(fake: Watched, ledger: Ledger) -> ColabRunner:
-    return ColabRunner(cli=ColabCli(Path("/fake/colab"), run=fake, run_until=fake.until, keepalive=PING), ledger=ledger,
-                       is_synthetic=lambda uid: uid.startswith("synthetic"), clock=Clock(),
-                       keepalive_period_s=PERIOD_S, vm_check_period_s=CHECK_S)
-
-
-def test_a_vm_lost_mid_exec_stops_the_exec_within_two_checks(tmp_path: Path) -> None:
-    fake, ledger = Watched(["present", "missing"]), Ledger(tmp_path / "budget.jsonl")
-    with pytest.raises(colab.ColabVmLost, match="VM"):
-        _watched(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert [reading for reading in ("present", "missing", "missing")] and len(fake.checks) == 3  # stopped at the 2nd missing
-    assert fake.exec_ran_s is not None and fake.exec_ran_s < 2.0 < fake.exec_s  # long before the exec would have ended
-    assert all(args == [*PING, "--check", f"anjo-sleep-{NAME}"] for args, _, _ in fake.checks)
-    assert all(timeout == colab.VM_CHECK_TIMEOUT_S and during for _, timeout, during in fake.checks)
-    commands = fake.commands()
-    assert commands[-3:] == ["exec", "sessions", "stop"] and "download" not in commands  # the CLI drops the dead session
-    reserve, settle = _events(ledger)
-    assert 0 < settle["amount"] < reserve["amount"]  # the stop went through: what the VM ran for, not the whole hold
-    assert _watch_threads() == []
-
-
-@pytest.mark.parametrize("readings", [
-    ["fail", "present"],  # a check that fails once gives no reading
-    ["present", "missing", "fail", "present"],  # one missing reading is not two
-    ["missing", "present"] * 6 + ["present"],  # missing, but never twice in a row
-])
-def test_the_exec_runs_on_unless_the_vm_is_missing_twice_in_a_row(tmp_path: Path, readings: list[str]) -> None:
-    fake, ledger = Watched(readings, exec_s=0.5), Ledger(tmp_path / "budget.jsonl")
-    out = _watched(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert out["steps"] == 9 and fake.exec_ran_s is not None and fake.exec_ran_s >= 0.5
-    assert out["vm_checks"] == len(fake.checks) >= 3 and out["vm_checks_failed"] == readings.count("fail")
-    assert "sessions" not in fake.commands() and _watch_threads() == []
-
-
-def test_two_missing_readings_around_a_failed_check_still_stop_the_exec(tmp_path: Path) -> None:
-    fake, ledger = Watched(["missing", "fail", "missing"]), Ledger(tmp_path / "budget.jsonl")
-    with pytest.raises(colab.ColabVmLost):
-        _watched(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert len(fake.checks) == 3 and _watch_threads() == []
-
-
-def test_the_watch_stops_when_the_exec_fails_on_its_own(tmp_path: Path) -> None:
-    fake, ledger = Watched(["present"], exec_s=0.3, exec_code=1), Ledger(tmp_path / "budget.jsonl")
-    with pytest.raises(ColabError, match="colab exec failed with exit 1") as raised:
-        _watched(fake, ledger).run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
-    assert not isinstance(raised.value, colab.ColabVmLost) and "sessions" not in fake.commands()
-    checked = len(fake.checks)
-    time.sleep(4 * CHECK_S)
-    assert len(fake.checks) == checked and _watch_threads() == []
-
-
-def test_the_stoppable_call_ends_a_real_process_and_keeps_the_hard_timeout() -> None:
-    sleeper = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
-    stop = threading.Event()
-    threading.Timer(0.2, stop.set).start()
-    started = time.monotonic()
-    done = colab.run_cli_until(sleeper, 20.0, stop)
-    assert done.returncode != 0 and time.monotonic() - started < 10.0
-    said = colab.run_cli_until([sys.executable, "-I", "-c", "print('x' * 200000)"], 20.0, threading.Event())
-    assert said.returncode == 0 and len(said.stdout.strip()) == 200000  # its output is read as it comes
-    started = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):
-        colab.run_cli_until(sleeper, 0.3, threading.Event())
-    assert time.monotonic() - started < 10.0  # killed at its timeout, not waited on to its end
-
-
-def test_a_stopped_exec_says_the_vm_was_lost_and_one_that_finished_does_not(tmp_path: Path) -> None:
-    entry = tmp_path / "train.py"
-    entry.write_text("")
-    lost = threading.Event()
-    lost.set()
-    stopped = ColabCli(Path("/fake/colab"), run=FakeColab(),
-                       run_until=lambda args, timeout_s, stop: subprocess.CompletedProcess(list(args), -9, "", ""))
-    with pytest.raises(colab.ColabVmLost):
-        stopped.call("exec", "-s", "x", timeout_s=60.0, vm_lost=lost)
-    finished = ColabCli(Path("/fake/colab"), run=FakeColab(),
-                        run_until=lambda args, timeout_s, stop: subprocess.CompletedProcess(list(args), 0, "ok", ""))
-    assert finished.call("exec", "-s", "x", timeout_s=60.0, vm_lost=lost) == "ok"
-    plain = FakeColab()  # a run with no stoppable path: the call runs on it, to its end
-    assert ColabCli(Path("/fake/colab"), run=plain).call(
-        "exec", "-s", "x", "-f", str(entry), timeout_s=60.0, vm_lost=threading.Event()) == ""
-    assert plain.commands() == ["exec"]
-    assert command_label((colab.VM_CHECK, "x")) == colab.VM_CHECK == "vmcheck"
-    assert colab.VM_CHECK_PERIOD_S == 120.0 and colab.VM_LOST_CHECKS == 2
-
-
-def _assignments(*endpoints: str) -> Any:
-    return lambda: [types.SimpleNamespace(endpoint=endpoint) for endpoint in endpoints]
-
-
-def test_the_ping_scripts_check_reads_the_accounts_assignments(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-) -> None:
-    def no_request(url: str, **kw: Any) -> None:
-        raise AssertionError("a check sends no keep-alive")
-
-    cases = [({"anjo-sleep-x": "e1"}, ("e1", "e2"), "present"), ({"anjo-sleep-x": "e1"}, ("e2",), "missing"),
-             ({}, ("e1",), "missing")]  # a session the CLI no longer knows: dropped as gone
-    for sessions, endpoints, reading in cases:
-        ping = _ping_module(monkeypatch, sessions, no_request)
-        monkeypatch.setattr(ping, "State", _with_assignments(ping.State, _assignments(*endpoints)))
-        assert ping.main(["--check", "anjo-sleep-x"]) == 0
-        assert capsys.readouterr().out == f"{reading}\n"
-
-    def broken() -> list[Any]:
-        raise ConnectionError("refused")
-
-    ping = _ping_module(monkeypatch, {"anjo-sleep-x": "e1"}, no_request)
-    monkeypatch.setattr(ping, "State", _with_assignments(ping.State, broken))
-    with pytest.raises(ConnectionError):  # no reading: the process exits 1
-        ping.main(["--check", "anjo-sleep-x"])
-    assert ping.main(["--check"]) == ping.USAGE
-
-
-def _with_assignments(state: Any, listing: Any) -> Any:
-    class Listed(state):  # type: ignore[misc]
-        def __init__(self) -> None:
-            super().__init__()
-            self.client.list_assignments = listing
-
-    return Listed

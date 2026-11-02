@@ -7,27 +7,26 @@ Colab can't give.
 Which failures fall back is read off the Colab CLI's own calls. ``TracedCli`` notes each call that
 failed: what it raised and how long it ran. Only these fall back:
 
-- any failure of a call made before the training script starts: ``new`` (no A100 to assign, a VM
-  that never came up), ``install``, ``mkdir`` (the exec that makes the remote folders) or ``upload``,
-  whether it exited non-zero, hung past its hard
-  timeout or found no CLI;
-- a timeout: any later call that hung past its hard timeout, or an ``exec`` that failed at or past
-  the kernel's own ``--timeout``;
-- a VM lost mid-run: an ``exec`` the watch stopped (``ColabVmLost``) because the session's VM was
-  missing from the account's assignments on two checks in a row.
+- any failure of a call made before the training starts: ``new`` (no A100 to assign, a VM that never
+  came up), ``install``, ``mkdir`` (the exec that makes the remote folders) or ``upload``, whether
+  it exited non-zero, hung past its hard timeout or found no CLI;
+- a timeout: any later call that hung past its hard timeout (the ``launch`` that starts the detached
+  training among them), or the training past its own time, killed (``ColabTrainingTimeout``);
+- a VM lost mid-run (``ColabVmLost``): ``LOST_POLLS`` polls in a row found no training on the VM.
 
 Everything else fails the night as ``colab`` does:
 
-- an ``exec`` that exits non-zero before its timeout. The CLI reports only an exit code, so a Python
-  error or a NaN the script reports can't be told from a VM lost mid-run, and a script error would
-  fail the same way on Modal;
+- a training that ended with a non-zero exit code: a Python error or a NaN the script reports would
+  fail the same way on Modal. Its log's last lines are kept in the night's folder;
+- a ``launch`` that exits non-zero or starts no training: the training counts as started;
 - a ``download`` that exits non-zero, or a receipt that isn't one;
 - a refusal before any VM: a real person, the thought channel, a timeout too short;
 - ``BudgetStop``, ``Cancelled``, an interrupt;
 - a VM stop that failed. That VM may still run, so stop it by hand before anything else.
 
-A keep-alive ping or a VM check that fails (``KEEPALIVE``, ``VM_CHECK``, from the watch's thread while
-the exec runs) is noted like any call but never decides the night: the exec's own outcome does.
+A poll, a keep-alive ping, a kill or a log tail that fails (``POLL``, ``KEEPALIVE``, ``KILL``,
+``LOG_TAIL``) is noted like any call but never decides the night: the polls' reading of the training
+does, and one miss, or two, stops nothing.
 
 By the time the job falls back, the Colab runner's own cleanup has run: the VM is stopped (a life's
 VM too), and the ``colab_cu`` hold is settled for what the VM ran, or in full after a ``new`` that
@@ -44,7 +43,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -56,14 +54,16 @@ from anjo.sleep.ports import GpuRunner
 from anjo.sleep.serving import config
 from anjo.sleep.train.runners.colab import (
     KEEPALIVE,
-    KEEPALIVE_PERIOD_S,
+    KILL,
+    LOG_TAIL,
     MKDIR,
-    VM_CHECK,
-    VM_CHECK_PERIOD_S,
+    POLL,
+    POLL_PERIOD_S,
     ColabCli,
     ColabError,
     ColabLives,
     ColabRunner,
+    ColabTrainingTimeout,
     ColabVmLost,
     command_label,
 )
@@ -74,28 +74,19 @@ CLI_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
 # The calls before the training script starts: the VM (an A100 to assign), its packages, its remote
 # folders, the night's files.
 BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload")
-EXEC: Final = "exec"
 STOP: Final = "stop"
-# Calls whose failure is never the night's: the VM's stop, the watch's pings and checks.
-NOT_THE_NIGHT: Final = (STOP, KEEPALIVE, VM_CHECK)
+# Calls whose failure is never the night's: the VM's stop, the polls, the pings, a kill, a log tail.
+NOT_THE_NIGHT: Final = (STOP, POLL, KEEPALIVE, KILL, LOG_TAIL)
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class Failed:
-    """One CLI call that failed: its command, what it raised, how long it ran and, for ``exec``, the
-    kernel's own ``--timeout``."""
+    """One CLI call that failed: its command, what it raised and how long it ran."""
 
     command: str
     error: BaseException
     seconds: float
-    kernel_timeout_s: float | None = None
-
-
-def _kernel_timeout(args: Sequence[str]) -> float | None:
-    if args[0] != EXEC or "--timeout" not in args:
-        return None
-    return float(args[args.index("--timeout") + 1])
 
 
 class TracedCli(ColabCli):
@@ -111,34 +102,32 @@ class TracedCli(ColabCli):
         """Forget the calls of an earlier job."""
         self.failed = []
 
-    def call(self, *args: str, timeout_s: float, vm_lost: threading.Event | None = None) -> str:
+    def call(self, *args: str, timeout_s: float) -> str:
         started = self._clock()
         try:
-            if vm_lost is None:
-                return self._cli.call(*args, timeout_s=timeout_s)
-            return self._cli.call(*args, timeout_s=timeout_s, vm_lost=vm_lost)
+            return self._cli.call(*args, timeout_s=timeout_s)
         except CLI_FAILURES as error:
-            self.failed.append(Failed(command_label(args), error, self._clock() - started, _kernel_timeout(args)))
+            self.failed.append(Failed(command_label(args), error, self._clock() - started))
             raise
 
 
 def fallback_reason(error: BaseException, failed: Sequence[Failed]) -> str | None:
     """Why Colab's ``error`` sends the job to Modal, or None when it fails the night as on ``colab``.
 
-    Only a CLI call's own failure falls back: the first failed call other than the VM's stop and the
-    watch's pings and checks must have raised ``error`` itself, so a refusal, a receipt that isn't
-    one, a failed stop, a failed ping or a failed check never does.
+    A VM lost mid-run and a training past its own time are the runner's reading of its polls, so they
+    fall back as they are. Otherwise only a CLI call's own failure falls back: the first failed call
+    other than those in ``NOT_THE_NIGHT`` must have raised ``error`` itself, so a refusal, a receipt
+    that isn't one, a training's own exit code or a failed stop never does.
     """
+    if isinstance(error, ColabVmLost):
+        return "colab VM lost mid-run"
+    if isinstance(error, ColabTrainingTimeout):
+        return "colab training ran past its timeout"
     first = next((call for call in failed if call.command not in NOT_THE_NIGHT), None)
     if first is None or first.error is not error:
         return None
-    if isinstance(error, ColabVmLost):
-        return "colab VM lost mid-run"
     if isinstance(error, subprocess.TimeoutExpired):
         return f"colab {first.command} timed out"
-    if first.command == EXEC:  # past the kernel's timeout, or the script (or the VM under it) failed
-        late = first.kernel_timeout_s is not None and first.seconds >= first.kernel_timeout_s
-        return "colab exec ran past its timeout" if late else None
     if first.command in BEFORE_TRAINING:
         return str(error) if isinstance(error, ColabError) else f"colab {first.command} failed ({type(error).__name__})"
     return None
@@ -151,12 +140,12 @@ class ColabModalRunner:
     def __init__(
         self, *, cli: ColabCli, modal: ModalRunner, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
-        keepalive_period_s: float = KEEPALIVE_PERIOD_S, vm_check_period_s: float = VM_CHECK_PERIOD_S,
+        poll_period_s: float = POLL_PERIOD_S, poll_clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._trace = TracedCli(cli, clock=clock)
         self.colab = ColabRunner(cli=self._trace, ledger=ledger, is_synthetic=is_synthetic, allow_real=allow_real,
-                                 clock=clock, keepalive_period_s=keepalive_period_s,
-                                 vm_check_period_s=vm_check_period_s)
+                                 clock=clock, poll_period_s=poll_period_s, poll_clock=poll_clock, sleep=sleep)
         self.modal = modal
         self._landed: set[str] = set()
 
