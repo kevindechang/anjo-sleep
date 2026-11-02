@@ -60,12 +60,13 @@ from types import MappingProxyType
 from typing import Final
 
 APP_NAME: Final = "anjo-sleep-serve"
+APP_NAME_ENV: Final = "ANJO_SLEEP_SERVE_APP_NAME"
 WEIGHTS_VOLUME: Final = "anjo-sleep-weights"
 ADAPTERS_VOLUME: Final = "anjo-sleep-adapters"
 # The serving secret holds VLLM_API_KEY (the bearer token the dev host sends) and nothing else.
 # Downloading needs no secret, since the Glimmer repo isn't gated: a deploy that wants HF_TOKEN
 # anyway names a second Modal secret in HF_SECRET_ENV, and only download_weights gets it.
-SECRET_NAME: Final = "anjo-sleep-serve"
+SECRET_NAME: Final = os.environ.get("ANJO_SLEEP_SERVE_SECRET_NAME", "").strip() or "anjo-sleep-serve"
 HF_SECRET_ENV: Final = "ANJO_SLEEP_HF_SECRET"
 WEIGHTS_DIR: Final = "/weights"
 ADAPTERS_DIR: Final = "/adapters"
@@ -192,7 +193,13 @@ def serve_deterministic(environ: Mapping[str, str] | None = None) -> bool:
 
 
 def serve_app_name(precision: Precision, *, deterministic: bool | None = None) -> str:
-    """A separate app for another GPU or deterministic kernels, including client staging."""
+    """A separate app for another GPU or deterministic kernels, including client staging.
+
+    ``ANJO_SLEEP_SERVE_APP_NAME`` names the app outright, for a trial beside the running apps.
+    """
+    override = os.environ.get(APP_NAME_ENV, "").strip()
+    if override:
+        return override
     name = APP_NAME if precision is SERVING else f"{APP_NAME}-{precision.gpu.lower()}"
     enabled = serve_deterministic() if deterministic is None else deterministic
     return f"{name}-det" if enabled else name
