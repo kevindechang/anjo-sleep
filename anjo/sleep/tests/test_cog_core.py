@@ -102,6 +102,12 @@ def test_dev_is_scored_without_asks_like_the_eval_and_also_with_them() -> None:
     assert all(bool(b.asking.all()) for b in asking) and sum(int(b.ask_mask.sum()) for b in asking) > 0
 
 
+def test_the_trainer_knows_the_main_and_the_independent_worlds() -> None:
+    assert {"toy", "real", "indep"} <= set(train_cog.WORLDS)
+    life = train_cog.WORLDS["indep"](10_000, 7)
+    assert life.meta.n_days == 7 and life.queries(0)
+
+
 def test_some_training_lives_never_hear_an_answer_whatever_the_target() -> None:
     assert train_cog.asking_share(train_cog.TrainConfig(soft=0.0)) == train_cog.TrainConfig().asking_share < 1.0
 

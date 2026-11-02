@@ -71,7 +71,14 @@ def real_world(seed: int, n_days: int) -> Life:
     return world.make_life(seed, population="base", n_days=n_days)
 
 
-WORLDS: Final[dict[str, World]] = {"toy": toy_world, "real": real_world}
+def indep_world(seed: int, n_days: int) -> Life:
+    """The independent world (``world_indep``, written apart from MIND), for protocol 2: trained there."""
+    from anjo.sleep.mind.cog import world_indep
+
+    return world_indep.make_life(seed, n_days=n_days)
+
+
+WORLDS: Final[dict[str, World]] = {"toy": toy_world, "real": real_world, "indep": indep_world}
 
 
 @dataclass(frozen=True)
