@@ -206,14 +206,15 @@ def test_on_the_teacher_reads_her_day_and_the_student_the_query_alone(tmp_path: 
         sleep_job.term_rows(colab_train, [{**rows[0], "teacher": [{"role": "system", "content": "<|eot|>"}]}])
 
 
-def test_sources_are_tonights_then_dreams_then_replay_each_message_once_and_capped() -> None:
+def test_sources_are_tonights_then_replay_never_a_day_dream_each_message_once_and_capped() -> None:
+    # 2026-11-02 audit: a day dream the keep-if-it-helps trial dropped still trained through SDFT; no dream is a source
     def row(i: str, message: str, group: str | None = None) -> SeedRow:
         return SeedRow(id=i, context="Notes: they edit at night.", message=message, reply="r", tokens=10, group=group)
 
     seeds = [row("old", "An old scene I shot?"), row("d0", "A dreamt question about the cut?", "dream"),
              row("t0", "Tonight's scene: the opening?"), row("t1", "Tonight's scene: the opening?")]
     made, dropped = terms.sdft_rows(seeds, frozenset({"old"}), terms.OverlapGuard([]), [], _NoLeak(), seed=3)
-    assert [r.source for r in made] == ["t0", "d0", "old"] and dropped == dict.fromkeys(terms.SDFT_DROPS, 0)
+    assert [r.source for r in made] == ["t0", "old"] and dropped == dict.fromkeys(terms.SDFT_DROPS, 0)
     many = [row(f"t{i}", f"Scene {i} of the short: what lens?") for i in range(terms.SDFT_SOURCES_MAX + 3)]
     made, _ = terms.sdft_rows(many, frozenset(), terms.OverlapGuard([]), [], _NoLeak(), seed=3)
     assert len({r.source for r in made}) == terms.SDFT_SOURCES_MAX == len(made)  # a tone row a source

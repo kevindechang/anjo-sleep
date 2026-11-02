@@ -396,13 +396,15 @@ def sdft_rows(
     decontam: Decontaminator, *, seed: int, max_seq_tokens: int = DEFAULT_MAX_SEQ_TOKENS,
 ) -> tuple[tuple[SdftRow, ...], dict[str, int]]:
     """The self-distillation rows from the seeding rows' messages, and the refusals by reason. Sources:
-    tonight's rows, then her day dreams, then replay (``replay_ids``), each message once, the first
+    tonight's rows, then replay (``replay_ids``), never a day dream (2026-11-02: the dreams' keep-if-it-helps
+    trial runs on the GPU after these rows are built, and a dream it drops must not train through this
+    term; a dream has no demonstration either), each message once, the first
     ``SDFT_SOURCES_MAX``; each gives one tone row (the bare message), with its seeding row's context and
     core, and from a practice source its reply as the teacher's demonstration (``sdft_demo``). The taste
     rows come from the night's pairs (``taste_rows``)."""
     dropped = dict.fromkeys(SDFT_DROPS, 0)
-    order = sorted(range(len(seeds)), key=lambda i: (
-        2 if seeds[i].id in replay_ids else 1 if seeds[i].group == DAY_DREAM_GROUP else 0, i))
+    order = sorted((i for i in range(len(seeds)) if seeds[i].group != DAY_DREAM_GROUP),
+                   key=lambda i: (1 if seeds[i].id in replay_ids else 0, i))
     sources: list[SeedRow] = []
     seen: set[str] = set()
     for i in order:
