@@ -9,6 +9,7 @@
 //                               (otherwise only once a night has run)
 //   mockcase=thoughtoff | thoughtfail | thoughtempty | markfail   (markfail: dispute and hide refused)
 //   mockcase=nopass             MIND's live pass never runs after a reply (its allowance spent)
+//   mockpass=75                 each live pass takes 75 s (default 4)
 //
 // As on the server, MIND's live pass starts only once a reply's stream has ended and takes a few
 // seconds (PASS_MS): /me/mind says live_pass "running" meanwhile, and its revision and content
@@ -27,7 +28,7 @@ const SPEED = Math.max(0.25, Number(params.get("mockspeed")) || 1);
 const AT = Math.max(0, Number(params.get("mockat")) || 0);
 const KEY = "anjo.mock.state";
 const DAY = 86400000;
-const PASS_MS = 4000;
+const PASS_MS = Math.max(1, Number(params.get("mockpass")) || 4) * 1000;
 
 const STAGES = [
   ["extract", 6, "Reading what you said…", "Read 6 messages. Kept 9 pieces of evidence."],

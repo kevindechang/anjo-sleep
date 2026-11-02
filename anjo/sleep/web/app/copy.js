@@ -240,6 +240,7 @@ export const COPY = Object.freeze({
   since_shifts: "Shifts",
   since_findings: "Conclusions",
   live_thinking: "Thinking about what you said…",
+  live_slow: "Still thinking about what you said…",
   side_mind: "Working out",
   side_thought: "Line of thought",
 });

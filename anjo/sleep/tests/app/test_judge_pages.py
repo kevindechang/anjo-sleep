@@ -221,6 +221,8 @@ def test_a_reply_starts_a_watch_for_the_live_pass_not_one_early_refresh() -> Non
     assert "onSend: () => livePass.mark()" in live  # the revision from before the message
     watch = (APP_DIR / "livepass.js").read_text()
     assert "export const POLL_MS = 2000;" in watch and "export const CAP_MS = 60000;" in watch
+    assert "export const SLOW_MS = 10000;" in watch and "export const SLOW_CAP_MS = 180000;" in watch
+    assert '"visibilitychange"' in watch and "document.hidden" in watch  # paused while the tab is hidden
     assert "thought.isOpen() ? thought.refresh()" in watch  # her line of thought too, when it's open
     assert "livepass.js" in ASSETS
     html = (APP_DIR / "live.html").read_text()
@@ -239,26 +241,123 @@ def test_the_watch_stops_only_once_the_pass_has_landed() -> None:
 
     from anjo.sleep.app.judge_pages import APP_DIR
 
-    cases = [  # (answer, expected stop)
-        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 4000}, False),
-        ({"base": 3, "revision": 4, "livePass": "running", "sawRunning": True, "elapsed": 4000}, False),
-        ({"base": 3, "revision": 4, "livePass": "idle", "sawRunning": True, "elapsed": 6000}, True),
-        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, False),
-        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": True, "elapsed": 8000}, True),
-        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 10000}, True),
-        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 60000}, True),
-        ({"base": None, "revision": 0, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, True),
-        ({"elapsed": 2000, "fresh": 0}, False),
-        ({"elapsed": 4000, "fresh": 2}, True),
-        ({"base": "a1", "revision": "b2", "livePass": "idle", "sawRunning": False, "elapsed": 2000}, True),
+    cases = [  # (answer, what the watch does next)
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 4000}, "poll"),
+        ({"base": 3, "revision": 4, "livePass": "running", "sawRunning": True, "elapsed": 4000}, "poll"),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 60000}, "slow"),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 179000}, "slow"),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True, "elapsed": 180000}, "stop"),
+        ({"base": 3, "revision": 4, "livePass": "idle", "sawRunning": True, "elapsed": 6000}, "stop"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": True, "elapsed": 8000}, "final"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, "poll"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False, "elapsed": 10000}, "stop"),
+        ({"base": None, "revision": 0, "livePass": "idle", "sawRunning": False, "elapsed": 2000}, "stop"),
+        ({"elapsed": 2000, "fresh": 0}, "poll"),
+        ({"elapsed": 4000, "fresh": 2}, "stop"),
+        ({"elapsed": 60000, "fresh": 0}, "stop"),
+        ({"base": "a1", "revision": "b2", "livePass": "idle", "sawRunning": False, "elapsed": 2000}, "stop"),
     ]
     script = f"""
 const L = await import({json.dumps((APP_DIR / "livepass.js").as_uri())});
-console.log(JSON.stringify({json.dumps([c for c, _ in cases])}.map((c) => L.settled(c))));
+console.log(JSON.stringify({json.dumps([c for c, _ in cases])}.map((c) => L.nextStep(c))));
 """
     done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == [want for _, want in cases]
+
+
+_WATCH_SIM = """
+let now = 0;
+const timers = [];
+globalThis.window = {
+  setTimeout: (f, ms) => { const t = { at: now + ms, f }; timers.push(t); return t; },
+  clearTimeout: (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); },
+};
+Date.now = () => now;
+const listeners = {};
+const words = { textContent: "" };
+const line = { hidden: true, querySelector: () => words };
+const tab = { dataset: {} };
+globalThis.document = {
+  hidden: false, addEventListener: (name, f) => { listeners[name] = f; },
+  getElementById: (id) => (id === "live-pass" ? line : tab),
+};
+const L = await import(LIVEPASS);
+const { COPY } = await import(COPYJS);
+
+async function until(t) {
+  for (;;) {
+    timers.sort((a, b) => a.at - b.at);
+    const next = timers[0];
+    if (!next || next.at > t) { now = t; return; }
+    timers.shift();
+    now = next.at;
+    await next.f();
+  }
+}
+
+// One watch after a reply. ``answer(t)`` is what /me/mind says at time t.
+async function watch(answer, script = async () => until(400000)) {
+  timers.length = 0;
+  now = 0;
+  const reads = [];
+  let slowShown = false;
+  const panel = {
+    revision: () => 5,
+    refresh: async () => { reads.push(now); if (words.textContent === COPY.live_slow) slowShown = true; return answer(now); },
+  };
+  const lp = L.createLivePass({ panel, thought: { isOpen: () => false } });
+  lp.mark();
+  lp.watch();
+  await script();
+  return { reads, hidden: line.hidden, pending: timers.length, slowShown };
+}
+
+const running = (t, end) => (t < end ? { revision: 5, livePass: "running" } : { revision: 6, livePass: "idle" });
+const out = {};
+out.slow = await watch((t) => running(t, 75000));             // a 75 s pass: seen in the background
+out.endless = await watch(() => ({ revision: 5, livePass: "running" }));  // never lands: gives up at 3 min
+out.away = await watch((t) => running(t, 75000), async () => {  // hidden from 30 s to 150 s
+  await until(30000);
+  document.hidden = true;
+  await until(150000);
+  document.hidden = false;
+  await listeners.visibilitychange();
+  await until(400000);
+});
+let late = 0;  // idle before its revision shows: one final read catches it
+out.final = await watch((t) => (t < 10000 ? { revision: 5, livePass: "running" }
+  : late++ === 0 ? { revision: 5, livePass: "idle" } : { revision: 6, livePass: "idle" }));
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_a_slow_pass_is_still_seen_and_a_hidden_tab_pauses_the_checks() -> None:
+    """The watch on a fake clock: a pass that runs 75 s (Spark may take 120 s) is caught by the
+    10 s background check after the 2 s minute; one that never lands ends at 3 minutes; a hidden
+    tab makes no requests and checks again as it shows; idle before the revision gets a final read."""
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _WATCH_SIM.replace("LIVEPASS", json.dumps((APP_DIR / "livepass.js").as_uri())).replace(
+        "COPYJS", json.dumps((APP_DIR / "copy.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    slow = out["slow"]
+    assert slow["reads"][:3] == [2000, 4000, 6000] and 60000 in slow["reads"]
+    assert slow["reads"][-3:] == [60000, 70000, 80000]  # every 10 s once the minute is up, until it lands
+    assert slow["slowShown"] and slow["hidden"] and slow["pending"] == 0
+    endless = out["endless"]
+    assert endless["reads"][-1] == 180000 and endless["hidden"] and endless["pending"] == 0
+    away = out["away"]
+    assert not [t for t in away["reads"] if 30000 < t < 150000]  # nothing while hidden
+    assert 150000 in away["reads"] and away["reads"][-1] == 150000 and away["hidden"]
+    final = out["final"]
+    assert final["reads"][-2:] == [10000, 10000] and final["hidden"] and final["pending"] == 0
 
 
 def test_the_judge_pages_call_anjo_her() -> None:

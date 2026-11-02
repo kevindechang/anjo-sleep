@@ -1,16 +1,26 @@
 // MIND after each reply. The server runs MIND's live pass only once a reply's stream has ended, so
 // a refresh at that moment still reads the old state. Instead, after each reply the panel polls
-// GET /api/sleep/me/mind every 2 s (and /me/thought when that view is open) until the pass has
-// landed: its ``revision`` moved past the one from before the message, with ``live_pass`` no longer
-// ``running``. A pass that never starts (her daily allowance spent, a night holding the host) ends
-// the watch after a short grace, and every watch ends by about a minute. While it runs, the panel
-// says it is thinking about what you said; new items arrive with the panel's own entrance.
+// GET /api/sleep/me/mind (and /me/thought when that view is open) until the pass has landed: its
+// ``revision`` moved past the one from before the message, with ``live_pass`` no longer ``running``.
+//
+// - every 2 s for the first minute (the foreground watch);
+// - then, while ``live_pass`` still says running (a slow model can take two minutes), every 10 s up
+//   to 3 minutes from the reply;
+// - when a pass that was running turns idle with no newer revision yet, one final read (the two
+//   fields aren't read at the same instant), then stop;
+// - a pass that never starts (her daily allowance spent, a night holding the host) ends the watch
+//   after a short grace.
+//
+// Checks pause while the tab is hidden and pick up as soon as it shows again. While a watch runs,
+// the panel says it is thinking about what you said; new items arrive with the panel's entrance.
 
 import { COPY } from "./copy.js";
 import { byId } from "./dom.js";
 
 export const POLL_MS = 2000;
 export const CAP_MS = 60000;
+export const SLOW_MS = 10000;
+export const SLOW_CAP_MS = 180000;
 export const IDLE_GRACE_MS = 10000;
 
 // Whether revision ``now`` is past ``base``: numbers by size, anything else by any change.
@@ -21,27 +31,35 @@ export function newer(now, base) {
   return String(now) !== String(base);
 }
 
-// Whether the watch after a reply can stop, from the latest answer: ``base`` is the revision before
-// the message, ``sawRunning`` whether any answer since said the pass was running.
-export function settled({ base, revision, livePass, sawRunning, elapsed, fresh = 0 }) {
-  if (elapsed >= CAP_MS) return true;
-  if (livePass === "running") return false;
-  if (newer(revision, base)) return true;
-  if (livePass === "idle") return sawRunning || elapsed >= IDLE_GRACE_MS; // ran with no change, or never started
-  return revision === undefined && livePass === undefined && fresh > 0; // an API without the fields
+// What to do after an answer: "poll" (again in 2 s), "slow" (again in 10 s), "final" (one last
+// read, then stop) or "stop". ``base`` is the revision before the message, ``sawRunning`` whether
+// any answer since said the pass was running, ``elapsed`` the time since the reply.
+export function nextStep({ base, revision, livePass, sawRunning, elapsed, fresh = 0 }) {
+  if (livePass === "running") {
+    if (elapsed < CAP_MS) return "poll";
+    return elapsed < SLOW_CAP_MS ? "slow" : "stop";
+  }
+  if (newer(revision, base)) return "stop";
+  if (livePass === "idle") {
+    if (sawRunning) return "final"; // it ran: read once more in case its revision landed just after
+    return elapsed < IDLE_GRACE_MS ? "poll" : "stop"; // never started
+  }
+  if (revision === undefined && livePass === undefined && fresh > 0) return "stop"; // an API without the fields
+  return elapsed < CAP_MS ? "poll" : "stop";
 }
 
 export function createLivePass({ panel, thought }) {
   const line = byId("live-pass");
+  const text = line.querySelector(".live-pass-text");
   const tab = byId("tab-mind");
   let base;
   let run = 0;
   let timer = null;
+  let resume = null; // the check that waits for the tab to show again
 
-  line.querySelector(".live-pass-text").textContent = COPY.live_thinking;
-
-  function thinking(on) {
+  function thinking(on, words = COPY.live_thinking) {
     line.hidden = !on;
+    text.textContent = words;
     if (on) tab.dataset.thinking = "true";
     else delete tab.dataset.thinking;
   }
@@ -49,8 +67,18 @@ export function createLivePass({ panel, thought }) {
   function stop() {
     run += 1;
     window.clearTimeout(timer);
+    resume = null;
     thinking(false);
   }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !resume) return;
+    const check = resume;
+    resume = null;
+    check();
+  });
+
+  const read = () => Promise.all([panel.refresh(), thought.isOpen() ? thought.refresh() : null]).then(([state]) => state);
 
   return {
     // A message is going out: the revision MIND is at before it.
@@ -64,19 +92,31 @@ export function createLivePass({ panel, thought }) {
       const from = base;
       const start = Date.now();
       let sawRunning = false;
-      thinking(true);
-      const tick = async () => {
-        const [state] = await Promise.all([panel.refresh(), thought.isOpen() ? thought.refresh() : null]);
+      const later = (ms) => { timer = window.setTimeout(check, ms); };
+      async function check() {
+        if (mine !== run) return;
+        if (document.hidden) { // paused: the next check runs when the tab shows again
+          resume = check;
+          return;
+        }
+        const state = await read();
         if (mine !== run) return; // a newer watch, or a night, took over
         if (state.livePass === "running") sawRunning = true;
-        const done = settled({
+        const step = nextStep({
           base: from, revision: state.revision, livePass: state.livePass, sawRunning,
           elapsed: Date.now() - start, fresh: state.fresh,
         });
-        if (done) thinking(false);
-        else timer = window.setTimeout(tick, POLL_MS);
-      };
-      timer = window.setTimeout(tick, POLL_MS);
+        if (step === "poll") later(POLL_MS);
+        else if (step === "slow") {
+          thinking(true, COPY.live_slow);
+          later(SLOW_MS);
+        } else {
+          if (step === "final") await read();
+          if (mine === run) thinking(false);
+        }
+      }
+      thinking(true);
+      later(POLL_MS);
     },
     stop,
   };
