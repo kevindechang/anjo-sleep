@@ -26,6 +26,7 @@ from anjo.sleep.tests.app.test_demo_page import (  # noqa: F401  (account is a f
 )
 
 PUBLIC = ("/sleep/demo", "/api/sleep/demo")
+JUDGE_PUBLIC = "/api/sleep/judge"  # judge_api: 404 without the judge code
 
 
 @pytest.fixture
@@ -119,7 +120,7 @@ def test_path_tricks_open_nothing_else(sleep_app: Any, raw: str) -> None:
 
 
 def test_the_public_paths_are_exactly_the_demo(sleep_app: Any) -> None:
-    assert tuple(sleep_app.state.public_prefixes) == PUBLIC
+    assert tuple(sleep_app.state.public_prefixes) == (*PUBLIC, JUDGE_PUBLIC)  # and the judge sign-in
     assert _raw(sleep_app, "/api/sleep/demo/page") == 200 and _raw(sleep_app, "/sleep/demo") == 200
     assert _raw(sleep_app, "/api/sleep/demo/page;") == 404  # past the gate, but no route of anyone else's
     assert _raw(sleep_app, "/api/sleep/demo") == 404 and _raw(sleep_app, "/api/sleep/demo/") in (401, 404)

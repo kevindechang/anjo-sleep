@@ -28,7 +28,7 @@ from anjo.sleep.tests.app.test_demo_page import (  # noqa: F401  (account is a f
     _write_starters,
     account,
 )
-from anjo.sleep.tests.app.test_demo_access import PUBLIC, sleep_app  # noqa: F401  (a fixture)
+from anjo.sleep.tests.app.test_demo_access import JUDGE_PUBLIC, PUBLIC, sleep_app  # noqa: F401  (a fixture)
 from anjo.sleep.tests.inquiry_fakes import Ws, notice_op
 from anjo.sleep.tests.inquiry_fakes import ev as inquiry_ev
 from anjo.sleep.types import CheckpointRef, Evidence, Expectation, Target
@@ -618,7 +618,7 @@ def test_the_new_routes_exist_only_on_the_sleep_host(monkeypatch: pytest.MonkeyP
 
 def test_an_anonymous_visitor_reaches_the_new_routes_inside_the_carve_out(sleep_app: Any, client: Any) -> None:  # noqa: F811  (the imported fixture)
     _her_nights(FIVE, (_ckpt(1), _ckpt(2), _ckpt(4), _ckpt(5)))
-    assert tuple(sleep_app.state.public_prefixes) == PUBLIC
+    assert tuple(sleep_app.state.public_prefixes) == (*PUBLIC, JUDGE_PUBLIC)
     assert client.get(f"{API}/nights").status_code == 200
     headers = _voted(client)
     assert client.get(f"{API}/mind", headers=headers).status_code == 200

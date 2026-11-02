@@ -17,7 +17,13 @@ is byte for byte main's.
 - the sole-answer hook (``open_model_turn.SOLE_ANSWER_HOOKS``): no other model answers a turn in
   a cleared session that Glimmer can't, unless it is a crisis turn;
 - the erasure hook (``erasure.ERASURE_HOOKS``): account erasure and a memory wipe also remove the
-  person's remote adapters, night logs, registry and the rest outside their own folder (Task 9).
+  person's remote adapters, night logs, registry and the rest outside their own folder (Task 9);
+- for the judge cohort only (``judge_cohort``): the judge route, first among the route overrides
+  (``judge_talker.judge_route``: Glimmer while she is up, Muse Spark while she isn't), and the
+  ``sleep_spark`` runtime it names (``spark_talker``), off the N-PROC vocabulary too.
+
+``register_sleep`` also mounts the judge product's API (``judge_api``), opens ``/api/sleep/judge`` to
+anonymous visitors beside the demo's paths, and adds ``TurnWatch`` (a judge's chat turn).
 """
 from __future__ import annotations
 
@@ -33,9 +39,15 @@ from anjo.sleep.app.demo_api import page_router as demo_page_router
 from anjo.sleep.app.demo_api import router as demo_router
 from anjo.sleep.app.delivery import held
 from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_enabled_for
+from anjo.sleep.app.judge_api import PUBLIC_PREFIX as JUDGE_PUBLIC
+from anjo.sleep.app.judge_api import TurnWatch
+from anjo.sleep.app.judge_api import router as judge_router
+from anjo.sleep.app.judge_talker import judge_route
 from anjo.sleep.app.ownership import remote_cleanup
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
+from anjo.sleep.app.spark_talker import HOST as SPARK_HOST
+from anjo.sleep.app.spark_talker import SparkRuntime
 from anjo.sleep.app.storage import brief_store, checkpoint_registry, glimmer_turns
 from anjo.sleep.context.brief_store import ServedBriefs, TrainingBriefs
 from anjo.sleep.serving.activity import track
@@ -55,6 +67,8 @@ def _promoted_adapter(user_id: str) -> CheckpointRef | None:
 def register_hooks() -> None:
     require_sleep_host()
     apply_tombstones()  # at startup: a deleted person's forced-id entry never comes back
+    if judge_route not in assignment.ROUTE_OVERRIDES:  # first: a judge's turn never waits on a cold start
+        assignment.ROUTE_OVERRIDES.insert(0, judge_route)
     _add(assignment.ROUTE_OVERRIDES, sleep_route)
     _add(talker_choice.MENU_OVERRIDES, sleep_enabled_for)
     _add(open_model_turn.TURN_HOOKS, sleep_turn_hook)
@@ -66,12 +80,16 @@ def register_hooks() -> None:
     if HOST not in hosts.RUNTIMES:
         hosts.register_runtime(HOST, SleepRuntime)
     client.OFF_VOCABULARY_HOSTS.add(HOST)
+    if SPARK_HOST not in hosts.RUNTIMES:
+        hosts.register_runtime(SPARK_HOST, SparkRuntime)
+    client.OFF_VOCABULARY_HOSTS.add(SPARK_HOST)
 
 
 def unregister_hooks() -> None:
     """Take the hooks out again (tests). The runtime stays registered: only a Glimmer pin, which
     only the route override makes, ever reaches it."""
     added: list[tuple[list[Any], Any]] = [
+        (assignment.ROUTE_OVERRIDES, judge_route),
         (assignment.ROUTE_OVERRIDES, sleep_route),
         (talker_choice.MENU_OVERRIDES, sleep_enabled_for),
         (open_model_turn.TURN_HOOKS, sleep_turn_hook),
@@ -94,4 +112,8 @@ def register_sleep(app: Any) -> None:
     app.include_router(router, prefix="/api")
     app.include_router(demo_router, prefix="/api")
     app.include_router(demo_page_router)
-    app.state.public_prefixes = DEMO_PUBLIC
+    app.include_router(judge_router, prefix="/api")
+    watched = any(getattr(m, "cls", None) is TurnWatch for m in getattr(app, "user_middleware", ()))
+    if not watched and getattr(app, "middleware_stack", None) is None:  # at import, before the app starts
+        app.add_middleware(TurnWatch)  # a judge's chat turn: presence, then MIND's live pass
+    app.state.public_prefixes = (*DEMO_PUBLIC, JUDGE_PUBLIC)
