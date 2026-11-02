@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Final, Literal, NamedTuple
 
@@ -439,23 +439,37 @@ def day_input(vocab: Vocab, events: Sequence[Event]) -> DayInput:
 
 
 @dataclass(frozen=True)
+class _Pending:
+    subject: str
+    target_day: int
+    logits: np.ndarray  # (K,) the heads' logits from the end of the asked day
+    p: float  # the prediction then, adapter included
+    cell: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class PersonState:
     """Everything one person's predictor holds; frozen, so a clone is the same object."""
 
     day: int
-    start: CogState  # after the night before ``day``: its probes are yesterday's predictions of today
+    start: CogState  # after the night before ``day``
     cur: CogState  # after ``day``'s events so far
     today: tuple[Event, ...]
     adapter: night_mod.Adapter
-    replay: tuple[night_mod.Replayed, ...]  # resolved probes, the night's buffer
-    counts: tuple[tuple[str, int], ...]  # events per activity through the last night (the night's need)
+    seen: tuple[Query, ...]  # today's queries (asked today) that ``predict`` was shown
+    pending: tuple[_Pending, ...]  # predicted, not yet resolved
+    replay: tuple[night_mod.Replayed, ...]  # resolved: the night's buffer
+    counts: tuple[tuple[str, int], ...]  # queries asked per subject (the night's need)
 
 
 class MindPredictor:
     """The cog core as a ``Predictor`` for one person at a time.
 
-    ``predict`` has no side effects (an inquirer may call it on the live state or a clone, any
-    number of times): the night replays the core's own daily probes, which ``observe`` makes.
+    ``predict`` returns the same predictions however often and by whom it is called, and changes
+    no later prediction: it only notes which of today's queries (asked today) it was shown, a set
+    that is the same whoever asks. At ``end_day`` each of them is predicted once more from the
+    day's final state, and that prediction is what the night replays once it resolves (a ``did``
+    event for its subject on its target day means it happened).
     Lesion switches: ``fast`` (the fast memory read and written), ``ensemble`` (heads used; 1 gives
     ``u = None``, and ``p`` is then head 0's), ``night`` (``off``, ``uniform`` or ``surprise``
     replay into the per-person adapter) and ``cms`` (the night level; only for a core trained with it).
@@ -494,35 +508,42 @@ class MindPredictor:
         with torch.no_grad():
             st = self.net.initial(1, len(meta.activities))
         adapter = night_mod.Adapter.zero(len(meta.activities) + 1)
-        self._state = PersonState(-1, st, st, (), adapter, (), ())
+        self._state = PersonState(-1, st, st, (), adapter, (), (), (), ())
 
     def observe(self, day: int, events: Sequence[Event]) -> None:
         self._state = self.peek(day, events)
 
     def predict(self, queries: Sequence[Query]) -> Sequence[Prediction]:
-        return self.predict_on(self.live, queries)[0]
+        ps = self.live
+        known = {q.qid for q in ps.seen}
+        fresh = tuple(q for q in queries if q.asked_day == ps.day and q.qid not in known)
+        if fresh:
+            self._state = replace(ps, seen=(*ps.seen, *dict((q.qid, q) for q in fresh).values()))
+        return self.predict_on(ps, queries)[0]
 
     def end_day(self, day: int) -> None:
-        """The night: yesterday's probes of today resolve into the replay buffer, the adapter takes
-        its steps, and the continuum memory (if on) consolidates."""
+        """The night: today's queries are predicted from the day's final state and wait to resolve;
+        those about today resolve into the replay buffer; the adapter takes its steps; the
+        continuum memory (if on) consolidates."""
         ps = self.live
-        assert self._meta is not None
-        acts = self._meta.activities
-        resolved: list[night_mod.Replayed] = []
         counts = dict(ps.counts)
-        if ps.day == day:
-            y = outcomes(ps.today, acts)
-            made = ps.start.probe_ok[0].numpy() > 0
-            logits = ps.start.probe_logits[0, :, : self.k].numpy().astype(np.float64)
-            wd = (self._meta.start_weekday + day) % 7
-            cells = np.array([(a, wd) for a in range(len(acts))], dtype=np.int64).reshape(-1, 2)
-            p = _mean_sigmoid(logits + ps.adapter.shift(cells)[:, None])
-            for a in np.flatnonzero(made):
-                surprise = -math.log(p[a] if y[a] else 1.0 - p[a])
-                resolved.append(night_mod.Replayed(logits[a], float(y[a]), surprise, acts[a], day, (int(a), wd)))
-            for e in ps.today:
-                if e.subject in acts:
-                    counts[e.subject] = counts.get(e.subject, 0) + 1
+        pending = list(ps.pending)
+        if ps.seen:
+            _, _, base = self.predict_on(ps, ps.seen)
+            cells = np.array([self._cell(q) for q in ps.seen], dtype=np.int64)
+            p = _mean_sigmoid(base + ps.adapter.shift(cells)[:, None])
+            for i, q in enumerate(ps.seen):
+                pending.append(_Pending(q.subject, q.target_day, base[i], float(p[i]), self._cell(q)))
+                counts[q.subject] = counts.get(q.subject, 0) + 1
+        did = {e.subject for e in ps.today if e.kind == "did"} if ps.day == day else None
+        resolved, waiting = [], []
+        for pend in pending:
+            if pend.target_day == day and did is not None:
+                y = 1.0 if pend.subject in did else 0.0
+                surprise = -math.log(pend.p if y else 1.0 - pend.p)
+                resolved.append(night_mod.Replayed(pend.logits, y, surprise, pend.subject, day, pend.cell))
+            elif pend.target_day > day:
+                waiting.append(pend)
         replay = (*ps.replay, *resolved)[-self.replay_keep:]
         adapter = ps.adapter
         if self.night_mode != "off" and replay:
@@ -531,7 +552,8 @@ class MindPredictor:
         if self.cms:
             with torch.no_grad():
                 cur = self.net.consolidate(cur)
-        self._state = PersonState(ps.day, ps.start, cur, ps.today, adapter, replay, tuple(counts.items()))
+        self._state = PersonState(ps.day, ps.start, cur, ps.today, adapter, (), tuple(waiting), replay,
+                                  tuple(counts.items()))
 
     # ── pure views, for the inquirer ─────────────────────────────────────────
 
@@ -552,7 +574,8 @@ class MindPredictor:
                 start, today = cur, ()
             today = (*today, *events)
             cur = self._step(start, day, today)
-        return PersonState(day, start, cur, today, ps.adapter, ps.replay, ps.counts)
+        seen = ps.seen if day == ps.day else ()
+        return PersonState(day, start, cur, today, ps.adapter, seen, ps.pending, ps.replay, ps.counts)
 
     def _step(self, st: CogState, day: int, events: Sequence[Event]) -> CogState:
         assert self._meta is not None

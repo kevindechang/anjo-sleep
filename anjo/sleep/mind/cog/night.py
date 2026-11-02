@@ -1,10 +1,11 @@
 """The cog core's night: a few gradient steps on a small per-person adapter over replayed predictions.
 
-**What is replayed.** Each day the core predicts, for every activity, whether it happens tomorrow
-(its probes, made inside ``observe``, so they never depend on who called ``predict`` or how often);
-the next day's events resolve them (``encode.outcomes``). The replay buffer holds those resolved
-probes: the heads' logits then, the outcome, the surprise (the log loss of the prediction then,
-adapter included) and the cell (activity, weekday).
+**What is replayed.** The person's resolved queries (``core.MindPredictor``: each of a day's
+queries is predicted from that day's final state, and resolves on its target day): the heads'
+logits then, the outcome, the surprise (the log loss of the prediction then, adapter included) and
+the cell (subject, target weekday). Replaying the core's own next-day probes instead was tried and
+dropped: the adapter then carried the probes' errors to queries whose errors differ (it raised a
+weakly trained core's log loss on a real life from 0.687 to 0.769).
 
 **The adapter** shifts every head's logit by ``delta = b + c[s] + t[s, wd]``: a bias, one per subject
 (each activity, and one slot for any other subject) and one per subject and target weekday. That is
@@ -19,7 +20,7 @@ and hippocampal replay": replay where the gain is large and the state will be ne
 draws ``samples`` items with replacement and takes ``steps`` plain gradient steps:
 
 - ``surprise``: drawn with probability ``P_i`` proportional to ``surprise_i x need_i + eps``. Need is
-  how much the item speaks for the person's coming days: the share of their events about its
+  how much the item speaks for the person's coming days: the share of their queries about its
   subject, times ``decay ** (today - day)`` (a successor-style discount: an old surprise says less
   about them now). Each draw is weighted by ``need_i / P_i`` (normalized), so the update is unbiased
   for the need-weighted loss ``sum_i need_i loss_i``: surprise decides where the samples go (the
