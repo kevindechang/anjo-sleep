@@ -41,6 +41,12 @@ def sleep_enabled_for(user_id: str) -> bool:
     from anjo.core.capabilities import capability_enabled_for, declare_sleep_capability
 
     declare_sleep_capability()
+    from anjo.sleep.app.judge_cohort import is_judge  # here: judge_cohort's callers import flags
+
+    if is_judge(user_id):  # the judge cohort, under the same switch (ANJO_SLEEP_ENABLED)
+        from anjo.core.capabilities import get_capabilities
+
+        return bool(get_capabilities().get(CAPABILITY))
     return bool(capability_enabled_for(CAPABILITY, user_id))
 
 
