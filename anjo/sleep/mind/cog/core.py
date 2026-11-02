@@ -492,7 +492,7 @@ def load_checkpoint(path: Path | str) -> Checkpoint:
 
 # ── the predictor ────────────────────────────────────────────────────────────
 
-NightMode = Literal["off", "uniform", "surprise"]
+NightMode = Literal["off", "uniform", "surprise", "transfer"]
 
 
 def day_input(vocab: Vocab, events: Sequence[Event]) -> DayInput:
@@ -538,7 +538,8 @@ class MindPredictor:
     event for its subject on its target day means it happened).
     Lesion switches: ``fast`` (the fast memory read and written), ``ensemble`` (heads used; 1 gives
     ``u = None``, and ``p`` is then head 0's), ``night`` (``off``, ``uniform`` or ``surprise``
-    replay into the per-person adapter), ``gate`` (serve the adapter only while it has paid,
+    replay into the per-person adapter, or ``transfer``: a share ``move`` of the fast memory into
+    it, ``night.transfer``), ``gate`` (serve the adapter only while it has paid,
     ``night.served``; off, it is always served), ``fallback`` (mix toward ``prior``, the train
     world's base rate per query family, as more of the inputs are unknown; module docstring) and
     ``platt`` (``(a, b)``: ``p <- sigmoid(a logit p + b)``, fitted on train-range lives by
@@ -550,7 +551,7 @@ class MindPredictor:
         self, checkpoint: Checkpoint | Path | str | object, *, fast: bool = True, ensemble: int | None = None,
         night: NightMode = "surprise", cms: bool | None = None, seed: int = 0, name: str = "mind",
         replay_keep: int = 512, gate: bool = True, fallback: bool = True, prior: Mapping[str, float] | None = None,
-        platt: tuple[float, float] | None = None,
+        platt: tuple[float, float] | None = None, move: float = night_mod.MOVE,
     ) -> None:
         ck = checkpoint if isinstance(checkpoint, Checkpoint) else _as_checkpoint(checkpoint)
         self.net, self.vocab = ck.net.eval(), ck.vocab
@@ -560,12 +561,14 @@ class MindPredictor:
             raise ValueError(f"ensemble is 1..{cfg.heads}")
         if night not in night_mod.NIGHT_MODES:
             raise ValueError(f"night is one of {night_mod.NIGHT_MODES}")
+        if not 0.0 < move <= 1.0:
+            raise ValueError("move is a share of the fast memory, in (0, 1]")
         if cms and not cfg.cms:
             raise ValueError("this core was trained without the continuum memory")
         self.fast = fast and cfg.fast
         self.cms = cfg.cms if cms is None else cms
         self.night_mode: NightMode = night
-        self.seed, self.name, self.replay_keep, self.gate = seed, name, replay_keep, gate
+        self.seed, self.name, self.replay_keep, self.gate, self.move = seed, name, replay_keep, gate, move
         saved = ck.extra.get("prior") if isinstance(ck.extra.get("prior"), Mapping) else None
         self.fallback, self.prior = fallback, dict(prior or saved or DEFAULT_PRIOR)  # type: ignore[arg-type]
         fitted = ck.extra.get("platt")
@@ -599,15 +602,22 @@ class MindPredictor:
 
     def end_day(self, day: int) -> None:
         """The night: today's queries are predicted from the day's final state and wait to resolve;
-        those about today resolve into the replay buffer; the adapter takes its steps; the
-        continuum memory (if on) consolidates."""
+        those about today resolve into the replay buffer; the adapter takes its steps (or, on a
+        transfer night, a share of the fast memory moves into it); the continuum memory (if on)
+        consolidates."""
         ps = self.live
         counts = dict(ps.counts)
         pending = list(ps.pending)
+        adapter, cur = ps.adapter, ps.cur
         if ps.seen:
             _, _, base = self.predict_on(ps, ps.seen)
             cells = np.array([self._cell(q) for q in ps.seen], dtype=np.int64)
             p = _mean_sigmoid(base + ps.adapter.shift(cells)[:, None])
+            if self.night_mode == "transfer" and self.fast:
+                k = 1.0 - self.move
+                cur = cur._replace(mem=cur.mem * k, mom=cur.mom * k)
+                _, _, kept = self.predict_on(replace(ps, cur=cur), ps.seen)
+                adapter = night_mod.transfer(adapter, cells, (base - kept).mean(axis=1))
             for i, q in enumerate(ps.seen):
                 pending.append(_Pending(q.subject, q.target_day, base[i], float(p[i]), self._cell(q)))
                 counts[q.subject] = counts.get(q.subject, 0) + 1
@@ -622,10 +632,8 @@ class MindPredictor:
                 waiting.append(pend)
         replay = (*ps.replay, *resolved)[-self.replay_keep:]
         gain = night_mod.update_gain(ps.gain, resolved)
-        adapter = ps.adapter
-        if self.night_mode != "off" and replay:
+        if self.night_mode in ("uniform", "surprise") and replay:
             adapter = night_mod.night(adapter, replay, today=day, mode=self.night_mode, rng=self._rng, counts=counts)
-        cur = ps.cur
         if self.cms:
             with torch.no_grad():
                 cur = self.net.consolidate(cur)
@@ -675,7 +683,8 @@ class MindPredictor:
         base = logits[0, :, : self.k].numpy().astype(np.float64)
         feats = x[0].numpy().astype(np.float64)
         cells = np.array([self._cell(q) for q in queries], dtype=np.int64)
-        adapter = night_mod.served(ps.adapter, ps.gain) if self.gate else ps.adapter
+        gated = self.gate and self.night_mode != "transfer"  # a moved memory is no fit for the gate to vouch for
+        adapter = night_mod.served(ps.adapter, ps.gain) if gated else ps.adapter
         shifted = torch.from_numpy(base + adapter.shift(cells)[:, None])
         p = mean_prob(shifted).numpy()
         u = mutual_information(shifted).numpy() if self.k > 1 else None

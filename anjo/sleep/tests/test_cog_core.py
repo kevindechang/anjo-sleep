@@ -17,7 +17,9 @@ import torch
 
 from anjo.sleep.mind.cog import core, train_cog
 from anjo.sleep.mind.cog.encode import Vocab, activity_kinds, build_vocab, collate, encode_life, encode_queries
-from anjo.sleep.mind.cog.night import NO_GAIN, Adapter, Replayed, night, paid, priorities, served, update_gain
+from anjo.sleep.mind.cog.night import (
+    NO_GAIN, Adapter, Replayed, night, paid, priorities, served, transfer, update_gain,
+)
 from anjo.sleep.mind.cog.toy_life import ToyLife
 from anjo.sleep.mind.cog.types import Event, Life, Prediction, Query, Resolution
 from anjo.sleep.mind.core.net import fast_update
@@ -416,6 +418,45 @@ def test_the_predictor_serves_the_adapter_only_while_it_has_paid() -> None:
         same = pred.predict_on(live, life.queries(30))[0] == pred.predict_on(bare, life.queries(30))[0]
         assert live.gain[1] > 0.0 and np.abs(live.adapter.c).sum() > 0
         assert same == (gate and not paid(live.gain))
+
+
+def test_transfer_adds_each_cells_mean_moved_logit_and_its_subjects_mean_on_other_weekdays() -> None:
+    start = Adapter(0.1, np.zeros(3), np.zeros((3, 7)))
+    after = transfer(start, np.array([[0, 1], [0, 1], [0, 2], [1, 4]]), np.array([0.2, 0.4, 0.6, -1.0]))
+
+    def shift(slot: int, wd: int) -> float:
+        return float(after.shift(np.array([[slot, wd]]))[0])
+
+    assert np.isclose(shift(0, 1), 0.1 + 0.3) and np.isclose(shift(0, 2), 0.1 + 0.6)
+    assert np.isclose(shift(0, 5), 0.1 + 0.4)  # a weekday not measured: the subject's mean
+    assert np.isclose(shift(1, 4), 0.1 - 1.0) and np.isclose(shift(2, 3), 0.1)  # a subject not measured: none
+    assert transfer(start, np.zeros((0, 2), dtype=np.int64), np.zeros(0)) is start
+
+
+def test_the_transfer_night_moves_fast_memory_into_the_adapter_and_keeps_the_predictions() -> None:
+    """A transfer night scales the fast memory by ``1 - move`` and adds what that removed from the
+    day's queries' logits to the adapter: the evidence moves, it is not counted twice."""
+    trained = trained_tiny()
+    life = ToyLife(DEV[2])
+    pred = core.MindPredictor(trained, night="transfer", move=0.5)
+    pred.begin(life.meta)
+    for d in range(20):
+        pred.observe(d, life.events(d))
+        pred.predict(life.queries(d))
+        pred.end_day(d)
+    pred.observe(20, life.events(20))
+    queries = life.queries(20)
+    before = np.array([x.p for x in pred.predict(queries)])
+    live = pred.live
+    pred.end_day(20)
+    after = pred.live
+    assert torch.allclose(after.cur.mem, 0.5 * live.cur.mem) and torch.allclose(after.cur.mom, 0.5 * live.cur.mom)
+    moved = np.array([x.p for x in pred.predict_on(after, queries)[0]])
+    dropped = np.array([x.p for x in pred.predict_on(replace(after, adapter=live.adapter), queries)[0]])
+    assert np.abs(dropped - before).mean() > 1e-3  # the memory spoke
+    assert np.abs(moved - before).mean() < 0.25 * np.abs(dropped - before).mean()
+    with pytest.raises(ValueError):
+        core.MindPredictor(trained, night="transfer", move=1.5)
 
 
 def test_the_night_does_not_forget_stable_habits() -> None:

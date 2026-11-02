@@ -13,7 +13,8 @@ fit it on ``--train-seeds`` (train seeds only) in this process before the lives 
 factory makes a fresh predictor per life (an inquirer factory takes that life's predictor). A
 factory must pickle for ``--workers > 1``. MIND's own predictor registers here as ``mind``, with its
 lesions ``mind_nofast`` (no fast memory), ``mind_k1`` (one head, no u), ``mind_nonight`` and
-``mind_uniform`` (uniform replay at equal compute); ``--set ckpt=PATH`` picks the checkpoint
+``mind_uniform`` (uniform replay at equal compute), and the variant ``mind_transfer`` (the night
+moves half the fast memory into the adapter); ``--set ckpt=PATH`` picks the checkpoint
 (default ``train_cog``'s default output). Its inquirer is ``mind_voi`` (``--set lam=1.0``, and
 ``--set week=7`` for the hypothetical days ahead it weighs, 0 for today's queries only), which
 needs a ``mind*`` predictor. Settings come from ``--set key=value``; a key no builder reads is an error.
@@ -232,6 +233,7 @@ PREDICTORS: dict[str, PredictorBuilder] = {
     "mind_k1": _mind("mind_k1", ensemble=1),
     "mind_nonight": _mind("mind_nonight", night="off"),
     "mind_uniform": _mind("mind_uniform", night="uniform"),
+    "mind_transfer": _mind("mind_transfer", night="transfer"),
 }
 
 INQUIRERS: dict[str, InquirerBuilder] = {

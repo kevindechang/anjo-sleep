@@ -38,6 +38,21 @@ online has seen the outcomes the night replays, so a bias fit to them counts tha
 on 40 real-world lives no core trained on (seeds 7000-7039, a core trained on 3000 lives) the
 ungated night raised the log loss by 0.020 nats (uniform replay by 0.006), and gated by 0.004
 (0.002). The gate starts closed, so a person's first predictions are the core's own.
+
+**The transfer night** (``transfer``; complementary learning systems, McClelland, McNaughton &
+O'Reilly 1995) replays nothing. It moves a share ``move`` of the fast memory into the adapter: the
+predictor scales the fast weights and their momentum by ``1 - move``, and each of the day's queries
+gives the logit that removed (the heads' mean, the full memory's minus the scaled one's). Each
+measured cell's adapter gains the mean of its queries, and the subject's other weekdays the mean
+of the subject's (``transfer``). The moved part is always served: it is no fit to outcomes that
+the gate would have to vouch for. It conserves the evidence only if the memory stays scaled down,
+and this core's does not: its write moves ``M k`` toward the fixed value ``W_v [y, 1 - y]``
+whatever the adapter holds, so a scaled-down memory relearns the same content by the next night
+and the adapter takes it again. On 40 real-world lives no core trained on (seeds 7000-7039, the
+6000-life tally core), the memory's norm settled at 1.2 instead of 4.4, the adapter's subject
+shifts reached 2-3 logits, and the log loss rose by 0.145 nats at ``move`` 0.5 (0.082 at 0.2,
+0.180 at 1; hidden queries, 0.62 -> 0.88). A transfer that conserves needs a core trained with
+it, whose memory learns the residual of the adapter.
 """
 from __future__ import annotations
 
@@ -47,11 +62,12 @@ from typing import Final
 
 import numpy as np
 
-NIGHT_MODES: Final = ("off", "uniform", "surprise")
+NIGHT_MODES: Final = ("off", "uniform", "surprise", "transfer")
 SAMPLES: Final = 128
 STEPS: Final = 10
 LR: Final = 0.5
 PRIOR: Final = 8.0
+MOVE: Final = 0.5  # the share of the fast memory a transfer night moves
 DECAY: Final = 0.9
 GAIN_DECAY: Final = 0.9  # per day: the gate weighs about the last ten days
 Z: Final = 2.0  # the gate opens on a saving two standard errors above zero
@@ -127,6 +143,24 @@ def served(adapter: Adapter, gain: Gain) -> Adapter:
     return adapter if paid(gain) else Adapter.zero(len(adapter.c))
 
 
+def transfer(adapter: Adapter, cells: np.ndarray, moved: np.ndarray) -> Adapter:
+    """The adapter after a transfer night: ``moved`` (N,) is the logit each query (cells (N, 2))
+    lost when the fast memory was scaled down. A measured cell gains its queries' mean; the other
+    weekdays of a measured subject gain the subject's mean; other subjects, nothing."""
+    cells = np.asarray(cells, dtype=np.int64).reshape(-1, 2)
+    moved = np.asarray(moved, dtype=np.float64).reshape(-1)
+    if not len(moved):
+        return adapter
+    c, t = adapter.c.copy(), adapter.t.copy()
+    for slot in np.unique(cells[:, 0]):
+        mine = cells[:, 0] == slot
+        mean = float(moved[mine].mean())
+        c[slot] += mean
+        for wd in np.unique(cells[mine, 1]):
+            t[slot, wd] += float(moved[mine & (cells[:, 1] == wd)].mean()) - mean
+    return Adapter(adapter.b, c, t)
+
+
 def night(
     adapter: Adapter, items: Sequence[Replayed], *, today: int, mode: str, rng: np.random.Generator,
     counts: Mapping[str, int], samples: int = SAMPLES, steps: int = STEPS, lr: float = LR, prior: float = PRIOR,
@@ -135,7 +169,7 @@ def night(
     """One night's adapter, from the last one and the replay buffer."""
     if mode not in NIGHT_MODES:
         raise ValueError(f"night mode is one of {NIGHT_MODES}")
-    if mode == "off" or not items:
+    if mode in ("off", "transfer") or not items:  # the transfer is the predictor's (it reads the net)
         return adapter
     if mode == "surprise":
         prob = priorities(items, today, counts, decay)
