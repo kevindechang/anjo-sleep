@@ -28,6 +28,16 @@ draws ``samples`` items with replacement and takes ``steps`` plain gradient step
   wrong (uncorrected, it shrank a calibrated core toward 0.5 on the toy world).
 - ``uniform``: the same number of draws, uniform over the buffer, unweighted, the same steps: the
   equal-compute control.
+
+**The adapter is served only while it has paid** (``served``, ``update_gain``, ``paid``). The night
+always fits it, but predictions use it only while its gain is ``Z`` standard errors above zero: the
+log loss its own predictions saved over the core's alone on the items resolved so far, each
+counted from before its outcome was known (prequential), decayed by ``GAIN_DECAY`` a day, against
+the root of the decayed sum of the squared savings. A core whose state already learns the person
+online has seen the outcomes the night replays, so a bias fit to them counts that evidence twice:
+on 40 real-world lives no core trained on (seeds 7000-7039, a core trained on 3000 lives) the
+ungated night raised the log loss by 0.020 nats (uniform replay by 0.006), and gated by 0.004
+(0.002). The gate starts closed, so a person's first predictions are the core's own.
 """
 from __future__ import annotations
 
@@ -43,6 +53,10 @@ STEPS: Final = 10
 LR: Final = 0.5
 PRIOR: Final = 8.0
 DECAY: Final = 0.9
+GAIN_DECAY: Final = 0.9  # per day: the gate weighs about the last ten days
+Z: Final = 2.0  # the gate opens on a saving two standard errors above zero
+Gain = tuple[float, float]  # (decayed sum of the savings, decayed sum of their squares)
+NO_GAIN: Final[Gain] = (0.0, 0.0)
 _EPS: Final = 1e-3
 
 
@@ -83,6 +97,34 @@ def priorities(items: Sequence[Replayed], today: int, counts: Mapping[str, int],
     """Each item's replay probability in ``surprise`` mode: surprise x need, normalized."""
     raw = np.array([it.surprise for it in items]) * need(items, today, counts, decay) + _EPS
     return raw / raw.sum()
+
+
+def _loss(p: np.ndarray, y: np.ndarray) -> np.ndarray:
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return -(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+
+def update_gain(gain: Gain, resolved: Sequence[Replayed], decay: float = GAIN_DECAY) -> Gain:
+    """The gate's evidence after a day: the old sums decayed, plus each resolved item's saving, its
+    base log loss minus the loss it had with the adapter (its ``surprise``), both from before the
+    outcome (and its square)."""
+    total, sq = decay * gain[0], decay * gain[1]
+    if not resolved:
+        return total, sq
+    base = np.stack([it.logits for it in resolved])
+    p_base = (1.0 / (1.0 + np.exp(-np.clip(base, -30.0, 30.0)))).mean(axis=1)
+    y = np.array([it.y for it in resolved])
+    saved = _loss(p_base, y) - np.array([it.surprise for it in resolved])
+    return total + float(saved.sum()), sq + float((saved ** 2).sum())
+
+
+def paid(gain: Gain, z: float = Z) -> bool:
+    return gain[0] > z * float(np.sqrt(gain[1])) and gain[0] > 0.0
+
+
+def served(adapter: Adapter, gain: Gain) -> Adapter:
+    """The adapter predictions use: the night's while it has paid, else none."""
+    return adapter if paid(gain) else Adapter.zero(len(adapter.c))
 
 
 def night(

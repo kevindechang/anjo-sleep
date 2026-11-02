@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,7 @@ import torch
 
 from anjo.sleep.mind.cog import core, train_cog
 from anjo.sleep.mind.cog.encode import build_vocab, collate, encode_life
-from anjo.sleep.mind.cog.night import Adapter, Replayed, night, priorities
+from anjo.sleep.mind.cog.night import NO_GAIN, Adapter, Replayed, night, paid, priorities, served, update_gain
 from anjo.sleep.mind.cog.toy_life import ToyLife
 from anjo.sleep.mind.cog.types import Life, Prediction
 from anjo.sleep.mind.core.net import fast_update
@@ -272,24 +273,34 @@ def test_night_moves_the_adapter_toward_what_surprised_it() -> None:
         night(start, items, today=40, mode="sometimes", rng=rng, counts={})
 
 
-def _shifted_stream(mode: str, seed: int) -> list[float]:
+def _p(base: np.ndarray, adapter: Adapter, wd: int) -> float:
+    return float(np.mean(1 / (1 + np.exp(-(base + adapter.shift(np.array([[0, wd]]))[0])))))
+
+
+def _shifted_stream(mode: str, seed: int, *, gated: bool = False, shift: bool = True) -> list[float]:
     """The night alone after a shift, on a base that cannot adapt: the base logits know the old
-    habit (run on weekdays 0-2) for good; from day 21 the person runs on weekdays 4-6. Each day one
-    run query per weekday is predicted (base plus the adapter), resolves, and the night runs. The
-    log losses of days 21-34, the two weeks after the shift."""
-    rng = np.random.default_rng(seed)
-    adapter, items, counts, losses = Adapter.zero(2), [], {"run": 0}, []
+    habit (run on weekdays 0-2, logits 1.73 and -2.44: the habit's true 0.85 and 0.08) for good;
+    from day 21 the person runs on weekdays 4-6 (or, ``shift=False``, keeps the habit, so the base
+    is exactly calibrated). Each day one run query per weekday is predicted (base plus the adapter
+    served: with ``gated``, only while its own predictions have beaten the base's), resolves, and
+    the night runs. The log losses served on days 21-34, the two weeks after the shift. The outcomes
+    have their own stream, so every variant sees the same ones."""
+    rng, world = np.random.default_rng(seed), np.random.default_rng(1000 + seed)
+    adapter, items, counts, losses, gain = Adapter.zero(2), [], {"run": 0}, [], NO_GAIN
     for day in range(42):
-        habit = (0, 1, 2) if day < 21 else (4, 5, 6)
+        habit = (4, 5, 6) if shift and day >= 21 else (0, 1, 2)
+        today = []
         for wd in range(7):
-            base = np.full(3, 1.5 if wd < 3 else -2.0)
-            p = float(np.mean(1 / (1 + np.exp(-(base + adapter.shift(np.array([[0, wd]]))[0])))))
-            y = float(rng.random() < (0.85 if wd in habit else 0.08))
-            loss = -np.log(p if y else 1 - p)
+            base = np.full(3, 1.73 if wd < 3 else -2.44)
+            p = _p(base, served(adapter, gain) if gated else adapter, wd)
+            y = float(world.random() < (0.85 if wd in habit else 0.08))
             if 21 <= day < 35:
-                losses.append(loss)
-            items.append(Replayed(base, y, loss, "run", day, (0, wd)))
+                losses.append(-np.log(p if y else 1 - p))
+            p_fit = _p(base, adapter, wd)
+            today.append(Replayed(base, y, -np.log(p_fit if y else 1 - p_fit), "run", day, (0, wd)))
             counts["run"] += 1
+        items.extend(today)
+        gain = update_gain(gain, today)
         adapter = night(adapter, items, today=day, mode=mode, rng=rng, counts=counts)
     return losses
 
@@ -298,6 +309,76 @@ def test_priority_night_recovers_faster_than_no_night_and_uniform_after_a_shift(
     after = {mode: np.mean([np.mean(_shifted_stream(mode, s)) for s in range(8)])
              for mode in ("off", "uniform", "surprise")}
     assert after["surprise"] < after["uniform"] < after["off"]
+
+
+def test_the_gated_night_still_recovers_after_a_shift() -> None:
+    after = {(mode, gated): np.mean([np.mean(_shifted_stream(mode, s, gated=gated)) for s in range(8)])
+             for mode in ("off", "surprise") for gated in (False, True)}
+    assert after[("surprise", True)] < after[("off", False)] - 0.1
+    assert after[("surprise", True)] < after[("surprise", False)] + 0.1  # the gate opens a day or two late
+
+
+def _learning_stream(mode: str, seed: int, *, gated: bool) -> float:
+    """The night over a base that learns the person itself, exactly: each weekday's rate is drawn
+    from Beta(0.5, 0.5) and the base predicts its posterior mean from that weekday's outcomes so
+    far (a calibrated online learner, as a trained core is meant to be). The outcomes the night
+    replays are ones the base has already counted. The mean log loss served over 42 days."""
+    rng, world = np.random.default_rng(seed), np.random.default_rng(1000 + seed)
+    rate, k, n = world.beta(0.5, 0.5, size=7), np.zeros(7), np.zeros(7)
+    adapter, items, counts, losses, gain = Adapter.zero(2), [], {"run": 0}, [], NO_GAIN
+    for day in range(42):
+        today = []
+        for wd in range(7):
+            q = (k[wd] + 0.5) / (n[wd] + 1.0)
+            base = np.full(3, np.log(q / (1 - q)))
+            p = _p(base, served(adapter, gain) if gated else adapter, wd)
+            y = float(world.random() < rate[wd])
+            losses.append(-np.log(p if y else 1 - p))
+            p_fit = _p(base, adapter, wd)
+            today.append(Replayed(base, y, -np.log(p_fit if y else 1 - p_fit), "run", day, (0, wd)))
+            counts["run"] += 1
+            k[wd], n[wd] = k[wd] + y, n[wd] + 1
+        items.extend(today)
+        gain = update_gain(gain, today)
+        adapter = night(adapter, items, today=day, mode=mode, rng=rng, counts=counts)
+    return float(np.mean(losses))
+
+
+def test_the_gate_keeps_the_night_from_counting_twice_what_the_base_has_learned() -> None:
+    after = {(mode, gated): np.mean([_learning_stream(mode, s, gated=gated) for s in range(16)])
+             for mode in ("off", "uniform", "surprise") for gated in (False, True)}
+    off = after[("off", False)]
+    assert after[("surprise", False)] > off and after[("uniform", False)] > off
+    assert after[("surprise", True)] < off + 1e-3 and after[("uniform", True)] < off + 1e-3
+
+
+def test_the_gain_is_the_decayed_log_loss_the_adapter_saved() -> None:
+    base = np.zeros(3)  # p = 0.5 from the base alone
+    good = Replayed(base, 1.0, -np.log(0.8), "run", 0)
+    assert np.allclose(update_gain(NO_GAIN, [good]), (np.log(1.6), np.log(1.6) ** 2))
+    assert np.allclose(update_gain((1.0, 2.0), []), (0.9, 1.8))
+    adapter = Adapter(0.5, np.zeros(1), np.zeros((1, 7)))
+    assert paid((3.0, 1.0)) and not paid((1.0, 1.0)) and not paid(NO_GAIN)  # two standard errors
+    assert served(adapter, (3.0, 1.0)) is adapter
+    assert float(served(adapter, (1.0, 1.0)).shift(np.array([[0, 3]]))[0]) == 0.0
+
+
+def test_the_predictor_serves_the_adapter_only_while_it_has_paid() -> None:
+    trained = trained_tiny()
+    life = ToyLife(DEV[1])
+    for gate in (True, False):
+        pred = core.MindPredictor(trained, night="surprise", gate=gate)
+        pred.begin(life.meta)
+        for d in range(30):
+            pred.observe(d, life.events(d))
+            pred.predict(life.queries(d))
+            pred.end_day(d)
+        pred.observe(30, life.events(30))
+        live = pred.live
+        bare = replace(live, adapter=Adapter.zero(len(live.adapter.c)))
+        same = pred.predict_on(live, life.queries(30))[0] == pred.predict_on(bare, life.queries(30))[0]
+        assert live.gain[1] > 0.0 and np.abs(live.adapter.c).sum() > 0
+        assert same == (gate and not paid(live.gain))
 
 
 def test_the_night_does_not_forget_stable_habits() -> None:

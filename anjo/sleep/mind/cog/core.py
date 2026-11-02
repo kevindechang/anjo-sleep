@@ -460,6 +460,7 @@ class PersonState:
     pending: tuple[_Pending, ...]  # predicted, not yet resolved
     replay: tuple[night_mod.Replayed, ...]  # resolved: the night's buffer
     counts: tuple[tuple[str, int], ...]  # queries asked per subject (the night's need)
+    gain: night_mod.Gain = night_mod.NO_GAIN  # what the night's adapter has saved (``night.update_gain``)
 
 
 class MindPredictor:
@@ -472,13 +473,15 @@ class MindPredictor:
     event for its subject on its target day means it happened).
     Lesion switches: ``fast`` (the fast memory read and written), ``ensemble`` (heads used; 1 gives
     ``u = None``, and ``p`` is then head 0's), ``night`` (``off``, ``uniform`` or ``surprise``
-    replay into the per-person adapter) and ``cms`` (the night level; only for a core trained with it).
+    replay into the per-person adapter), ``gate`` (serve the adapter only while it has paid,
+    ``night.served``; off, it is always served) and ``cms`` (the night level; only for a core
+    trained with it).
     """
 
     def __init__(
         self, checkpoint: Checkpoint | Path | str | object, *, fast: bool = True, ensemble: int | None = None,
         night: NightMode = "surprise", cms: bool | None = None, seed: int = 0, name: str = "mind",
-        replay_keep: int = 512,
+        replay_keep: int = 512, gate: bool = True,
     ) -> None:
         ck = checkpoint if isinstance(checkpoint, Checkpoint) else _as_checkpoint(checkpoint)
         self.net, self.vocab = ck.net.eval(), ck.vocab
@@ -493,7 +496,7 @@ class MindPredictor:
         self.fast = fast and cfg.fast
         self.cms = cfg.cms if cms is None else cms
         self.night_mode: NightMode = night
-        self.seed, self.name, self.replay_keep = seed, name, replay_keep
+        self.seed, self.name, self.replay_keep, self.gate = seed, name, replay_keep, gate
         self._meta: LifeMeta | None = None
         self._state: PersonState | None = None
 
@@ -545,6 +548,7 @@ class MindPredictor:
             elif pend.target_day > day:
                 waiting.append(pend)
         replay = (*ps.replay, *resolved)[-self.replay_keep:]
+        gain = night_mod.update_gain(ps.gain, resolved)
         adapter = ps.adapter
         if self.night_mode != "off" and replay:
             adapter = night_mod.night(adapter, replay, today=day, mode=self.night_mode, rng=self._rng, counts=counts)
@@ -553,7 +557,7 @@ class MindPredictor:
             with torch.no_grad():
                 cur = self.net.consolidate(cur)
         self._state = PersonState(ps.day, ps.start, cur, ps.today, adapter, (), tuple(waiting), replay,
-                                  tuple(counts.items()))
+                                  tuple(counts.items()), gain)
 
     # ── pure views, for the inquirer ─────────────────────────────────────────
 
@@ -575,7 +579,7 @@ class MindPredictor:
             today = (*today, *events)
             cur = self._step(start, day, today)
         seen = ps.seen if day == ps.day else ()
-        return PersonState(day, start, cur, today, ps.adapter, seen, ps.pending, ps.replay, ps.counts)
+        return PersonState(day, start, cur, today, ps.adapter, seen, ps.pending, ps.replay, ps.counts, ps.gain)
 
     def _step(self, st: CogState, day: int, events: Sequence[Event]) -> CogState:
         assert self._meta is not None
@@ -596,7 +600,8 @@ class MindPredictor:
         base = logits[0, :, : self.k].numpy().astype(np.float64)
         feats = x[0].numpy().astype(np.float64)
         cells = np.array([self._cell(q) for q in queries], dtype=np.int64)
-        shifted = torch.from_numpy(base + ps.adapter.shift(cells)[:, None])
+        adapter = night_mod.served(ps.adapter, ps.gain) if self.gate else ps.adapter
+        shifted = torch.from_numpy(base + adapter.shift(cells)[:, None])
         p = mean_prob(shifted).numpy()
         u = mutual_information(shifted).numpy() if self.k > 1 else None
         preds = [Prediction(q.qid, float(p[i]), None if u is None else float(u[i])) for i, q in enumerate(queries)]
