@@ -12,7 +12,9 @@ failed: what it raised and how long it ran. Only these fall back:
   whether it exited non-zero, hung past its hard
   timeout or found no CLI;
 - a timeout: any later call that hung past its hard timeout, or an ``exec`` that failed at or past
-  the kernel's own ``--timeout``.
+  the kernel's own ``--timeout``;
+- a VM lost mid-run: an ``exec`` the watch stopped (``ColabVmLost``) because the session's VM was
+  missing from the account's assignments on two checks in a row.
 
 Everything else fails the night as ``colab`` does:
 
@@ -24,8 +26,8 @@ Everything else fails the night as ``colab`` does:
 - ``BudgetStop``, ``Cancelled``, an interrupt;
 - a VM stop that failed. That VM may still run, so stop it by hand before anything else.
 
-A keep-alive ping that fails (``KEEPALIVE``, from its own thread while the exec runs) is noted like
-any call but never decides the night: the exec's own outcome does.
+A keep-alive ping or a VM check that fails (``KEEPALIVE``, ``VM_CHECK``, from the watch's thread while
+the exec runs) is noted like any call but never decides the night: the exec's own outcome does.
 
 By the time the job falls back, the Colab runner's own cleanup has run: the VM is stopped (a life's
 VM too), and the ``colab_cu`` hold is settled for what the VM ran, or in full after a ``new`` that
@@ -42,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -55,10 +58,13 @@ from anjo.sleep.train.runners.colab import (
     KEEPALIVE,
     KEEPALIVE_PERIOD_S,
     MKDIR,
+    VM_CHECK,
+    VM_CHECK_PERIOD_S,
     ColabCli,
     ColabError,
     ColabLives,
     ColabRunner,
+    ColabVmLost,
     command_label,
 )
 from anjo.sleep.train.runners.modal import ModalRunner
@@ -70,7 +76,8 @@ CLI_FAILURES: Final = (ColabError, subprocess.TimeoutExpired, OSError)
 BEFORE_TRAINING: Final = ("new", "install", MKDIR, "upload")
 EXEC: Final = "exec"
 STOP: Final = "stop"
-NOT_THE_NIGHT: Final = (STOP, KEEPALIVE)  # calls whose failure is never the night's: the VM's stop, a ping
+# Calls whose failure is never the night's: the VM's stop, the watch's pings and checks.
+NOT_THE_NIGHT: Final = (STOP, KEEPALIVE, VM_CHECK)
 logger = logging.getLogger(__name__)
 
 
@@ -104,10 +111,12 @@ class TracedCli(ColabCli):
         """Forget the calls of an earlier job."""
         self.failed = []
 
-    def call(self, *args: str, timeout_s: float) -> str:
+    def call(self, *args: str, timeout_s: float, vm_lost: threading.Event | None = None) -> str:
         started = self._clock()
         try:
-            return self._cli.call(*args, timeout_s=timeout_s)
+            if vm_lost is None:
+                return self._cli.call(*args, timeout_s=timeout_s)
+            return self._cli.call(*args, timeout_s=timeout_s, vm_lost=vm_lost)
         except CLI_FAILURES as error:
             self.failed.append(Failed(command_label(args), error, self._clock() - started, _kernel_timeout(args)))
             raise
@@ -117,12 +126,14 @@ def fallback_reason(error: BaseException, failed: Sequence[Failed]) -> str | Non
     """Why Colab's ``error`` sends the job to Modal, or None when it fails the night as on ``colab``.
 
     Only a CLI call's own failure falls back: the first failed call other than the VM's stop and the
-    keep-alive's pings must have raised ``error`` itself, so a refusal, a receipt that isn't one, a
-    failed stop or a failed ping never does.
+    watch's pings and checks must have raised ``error`` itself, so a refusal, a receipt that isn't
+    one, a failed stop, a failed ping or a failed check never does.
     """
     first = next((call for call in failed if call.command not in NOT_THE_NIGHT), None)
     if first is None or first.error is not error:
         return None
+    if isinstance(error, ColabVmLost):
+        return "colab VM lost mid-run"
     if isinstance(error, subprocess.TimeoutExpired):
         return f"colab {first.command} timed out"
     if first.command == EXEC:  # past the kernel's timeout, or the script (or the VM under it) failed
@@ -140,11 +151,12 @@ class ColabModalRunner:
     def __init__(
         self, *, cli: ColabCli, modal: ModalRunner, ledger: Ledger, is_synthetic: Callable[[str], bool],
         allow_real: bool = False, clock: Callable[[], float] = time.monotonic,
-        keepalive_period_s: float = KEEPALIVE_PERIOD_S,
+        keepalive_period_s: float = KEEPALIVE_PERIOD_S, vm_check_period_s: float = VM_CHECK_PERIOD_S,
     ) -> None:
         self._trace = TracedCli(cli, clock=clock)
         self.colab = ColabRunner(cli=self._trace, ledger=ledger, is_synthetic=is_synthetic, allow_real=allow_real,
-                                 clock=clock, keepalive_period_s=keepalive_period_s)
+                                 clock=clock, keepalive_period_s=keepalive_period_s,
+                                 vm_check_period_s=vm_check_period_s)
         self.modal = modal
         self._landed: set[str] = set()
 

@@ -268,6 +268,23 @@ def test_a_night_that_would_outrun_its_kept_vms_hold_gets_a_new_vm_not_a_refusal
     assert [e["op"] for e in _events(ledger)] == ["reserve", "settle"] * 3
 
 
+def test_a_kept_vms_next_night_counts_its_last_stop_against_the_hold(tmp_path: Path) -> None:
+    """A night that would fit a kept VM's hold only without the VM's final stop gets a new VM: its
+    worst case is the night's timeout and then the stop, and settling past a hold blocks the pool."""
+    from anjo.sleep.train.runners.colab import STOP_TIMEOUT_S
+
+    fake, ledger, clock = FakeColab(), Ledger(tmp_path / "budget.jsonl"), Minute()
+    with _lives(_runner(fake, ledger, clock=clock), 3 * NIGHT_S) as lives:
+        _run(lives, tmp_path, "synthetic-1", 1)
+        _run(lives, tmp_path, "synthetic-1", 2)  # kept
+        life = lives._lives["synthetic-1"]
+        # the next clock reading leaves room for the night's timeout, but not for the stop after it
+        clock.now = life.started + life.hold_s - NIGHT_S - STOP_TIMEOUT_S / 2 - 60.0
+        _run(lives, tmp_path, "synthetic-1", 3)
+        assert fake.commands().count("new") == 3
+    assert not ledger.open_holds()
+
+
 def test_a_final_shaped_batch_holds_one_night_per_vm(tmp_path: Path) -> None:
     """The final: three lives, two nights each, a long simulated day before each next night, on the
     accelerated run's own per-life runner and hold. Every hold is one night's, never more than three

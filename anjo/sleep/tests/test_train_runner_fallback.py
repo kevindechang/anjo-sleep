@@ -34,13 +34,15 @@ from anjo.sleep.train.runners.colab import (
     A100_CU_PER_HOUR,
     KEEPALIVE,
     PING_SCRIPT,
+    VM_CHECK,
     ColabCli,
+    ColabVmLost,
     ColabError,
     ColabRunner,
     RealPersonRefused,
     command_label,
 )
-from anjo.sleep.train.runners.fallback import ColabModalLives, ColabModalRunner
+from anjo.sleep.train.runners.fallback import ColabModalLives, ColabModalRunner, Failed, fallback_reason
 from anjo.sleep.train.runners.modal import A100_USD_PER_HOUR, CALLS_DIR, CallRecords, ModalRunner
 from anjo.sleep.train.trainer import OPTIONAL_KEYS, LoraTrainer
 
@@ -222,6 +224,59 @@ def test_a_failed_keepalive_ping_is_never_the_nights_failure(
     assert len(calls.spawned) == (trained == "modal") and ledger.open_holds() == ()
     if trained == "colab":
         assert out["keepalive_failed"] == out["keepalive_pings"] == colab.pings
+
+
+class LosesVm(TimedColab):
+    """``TimedColab`` whose VM is gone after ``present`` checks: its exec runs on the stoppable path and
+    waits up to ten seconds of real time for its stop."""
+
+    def __init__(self, present: int = 1) -> None:
+        super().__init__()
+        self.present, self.checks = present, 0
+        self.exec_ran_s: float | None = None
+
+    def __call__(self, args: Sequence[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        args = list(args)
+        if args[1] == "-I":
+            if args[3] != "--check":
+                return subprocess.CompletedProcess(args, 0, "", "")
+            self.checks += 1
+            return subprocess.CompletedProcess(args, 0, "present\n" if self.checks <= self.present else "missing\n", "")
+        return super().__call__(args, timeout_s)
+
+    def until(self, args: Sequence[str], timeout_s: float, stop: Any) -> subprocess.CompletedProcess[str]:
+        args = list(args)
+        if command_label(args[3:]) != "exec":
+            return self(args, timeout_s)
+        started = time.monotonic()
+        stopped = stop.wait(10.0)
+        self.exec_ran_s = time.monotonic() - started
+        if not stopped:
+            return self(args, timeout_s)
+        self.calls.append((args, timeout_s))
+        return subprocess.CompletedProcess(args, -9, "", "")
+
+
+def test_a_vm_lost_mid_run_stops_the_exec_and_trains_the_night_on_modal(tmp_path: Path) -> None:
+    colab = LosesVm()
+    calls, ledger = FakeCalls(), Ledger(tmp_path / "budget.jsonl")
+    cli = ColabCli(Path("/fake/colab"), run=colab, run_until=colab.until,
+                   keepalive=("/cli/bin/python", "-I", str(PING_SCRIPT)))
+    runner = ColabModalRunner(cli=cli, modal=_modal(tmp_path, calls, ledger), ledger=ledger, is_synthetic=_synthetic,
+                              clock=colab.clock, keepalive_period_s=0.02, vm_check_period_s=0.05)
+    out = runner.run(JOB, _inputs(tmp_path), timeout_s=TIMEOUT_S)
+    assert out["runner"] == "modal" and out["fallback_reason"] == "colab VM lost mid-run" and len(calls.spawned) == 1
+    assert colab.checks == 3 and colab.exec_ran_s is not None and colab.exec_ran_s < 2.0  # two checks, not ten seconds
+    assert colab.commands()[-2:] == ["sessions", "stop"] and ledger.open_holds() == ()
+    assert 0 < ledger.used("colab_cu") < Bound(A100_CU_PER_HOUR, TIMEOUT_S).amount and runner.landed(NAME)
+
+
+def test_a_lost_vm_is_a_fallback_reason_and_a_failed_check_never_is() -> None:
+    lost = ColabVmLost("colab exec stopped: the session's VM is gone")
+    check = ColabError("colab vmcheck failed with exit 1")
+    assert fallback_reason(lost, [Failed(VM_CHECK, check, 1.0), Failed("exec", lost, 300.0, 6000.0)]) == (
+        "colab VM lost mid-run")
+    assert fallback_reason(check, [Failed(VM_CHECK, check, 1.0)]) is None
 
 
 def test_an_exec_that_fails_after_failed_pings_fails_with_its_own_error(tmp_path: Path) -> None:
