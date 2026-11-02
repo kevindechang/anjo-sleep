@@ -541,13 +541,16 @@ class MindPredictor:
     replay into the per-person adapter), ``gate`` (serve the adapter only while it has paid,
     ``night.served``; off, it is always served), ``fallback`` (mix toward ``prior``, the train
     world's base rate per query family, as more of the inputs are unknown; module docstring) and
-    ``cms`` (the night level; only for a core trained with it).
+    ``platt`` (``(a, b)``: ``p <- sigmoid(a logit p + b)``, fitted on train-range lives by
+    ``train_cog.calibrate``; read from the checkpoint when saved there) and ``cms`` (the night
+    level; only for a core trained with it).
     """
 
     def __init__(
         self, checkpoint: Checkpoint | Path | str | object, *, fast: bool = True, ensemble: int | None = None,
         night: NightMode = "surprise", cms: bool | None = None, seed: int = 0, name: str = "mind",
         replay_keep: int = 512, gate: bool = True, fallback: bool = True, prior: Mapping[str, float] | None = None,
+        platt: tuple[float, float] | None = None,
     ) -> None:
         ck = checkpoint if isinstance(checkpoint, Checkpoint) else _as_checkpoint(checkpoint)
         self.net, self.vocab = ck.net.eval(), ck.vocab
@@ -565,6 +568,8 @@ class MindPredictor:
         self.seed, self.name, self.replay_keep, self.gate = seed, name, replay_keep, gate
         saved = ck.extra.get("prior") if isinstance(ck.extra.get("prior"), Mapping) else None
         self.fallback, self.prior = fallback, dict(prior or saved or DEFAULT_PRIOR)  # type: ignore[arg-type]
+        fitted = ck.extra.get("platt")
+        self.platt = platt if platt is not None else (tuple(fitted) if isinstance(fitted, (list, tuple)) else None)
         self._meta: LifeMeta | None = None
         self._state: PersonState | None = None
 
@@ -674,6 +679,10 @@ class MindPredictor:
         shifted = torch.from_numpy(base + adapter.shift(cells)[:, None])
         p = mean_prob(shifted).numpy()
         u = mutual_information(shifted).numpy() if self.k > 1 else None
+        if self.platt is not None:
+            a, b = self.platt
+            q = np.clip(p.astype(np.float64), 1e-9, 1 - 1e-9)
+            p = np.clip(1.0 / (1.0 + np.exp(-(a * np.log(q / (1 - q)) + b))), P_FLOOR, 1 - P_FLOOR)
         if self.fallback:
             p, u = self._fall_back(ps, queries, p, u)
         preds = [Prediction(q.qid, float(p[i]), None if u is None else float(u[i])) for i, q in enumerate(queries)]

@@ -464,6 +464,25 @@ def test_the_prior_is_the_train_lives_base_rate_per_family(tmp_path: Path) -> No
     assert core.MindPredictor(tmp_path / "c.pt").prior == prior
 
 
+def test_platt_recovers_a_known_miscalibration() -> None:
+    rng = np.random.default_rng(0)
+    z = rng.normal(0.0, 2.0, 50_000)
+    y = (rng.random(z.shape) < 1 / (1 + np.exp(-(0.8 * z + 0.3)))).astype(float)
+    a, b = train_cog.fit_platt(1 / (1 + np.exp(-z)), y)
+    assert abs(a - 0.8) < 0.03 and abs(b - 0.3) < 0.03
+    with pytest.raises(ValueError):
+        train_cog.calibrate(Path("x.pt"), range(9_990, 10_010), Path("y.pt"))  # never on dev seeds
+
+
+def test_the_predictor_applies_its_platt_map() -> None:
+    trained = trained_tiny()
+    life = ToyLife(DEV[3])
+    plain = np.array([r[2] for r in _run(core.MindPredictor(trained), life)])
+    shifted = np.array([r[2] for r in _run(core.MindPredictor(trained, platt=(1.0, 1.0)), life)])
+    want = 1 / (1 + np.exp(-(np.log(plain / (1 - plain)) + 1.0)))
+    assert np.allclose(shifted, np.clip(want, core.P_FLOOR, 1 - core.P_FLOOR), atol=1e-6)
+
+
 def test_known_inputs_leave_predictions_alone() -> None:
     trained = trained_tiny()
     life = ToyLife(DEV[2])

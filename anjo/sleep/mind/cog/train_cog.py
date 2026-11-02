@@ -272,6 +272,43 @@ def fit_prior(lives: Sequence[Life]) -> dict[str, float]:
     return {k: float(np.clip(np.mean(v), 1e-3, 1 - 1e-3)) for k, v in ys.items()}
 
 
+def fit_platt(p: np.ndarray, y: np.ndarray, iters: int = 100) -> tuple[float, float]:
+    """``(a, b)`` minimizing the log loss of ``sigmoid(a logit(p) + b)`` against ``y`` (Newton steps)."""
+    p = np.clip(np.asarray(p, dtype=np.float64), 1e-6, 1 - 1e-6)
+    y = np.asarray(y, dtype=np.float64)
+    z, a, b = np.log(p / (1 - p)), 1.0, 0.0
+    for _ in range(iters):
+        q = 1.0 / (1.0 + np.exp(-(a * z + b)))
+        w = q * (1 - q)
+        hess = np.array([[np.mean(w * z * z), np.mean(w * z)], [np.mean(w * z), np.mean(w)]]) + 1e-9 * np.eye(2)
+        step = np.linalg.solve(hess, np.array([np.mean((q - y) * z), np.mean(q - y)]))
+        a, b = a - float(step[0]), b - float(step[1])
+        if np.abs(step).max() < 1e-10:
+            break
+    return a, b
+
+
+def calibrate(ckpt: Path, seeds: Sequence[int], out: Path, world: World = real_world, n_days: int = 84) -> tuple[float, float]:
+    """Fit the predictor's Platt map on train-range lives without asks (never dev seeds) and save
+    the checkpoint with it as ``out``."""
+    if any(s >= DEV_SEED for s in seeds):
+        raise ValueError(f"calibrate on train seeds (< {DEV_SEED}), never on dev")
+    from anjo.sleep.mind.cog.core import load_checkpoint
+
+    ck = load_checkpoint(ckpt)
+    passive, _ = dev_batches(ck.vocab, [world(s, n_days) for s in seeds], 32, 0.0)
+    ps, ys = [], []
+    with torch.no_grad():
+        for b in passive:
+            m = b.q_mask
+            ps.append(mean_prob(unroll(ck.net, b).query_logits)[m].numpy())
+            ys.append(b.q_y[m].numpy())
+    platt = fit_platt(np.concatenate(ps), np.concatenate(ys))
+    save_checkpoint(out, ck.net, ck.vocab, {**dict(ck.extra), "platt": list(platt),
+                                            "platt_seeds": [int(seeds[0]), int(seeds[-1])]})
+    return platt
+
+
 def asking_share(cfg: TrainConfig) -> float:
     """The share of train lives with random asks (the rest hear no answer, whatever the target)."""
     return cfg.asking_share
@@ -416,7 +453,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--no-fast", action="store_true", help="train without the fast memory (the trained lesion)")
     ap.add_argument("--cms", action="store_true", help="train with the continuum memory's night level")
     ap.add_argument("--no-tallies", action="store_true", help="train without the tallies (the old core)")
+    ap.add_argument("--calibrate", metavar="FIRST-LAST", help="no training: fit the Platt map of OUT/cog_core.pt on "
+                    "these train seeds and write OUT/cog_core_platt.pt")
     a = ap.parse_args(argv)
+    if a.calibrate:
+        first, last = (int(x) for x in a.calibrate.split("-"))
+        platt = calibrate(a.out / "cog_core.pt", range(first, last + 1), a.out / "cog_core_platt.pt",
+                          WORLDS[a.world], a.n_days)
+        print(json.dumps({"platt": platt, "out": str(a.out / "cog_core_platt.pt")}))  # noqa: T201
+        return 0
     cfg = TrainConfig(lives=a.lives, epochs=a.epochs, batch=a.batch, dim=a.dim, hidden=a.hidden, tbptt=a.tbptt,
                       dev_lives=a.dev_lives, n_days=a.n_days, seed=a.seed, threads=a.threads, patience=a.patience,
                       lr=a.lr, u_mode=a.u_mode, fast=not a.no_fast, cms=a.cms, soft=a.soft,
