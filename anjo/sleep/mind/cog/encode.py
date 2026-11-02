@@ -152,6 +152,20 @@ def outcomes(events: Sequence[Event], subjects: Sequence[str]) -> np.ndarray:
     return np.array([1.0 if s in did else 0.0 for s in subjects], dtype=np.float32)
 
 
+TALLY_KINDS: Final = ("did", "skipped", "cancel", "plan")
+
+
+def activity_kinds(events: Sequence[Event], subjects: Sequence[str]) -> np.ndarray:
+    """(A, 4): how many ``did``, ``skipped``, ``cancel`` and ``plan`` events each subject has among
+    the events (the counts the core's tallies add up by weekday)."""
+    out = np.zeros((len(subjects), len(TALLY_KINDS)), dtype=np.float32)
+    index = {s: i for i, s in enumerate(subjects)}
+    for e in events:
+        if e.subject in index and e.kind in TALLY_KINDS:
+            out[index[e.subject], TALLY_KINDS.index(e.kind)] += 1.0
+    return out
+
+
 @dataclass(frozen=True)
 class QueryArrays:
     tok: np.ndarray  # (Q, T)
@@ -198,6 +212,7 @@ class LifeArrays:
     oracle: tuple[np.ndarray, ...]  # per day, (Q,) oracle_p
     asks: tuple[tuple[QuestionArrays, int] | None, ...]  # per day, the question asked and the answer's index
     asking: bool = True  # whether this life's days could have asks at all
+    kinds: np.ndarray | None = None  # (D, A, 4) ``activity_kinds`` per day
 
 
 def encode_life(
@@ -208,7 +223,7 @@ def encode_life(
     meta = life.meta
     if not asking:
         ask_rate = 0.0
-    days, probe, qs, ys, ors, asks = [], [], [], [], [], []
+    days, probe, qs, ys, ors, asks, kinds = [], [], [], [], [], [], []
     for d in range(meta.n_days):
         events = list(life.events(d))
         ask: tuple[QuestionArrays, int] | None = None
@@ -221,6 +236,7 @@ def encode_life(
             ask = (encode_question(vocab, question), index)
         days.append(encode_day(vocab, events))
         probe.append(outcomes(events, meta.activities))
+        kinds.append(activity_kinds(events, meta.activities))
         queries = life.queries(d)
         qs.append(encode_queries(vocab, queries))
         res = [life.resolve(q.qid) for q in queries]
@@ -229,7 +245,7 @@ def encode_life(
         asks.append(ask)
     return LifeArrays(meta.n_days, meta.start_weekday, tuple(days),
                       np.array([vocab.id(a) for a in meta.activities], dtype=np.int64),
-                      np.stack(probe), tuple(qs), tuple(ys), tuple(ors), tuple(asks), asking)
+                      np.stack(probe), tuple(qs), tuple(ys), tuple(ors), tuple(asks), asking, np.stack(kinds))
 
 
 @dataclass(frozen=True)
@@ -262,6 +278,7 @@ class Batch:
     ask_opt_mask: Tensor  # (B, D, O) bool
     ask_answer: Tensor  # (B, D)
     asking: Tensor  # (B,) bool, lives whose days could have asks
+    act_kinds: Tensor  # (B, D, A, 4) ``activity_kinds`` per day
 
 
 def collate(lives: Sequence[LifeArrays]) -> Batch:
@@ -282,6 +299,7 @@ def collate(lives: Sequence[LifeArrays]) -> Batch:
     ev_span = np.full((b, dmax, emax), NO_PLAN, np.float32)
     ev_answer, ev_mask = z((b, dmax, emax), bool), z((b, dmax, emax), bool)
     act, act_mask, probe_y = z((b, amax), np.int64), z((b, amax), bool), z((b, dmax, amax), np.float32)
+    act_kinds = z((b, dmax, amax, len(TALLY_KINDS)), np.float32)
     q_tok, q_subj = z((b, dmax, qmax, qtmax), np.int64), z((b, dmax, qmax), np.int64)
     q_target, q_mask = z((b, dmax, qmax), np.int64), z((b, dmax, qmax), bool)
     q_y, q_oracle = z((b, dmax, qmax), np.float32), np.full((b, dmax, qmax), 0.5, np.float32)
@@ -292,6 +310,8 @@ def collate(lives: Sequence[LifeArrays]) -> Batch:
         na = len(x.act)
         act[i, :na], act_mask[i, :na] = x.act, True
         probe_y[i, : x.n_days, :na] = x.probe_y
+        if x.kinds is not None:
+            act_kinds[i, : x.n_days, :na] = x.kinds
         for d, day in enumerate(x.days):
             ne, nt = len(day.kind), day.tok.shape[1]
             ev_tok[i, d, :ne, :nt] = day.tok
@@ -319,5 +339,5 @@ def collate(lives: Sequence[LifeArrays]) -> Batch:
         q_tok=t(q_tok), q_subj=t(q_subj), q_target=t(q_target), q_mask=t(q_mask), q_y=t(q_y),
         q_oracle=t(q_oracle), ask_mask=t(ask_mask), ask_tok=t(ask_tok), ask_subj=t(ask_subj),
         ask_opt=t(ask_opt), ask_opt_mask=t(ask_opt_mask), ask_answer=t(ask_answer),
-        asking=torch.tensor([x.asking for x in lives], dtype=torch.bool),
+        asking=torch.tensor([x.asking for x in lives], dtype=torch.bool), act_kinds=t(act_kinds),
     )

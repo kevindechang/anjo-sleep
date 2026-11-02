@@ -16,7 +16,7 @@ import pytest
 import torch
 
 from anjo.sleep.mind.cog import core, train_cog
-from anjo.sleep.mind.cog.encode import build_vocab, collate, encode_life
+from anjo.sleep.mind.cog.encode import activity_kinds, build_vocab, collate, encode_life
 from anjo.sleep.mind.cog.night import NO_GAIN, Adapter, Replayed, night, paid, priorities, served, update_gain
 from anjo.sleep.mind.cog.toy_life import ToyLife
 from anjo.sleep.mind.cog.types import Life, Prediction
@@ -104,6 +104,26 @@ def test_dev_is_scored_without_asks_like_the_eval_and_also_with_them() -> None:
 
 def test_some_training_lives_never_hear_an_answer_whatever_the_target() -> None:
     assert train_cog.asking_share(train_cog.TrainConfig(soft=0.0)) == train_cog.TrainConfig().asking_share < 1.0
+
+
+def test_tallies_count_each_activity_by_weekday_and_both_paths_agree() -> None:
+    net, lives = _tiny_net(5, tallies=True)
+    net.eval()
+    vocab = build_vocab(lives)
+    life = lives[0]
+    batch = collate([encode_life(vocab, life, np.random.default_rng(0), 0.0, asking=False)])
+    with torch.no_grad():
+        out = train_cog.unroll(net, batch)
+    acts, n = life.meta.activities, life.meta.n_days
+    want = np.zeros((len(acts), 7, 4))
+    for d in range(n):
+        want[:, (life.meta.start_weekday + d) % 7] += activity_kinds(life.events(d), acts)
+    assert want[:, :, 0].sum() > 0 and want[:, :, 1].sum() > 0
+    assert np.allclose(out.final.tally[0].numpy(), want)
+    assert float(out.final.tdays[0].sum()) == n
+    rows = _run(core.MindPredictor(core.Checkpoint(net, vocab), night="off"), life)
+    p_batch = core.mean_prob(out.query_logits)[batch.q_mask].numpy()
+    assert np.allclose([r[2] for r in rows], np.clip(p_batch, core.P_FLOOR, 1 - core.P_FLOOR), atol=1e-5)
 
 
 def test_fast_off_never_writes_and_reads_zero() -> None:

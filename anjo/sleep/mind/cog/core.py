@@ -22,6 +22,12 @@
    of the subject match with the pointing and weekday ones, and the target inside an event's span
    (``left=k``).
 5. **Tomorrow's probes** are predicted from the new state, for the next day's write.
+6. **The tallies** (``tallies``): the counter's sufficient statistics, kept exactly: per activity
+   and weekday, the ``did``, ``skipped``, ``cancel`` and ``plan`` events so far, the days of that
+   weekday so far, and a recency-weighted rate of ``did`` on them (``TALLY_DECAY`` per occurrence).
+   A query reads its subject's cell for its target weekday and the subject's totals, as counts,
+   smoothed rates and the recent rate (``TALLY_FEATURES``); the meta-trained trunk does the
+   shrinkage toward the population that a hand-built counter fixes by a prior.
 
 **A query** reads its tokens, its subject, its target weekday and horizon, the belief, the fast
 memory (keyed by subject, target weekday and belief: ``key_proj``) and the episodic buffer; a trunk
@@ -50,7 +56,7 @@ from torch.nn import functional as F  # noqa: N812
 
 from anjo.sleep.mind.cog import night as night_mod
 from anjo.sleep.mind.cog.encode import (
-    KIND_INDEX, NO_PLAN, PAD, UNK, Vocab, encode_day, encode_queries, encode_question, outcomes,
+    KIND_INDEX, NO_PLAN, PAD, UNK, Vocab, activity_kinds, encode_day, encode_queries, encode_question, outcomes,
 )
 from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
 
@@ -59,6 +65,9 @@ P_FLOOR: Final = 1e-4  # predictions are kept in [P_FLOOR, 1 - P_FLOOR]
 POOL_HEADS: Final = 4
 EPI_HEADS: Final = 4
 N_FLAGS: Final = 7
+N_KINDS: Final = 4  # encode.TALLY_KINDS: did, skipped, cancel, plan
+TALLY_FEATURES: Final = 15
+TALLY_DECAY: Final = 0.7
 U_MODES: Final = ("oracle", "boot")
 
 
@@ -74,6 +83,7 @@ class CogConfig:
     cms: bool = False
     day_scale: float = 84.0
     u_mode: str = "oracle"
+    tallies: bool = False
 
     def __post_init__(self) -> None:
         if min(self.vocab_size, self.dim, self.hidden, self.heads, self.window) < 1:
@@ -120,6 +130,10 @@ class CogState(NamedTuple):
     epi_plan: Tensor  # (B, N) float, NO_PLAN where none
     epi_span: Tensor  # (B, N) float, NO_PLAN where none
     epi_mask: Tensor  # (B, N) bool
+    act: Tensor  # (B, A) the activities' ids (set by the first day)
+    tally: Tensor  # (B, A, 7, 4) did / skipped / cancel / plan events per activity and weekday
+    tdays: Tensor  # (B, 7) days of each weekday so far
+    tema: Tensor  # (B, A, 7, 2) the recent rate of did per cell: decayed sum of outcomes, of days
 
 
 class DayInput(NamedTuple):
@@ -191,6 +205,9 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
         self.ans_ctx = nn.Sequential(nn.Linear(3 * d, d), nn.GELU(), nn.Linear(d, d))
         self.ans_opt = nn.Linear(d, d)
         self.self_head = nn.Linear(d + 4, 1)
+        if cfg.tallies:
+            self.tally_proj = nn.Sequential(nn.Linear(TALLY_FEATURES, d), nn.GELU(), nn.Linear(d, d))
+            self.trunk[0] = nn.Linear(6 * d + 7 + 2 + 2, hdim)
         if cfg.cms:  # built last, so a core without it draws the same weights
             self.cms_rate = nn.Parameter(torch.tensor(-1.0))  # the night level's rate, a share of each write
             self.cms_mix = nn.Parameter(torch.tensor(1.0))  # its weight in the read
@@ -206,8 +223,34 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
             probe_key=z(batch, n_act, d), probe_ok=z(batch, n_act), epi_key=z(batch, 0, d), epi_val=z(batch, 0, d),
             epi_day=z(batch, 0, dtype=torch.long), epi_wd=z(batch, 0, dtype=torch.long),
             epi_subj=z(batch, 0, dtype=torch.long), epi_plan=z(batch, 0), epi_span=z(batch, 0),
-            epi_mask=z(batch, 0, dtype=torch.bool),
+            epi_mask=z(batch, 0, dtype=torch.bool), act=z(batch, n_act, dtype=torch.long),
+            tally=z(batch, n_act, 7, N_KINDS), tdays=z(batch, 7), tema=z(batch, n_act, 7, 2),
         )
+
+    def count(self, st: CogState, kinds: Tensor, y: Tensor, weekday: Tensor) -> CogState:
+        """Today's events into the tallies: ``kinds`` (B, A, 4) and outcomes ``y`` (B, A) on ``weekday`` (B,)."""
+        wd = F.one_hot(weekday, 7).to(y.dtype)  # (B, 7)
+        cell = wd[:, None, :, None]  # (B, 1, 7, 1)
+        tema = st.tema * (1.0 - cell * (1.0 - TALLY_DECAY)) + cell * torch.stack([y, torch.ones_like(y)], -1)[:, :, None]
+        return st._replace(tally=st.tally + cell * kinds[:, :, None, :], tdays=st.tdays + wd, tema=tema)
+
+    def tally_features(self, st: CogState, subj: Tensor, wd_idx: Tensor) -> Tensor:
+        """(B, Q, TALLY_FEATURES) for queries about ``subj`` (B, Q) on weekdays ``wd_idx`` (B, Q)."""
+        match = ((st.act[:, None, :] == subj[:, :, None]) & (subj[:, :, None] != UNK)).to(st.tally.dtype)
+        def pick(x: Tensor) -> Tensor:  # (B, A, 7, F) -> the query's subject and weekday (B, Q, F)
+            w = F.one_hot(wd_idx, 7).to(x.dtype)
+            return torch.einsum("bqa,bqw,bawf->bqf", match, w, x)
+        cell, days = pick(st.tally), torch.einsum("bqw,bw->bq", F.one_hot(wd_idx, 7).to(st.tdays.dtype), st.tdays)
+        tot = torch.einsum("bqa,baf->bqf", match, st.tally.sum(dim=2))
+        all_days = st.tdays.sum(dim=1, keepdim=True).expand_as(days)
+        ema = pick(st.tema)
+        seen_cell, seen_tot = cell[..., :3].sum(-1), tot[..., :3].sum(-1)
+        f = [torch.log1p(cell) / 3.0, torch.log1p(days)[..., None] / 3.0,
+             ((cell[..., 0] + 0.5) / (days + 1.0))[..., None], ((cell[..., 0] + 0.5) / (seen_cell + 1.0))[..., None],
+             torch.log1p(tot) / 4.0, ((tot[..., 0] + 0.5) / (all_days + 1.0))[..., None],
+             ((tot[..., 0] + 0.5) / (seen_tot + 1.0))[..., None], ((ema[..., 0] + 0.5) / (ema[..., 1] + 1.0))[..., None],
+             match.sum(-1, keepdim=True)]
+        return torch.cat(f, dim=-1)
 
     # ── pieces ───────────────────────────────────────────────────────────────
 
@@ -336,7 +379,10 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
         read = self.memory_read(st, key, fast, cms)
         epi = self.episodic(st, torch.cat([qb + s, wd_t, hzf], dim=-1), subj, target, wd_idx)
         dayf = self.day_features(day, b)[:, None, :].expand(b, q, 2)
-        z = torch.cat([qb, s, wd_t, hzf, h, self.read_proj(read), epi, dayf], dim=-1)
+        parts = [qb, s, wd_t, hzf, h, self.read_proj(read), epi, dayf]
+        if self.cfg.tallies:
+            parts.append(self.tally_proj(self.tally_features(st, subj, wd_idx)))
+        z = torch.cat(parts, dim=-1)
         return self.trunk(z), key
 
     def query_logits(
@@ -350,10 +396,11 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
 
     def day_step(
         self, st: CogState, ev: DayInput, day: int, weekday0: Tensor, act: Tensor, act_mask: Tensor, y: Tensor, *,
-        fast: bool | None = None, cms: bool | None = None, want_pre: bool = False,
+        kinds: Tensor | None = None, fast: bool | None = None, cms: bool | None = None, want_pre: bool = False,
     ) -> StepOut:
-        """Day ``day``'s events: write today's outcomes ``y`` (B, A) by surprise, step the belief,
-        keep the events, and predict each activity tomorrow."""
+        """Day ``day``'s events: write today's outcomes ``y`` (B, A) by surprise, count them with the
+        day's ``kinds`` (B, A, 4; ``did`` alone when None) in the tallies, step the belief, keep the
+        events, and predict each activity tomorrow."""
         fast = self.cfg.fast if fast is None else fast
         cms = self.cfg.cms if cms is None else cms
         b = ev.mask.shape[0]
@@ -371,7 +418,10 @@ class CogNet(nn.Module):  # type: ignore[misc]  # torch's types are skipped (fol
             h, h_pre = both[:b], both[b:]
         else:
             h = self.gru(torch.cat([pooled, ctx], dim=-1), st.h)
-        st = self._append(st._replace(h=h), e, ev, day, weekday)
+        st = self._append(st._replace(h=h, act=act), e, ev, day, weekday)
+        if kinds is None:
+            kinds = F.pad(y[..., None], (0, N_KINDS - 1))
+        st = self.count(st, kinds * act_mask[..., None].to(y.dtype), y * act_mask.to(y.dtype), weekday)
         a = act.shape[1]
         empty = torch.zeros(b, a, 1, dtype=torch.long)
         tomorrow = torch.full((b, a), day + 1, dtype=torch.long)
@@ -584,8 +634,9 @@ class MindPredictor:
     def _step(self, st: CogState, day: int, events: Sequence[Event]) -> CogState:
         assert self._meta is not None
         y = torch.from_numpy(outcomes(events, self._meta.activities))[None]
+        kinds = torch.from_numpy(activity_kinds(events, self._meta.activities))[None]
         out = self.net.day_step(st, day_input(self.vocab, events), day, self._wd0, self._act, self._act_mask, y,
-                                fast=self.fast, cms=self.cms)
+                                kinds=kinds, fast=self.fast, cms=self.cms)
         return out.state
 
     def predict_on(self, ps: PersonState, queries: Sequence[Query]) -> tuple[list[Prediction], np.ndarray, np.ndarray]:
