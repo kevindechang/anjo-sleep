@@ -4,7 +4,8 @@
 three activities with weekday habits, a hidden calm/busy regime (a sticky two-state Markov chain)
 that lowers two of them and shows only through late messages and low moods, next-day plans,
 distractor topic mentions, two questions a day (work, a topic), an exact forward-filter oracle, and
-an optional regime shift that moves the run to the weekend for good.
+an optional regime shift that moves the run to the weekend for good, and two ways to be unlike the
+population: every habit rotated by some weekdays, or busy spells raising the gym instead of lowering it.
 """
 from __future__ import annotations
 
@@ -59,9 +60,13 @@ def _sigmoid(x: float) -> float:
 class FakeLife:
     """One fake person; every random draw is made at construction from ``seed``."""
 
-    def __init__(self, seed: int, n_days: int = 28, shift_day: int | None = None) -> None:
+    def __init__(self, seed: int, n_days: int = 28, shift_day: int | None = None, rotate: int = 0,
+                 idiosyncratic: bool = False) -> None:
         rng = np.random.default_rng(seed)
         self.seed = seed
+        self._rotate = rotate  # moves every habit by this many weekdays
+        # against the population norm: a busy spell sends this person to the gym more, not less
+        self._busy = {**BUSY_EFFECT, "gym": 2.0} if idiosyncratic else BUSY_EFFECT
         self.meta = LifeMeta(person_id=f"p{seed}", n_days=n_days, start_weekday=seed % 7,
                              activities=ACTIVITIES, people=PEOPLE, topics=TOPICS)
         self._shift_day = shift_day
@@ -92,11 +97,11 @@ class FakeLife:
 
     def scheduled(self, activity: str, day: int) -> bool:
         shifted = activity == "run" and self._shift_day is not None and day >= self._shift_day
-        return self.weekday(day) in (SHIFTED_RUN if shifted else SCHEDULE[activity])
+        return (self.weekday(day) - self._rotate) % 7 in (SHIFTED_RUN if shifted else SCHEDULE[activity])
 
     def _p(self, activity: str, day: int, state: int, planned: bool) -> float:
         logit = (BASE_ON if self.scheduled(activity, day) else BASE_OFF)
-        return _sigmoid(logit + BUSY_EFFECT[activity] * state + (PLAN_BONUS if planned else 0.0))
+        return _sigmoid(logit + self._busy[activity] * state + (PLAN_BONUS if planned else 0.0))
 
     def _make_events(self, day: int) -> tuple[Event, ...]:
         out: list[Event] = []

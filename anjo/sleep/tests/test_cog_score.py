@@ -124,22 +124,29 @@ def _shift_life(gaps: list[float], *, seed: int = 0, shift: int = 10) -> LifeRec
     return _rec("m", qs, seed=seed, shift_days=(shift,), shift_subjects=("run",), n_days=shift + len(gaps))
 
 
-def test_t4_recovery_is_days_until_the_rolling_gap_is_within_margin() -> None:
-    # the rolling window starts at the shift: means 1, 1, 1, .75, .6, .5, 3/7, 2/7, 1/7, then 0
+def test_t4_recovery_is_the_first_post_shift_week_within_margin() -> None:
+    # weeks starting 0, 1, 2, 3 days after the shift have mean gaps 3/7, 2/7, 1/7, 0
     rec = _shift_life([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     t4 = score.t4_recovery([rec], margin=0.05)
     assert t4["n_shifts"] == 1 and t4["recovered_share"] == 1.0
-    assert t4["recovery_days_mean"] == 9  # the window of days 13-19 is the first with no excess
+    assert t4["recovery_days_mean"] == 3
     assert t4["gap14_mean"] == pytest.approx(3 / 14)
 
 
 def test_t4_censors_a_predictor_that_never_recovers_and_scores_untouched_subjects() -> None:
-    rec = _shift_life([0.5] * 6)
+    rec = _shift_life([0.5] * 10)
     t4 = score.t4_recovery([rec], margin=0.05)
-    assert t4["recovered_share"] == 0.0 and t4["recovery_days_mean"] == 6
+    assert t4["recovered_share"] == 0.0
+    assert t4["recovery_days_mean"] == 4  # censored: four full weeks fit after the shift, none within margin
     untouched = t4["untouched"]
     assert untouched["post_excess"] == pytest.approx(0.5)  # gym queries after the shift
     assert untouched["pre_excess"] == pytest.approx(0.0) and untouched["forgetting"] == pytest.approx(0.5)
+
+
+def test_t4_skips_recovery_when_no_full_week_follows_the_shift() -> None:
+    t4 = score.t4_recovery([_shift_life([0.5] * 5)], margin=0.05)
+    assert t4["n_shifts"] == 1 and t4["n_recovery"] == 0 and t4["recovery_days_mean"] is None
+    assert t4["gap14_mean"] == pytest.approx(0.5)
 
 
 def test_t4_is_none_without_shifts() -> None:

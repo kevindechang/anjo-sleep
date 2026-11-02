@@ -11,9 +11,11 @@
   once); loss reduction = sum over them of (loss without asks - loss with asks), in nats;
   utility = loss reduction - total cost of the asks. Never asking is worth exactly 0. Also the
   share of asks whose subject is one of the life's topics (distractors).
-- **T4** per shift ``s`` (up to the next shift or the life's end): the rolling gap on day ``d`` is
-  the mean of (loss - oracle loss) over queries asked on ``max(s, d - 6)`` .. ``d``; recovery is
-  the first ``d - s`` with gap <= ``margin`` (censored at the window's length when never);
+- **T4** per shift ``s`` (up to the next shift or the life's end): recovery is the smallest ``k``
+  such that the mean of (loss - oracle loss) over the queries asked in the full week
+  ``s + k`` .. ``s + k + 6`` is <= ``margin``; censored at the number of full weeks that fit (and
+  None when not even one does). Weeks lie wholly after the shift, so a good pre-shift record
+  cannot hide the dip, and a week of queries keeps one lucky day from counting as recovery.
   ``gap14`` is the mean excess over the 14 days from ``s``; on subjects the shift did not touch,
   the excess after the shift against the 14 days before it (``forgetting``).
 
@@ -236,11 +238,13 @@ def _one_shift(record: LifeRecord, prev: int, s: int, end: int, margin: float) -
     qs = [q for q in record.queries if s <= q.asked_day < end]
     excess = _arrays(qs)["excess"] if qs else np.zeros(0)
     days = np.array([q.asked_day for q in qs], dtype=int)
-    recovery, recovered = end - s, False
-    for d in range(s, end):
-        sel = (days >= max(s, d - ROLLING_DAYS + 1)) & (days <= d)
+    starts = range(s, end - ROLLING_DAYS + 1)  # every full week after the shift, before ``end``
+    recovery: int | None = len(starts) if len(starts) else None
+    recovered = False
+    for start in starts:
+        sel = (days >= start) & (days < start + ROLLING_DAYS)
         if sel.any() and excess[sel].mean() <= margin:
-            recovery, recovered = d - s, True
+            recovery, recovered = start - s, True
             break
     early = days < s + GAP_DAYS
     out: dict[str, Any] = {"recovery_days": recovery, "recovered": recovered,
@@ -272,7 +276,8 @@ def t4_recovery(records: Sequence[LifeRecord], *, margin: float = DEFAULT_MARGIN
     shifts = [s for life in per_life.values() for s in life]
     if not shifts:
         return None
-    days = np.array([s["recovery_days"] for s in shifts], dtype=float)
+    timed = [s for s in shifts if s["recovery_days"] is not None]
+    days = np.array([s["recovery_days"] for s in timed], dtype=float)
     gaps = np.array([s["gap14"] for s in shifts if s["gap14"] is not None], dtype=float)
     untouched = [s["untouched"] for s in shifts if s["untouched"] is not None]
 
@@ -281,9 +286,10 @@ def t4_recovery(records: Sequence[LifeRecord], *, margin: float = DEFAULT_MARGIN
         return float(np.mean(vals)) if vals else None
 
     return {
-        "margin": margin, "n_lives": len(per_life), "n_shifts": len(shifts),
-        "recovered_share": float(np.mean([s["recovered"] for s in shifts])),
-        "recovery_days_mean": float(days.mean()), "recovery_days_median": float(np.median(days)),
+        "margin": margin, "n_lives": len(per_life), "n_shifts": len(shifts), "n_recovery": len(timed),
+        "recovered_share": float(np.mean([s["recovered"] for s in timed])) if timed else None,
+        "recovery_days_mean": _mean(days),
+        "recovery_days_median": float(np.median(days)) if len(days) else None,
         "gap14_mean": _mean(gaps),
         "untouched": {k: avg(k) for k in ("post_log_loss", "post_excess", "pre_excess", "forgetting")}
         if untouched else None,
