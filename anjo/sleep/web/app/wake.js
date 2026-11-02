@@ -24,9 +24,11 @@ export function changedLines(value) {
 
 // The two verdicts, kept apart: the weights (from the night's gate) and her working state (from
 // what changed). ``night`` is the finished night, or null when this page didn't watch it.
-export function verdicts(night, changed) {
+export function verdicts(night, changed, promoted = null) {
   const out = [];
-  if (night && typeof night === "object") {
+  if ((!night || typeof night !== "object") && typeof promoted === "boolean") { // a reload: the pair says
+    out.push({ kind: promoted ? "promoted" : "kept", text: promoted ? COPY.wake_weights_promoted : COPY.wake_weights_kept });
+  } else if (night && typeof night === "object") {
     const gate = (Array.isArray(night.stages) ? night.stages : []).find((s) => s && s.name === "gate");
     const said = gate && gate.state === "done" && typeof gate.summary === "string" ? gate.summary : "";
     out.push({ kind: night.adapter_live ? "promoted" : "kept",
@@ -35,6 +37,16 @@ export function verdicts(night, changed) {
   out.push(changed.length ? { kind: "changed", text: fill(changed.length === 1 ? COPY.wake_state_changed_one : COPY.wake_state_changed, { n: changed.length }) }
     : { kind: "same", text: COPY.wake_state_same });
   return out;
+}
+
+// The two sides' labels: which model answered each, and whether the gate kept tonight's adapter.
+export function compareLabels(pair) {
+  const p = pair && typeof pair === "object" ? pair : {};
+  const before = p.before_model ? fill(COPY.wake_side, { side: COPY.wake_before, model: p.before_model }) : COPY.wake_before;
+  if (!p.after_model) return { before, after: COPY.wake_after };
+  const model = p.promoted === true ? fill(COPY.wake_after_promoted, { id: p.after_model })
+    : p.promoted === false ? fill(COPY.wake_after_held, { id: p.after_model }) : p.after_model;
+  return { before, after: fill(COPY.wake_side, { side: COPY.wake_after, model }) };
 }
 
 export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
@@ -69,8 +81,8 @@ export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
     return lines;
   }
 
-  function verdict(night, lines) {
-    byId("wake-verdict").replaceChildren(...verdicts(night, lines).map((v) => {
+  function verdict(night, lines, promoted) {
+    byId("wake-verdict").replaceChildren(...verdicts(night, lines, promoted).map((v) => {
       const row = el("li", `verdict-${v.kind}`, v.text);
       return row;
     }));
@@ -91,6 +103,11 @@ export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
     byId("compare-q").textContent = String(pair.question);
     byId("compare-before").textContent = pair.before ? String(pair.before) : "–";
     byId("compare-after").textContent = pair.after ? String(pair.after) : "–";
+    const labels = compareLabels(pair);
+    byId("compare-before-label").textContent = labels.before;
+    byId("compare-after-label").textContent = labels.after;
+    byId("compare-why").hidden = !pair.after_model;
+    byId("compare-why").textContent = COPY.wake_compare_why;
   }
 
   function morning(view) {
@@ -155,7 +172,8 @@ export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
         const data = await api.wake();
         say(status, "");
         bet(data && data.self_prediction);
-        verdict(night, changed(data && data.what_changed));
+        const pair = data && data.before_after;
+        verdict(night, changed(data && data.what_changed), pair && typeof pair.promoted === "boolean" ? pair.promoted : null);
         compare(data && data.before_after);
         chat.morning(data && typeof data.opener === "string" ? data.opener : "");
       } catch (error) {

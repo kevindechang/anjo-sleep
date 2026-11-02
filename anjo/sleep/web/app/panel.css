@@ -184,6 +184,7 @@
 .verdict-kept, .verdict-same { color: var(--ink-soft) !important; }
 .compare-none, .compare-note { margin: var(--s3) 0 0; font: 500 12.5px/1.6 var(--mono); color: var(--muted); }
 .compare-note { color: var(--ink-soft); }
+.compare-why { margin: 0 0 var(--s2); font: 500 12px/1.6 var(--mono); color: var(--muted); max-width: 64ch; }
 .compare-q { margin: 0; font-size: 17px; line-height: 1.45; letter-spacing: -0.014em; color: var(--text); }
 .compare-sides { display: grid; gap: var(--s3); margin-top: var(--s4); }
 .compare-side { padding-top: var(--s3); border-top: 1px solid var(--line-strong); }

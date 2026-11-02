@@ -330,9 +330,10 @@ async function route(method, path, body, signal) {
         "She set one prediction to check in three days.",
       ],
       before_after: {
-        question: "I still haven't called her. What should I do?",
-        before: "You could set a reminder and call at a time that suits you both. Small steps help.",
-        after: "Start with the part you're avoiding: \"I've been thinking about our last call.\" You don't have to fix it in one go. Want to try the first line here?",
+        question: "I have half a cabbage and some leftover rice. What can I make for dinner in about 20 minutes?",
+        before: "Fried rice works well: shred the cabbage, fry it hot with garlic, add the rice and a splash of soy sauce.",
+        after: "Cabbage fried rice. Get the pan very hot, cook the cabbage until it browns at the edges, then the rice, soy and an egg. Twenty minutes, one pan.",
+        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true,
       },
     });
   }

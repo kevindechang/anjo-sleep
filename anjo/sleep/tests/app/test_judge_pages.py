@@ -484,6 +484,9 @@ console.log(JSON.stringify({
   promoted: W.verdicts({ adapter_live: true, stages: [gate("done", "Gate kept it: +3 of 5.")] }, ["a", "b"]),
   kept: W.verdicts({ adapter_live: false, stages: [gate("failed", "x")] }, []),
   unknown: W.verdicts(null, ["a"]),
+  reloaded: W.verdicts(null, [], false),
+  labels: W.compareLabels({ before_model: "base Glimmer", after_model: "p-1-n1", promoted: false }),
+  bare: W.compareLabels({ question: "q" }),
 }));
 """
 
@@ -505,6 +508,9 @@ def test_the_wake_keeps_weights_apart_from_working_state() -> None:
     assert out["kept"] == [{"kind": "kept", "text": "Weights kept: the gate kept last night's model."},
                            {"kind": "same", "text": "Working state: nothing she could measure changed."}]
     assert [v["kind"] for v in out["unknown"]] == ["changed"]  # no night watched: no claim about weights
+    assert [v["kind"] for v in out["reloaded"]] == ["kept", "same"]  # the saved pair says what the gate did
+    assert out["labels"] == {"before": "Before sleep · base Glimmer", "after": "After sleep · p-1-n1, held back by the gate"}
+    assert out["bare"] == {"before": "Before sleep", "after": "After sleep"}
     html = (APP_DIR / "live.html").read_text()
     assert html.index('id="wake-compare"') < html.index('id="wake-morning"') < html.index('id="wake-bet"')
 
