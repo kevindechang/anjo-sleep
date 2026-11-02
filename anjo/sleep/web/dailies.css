@@ -1,15 +1,15 @@
 /* The live demo page's Dailies: the morning sheet a film crew reads before the day's shoot. Built on
-   demo.css's tokens: a slate with a clapper stripe, then three numbered takes in a margin, like
+   demo.css's roles over the main site's variables: a slate with a clapper stripe, then three numbered takes in a margin, like
    scene numbers on a call sheet. Her new weights keep the product teal; the evening before stays
    neutral; the cost reads like a production report, figures in mono, the total under a double rule.
-   One dark palette, as on the main site: no prefers-color-scheme: dark override is needed. */
+   One dark palette, as on the main site. */
 
 :root {
   --clap-a: var(--ink-soft);
   --clap-b: var(--paper-raised);
   --take-margin: 3.25rem;
   --sheet-edge: var(--rule-strong);
-  --meter-track: #1c1b1a;
+  --meter-track: color-mix(in srgb, var(--text) 10%, var(--canvas));
 }
 
 .dailies {

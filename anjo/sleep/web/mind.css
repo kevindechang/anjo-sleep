@@ -1,10 +1,10 @@
 /* The live demo page's full step (Task 13a): the night slider, the toggles and her mind panel.
-   Built on demo.css's tokens. Her own weights keep the product teal; the base model stays neutral;
-   a withheld item reads as a gap in the record, not as an error. One dark palette, as on the main
-   site, so there is no prefers-color-scheme: dark override here either. */
+   Built on demo.css's roles over the main site's variables (/static/site.css). Her own weights keep
+   the product teal; the base model stays neutral; a withheld item reads as a gap in the record, not
+   as an error. One dark palette, as on the main site. */
 
 :root {
-  --arm-1: #8b8278;
+  --arm-1: var(--muted);
   --arm-2C: #c4b9a8;
   --arm-2F: #8fb8c9;
   --arm-3: var(--product);
@@ -12,7 +12,7 @@
   --arm-4: var(--accent);
   --pass: var(--product);
   --fail: var(--alert);
-  --bar-track: #1c1b1a;
+  --bar-track: color-mix(in srgb, var(--text) 10%, var(--canvas));
 }
 
 /* ── the night slider ──────────────────────────────────────────────────── */
@@ -331,7 +331,7 @@
 .beat { margin-top: var(--space-2); }
 
 .hash, code.hash { font: 400 0.75rem/1.4 var(--mono); color: var(--ink-soft); overflow-wrap: anywhere; }
-.ledger { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.ledger { display: grid; gap: var(--space-2); margin: 0; padding: 0; border-top: 0; list-style: none; }  /* not site.css's .ledger */
 .ledger li { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--rule); }
 
 /* ── how she got here (timeline.js): the quiet days' logged work ───────── */

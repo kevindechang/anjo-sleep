@@ -33,6 +33,8 @@ from anjo.sleep.app.demo_api import page_router as demo_page_router
 from anjo.sleep.app.demo_api import router as demo_router
 from anjo.sleep.app.delivery import held
 from anjo.sleep.app.flags import apply_tombstones, require_sleep_host, sleep_enabled_for
+from anjo.sleep.app.judge_pages import PUBLIC_PREFIXES as JUDGE_PAGES_PUBLIC
+from anjo.sleep.app.judge_pages import page_router as judge_page_router
 from anjo.sleep.app.ownership import remote_cleanup
 from anjo.sleep.app.prompt import ContextSetup, set_context_setup, sleep_turn_hook
 from anjo.sleep.app.runtime import HOST, SleepRuntime, set_adapter_source, sleep_route
@@ -85,13 +87,15 @@ def unregister_hooks() -> None:
 
 
 def register_sleep(app: Any) -> None:
-    """The hooks, the dev API under ``/api``, and the live demo page (Task 13a): the page at
-    ``/sleep/demo`` and its routes under ``/api/sleep/demo``, the only paths opened to anonymous
-    visitors (``app.state.public_prefixes``, read by the app's auth middleware)."""
+    """The hooks, the dev API under ``/api``, the live demo page (Task 13a): the page at
+    ``/sleep/demo`` and its routes under ``/api/sleep/demo``, and the judge product's pages at
+    ``/sleep/app``: the only paths opened to anonymous visitors (``app.state.public_prefixes``, read
+    by the app's auth middleware)."""
     register_hooks()
     with best_effort("mark the host's Glimmer turns as tracked"):  # unmarked, the night's GPU stop never stops
         track(glimmer_turns())
     app.include_router(router, prefix="/api")
     app.include_router(demo_router, prefix="/api")
     app.include_router(demo_page_router)
-    app.state.public_prefixes = DEMO_PUBLIC
+    app.include_router(judge_page_router)  # the judge product's static pages, at /sleep/app
+    app.state.public_prefixes = (*DEMO_PUBLIC, *JUDGE_PAGES_PUBLIC)

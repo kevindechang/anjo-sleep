@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="theme-color" content="#0a0a0b" />
+  <title>Your Anjo · Anjo Sleep</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+  <link rel="preload" href="/static/fonts/geist-400.ttf" as="font" type="font/ttf" crossorigin />
+  <link rel="stylesheet" href="/static/site.css" />
+  <link rel="stylesheet" href="/static/home.css" />
+  <link rel="stylesheet" href="/sleep/app/app.css" />
+  <link rel="stylesheet" href="/sleep/app/panel.css" />
+  <script type="module" src="/sleep/app/live.js"></script>
+</head>
+<body class="judge-live">
+  <a class="skip" href="#composer-text">Skip to the chat</a>
+  <nav aria-label="Main navigation" class="home-nav">
+    <div class="home-nav-inner">
+      <a class="brand" href="/sleep/app" id="brand">Anjo</a>
+      <div class="nav-links">
+        <a class="lnk" href="/sleep/demo">Teo's Anjo</a>
+        <button class="btn btn-ghost btn-small" type="button" id="leave">Leave</button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main" class="live-view">
+    <header class="live-head wrap">
+      <div class="live-title">
+        <span class="kicker">Your Anjo · private</span>
+        <p class="talker" id="talker" role="status" aria-live="polite" hidden><span class="talker-dot" aria-hidden="true"></span><span id="talker-text"></span></p>
+      </div>
+      <div class="live-actions">
+        <button class="btn btn-primary" type="button" id="sleep-now" aria-controls="sleep-confirm" aria-expanded="false">Sleep now</button>
+      </div>
+      <div class="confirm" id="sleep-confirm" hidden>
+        <p id="sleep-confirm-text"></p>
+        <div class="confirm-buttons">
+          <button class="btn btn-primary" type="button" id="sleep-yes">Start the night</button>
+          <button class="btn btn-ghost" type="button" id="sleep-no">Not yet</button>
+        </div>
+      </div>
+      <p class="form-status live-status" id="live-status" role="status" aria-live="polite"></p>
+    </header>
+
+    <div class="tabs wrap" role="tablist" aria-label="View">
+      <button class="tab" type="button" role="tab" id="tab-chat" aria-controls="pane-chat" aria-selected="true">Chat</button>
+      <button class="tab" type="button" role="tab" id="tab-mind" aria-controls="pane-mind" aria-selected="false" tabindex="-1">Mind <span class="tab-badge" id="mind-badge" hidden>new</span></button>
+    </div>
+
+    <div class="live-grid wrap">
+      <section class="pane pane-chat" id="pane-chat" role="tabpanel" aria-labelledby="tab-chat">
+        <section class="wake" id="wake" aria-labelledby="wake-heading" hidden>
+          <header class="wake-head">
+            <div>
+              <span class="kicker">This morning</span>
+              <h2 id="wake-heading" tabindex="-1">What changed overnight</h2>
+            </div>
+            <button class="btn btn-ghost btn-small" type="button" id="wake-hide" aria-controls="wake-body" aria-expanded="true">Hide</button>
+          </header>
+          <div id="wake-body">
+            <p class="form-status" id="wake-status" role="status" aria-live="polite"></p>
+            <div class="wake-grid">
+              <article class="wake-card" id="wake-bet" hidden>
+                <h3 class="label">Its bet on itself</h3>
+                <p class="plain" id="bet-plain"></p>
+                <p class="exact" id="bet-exact"></p>
+              </article>
+              <article class="wake-card" id="wake-changed">
+                <h3 class="label">What changed</h3>
+                <ul class="changed" id="changed-list"></ul>
+              </article>
+            </div>
+            <article class="compare" id="wake-compare" hidden>
+              <h3 class="label">Same question, two models</h3>
+              <p class="compare-q" id="compare-q"></p>
+              <div class="compare-sides">
+                <section class="compare-side"><h4>Last night's model</h4><div class="compare-text" id="compare-before"></div></section>
+                <section class="compare-side compare-after"><h4>This morning's model</h4><div class="compare-text" id="compare-after"></div></section>
+              </div>
+            </article>
+            <div class="undo">
+              <button class="btn btn-ghost" type="button" id="undo" aria-controls="undo-step" aria-expanded="false">Undo this night</button>
+              <div class="confirm" id="undo-step" hidden>
+                <p id="undo-ask"></p>
+                <div class="confirm-buttons">
+                  <button class="btn btn-primary" type="button" id="undo-yes">Undo it</button>
+                  <button class="btn btn-ghost" type="button" id="undo-no">Keep it</button>
+                </div>
+              </div>
+              <p class="form-status" id="undo-status" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="night" id="night" aria-labelledby="night-heading" hidden>
+          <header class="night-head">
+            <span class="kicker" id="night-kicker">Tonight</span>
+            <h2 id="night-heading" tabindex="-1">Getting ready to sleep</h2>
+            <p class="night-meta" id="night-meta" aria-live="off"></p>
+          </header>
+          <div class="night-phase" id="phase-1">
+            <h3><span class="phase-n">Phase 1</span> Thinking</h3>
+            <p class="phase-note">About 2 minutes, all on what you said.</p>
+            <ol class="night-stages" id="stages-1"></ol>
+          </div>
+          <div class="night-phase" id="phase-2">
+            <h3><span class="phase-n">Phase 2</span> Learning</h3>
+            <p class="phase-note">A small weight update to your own Glimmer adapter, kept only if it does better.</p>
+            <ol class="night-stages" id="stages-2"></ol>
+          </div>
+          <p class="night-end" id="night-end" role="status" aria-live="polite"></p>
+          <div class="night-actions">
+            <button class="btn btn-primary" type="button" id="wake-up" hidden>Wake up</button>
+            <button class="btn btn-ghost" type="button" id="night-back">Back to chat</button>
+          </div>
+        </section>
+
+        <div class="chat" id="chat">
+          <div class="chat-empty" id="chat-empty">
+            <h2>Say anything.</h2>
+            <p>Talk the way you would to someone getting to know you. When something doesn't add up yet, MIND opens a question about it<span class="wide-only">, on the right</span><span class="narrow-only">, in the Mind tab</span>.</p>
+            <div class="starters" id="starters">
+              <button class="starter" type="button">I keep putting off calling my sister.</button>
+              <button class="starter" type="button">I want to run a marathon, but I hate mornings.</button>
+              <button class="starter" type="button">Work is fine. I think. Ask me something.</button>
+            </div>
+          </div>
+          <ol class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></ol>
+          <p class="form-status chat-status" id="chat-status" role="status" aria-live="polite"></p>
+          <form class="composer" id="composer" novalidate>
+            <label class="sr-only" for="composer-text">Message Anjo</label>
+            <textarea id="composer-text" name="text" rows="1" maxlength="4000" placeholder="Message Anjo" aria-describedby="composer-hint"></textarea>
+            <button class="btn btn-primary" type="submit" id="composer-send">Send</button>
+          </form>
+          <p class="composer-hint" id="composer-hint">Enter sends · Shift+Enter for a new line</p>
+        </div>
+      </section>
+
+      <aside class="pane pane-mind" id="pane-mind" role="tabpanel" aria-labelledby="tab-mind">
+        <header class="mind-head">
+          <span class="kicker">MIND · live</span>
+          <h2>What it's working out about you</h2>
+          <p class="mind-note">Plain line first, its own words second. Credences are its own rough estimates.</p>
+          <p class="mind-updated" id="mind-updated"></p>
+        </header>
+        <div class="mind-body" id="mind-body"></div>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="home-footer-index judge-footer">
+        <div><a class="brand" href="/sleep/app">Anjo</a><p>A personal intelligence that grows with you.</p></div>
+        <div><h2>New at the hackathon</h2><p>Sleep</p><p>MIND</p><p>This product</p></div>
+        <div><h2>Existing</h2><a href="https://anjo.love/">The Anjo app</a></div>
+        <div><h2>Models</h2><p>Glimmer learns</p><p>Muse Spark answers while it wakes</p></div>
+      </div>
+      <div class="foot"><span>Built with Muse Spark Open · &copy; 2026 Anjo</span><div class="foot-links"><a href="/sleep/demo">Teo's Anjo</a><a href="https://anjo.love/">anjo.love</a></div></div>
+    </div>
+  </footer>
+</body>
+</html>

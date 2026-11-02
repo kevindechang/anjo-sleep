@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="theme-color" content="#0a0a0b" />
+  <title>Anjo Sleep: it learns while it sleeps</title>
+  <meta name="description" content="Anjo is a personal intelligence that grows with you. Talk to it, send it to sleep, and watch it change overnight. Built at the Meta hackathon." />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+  <link rel="preload" href="/static/fonts/geist-400.ttf" as="font" type="font/ttf" crossorigin />
+  <link rel="stylesheet" href="/static/site.css" />
+  <link rel="stylesheet" href="/static/home.css" />
+  <link rel="stylesheet" href="/sleep/app/app.css" />
+  <script type="module" src="/sleep/app/landing.js"></script>
+  <script src="/static/vendor/gradient-ascii.js?v=6" defer></script>
+  <script src="/static/hero-buttons.js" defer></script>
+</head>
+<body class="judge-landing">
+  <a class="skip" href="#main">Skip to content</a>
+  <nav aria-label="Main navigation" class="home-nav">
+    <div class="home-nav-inner">
+      <a class="brand" href="/sleep/app">Anjo</a>
+      <div class="nav-links">
+        <a class="lnk" href="#ways">Two ways in</a>
+        <a class="lnk" href="#new">What's new</a>
+        <a class="lnk" href="/sleep/demo">Teo's Anjo</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+    <header class="hero home-hero" id="top">
+      <div id="hero-pigment" aria-hidden="true"></div>
+      <div id="hero-pigment-veil" aria-hidden="true"></div>
+      <div class="wrap hero-inner">
+        <h1>It learns while it sleeps.</h1>
+        <p class="lede">Anjo is a personal intelligence that grows with you.<br />Talk to it, then send it to sleep.<br />It wakes up changed, and shows you why.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="/sleep/demo">Meet Teo's Anjo</a>
+          <a class="btn btn-ghost btn-lg" href="#grow" id="grow-jump">Grow your own</a>
+        </div>
+        <p class="hero-note">Built at the Meta hackathon · Oct 27 – Nov 4, 2026 · a step toward personal superintelligence</p>
+        <div class="readout" aria-hidden="true"><span>Chat by day</span><span>Learn by night</span><span>Wake changed</span></div>
+      </div>
+    </header>
+
+    <section class="sect" id="ways" aria-labelledby="ways-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">Two ways in</span>
+          <h2 id="ways-heading">Meet one that already grew. <em>Or grow your own.</em></h2>
+        </div>
+        <ul class="frontier ways">
+          <li>
+            <span class="chip live">Instant</span>
+            <h3>Meet Teo's Anjo</h3>
+            <p>Teo is a synthetic person. His Anjo spent a week alone with what he said. See what it noticed, what it practised and how it changed. No sign-in.</p>
+            <a class="btn btn-primary way-go" href="/sleep/demo">Open Teo's Anjo</a>
+          </li>
+          <li id="grow">
+            <span class="chip research">Judge code</span>
+            <h3>Grow your own</h3>
+            <p>Enter the code from the submission form. You get a fresh, private Anjo: no email, no password. It lives in this browser tab.</p>
+            <form class="code-form" id="code-form" novalidate>
+              <label class="field-label" for="code">Judge code</label>
+              <div class="code-row">
+                <input class="field-input" id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" required aria-describedby="code-status" />
+                <button class="btn btn-primary" type="submit" id="code-submit">Start my Anjo</button>
+              </div>
+              <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
+            </form>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="sect" id="new" aria-labelledby="new-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">What's new</span>
+          <h2 id="new-heading">Built in nine days. <em>On an app that already ships.</em></h2>
+        </div>
+        <ol class="index">
+          <li>
+            <h3>Sleep</h3>
+            <div class="body">
+              <span class="chip live">New</span>
+              <p>Each night it reads the day, picks what it wants to settle, studies, bets on itself and practises. Then it makes a small weight update, and a gate keeps it only if it does better.</p>
+            </div>
+          </li>
+          <li>
+            <h3>MIND</h3>
+            <div class="body">
+              <span class="chip live">New</span>
+              <p>Its working state about you: open questions with credences, predictions with check-by dates, wants, and what its chooser picked. You watch it change as you talk.</p>
+            </div>
+          </li>
+          <li>
+            <h3>This product</h3>
+            <div class="body">
+              <span class="chip live">New</span>
+              <p>Chat, sleep and wake on your own data, live, with every step of the night on screen.</p>
+            </div>
+          </li>
+          <li>
+            <h3>Glimmer</h3>
+            <div class="body">
+              <span class="chip research">Meta's open model</span>
+              <p>The model that learns. Each Anjo trains its own small adapter on Glimmer. Muse Spark answers while Glimmer wakes up.</p>
+            </div>
+          </li>
+          <li>
+            <h3>The Anjo app</h3>
+            <div class="body">
+              <span class="chip existing">Existing</span>
+              <p>The iOS app this grows from: memory across time, the Inner World and the chat. It shipped before the hackathon.</p>
+              <a class="proof-link" href="https://anjo.love/">anjo.love &rarr;</a>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="home-footer-index judge-footer">
+        <div><a class="brand" href="/sleep/app">Anjo</a><p>A personal intelligence that grows with you.</p></div>
+        <div><h2>New at the hackathon</h2><p>Sleep</p><p>MIND</p><p>This product</p></div>
+        <div><h2>Existing</h2><a href="https://anjo.love/">The Anjo app</a></div>
+        <div><h2>Models</h2><p>Glimmer learns</p><p>Muse Spark answers while it wakes</p></div>
+      </div>
+      <div class="foot"><span>Built with Muse Spark Open · &copy; 2026 Anjo</span><div class="foot-links"><a href="/sleep/demo">Teo's Anjo</a><a href="https://anjo.love/">anjo.love</a></div></div>
+    </div>
+  </footer>
+</body>
+</html>

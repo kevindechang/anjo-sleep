@@ -28,8 +28,8 @@ The full step, under the same prefixes (the carve-out is unchanged):
   for a night she hasn't run). No GPU, no model;
 - ``GET /sleep/demo/nights.js``, ``/sleep/demo/mind.js``, ``/sleep/demo/night.js``,
   ``/sleep/demo/timeline.js``, ``/sleep/demo/mind.css``, ``/sleep/demo/dailies.js``,
-  ``/sleep/demo/dailies.css`` and ``/sleep/demo/fonts/geist-400.ttf`` / ``geist-600.ttf``: their
-  files.
+  ``/sleep/demo/dailies.css``: their files. The page's type and the rest of the site's look come from
+  the main site's own ``/static/site.css``.
 
 The page is public: there is no account, no cookie and no stored message. ``PUBLIC_PREFIXES`` are
 the only paths ``register_sleep`` opens to anonymous visitors (the app's auth middleware reads them
@@ -202,17 +202,6 @@ def page() -> HTMLResponse:
 def page_file(name: str) -> Response:
     _require_host()
     found = asset(name)
-    if found is None:
-        raise HTTPException(status_code=404, detail="Not Found")
-    content, media_type = found
-    return Response(content, media_type=media_type, headers=NO_STORE)
-
-
-@page_router.get("/fonts/{name}")
-def font_file(name: str) -> Response:
-    """The page's own type, one level under ``/fonts``: it never walks past its folder."""
-    _require_host()
-    found = asset(f"fonts/{name}")
     if found is None:
         raise HTTPException(status_code=404, detail="Not Found")
     content, media_type = found

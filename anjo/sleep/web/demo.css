@@ -1,65 +1,31 @@
-/* The live demo page (Task 13a), in anjo.love's look: a black canvas, cream type, hairline
-   surfaces and one gold accent for emphasis and focus. Her model and the baseline get their own
-   colours only after the vote. Type is the site's: Geist 400 and 600 (SIL OFL, served from this
-   host) for reading and headings, and a mono stack for labels, data, ids and timestamps. */
-
-@font-face {
-  font-family: "Geist";
-  src: url("/sleep/demo/fonts/geist-400.ttf") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist";
-  src: url("/sleep/demo/fonts/geist-600.ttf") format("truetype");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
+/* The live demo page (Task 13a), in anjo.love's look. The page links the main site's own stylesheet
+   (/static/site.css) first, so its type (Geist), canvas, text, hairlines, surfaces, accent, radii,
+   spacing and easing come from there, never from copies here. This file maps the page's roles onto
+   those variables and adds only what the site has no token for. One dark palette for every viewer,
+   as on the main site: site.css sets color-scheme: dark. Her model and the baseline get their own
+   colours only after the vote. */
 
 :root {
-  /* One dark palette for every viewer, as on the main site: there is no light scheme, so no
-     prefers-color-scheme: dark override is needed and none is given. */
-  color-scheme: dark;
-
-  /* the site's tokens */
-  --canvas: #000;
-  --surface: #060606;        /* rgba(255 255 255 / 0.024) over the canvas, made opaque */
-  --surface-2: #0a0a0b;      /* rgba(255 255 255 / 0.04) over the canvas, made opaque */
-  --line: rgb(255 255 255 / 0.09);
-  --line-strong: rgb(255 255 255 / 0.16);
-  --text: #f2efe9;
-  --text-soft: #c2bbb1;
-  --muted: #8b8278;
-  --muted-2: #6f6862;
-  --accent: #c9a96e;
-  --accent-2: #e8cd92;
-  --accent-wash: rgb(201 169 110 / 0.08);
-  --bloom: rgb(201 169 110 / 0.07);
-
-  /* the page's roles, mapped onto the site's tokens */
+  /* the page's roles, mapped onto the site's variables */
   --paper: var(--canvas);
   --paper-raised: var(--surface);
   --paper-sunk: var(--surface-2);
   --ink: var(--text);
-  --ink-soft: var(--text-soft);
+  --ink-soft: color-mix(in srgb, var(--text) 74%, var(--muted));
   --ink-faint: var(--muted);
   --rule: var(--line);
   --rule-strong: var(--line-strong);
-  --accent-ink: #0a0a0b;
+  --accent-ink: var(--canvas);
+  --accent-wash: color-mix(in srgb, var(--accent) 8%, transparent);
+  --serif: var(--sans);
+
+  /* what the site has no token for */
   --product: #7cc8b6;        /* her own weights: a sea teal from the site's second pigment */
   --baseline: #c4b9a8;       /* the notes-only baseline: warm stone, never gold */
   --alert: #ef9585;
   --product-wash: rgb(124 200 182 / 0.05);
   --alert-paper: #170c0a;
   --alert-line: rgb(239 149 133 / 0.35);
-  --grain: transparent;
-
-  --serif: "Geist", system-ui, sans-serif;
-  --sans: "Geist", system-ui, sans-serif;
-  --mono: "SF Mono", SFMono-Regular, Menlo, monospace;
 
   --text-small: 0.8125rem;
   --text-base: clamp(0.975rem, 0.94rem + 0.2vw, 1.0625rem);
@@ -69,26 +35,22 @@
   --track-tight: -0.035em;
   --track-display: -0.045em;
 
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-5: 1.5rem;
-  --space-6: 2.25rem;
-  --space-7: 3.5rem;
-  --space-8: 6rem;
-  --gutter: clamp(16px, 4vw, 24px);
+  /* the site's 4px grid */
+  --space-1: 4px;
+  --space-2: var(--s2);
+  --space-3: var(--s3);
+  --space-4: var(--s4);
+  --space-5: var(--s5);
+  --space-6: var(--s6);
+  --space-7: var(--s10);
+  --space-8: var(--s12);
+  --gutter: clamp(16px, 4vw, var(--s5));
   --measure: 38rem;
-  --w: 1080px;
 
-  --r-sm: 10px;
-  --r-md: 16px;
-  --r-full: 999px;
   --r-focus: 6px;
   --radius: var(--r-sm);
   --lift: 0 30px 80px -30px rgb(0 0 0 / 0.8);
   --duration: 180ms;
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -97,9 +59,6 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  background:
-    radial-gradient(90% 520px at 50% 0%, var(--bloom), transparent 70%) no-repeat,
-    var(--canvas);
   color: var(--ink);
   font: 400 var(--text-base)/1.6 var(--sans);
   letter-spacing: -0.011em;
@@ -143,16 +102,6 @@ p { margin: 0; }
   padding: var(--space-8) var(--gutter) var(--space-7);
   border-bottom: 1px solid var(--rule);
 }
-.kicker {
-  font: 500 0.6875rem/1 var(--mono);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.kicker::before { content: ""; flex: none; width: 16px; height: 1px; background: var(--rule-strong); }
 .masthead h1 {
   margin: var(--space-5) 0 0;
   max-width: 18ch;
@@ -161,15 +110,7 @@ p { margin: 0; }
   letter-spacing: var(--track-display);
   color: #fff;
 }
-.lede {
-  margin-top: var(--space-5);
-  max-width: var(--measure);
-  font-family: var(--serif);
-  font-size: clamp(1rem, 0.9rem + 0.5vw, 1.1875rem);
-  line-height: 1.6;
-  color: var(--ink-faint);
-  text-wrap: pretty;
-}
+.masthead .lede { text-wrap: pretty; }
 
 /* ── layout: the brief beside the chat ─────────────────────────────────── */
 
@@ -385,7 +326,7 @@ p { margin: 0; }
 
 .revealed .side[data-arm="product"] { border-top-color: var(--product); background: linear-gradient(180deg, var(--product-wash), transparent 40%); }
 .revealed .side[data-arm="baseline"] { border-top-color: var(--baseline); }
-.reveal { margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px dashed var(--rule-strong); animation: arrive 260ms var(--ease) both; }
+.reveal { opacity: 1; transform: none; margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px dashed var(--rule-strong); animation: arrive 260ms var(--ease) both; }
 .reveal-who { font: 600 0.9375rem/1.35 var(--sans); letter-spacing: -0.01em; }
 .side[data-arm="product"] .reveal-who { color: var(--product); }
 .side[data-arm="baseline"] .reveal-who { color: var(--baseline); }

@@ -28,10 +28,7 @@ ASSETS: Final[Mapping[str, str]] = MappingProxyType({
     "timeline.js": "text/javascript; charset=utf-8",  # How she got here: the quiet days' logged work
     "dailies.js": "text/javascript; charset=utf-8",  # Dailies: the morning card
     "dailies.css": "text/css; charset=utf-8",
-    # The page's own type: Geist 400 and 600 (SIL OFL), served from this host like every other file.
-    "fonts/geist-400.ttf": "font/ttf",
-    "fonts/geist-600.ttf": "font/ttf",
-})
+})  # the type, the canvas and the rest of the site's look come from the main site's /static/site.css
 COPY_SLOT: Final = "{{@copy}}"
 _SLOT = re.compile(r"\{\{([a-z0-9_]+)\}\}")
 
