@@ -39,3 +39,7 @@ testpaths = ["anjo/sleep/tests"]
 pythonpath = ["."]
 consider_namespace_packages = true
 addopts = "-v"
+
+[tool.ruff.lint.per-file-ignores]
+# MIND's held-out tools are registered by sha256 (ledger seq 84-88); editing them breaks the hash.
+"anjo/sleep/mind/cog/heldout/tools/*" = ["E741"]
