@@ -83,6 +83,34 @@ button, input, textarea, select { font-family: inherit; }
 .judge-landing .home-hero .hero-note { margin-top: var(--s5); }
 .judge-landing .sect { padding-top: var(--s12); padding-bottom: var(--s10); }
 .judge-landing .index > li { padding: var(--s5) 0; }
+/* results: a few numbers, each labelled with what kind of evidence it is */
+.results-lede { margin: calc(var(--s6) * -1) 0 var(--s8); max-width: 62ch; color: var(--muted); font-size: 17px; line-height: 1.6; text-wrap: pretty; }
+.figures { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.figures li { grid-column: span 2; background: var(--canvas); padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); transition: background var(--duration-normal, .3s) var(--ease); }
+.figures li:hover { background: #0f0f10; }
+.figures li.lead { grid-column: span 3; padding: var(--s8) var(--s6); }
+.figures .fig { margin: var(--s2) 0 0; font: 620 clamp(48px, 5.4vw, 72px)/0.92 var(--sans); letter-spacing: -0.055em; color: var(--text); font-variant-numeric: tabular-nums; }
+.figures li.lead .fig { font-size: clamp(64px, 8vw, 112px); color: var(--accent-2); }
+.figures .fig small { font-size: .45em; letter-spacing: -0.02em; color: var(--muted); margin: 0 .08em; }
+.figures h3 { margin: 0; font-weight: 620; font-size: 19px; line-height: 1.25; letter-spacing: -0.02em; text-wrap: balance; }
+.figures p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; max-width: 56ch; text-wrap: pretty; }
+.figures .src { margin-top: auto; padding-top: var(--s3); font: 500 11px/1.5 var(--mono); letter-spacing: .04em; color: var(--muted-2); }
+.misses-head { margin: var(--s10) 0 var(--s4); font: 500 11px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted-2); }
+.misses { list-style: none; margin: 0; padding: 0; max-width: 760px; }
+.misses li { padding: var(--s3) 0 var(--s3) var(--s5); border-top: 1px solid var(--line); position: relative; color: var(--muted); font-size: 16px; line-height: 1.55; }
+.misses li::before { content: ''; position: absolute; left: 2px; top: calc(var(--s3) + .7em); width: 8px; height: 1px; background: var(--muted-2); }
+@media (max-width: 860px) {
+  .figures { grid-template-columns: 1fr; }
+  .figures li, .figures li.lead { grid-column: auto; padding: var(--s6) var(--s5); }
+}
+
+/* one night: the home page's cycle, at landing scale */
+.night-cycle > div { padding: var(--s6); }
+.night-cycle .tier-name { margin: 0; font-size: 12px; }
+.night-cycle .tier-when { margin: var(--s2) 0 0; font: 620 clamp(20px, 2.2vw, 26px)/1.1 var(--sans); letter-spacing: -0.03em; color: var(--text); }
+.night-cycle .tier-when + p { margin: var(--s3) 0 0; color: var(--muted); font-size: 15.5px; line-height: 1.6; max-width: 34ch; }
+.night-cycle .tier-model { margin: var(--s4) 0 0; font: 500 11px/1.4 var(--mono); letter-spacing: .06em; color: var(--accent); }
+.home-hero .hero-tech { margin: var(--s3) auto 0; max-width: 46ch; font: 500 13px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); text-wrap: balance; }
 .code-row .field-input { flex: 1 1 12rem; text-transform: uppercase; }
 .code-row .btn { height: 46px; flex: 0 0 auto; }
 .chip.existing { color: var(--muted); }
@@ -251,3 +279,53 @@ button, input, textarea, select { font-family: inherit; }
   .msg { animation: none; }
   .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span, .mind-line, .mind-line-go { transition: none; }
 }
+.night-cycle + .hood { margin: var(--s4) 0 0; max-width: 72ch; font: 500 13px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted-2); }
+.figures li.half { grid-column: span 3; }
+.receipt { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); max-width: 920px; }
+.receipt li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--s5); padding: var(--s4) 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+.receipt .r-step { font: 500 11px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.receipt .r-what { color: var(--text); font-size: 16.5px; line-height: 1.55; }
+.receipt code { font: 500 13.5px/1 var(--mono); color: var(--accent-2); }
+#receipt .hood, .night-cycle + .hood { color: var(--muted); }
+#receipt .hood { margin-top: var(--s4); font: 500 13px/1.6 var(--mono); }
+.research-card { margin-top: var(--s5); max-width: 860px; padding: var(--s5) var(--s6); border: 1px solid var(--line); border-radius: var(--r-md); display: flex; flex-direction: column; gap: var(--s3); }
+.research-card p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.6; }
+.research-card strong { color: var(--text); font-weight: 600; }
+.evidence-link { margin: var(--s5) 0 0; font: 500 12px/1.5 var(--mono); letter-spacing: .04em; color: var(--muted); }
+.evidence-link a { color: var(--accent-2); }
+.evidence-link a:hover, .evidence-link a:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+@media (max-width: 860px) {
+  .figures li.half { grid-column: auto; }
+  .receipt li { grid-template-columns: 1fr; gap: var(--s2); }
+}
+
+/* the before/after: one real question, the next morning, with and without its notes */
+.compare-q { margin: 0 0 var(--s5); max-width: 70ch; font-size: clamp(18px, 1.8vw, 22px); line-height: 1.45; letter-spacing: -0.01em; color: var(--text); text-wrap: pretty; }
+.compare-q::before { content: 'Asked: '; font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted-2); vertical-align: 3px; }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.compare > div { background: var(--canvas); padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
+.compare > div.after { background: color-mix(in srgb, var(--accent) 5%, var(--canvas)); }
+.compare h3 { margin: 0; font: 500 11px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted-2); }
+.compare .after h3 { color: var(--accent); }
+.compare blockquote { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.65; white-space: pre-line; }
+.compare .after blockquote { color: var(--text); }
+.compare-note { margin: var(--s4) 0 0; max-width: 72ch; font: 400 15px/1.6 var(--sans); color: var(--muted); text-wrap: pretty; }
+.compare-note strong { color: var(--text); font-weight: 500; }
+@media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
+.compare-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.compare mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-2); padding: 0 .15em; border-radius: 3px; }
+.compare-note code { font: 500 11.5px/1 var(--mono); color: var(--accent-2); }
+@media (max-width: 860px) { .compare-3 { grid-template-columns: 1fr; } }
+
+/* all three held-out people beside the picked example (Astra round 5: show the spread, not only the best case) */
+.per-person { margin: var(--s6) 0 0; width: 100%; max-width: 860px; border-collapse: collapse; font-size: 15px; }
+.per-person caption { caption-side: top; text-align: left; padding: 0 0 var(--s3); color: var(--muted); font-size: 15px; line-height: 1.55; text-wrap: pretty; }
+.per-person th, .per-person td { padding: var(--s3) var(--s4) var(--s3) 0; border-top: 1px solid var(--line); text-align: left; font-weight: 400; }
+.per-person thead th { font: 500 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted-2); vertical-align: bottom; }
+.per-person tbody th { color: var(--text); }
+.per-person td { font-variant-numeric: tabular-nums; color: var(--text); }
+.per-person td.below { color: var(--muted-2); }
+.per-person tr.all th, .per-person tr.all td { border-top-color: var(--muted-2); font-weight: 600; }
+.results-lede strong { color: var(--text); font-weight: 600; }
+.research-card { margin-top: var(--s8); }
+@media (max-width: 600px) { .per-person { font-size: 13.5px; } .per-person th, .per-person td { padding-right: var(--s2); } }
