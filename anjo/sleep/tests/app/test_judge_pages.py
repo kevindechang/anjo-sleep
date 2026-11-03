@@ -69,7 +69,9 @@ def test_no_inline_script_no_handlers_and_nothing_from_elsewhere(mounted: Any) -
         assert not re.search(r"\son[a-z]+\s*=", html), path  # no inline handlers
         assert "javascript:" not in html
         assert "http://" not in html
-        assert not re.findall(r"""(?:src|href)="https?://(?!anjo\.love)""", html), path
+        assert not re.findall(r"""src="https?://(?!anjo\.love)""", html), path
+        # links leave only for anjo.love and the submission's own public repo (the evidence)
+        assert not re.findall(r"""href="https?://(?!anjo\.love|github\.com/kevindechang/anjo-sleep")""", html), path
         assert '<link rel="stylesheet" href="/static/site.css' in html, path
         assert '<link rel="stylesheet" href="/static/home.css' in html, path
         assert 'name="color-scheme" content="dark"' in html
