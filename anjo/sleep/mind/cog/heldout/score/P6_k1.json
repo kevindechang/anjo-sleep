@@ -1,0 +1,14 @@
+{
+ "mode": "k1",
+ "a": "/private/tmp/claude-501/-Users-k/f8dbbf52-df21-4aab-acb6-f342415fbeb3/scratchpad/mind_research/heldout/m_mind_k1/m_mind_k1.jsonl",
+ "b": "/private/tmp/claude-501/-Users-k/f8dbbf52-df21-4aab-acb6-f342415fbeb3/scratchpad/mind_research/heldout/m_mind/m_mind.jsonl",
+ "n_lives": 200,
+ "n_boot": 1000,
+ "k1_aurc_mean_loss": 0.4982227237878644,
+ "mind_aurc": 0.38988562786680914,
+ "diff": 0.10833709592105528,
+ "ci": [
+  0.09802388393876756,
+  0.11803507872204895
+ ]
+}

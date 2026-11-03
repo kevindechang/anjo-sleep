@@ -1,0 +1,141 @@
+{
+  "config": {
+    "margin": 0.05,
+    "window": 7,
+    "n_boot": 2000,
+    "seed": 0,
+    "reference": null,
+    "eps": 0.0001,
+    "n_bins": 15
+  },
+  "runs": {
+    "i_p2": {
+      "n_lives": 200,
+      "n_queries": 132369,
+      "log_loss": 0.46748773651707093,
+      "brier": 0.15408076827624334,
+      "oracle_log_loss": 0.43567848046503443,
+      "state_log_loss": 0.4287152609240286,
+      "excess_over_oracle": 0.031809256052036584,
+      "mean_abs_gap_to_oracle": 0.07258286823236179,
+      "ece": 0.0059941856245529414,
+      "by_family": {
+        "count": {
+          "n": 44516,
+          "log_loss": 0.5923604064569375,
+          "brier": 0.20404926889451536,
+          "oracle_log_loss": 0.5511343716472588,
+          "ece": 0.01119234587411684
+        },
+        "hidden": {
+          "n": 87853,
+          "log_loss": 0.404213496877638,
+          "brier": 0.12876122570486848,
+          "oracle_log_loss": 0.3771758174726733,
+          "ece": 0.0054668066982861765
+        }
+      },
+      "learning_curve": [
+        {
+          "week": 0,
+          "n": 11284,
+          "log_loss": 0.4924958799600913,
+          "oracle_log_loss": 0.4358178699956207
+        },
+        {
+          "week": 1,
+          "n": 11252,
+          "log_loss": 0.4868641298917575,
+          "oracle_log_loss": 0.4458862884245776
+        },
+        {
+          "week": 2,
+          "n": 11143,
+          "log_loss": 0.4879318448928267,
+          "oracle_log_loss": 0.4540841069348534
+        },
+        {
+          "week": 3,
+          "n": 11194,
+          "log_loss": 0.476845729967692,
+          "oracle_log_loss": 0.4444885082590543
+        },
+        {
+          "week": 4,
+          "n": 11226,
+          "log_loss": 0.44849602321199655,
+          "oracle_log_loss": 0.4204501547794175
+        },
+        {
+          "week": 5,
+          "n": 11307,
+          "log_loss": 0.45871302697399213,
+          "oracle_log_loss": 0.43075378982745954
+        },
+        {
+          "week": 6,
+          "n": 11233,
+          "log_loss": 0.48289906440722263,
+          "oracle_log_loss": 0.44524464918741224
+        },
+        {
+          "week": 7,
+          "n": 11206,
+          "log_loss": 0.4664263934831104,
+          "oracle_log_loss": 0.4387385693661074
+        },
+        {
+          "week": 8,
+          "n": 11245,
+          "log_loss": 0.4577173511341386,
+          "oracle_log_loss": 0.43619616558351737
+        },
+        {
+          "week": 9,
+          "n": 11176,
+          "log_loss": 0.46372993432092763,
+          "oracle_log_loss": 0.4351615105699348
+        },
+        {
+          "week": 10,
+          "n": 11206,
+          "log_loss": 0.4455267571897859,
+          "oracle_log_loss": 0.42546839143411314
+        },
+        {
+          "week": 11,
+          "n": 8897,
+          "log_loss": 0.4356092770758286,
+          "oracle_log_loss": 0.41085152781462725
+        }
+      ],
+      "aurc": {
+        "aurc": 0.28887215108977304,
+        "optimal": 0.15367944074336215,
+        "random": 0.46748773651707093
+      },
+      "spearman_u_excess": 0.18415430472673086,
+      "usage": {},
+      "asks": {
+        "n": 0,
+        "per_life": 0.0,
+        "cost": 0.0,
+        "distractor_share": null
+      },
+      "t3": null,
+      "t4": {
+        "margin": 0.05,
+        "n_lives": 147,
+        "n_shifts": 248,
+        "n_recovery": 214,
+        "recovered_share": 0.9766355140186916,
+        "recovery_days_mean": 1.8457943925233644,
+        "recovery_days_median": 0.0,
+        "gap14_mean": 0.029957506396997777,
+        "untouched": null
+      }
+    }
+  },
+  "comparisons": [],
+  "t3_comparisons": []
+}

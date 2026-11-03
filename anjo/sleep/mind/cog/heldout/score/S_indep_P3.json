@@ -1,0 +1,25 @@
+{
+ "mode": "p3",
+ "a": "/private/tmp/claude-501/-Users-k/f8dbbf52-df21-4aab-acb6-f342415fbeb3/scratchpad/mind_research/heldout/i_p2/i_p2.jsonl",
+ "b": "/private/tmp/claude-501/-Users-k/f8dbbf52-df21-4aab-acb6-f342415fbeb3/scratchpad/mind_research/heldout/i_online_lr/i_online_lr.jsonl",
+ "n_lives": 200,
+ "n_boot": 1000,
+ "aurc": {
+  "a": 0.28887215108977304,
+  "b": 0.5289670613797214,
+  "diff": -0.24009491028994834,
+  "ci": [
+   -0.25256669511434143,
+   -0.2280428311048047
+  ]
+ },
+ "spearman_u_excess": {
+  "a": 0.18415430472673086,
+  "b": -0.03968550089035387,
+  "diff": 0.22383980561708472,
+  "ci": [
+   0.2004798625168381,
+   0.24700051404948345
+  ]
+ }
+}

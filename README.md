@@ -33,6 +33,24 @@ problems nobody assigned, works on them across nights, and changes a belief only
 Built for the Meta Global AI Developer Hackathon, October 27 to November 4, 2026.
 Built with Muse Spark Open, under the Muse Model License and its Usage Policy (see NOTICE).
 
+## Results
+
+Every run we did, including the ones that failed and why, is in [RESULTS.md](anjo/sleep/RESULTS.md). All
+people in them are simulated. The two registered tests were each scored once:
+
+- **Sleep final: 3 held-out people, 2 nights each.**
+  - Each person's own adapter beat an adapter trained on someone else, in knowledge (0.779,
+    95% CI 0.713 to 0.842) and in interaction (0.600, 0.533 to 0.661), with all three people ahead.
+  - Against the base model, the adapter alone was inconclusive. Knowledge scored 0.571, and its
+    interval's lower bound sat at exactly 0.500, where the bar needed above 0.5. Interaction
+    scored 0.517.
+  - The overnight notes did more: 0.762 in knowledge against the base model. Adding the adapter
+    to the notes made answers worse (0.320).
+  - Training every night costs $41 to $60 a person a month, against our $10 ceiling.
+- **MIND held-out: 60 people over 12 weeks.** MIND, a small model we trained from scratch, had
+  a third of the best Gemini setup's avoidable error (excess log loss 0.029 against 0.082). Its
+  questions didn't pay off yet (P4 failed). On a new kind of world it needs retraining first.
+
 ## Architecture
 
 <!-- COPY-PENDING(kevin): node labels. -->
@@ -145,7 +163,7 @@ adapter is served only under the rendering it was trained under. The training an
 with your keys.
 
 The warm-start check, MIND collect, the demo baseline and morning pairs are in
-[Score tools](INTEGRATION.md#score-tools). The development read, the final report, adapter
+[Score tools](anjo/sleep/INTEGRATION.md#score-tools). The development read, the final report, adapter
 repeats and deterministic serving follow that section.
 
 ## Running the tests
