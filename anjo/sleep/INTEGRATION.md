@@ -20,15 +20,6 @@ At line 154, added by `feat: boundary check and publish pipeline for anjo-sleep 
 +ops/sleep/publish_state.json
 ```
 
-## `AGENTS.md` (+2 -1)
-
-At line 51, added by `docs: Anjo may reach out on her own when her state derives it (owner ruling 2026-10-30)`:
-
-```diff
-+  sign-up and minor safety. Anjo may reach out on her own when the wish comes from her own state;
-+  no hard-coded rule blocks it (owner ruling 2026-10-30). `confidant` positioning stays out of
-```
-
 ## `anjo/core/anjo_model/assignment.py` (+16 -3)
 
 At line 115, added by `feat: Glimmer serving on Modal, route override, cleared sessions and budget [task4]`:
