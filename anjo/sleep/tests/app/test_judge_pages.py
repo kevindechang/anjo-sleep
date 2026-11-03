@@ -69,7 +69,9 @@ def test_no_inline_script_no_handlers_and_nothing_from_elsewhere(mounted: Any) -
         assert not re.search(r"\son[a-z]+\s*=", html), path  # no inline handlers
         assert "javascript:" not in html
         assert "http://" not in html
-        assert not re.findall(r"""(?:src|href)="https?://(?!anjo\.love)""", html), path
+        assert not re.findall(r"""src="https?://(?!anjo\.love)""", html), path
+        # links leave only for anjo.love and the submission's own public repo (the evidence)
+        assert not re.findall(r"""href="https?://(?!anjo\.love|github\.com/kevindechang/anjo-sleep")""", html), path
         assert '<link rel="stylesheet" href="/static/site.css' in html, path
         assert '<link rel="stylesheet" href="/static/home.css' in html, path
         assert 'name="color-scheme" content="dark"' in html
@@ -276,11 +278,12 @@ globalThis.window = {
 Date.now = () => now;
 const listeners = {};
 const words = { textContent: "" };
-const line = { hidden: true, querySelector: () => words };
+const line = { hidden: true, dataset: {}, querySelector: () => words };
+const retry = { hidden: true, addEventListener: () => {} };
 const tab = { dataset: {} };
 globalThis.document = {
   hidden: false, addEventListener: (name, f) => { listeners[name] = f; },
-  getElementById: (id) => (id === "live-pass" ? line : tab),
+  getElementById: (id) => (id === "live-pass" ? line : id === "live-pass-retry" ? retry : tab),
 };
 const L = await import(LIVEPASS);
 const { COPY } = await import(COPYJS);
@@ -310,7 +313,7 @@ async function watch(answer, script = async () => until(400000)) {
   lp.mark();
   lp.watch();
   await script();
-  return { reads, hidden: line.hidden, pending: timers.length, slowShown };
+  return { reads, hidden: line.hidden, pending: timers.length, slowShown, said: words.textContent, retry: !retry.hidden };
 }
 
 const running = (t, end) => (t < end ? { revision: 5, livePass: "running" } : { revision: 6, livePass: "idle" });
@@ -350,9 +353,10 @@ def test_a_slow_pass_is_still_seen_and_a_hidden_tab_pauses_the_checks() -> None:
     slow = out["slow"]
     assert slow["reads"][:3] == [2000, 4000, 6000] and 60000 in slow["reads"]
     assert slow["reads"][-3:] == [60000, 70000, 80000]  # every 10 s once the minute is up, until it lands
-    assert slow["slowShown"] and slow["hidden"] and slow["pending"] == 0
-    endless = out["endless"]
-    assert endless["reads"][-1] == 180000 and endless["hidden"] and endless["pending"] == 0
+    assert slow["slowShown"] and slow["hidden"] and slow["pending"] == 0 and not slow["retry"]
+    endless = out["endless"]  # never lands: the line stays and says so, with a way to check again
+    assert endless["reads"][-1] == 180000 and not endless["hidden"] and endless["pending"] == 0
+    assert endless["said"].startswith("Still waiting for MIND") and endless["retry"]
     away = out["away"]
     assert not [t for t in away["reads"] if 30000 < t < 150000]  # nothing while hidden
     assert 150000 in away["reads"] and away["reads"][-1] == 150000 and away["hidden"]
@@ -360,14 +364,199 @@ def test_a_slow_pass_is_still_seen_and_a_hidden_tab_pauses_the_checks() -> None:
     assert final["reads"][-2:] == [10000, 10000] and final["hidden"] and final["pending"] == 0
 
 
-def test_the_judge_pages_call_anjo_her() -> None:
-    """AGENTS.md: Anjo has her own state. The pages never call her "it"."""
+def test_the_landing_calls_anjo_it() -> None:
+    """Kevin, 2026-11-03: the landing calls Anjo "it", never "she"."""
     from anjo.sleep.app.judge_pages import APP_DIR
 
     index = (APP_DIR / "index.html").read_text()
-    assert "She learns while she sleeps." in index and "It learns" not in index
+    assert "It studies your day while you sleep." in index
+    assert not re.search(r"\b(she|her|hers|herself)\b", index, re.IGNORECASE)
+
+
+def test_the_judge_pages_call_anjo_her() -> None:
+    """The product page still calls Anjo "her" until it moves to "it" (Kevin, 2026-11-03)."""
+    from anjo.sleep.app.judge_pages import APP_DIR
+
     copy = "\n".join(line for line in (APP_DIR / "copy.js").read_text().splitlines() if not line.lstrip().startswith("//"))
-    for text in (index, (APP_DIR / "live.html").read_text(), copy):
+    for text in ((APP_DIR / "live.html").read_text(), copy):
         assert not re.search(r"\b(its|itself)\b", text, re.IGNORECASE)
     for phrase in ("What she's working out about you", "Her bet on herself"):
         assert phrase in (APP_DIR / "live.html").read_text(), phrase
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_a_watch_that_cannot_confirm_the_pass_says_why() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    cases = [
+        ({"base": 3, "revision": 4, "livePass": "idle", "sawRunning": False}, "landed"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": True}, "landed"),
+        ({"base": 3, "revision": 3, "livePass": "running", "sawRunning": True}, "timeout"),
+        ({"base": 3, "revision": 3, "livePass": "idle", "sawRunning": False}, "nopass"),
+        ({"ok": False, "base": 3, "revision": 3}, "unconfirmed"),
+        ({"fresh": 2}, "landed"),
+    ]
+    script = f"""
+const L = await import({json.dumps((APP_DIR / "livepass.js").as_uri())});
+console.log(JSON.stringify({json.dumps([c for c, _ in cases])}.map((c) => L.ending(c))));
+"""
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == [want for _, want in cases]
+
+
+_PANEL_HELPERS = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const P = await import(PANEL);
+const ok = { at: "2026-11-03T10:15:00+00:00", state: "ok", thinker: "spark-open", questions_opened: 0, new_items: 1,
+  choice: { action: null, target: null } };
+const won = { ...ok, new_items: 2, choice: { action: "revisit_thread", target: { text: "choosing between two job offers", withheld: false } } };
+console.log(JSON.stringify({
+  none: P.passLine(null), first: P.passLine(ok), opened: P.passLine({ ...ok, new_items: 3, questions_opened: 2 }),
+  failed: P.passLine({ at: ok.at, state: "failed" }),
+  abstain: P.liveChoice(ok), pick: P.liveChoice(won), old: P.liveChoice({ ...ok, choice: undefined }),
+  failedChoice: P.liveChoice({ ...won, state: "failed" }),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_panel_shows_each_live_pass_from_its_own_counts() -> None:
+    """Turn one already shows work: what the pass read, that it opened no question, and that her
+    chooser picked nothing; a later pass shows her pick and its stored target. Never inferred."""
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _PANEL_HELPERS.replace("PANEL", json.dumps((APP_DIR / "panel.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["first"] == "Read your latest messages · 1 new piece of evidence · no question opened"
+    assert out["opened"] == "Read your latest messages · 3 new pieces of evidence · 2 questions opened"
+    assert out["none"].startswith("Her first pass runs") and out["failed"].startswith("Her last pass didn't finish")
+    assert out["abstain"] == {"kind": "none"}
+    assert out["pick"] == {"kind": "pick", "action": "revisit_thread",
+                           "target": {"text": "choosing between two job offers", "withheld": False}}
+    assert out["old"] is None and out["failedChoice"] is None
+    panel = (APP_DIR / "panel.js").read_text()
+    assert "view.live" in panel and "view.targets" in panel  # both blocks the API sends are drawn
+
+
+_STORY = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const S = await import(SLEEP);
+const st = (name, state, summary = "") => ({ name, state, summary });
+console.log(JSON.stringify({
+  pending: S.storyPart([st("mind_choose", "pending")]),
+  chose: S.storyPart([st("mind_choose", "done", "Chose to think through the job offers.")]),
+  practising: S.storyPart([st("practice", "done", "Rehearsed 4 scenes."), st("train", "running", "Step 3 of 38")]),
+  skipped: S.storyPart([st("practice", "skipped"), st("train", "skipped")]),
+  failed: S.storyPart([st("gate", "failed", "The gate couldn't run."), st("promote", "skipped")]),
+  kept: S.storyPart([st("gate", "done", "Gate kept it: +3 of 5."), st("promote", "done", "Promoted.")]),
+  missing: S.storyPart([undefined]),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_night_tells_its_story_from_the_stages_own_summaries() -> None:
+    """What she chose, practised and what the gate decided: from the stages' summaries, with
+    skipped work and failures said plainly and nothing claimed before it ran."""
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _STORY.replace("SLEEP", json.dumps((APP_DIR / "sleep.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["pending"] == {"state": "pending", "text": "Not yet."}
+    assert out["chose"] == {"state": "done", "text": "Chose to think through the job offers."}
+    assert out["practising"] == {"state": "running", "text": "Rehearsed 4 scenes."}
+    assert out["skipped"] == {"state": "skipped", "text": "Skipped tonight."}
+    assert out["failed"] == {"state": "failed", "text": "The gate couldn't run."}
+    assert out["kept"] == {"state": "done", "text": "Gate kept it: +3 of 5. Promoted."}
+    assert out["missing"]["state"] == "pending"
+
+
+_VERDICTS = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const W = await import(WAKE);
+const gate = (state, summary) => ({ name: "gate", state, summary });
+console.log(JSON.stringify({
+  promoted: W.verdicts({ adapter_live: true, stages: [gate("done", "Gate kept it: +3 of 5.")] }, ["a", "b"]),
+  kept: W.verdicts({ adapter_live: false, stages: [gate("failed", "x")] }, []),
+  unknown: W.verdicts(null, ["a"]),
+  reloaded: W.verdicts(null, [], false),
+  labels: W.compareLabels({ before_model: "base Glimmer", after_model: "p-1-n1", promoted: false }),
+  bare: W.compareLabels({ question: "q" }),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_wake_keeps_weights_apart_from_working_state() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _VERDICTS.replace("WAKE", json.dumps((APP_DIR / "wake.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["promoted"] == [
+        {"kind": "promoted", "text": "Weights promoted: tonight's adapter passed the gate. Chat uses her notes. Gate kept it: +3 of 5."},
+        {"kind": "changed", "text": "Working state changed: 2 things, listed below."}]
+    assert out["kept"] == [{"kind": "kept", "text": "Weights kept: the gate kept last night's model."},
+                           {"kind": "same", "text": "Working state: nothing she could measure changed."}]
+    assert [v["kind"] for v in out["unknown"]] == ["changed"]  # no night watched: no claim about weights
+    assert [v["kind"] for v in out["reloaded"]] == ["kept", "same"]  # the saved pair says what the gate did
+    assert out["labels"] == {"before": "Before sleep · base Glimmer", "after": "After sleep · p-1-n1, held back by the gate"}
+    assert out["bare"] == {"before": "Before sleep", "after": "After sleep"}
+    html = (APP_DIR / "live.html").read_text()
+    assert html.index('id="wake-compare"') < html.index('id="wake-morning"') < html.index('id="wake-bet"')
+
+
+_TALKER = """
+globalThis.window = { location: { search: "" }, matchMedia: () => ({ matches: false }) };
+const C = await import(CHAT);
+console.log(JSON.stringify({
+  waking: C.talkerLine({ state: "waking", eta_s: 150, fallback_via: "muse-spark" }, { thinker: "spark-open" }),
+  cold: C.talkerLine({ state: "cold", fallback_via: "frontier" }),
+  warm: C.talkerLine({ state: "warm" }, { thinker: "glimmer" }),
+  served: C.talkerLine({ state: "warm" }, { adapter: "tonight" }),
+  undone: C.talkerLine({ state: "warm" }, { adapter: "before" }),
+  notes: C.talkerLine({ state: "warm", chat_adapter: false }, { adapter: "tonight" }),
+  notes_undone: C.talkerLine({ state: "warm", chat_adapter: false }, { adapter: "before" }),
+}));
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_the_talker_label_names_who_answers_and_who_thinks() -> None:
+    import json
+    import subprocess
+
+    from anjo.sleep.app.judge_pages import APP_DIR
+
+    script = _TALKER.replace("CHAT", json.dumps((APP_DIR / "chat.js").as_uri()))
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert out["waking"] == "Chat: Muse Spark · Glimmer loading (~3 min) · MIND: Muse Spark Open"
+    assert out["cold"] == "Chat: a fallback model · Glimmer off right now"
+    assert out["warm"] == "Chat: Glimmer · MIND: Glimmer"
+    assert out["served"] == "Chat: Glimmer + tonight's adapter"
+    assert out["undone"] == "Chat: Glimmer, as she was before this night"
+    # notes-first serving (2026-11-03): chat is Glimmer with the overnight notes, never the adapter
+    assert out["notes"] == "Chat: Glimmer + tonight's notes"
+    assert out["notes_undone"] == "Chat: Glimmer"
+    live = (APP_DIR / "live.js").read_text()
+    assert "TALKER_WARM_POLL_MS" in live  # still checked once warm: a serve or Undo can change it

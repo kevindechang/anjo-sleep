@@ -78,6 +78,18 @@
           </header>
           <div id="wake-body">
             <p class="form-status" id="wake-status" role="status" aria-live="polite"></p>
+            <article class="compare" id="wake-compare">
+              <h3 class="label" id="compare-title">Same question, before and after sleep</h3>
+              <ul class="verdict" id="wake-verdict" aria-label="What the night changed"></ul>
+              <p class="compare-why" id="compare-why" hidden></p>
+              <p class="compare-q" id="compare-q"></p>
+              <div class="compare-sides" id="compare-sides">
+                <section class="compare-side"><h4 id="compare-before-label">Before sleep</h4><div class="compare-text" id="compare-before"></div></section>
+                <section class="compare-side compare-after"><h4 id="compare-after-label">After sleep</h4><div class="compare-text" id="compare-after"></div></section>
+              </div>
+              <p class="compare-none" id="compare-none" hidden></p>
+              <p class="compare-note" id="compare-note" hidden></p>
+            </article>
             <article class="wake-card wake-morning" id="wake-morning" hidden>
               <h3 class="label">Since your last visit</h3>
               <div class="since-body" id="wake-morning-body"></div>
@@ -93,14 +105,6 @@
                 <ul class="changed" id="changed-list"></ul>
               </article>
             </div>
-            <article class="compare" id="wake-compare" hidden>
-              <h3 class="label">Same question, two models</h3>
-              <p class="compare-q" id="compare-q"></p>
-              <div class="compare-sides">
-                <section class="compare-side"><h4>Last night's model</h4><div class="compare-text" id="compare-before"></div></section>
-                <section class="compare-side compare-after"><h4>This morning's model</h4><div class="compare-text" id="compare-after"></div></section>
-              </div>
-            </article>
             <div class="undo">
               <button class="btn btn-ghost" type="button" id="undo" aria-controls="undo-step" aria-expanded="false">Undo this night</button>
               <div class="confirm" id="undo-step" hidden>
@@ -121,6 +125,13 @@
             <h2 id="night-heading" tabindex="-1">Getting ready to sleep</h2>
             <p class="night-meta" id="night-meta" aria-live="off"></p>
           </header>
+          <div class="night-story" aria-label="The night, in three parts">
+            <article class="story" id="story-choose" data-state="pending"><h3 class="label">What she chose</h3><p class="story-text" aria-live="polite"></p></article>
+            <article class="story" id="story-practice" data-state="pending"><h3 class="label">What she practised</h3><p class="story-text" aria-live="polite"></p></article>
+            <article class="story" id="story-gate" data-state="pending"><h3 class="label">What the gate decided</h3><p class="story-text" aria-live="polite"></p></article>
+          </div>
+          <details class="night-steps" id="night-steps" open>
+          <summary>Every step of the night <span class="steps-count" id="steps-count"></span></summary>
           <div class="night-phase" id="phase-1">
             <h3><span class="phase-n">Phase 1</span> Thinking</h3>
             <p class="phase-note">About 2 minutes, all on what you said.</p>
@@ -131,6 +142,7 @@
             <p class="phase-note">A small weight update to your own Glimmer adapter, kept only if it does better.</p>
             <ol class="night-stages" id="stages-2"></ol>
           </div>
+          </details>
           <p class="night-end" id="night-end" role="status" aria-live="polite"></p>
           <div class="night-actions">
             <button class="btn btn-primary" type="button" id="wake-up" hidden>Wake up</button>
@@ -140,16 +152,18 @@
 
         <div class="chat" id="chat">
           <div class="chat-empty" id="chat-empty">
-            <h2>Say anything.</h2>
-            <p>Talk the way you would to someone getting to know you. When something doesn't add up yet, MIND opens a question about it<span class="wide-only">, on the right</span><span class="narrow-only">, in the Mind tab</span>.</p>
-            <div class="starters" id="starters">
-              <button class="starter" type="button">I'm building something. Ask me about it.</button>
-              <button class="starter" type="button">How I like feedback: short, blunt, no cheerleading.</button>
-              <button class="starter" type="button">I'm torn between two options. Help me think it through.</button>
+            <h2>Give her something worth learning.</h2>
+            <p>Tell her what you're working toward, what makes it difficult, and how you want help. After each reply, MIND reads it and shows what she kept<span class="wide-only">, on the right</span><span class="narrow-only">, in the Mind tab</span>.</p>
+            <p class="starters-label" id="starters-label">Start from a frame, then fill in the blanks</p>
+            <div class="starters" id="starters" role="group" aria-labelledby="starters-label">
+              <button class="starter" type="button" data-draft="I'm working toward ___. I keep getting stuck on ___. When you help me, please ___.">What I'm working toward</button>
+              <button class="starter" type="button" data-draft="I'm choosing between ___ and ___. What pulls me toward the first is ___, and what holds me back is ___.">A choice I'm stuck on</button>
+              <button class="starter" type="button" data-draft="How I like help: ___. What doesn't work for me: ___.">How I like help</button>
             </div>
           </div>
           <ol class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></ol>
           <p class="form-status chat-status" id="chat-status" role="status" aria-live="polite"></p>
+          <button class="mind-line narrow-only" type="button" id="mind-line" aria-controls="pane-mind" hidden><span class="mind-line-k">MIND</span><span class="mind-line-text" id="mind-line-text"></span><span class="mind-line-go" aria-hidden="true">&rarr;</span></button>
           <form class="composer" id="composer" novalidate>
             <label class="sr-only" for="composer-text">Message Anjo</label>
             <textarea id="composer-text" name="text" rows="1" maxlength="4000" placeholder="Message Anjo" aria-describedby="composer-hint"></textarea>
@@ -164,7 +178,7 @@
           <button class="side-tab" type="button" role="tab" id="side-tab-mind" aria-controls="side-mind" aria-selected="true">Working out</button>
           <button class="side-tab" type="button" role="tab" id="side-tab-thought" aria-controls="side-thought" aria-selected="false" tabindex="-1">Line of thought</button>
         </div>
-        <p class="live-pass" id="live-pass" role="status" aria-live="polite" hidden><span class="scan" aria-hidden="true"></span><span class="live-pass-text"></span></p>
+        <p class="live-pass" id="live-pass" role="status" aria-live="polite" hidden><span class="scan" aria-hidden="true"></span><span class="live-pass-text"></span><button class="live-pass-retry" type="button" id="live-pass-retry" hidden>Check again</button></p>
         <section class="side-pane" id="side-mind" role="tabpanel" aria-labelledby="side-tab-mind">
           <header class="mind-head">
             <span class="kicker">MIND · live</span>
@@ -189,13 +203,7 @@
 
   <footer>
     <div class="wrap">
-      <div class="home-footer-index judge-footer">
-        <div><a class="brand" href="/sleep/app">Anjo</a><p>A personal intelligence that grows with you.</p></div>
-        <div><h2>New at the hackathon</h2><p>Sleep</p><p>MIND</p><p>This product</p></div>
-        <div><h2>Existing</h2><a href="https://anjo.love/">The Anjo app</a></div>
-        <div><h2>Models</h2><p>Glimmer learns</p><p>Muse Spark answers while Glimmer wakes</p></div>
-      </div>
-      <div class="foot"><span>Built with Muse Spark Open · &copy; 2026 Anjo</span><div class="foot-links"><a href="/sleep/demo">Teo's Anjo</a><a href="https://anjo.love/">anjo.love</a></div></div>
+      <div class="foot live-foot"><span>Built with Muse Spark Open · &copy; 2026 Anjo</span><div class="foot-links"><a href="/sleep/demo">Teo's Anjo</a><a href="https://anjo.love/">anjo.love</a></div></div>
     </div>
   </footer>
 </body>

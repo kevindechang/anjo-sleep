@@ -1,16 +1,19 @@
 // Sleep now and the night view. POST /api/sleep/me/sleep-now starts a night; GET
 // /api/sleep/me/nights/{id} is polled every 2 s (plain JSON, no SSE) and drawn as a live timeline:
+// first the causal story in three parts (what she chose, what she practised, what the gate decided,
+// each from the stages' own summaries, skipped work said plainly), then every step as a receipt:
 // phase 1 (thinking) and phase 2 (learning), each stage with its plain name, what it does, how long
-// it took and the server's one-line summary, typed in as it arrives. While phase 1 runs the MIND
-// panel refreshes too, so its new questions appear as the night opens them.
+// it took and the server's one-line summary. While phase 1 runs the MIND panel refreshes too, so new
+// questions appear as the night opens them. Once the night ends, the steps fold away.
 
 import { api, nightId, setNightId } from "./api.js";
 import { COPY, fill } from "./copy.js";
-import { byId, el, reducedMotion, say } from "./dom.js";
+import { byId, el, say } from "./dom.js";
 
 const POLL_MS = 2000;
 const MAX_BACKOFF_MS = 10000;
-const TYPE_MS = 16;
+// The story's three parts, each told by the summaries of the stages behind it.
+export const STORY = { choose: ["mind_choose"], practice: ["practice", "train"], gate: ["gate", "promote"] };
 export const PHASE_1 = ["extract", "mind_notice", "mind_choose", "mind_inquire", "homework", "self_predict", "note"];
 export const PHASE_2 = ["practice", "train", "gate", "promote", "serve"];
 const LATER = new Set(PHASE_2);
@@ -19,6 +22,24 @@ function seconds(start, end) {
   const a = Date.parse(start);
   const b = end ? Date.parse(end) : Date.now();
   return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 1000)) : null;
+}
+
+// One story part from its stages: {state, text}. Done summaries are joined; a failure is told as
+// it is; work the night skipped says so; nothing is said for a stage that hasn't run.
+export function storyPart(stages) {
+  const known = stages.filter(Boolean);
+  const said = (s) => (typeof s.summary === "string" ? s.summary.trim() : "");
+  const failed = known.find((s) => s.state === "failed");
+  if (failed) return { state: "failed", text: said(failed) || COPY.stage_failed };
+  const done = known.filter((s) => s.state === "done");
+  if (known.length && known.every((s) => s.state === "skipped")) return { state: "skipped", text: COPY.story_skipped };
+  if (known.some((s) => s.state === "running")) {
+    return { state: "running", text: done.map(said).filter(Boolean).join(" ") || COPY.story_running };
+  }
+  if (done.length && known.every((s) => s.state === "done" || s.state === "skipped")) {
+    return { state: "done", text: done.map(said).filter(Boolean).join(" ") || COPY.story_done };
+  }
+  return { state: "pending", text: COPY.story_pending };
 }
 
 export function clock(total) {
@@ -44,6 +65,8 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   let backoff = POLL_MS;
   let polls = 0;
   let running = false;
+  let starting = false;
+  let finished = null; // the night that just ended, for the wake's verdict
   let startedAt = null;
 
   byId("sleep-confirm-text").textContent = COPY.sleep_confirm;
@@ -71,7 +94,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
     const parts = {
       item, name: el("span", "stage-name", COPY[`stage_${name}`] || name.replace(/_/g, " ")),
       time: el("span", "stage-time", ""), line: el("p", "stage-line", COPY[`stage_${name}_line`] || ""),
-      think, summary: el("p", "stage-summary", ""), typed: "",
+      think, summary: el("p", "stage-summary", ""),
     };
     item.append(parts.name, parts.time, parts.line, parts.summary, parts.think);
     byId(LATER.has(name) ? "stages-2" : "stages-1").append(item);
@@ -87,28 +110,20 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
     say(end, "");
     wakeUp.hidden = true;
     startedAt = null;
+    byId("night-steps").open = true;
+    story([]);
   }
 
-  // The summary, typed in once as it arrives (at once when motion is reduced).
-  function type(parts, text) {
-    if (parts.typed === text) return;
-    parts.typed = text;
-    const node = parts.summary;
-    if (reducedMotion() || !text) {
-      node.textContent = text;
-      return;
+  function story(stages) {
+    const byName = new Map(stages.map((s) => [String(s.name), s]));
+    for (const [part, names] of Object.entries(STORY)) {
+      const told = storyPart(names.map((n) => byName.get(n)));
+      const node = byId(`story-${part}`);
+      node.dataset.state = told.state;
+      node.querySelector(".story-text").textContent = told.text;
     }
-    node.textContent = "";
-    node.classList.add("is-typing");
-    let i = 0;
-    const step = () => {
-      if (parts.typed !== text) return;
-      i += Math.max(1, Math.round(text.length / 90));
-      node.textContent = text.slice(0, i);
-      if (i < text.length) window.setTimeout(step, TYPE_MS);
-      else node.classList.remove("is-typing");
-    };
-    step();
+    const finished = stages.filter((s) => ["done", "skipped", "failed"].includes(s.state)).length;
+    byId("steps-count").textContent = stages.length ? fill(COPY.steps_count, { n: finished, of: stages.length }) : "";
   }
 
   function draw(night) {
@@ -121,9 +136,10 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
       parts.time.textContent = state === "done" || state === "failed" ? clock(took)
         : state === "skipped" ? COPY.stage_skipped : "";
       parts.think.querySelector(".think-time").textContent = state === "running" ? clock(took) : "";
-      type(parts, typeof stage.summary === "string" ? stage.summary : "");
+      parts.summary.textContent = typeof stage.summary === "string" ? stage.summary : "";
       if (!startedAt && stage.started_at) startedAt = stage.started_at;
     }
+    story(stages);
     const phase = night.phase === 2 ? 2 : 1;
     byId("phase-2").classList.toggle("is-later", phase === 1 && night.status !== "done");
     const title = night.status === "queued" ? COPY.night_title_queued : night.status === "done" ? COPY.night_title_done
@@ -138,13 +154,15 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   }
 
   function finish(night) {
+    finished = night;
     running = false;
     setNightId(null);
     setButton();
     chat.setAsleep(false);
     panel.refresh();
-    onFinish();
+    onFinish(night);
     show(true); // it may have finished while the judge was reading the chat or MIND
+    byId("night-steps").open = false; // the story above says it; the steps stay one click away
     if (night.status === "done") {
       say(end, `${COPY.night_done_line} ${night.adapter_live ? COPY.night_adapter_live : COPY.night_adapter_kept}`, "ok");
       wakeUp.hidden = false;
@@ -198,9 +216,18 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
     poll();
   }
 
+  // A night starts only between replies, once: chat holds while the server admits it.
   async function begin() {
+    if (starting || running) return;
+    if (!chat.canSend) {
+      onStatus(chat.asleep ? COPY.sleep_409 : COPY.sleep_wait_reply, "");
+      return;
+    }
+    starting = true;
     confirm.hidden = true;
     button.disabled = true;
+    byId("sleep-yes").disabled = true;
+    chat.hold(true);
     onStatus(COPY.sleep_starting, "");
     try {
       const data = await api.sleepNow();
@@ -216,13 +243,21 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
         onStatus(error.message || COPY.server, "error");
       }
     } finally {
+      starting = false;
+      chat.hold(false);
       button.disabled = false;
+      byId("sleep-yes").disabled = false;
     }
   }
 
   button.addEventListener("click", () => {
     if (running) {
       show(true);
+      return;
+    }
+    if (starting) return;
+    if (!chat.canSend) { // a reply is still arriving: sleep once it's in
+      onStatus(COPY.sleep_wait_reply, "");
       return;
     }
     confirm.hidden = !confirm.hidden;
@@ -241,7 +276,7 @@ export function createSleep({ chat, panel, onAwake, onStatus, onShow = () => {},
   });
   wakeUp.addEventListener("click", () => {
     show(false);
-    onAwake();
+    onAwake(finished);
   });
 
   return {

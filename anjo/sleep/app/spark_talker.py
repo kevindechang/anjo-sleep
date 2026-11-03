@@ -19,7 +19,7 @@ import hashlib
 import os
 import threading
 from collections.abc import Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
 from anjo.core.anjo_model.hosted_runtime import ChatCompletionsRuntime, bearer
@@ -37,6 +37,10 @@ INTERNAL_MODEL_ID: Final = "anjo-sleep-fallback"
 PRICES_AS_OF: Final = "2026-11-02"
 CONTEXT_TOKENS: Final = 131_072
 OUTPUT_TOKENS: Final = 4_096
+# Spark always reasons before it answers, and those tokens count against max_tokens: at minimal
+# effort ~110 for a judge turn (5 s), at low ~400-700 (9 s), measured 2026-11-02. A bare reply cap
+# ended turns with no words, so a turn asks for minimal and gets this room above the reply.
+REASONING_HEADROOM_TOKENS: Final = 1_024
 LABEL: Final = "spark-fallback"  # what ``GET /api/sleep/me/talker`` calls a reply it serves
 # Its tokenizer isn't published: the Llama family's special tokens, which retrieved context and tool
 # results are stripped of before they reach it (``turn_input``), as a guard.
@@ -72,7 +76,8 @@ def spark_traits() -> ModelTraits:
     return ModelTraits(
         system_role="native", tool_calls="none", tool_choice_modes=(), tool_call_ids="native",
         parallel_tool_calls=False, max_tools_per_request=0, max_parallel_tool_calls=1,
-        thinking=ThinkingControl(field="none", values=()), thinking_replay="n_a", reasoning_stream_field="none",
+        thinking=ThinkingControl(field="reasoning_effort", values=("minimal", "low"), off="minimal", on="low"),
+        thinking_replay="forbidden", reasoning_stream_field="none",  # no reasoning text comes back
         max_context_tokens=CONTEXT_TOKENS, max_output_tokens=OUTPUT_TOKENS,
         decode_clamps=DecodeClamps(temperature=(0.0, 2.0), top_p=(0.0, 1.0), top_k_accepted=False),
         usage_in_stream=False,  # no stream_options: a field the API might refuse
@@ -105,7 +110,8 @@ class SparkRuntime(ChatCompletionsRuntime):  # type: ignore[misc, unused-ignore]
         if carries_crisis(request):  # the chat route's own fallback answers it, as before
             yield Finish("error", "rejected")
             return
-        yield from super().stream(request, cancel)
+        roomy = replace(request, max_output_tokens=request.max_output_tokens + REASONING_HEADROOM_TOKENS)
+        yield from super().stream(roomy, cancel)
 
     def _endpoint(self) -> tuple[str, dict[str, str]]:
         base = os.environ.get(meta_api.BASE_ENV, "").strip().rstrip("/") or meta_api.DEFAULT_BASE

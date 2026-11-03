@@ -7,8 +7,8 @@
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
   <meta name="theme-color" content="#0a0a0b" />
-  <title>Anjo Sleep: she learns while she sleeps</title>
-  <meta name="description" content="Anjo is a personal intelligence that grows with you. Talk to her, send her to sleep, and watch her change overnight. Built at the Meta hackathon." />
+  <title>Anjo Sleep: it studies your day while you sleep</title>
+  <meta name="description" content="Anjo is a personal intelligence that grows with you. Talk to it by day; at night it studies what you said and trains a small model of its own. Built at the Meta hackathon." />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
@@ -26,8 +26,9 @@
     <div class="home-nav-inner">
       <a class="brand" href="/sleep/app">Anjo</a>
       <div class="nav-links">
-        <a class="lnk" href="#ways">Two ways in</a>
-        <a class="lnk" href="#new">What's new</a>
+        <a class="lnk" href="#grow">Start</a>
+        <a class="lnk" href="#night">How it works</a>
+        <a class="lnk" href="#results">Results</a>
         <a class="lnk" href="/sleep/demo">Teo's Anjo</a>
       </div>
     </div>
@@ -38,91 +39,213 @@
       <div id="hero-pigment" aria-hidden="true"></div>
       <div id="hero-pigment-veil" aria-hidden="true"></div>
       <div class="wrap hero-inner">
-        <h1>She learns while she sleeps.</h1>
-        <p class="lede">Anjo is a personal intelligence that grows with you.<br />Talk to her, then send her to sleep.<br />She wakes up changed, and shows you why.</p>
-        <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="/sleep/demo">Meet Teo's Anjo</a>
-          <a class="btn btn-ghost btn-lg" href="#grow" id="grow-jump">Grow your own</a>
-        </div>
-        <p class="hero-note">Built at the Meta hackathon · Oct 27 – Nov 4, 2026 · a step toward personal superintelligence</p>
-        <div class="readout" aria-hidden="true"><span>Chat by day</span><span>Learn by night</span><span>Wake changed</span></div>
+        <h1>It studies your day while you sleep.</h1>
+        <p class="lede">Each night it trains a Muse Glimmer adapter for you alone, and writes notes for the morning.</p>
+        <p class="hero-tech">On three unseen simulated people, the notes won 76% of blind comparisons. The trained weights alone won 57%: specific to each person, not yet better.</p>
+        <form class="code-form hero-code" id="code-form" novalidate>
+          <label class="field-label" for="code" id="code-label">Your judge code, from the submission form</label>
+          <div class="code-row hero-actions" id="grow">
+            <input class="field-input" id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" required aria-describedby="code-status" placeholder="Judge code" />
+            <button class="btn btn-primary btn-lg" type="submit" id="code-submit">Try a night with Anjo</button>
+          </div>
+          <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
+          <p class="hero-fine">No email, no password.</p>
+        </form>
+        <a class="hero-alt" href="/sleep/demo">Or see Teo's finished week <span aria-hidden="true">&rarr;</span></a>
+        <p class="hero-note">Built at the Meta hackathon, Oct 27 – Nov 4, 2026. New: the nightly Sleep loop, MIND and this judge web app. Existing: the Anjo iOS app.</p>
       </div>
     </header>
 
-    <section class="sect" id="ways" aria-labelledby="ways-heading">
+    <section class="sect" id="morning" aria-labelledby="morning-heading">
       <div class="wrap">
         <div class="sect-head">
-          <span class="kicker">Two ways in</span>
-          <h2 id="ways-heading">Meet one that already grew. <em>Or grow your own.</em></h2>
+          <span class="kicker">The next morning</span>
+          <h2 id="morning-heading">Same question, three ways. <em>Real replies.</em></h2>
         </div>
-        <ul class="frontier ways">
-          <li>
-            <span class="chip live">Instant</span>
-            <h3>Meet Teo's Anjo</h3>
-            <p>Teo is a synthetic person. His Anjo spent a week alone with what he said. See what she noticed, what she practised and how she changed. No sign-in.</p>
-            <a class="btn btn-primary way-go" href="/sleep/demo">Open Teo's Anjo</a>
+        <p class="compare-q">I'm putting together a small stargazing guide for our village astronomy club, for people who have never looked up before. Our local library has asked for a copy to put out on the community shelf. I've never supplied anything to the library before. What should I send them and what should I say in the note with it?</p>
+        <div class="compare compare-3">
+          <div>
+            <h3>Base Glimmer, no notes</h3>
+            <blockquote>A few printed copies: 3-5 copies are a good start. &hellip;
+&ldquo;We&rsquo;ve created a beginner-friendly stargazing guide for our community and would love to donate a few copies for your community shelf.&rdquo;</blockquote>
+          </div>
+          <div class="after">
+            <h3>With its overnight notes</h3>
+            <blockquote>A printed and bound version of <mark>First Clear Night Over Norfolk</mark>. &hellip;
+&ldquo;It is written in short, clear steps that can be read aloud outside in the dark under a <mark>red torch</mark>.&rdquo;</blockquote>
+          </div>
+          <div class="after">
+            <h3>Its trained adapter, every note removed</h3>
+            <blockquote>A single, <mark>cream-coloured</mark> A5 booklet &hellip; so it can be read outside in the dark. &hellip;
+&ldquo;Thank you for letting us put a copy of <mark>First Clear Night Over Norfolk</mark> on the community shelf.&rdquo;</blockquote>
+          </div>
+        </div>
+        <p class="compare-note">The base model never heard of the guide. The notes named it, and so did the adapter&rsquo;s weights, without personal notes or history in the prompt. <strong>Hugh</strong> is a held-out simulated person; these are fresh replies from his scored adapter (<code>p-72dfc7220a90-n2</code>), the morning after night 2. We picked this one of the first four questions; on question four the adapter&rsquo;s answer was the thinnest of the three. All four questions and replies are in the repo.</p>
+        <table class="per-person">
+          <caption>Hugh is where training did best. All three held-out people, knowledge questions, 40 blind comparisons each. 50% means no difference.</caption>
+          <thead>
+            <tr><th scope="col">Person</th><th scope="col">Notes vs base</th><th scope="col">Adapter alone vs base</th><th scope="col">Own adapter vs another person&rsquo;s</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Hugh, stargazing guide</th><td>79%</td><td>74%</td><td>66%</td></tr>
+            <tr><th scope="row">Elena, posed weddings</th><td>81%</td><td>54%</td><td>78%</td></tr>
+            <tr><th scope="row">Theo, candid weddings</th><td>69%</td><td class="below">44%</td><td>90%</td></tr>
+            <tr class="all"><th scope="row">All three</th><td>76%</td><td>57%</td><td>78%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="sect" id="night" aria-labelledby="night-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">How it works</span>
+          <h2 id="night-heading">One night, on Meta's models.</h2>
+        </div>
+        <div class="cycle night-cycle">
+          <div>
+            <h3 class="tier-name">Day</h3>
+            <p class="tier-when">You talk.</p>
+            <p>Glimmer answers with your notes. Muse Spark covers while it wakes.</p>
+            <p class="tier-model">Muse Glimmer · Muse Spark</p>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+          <div>
+            <h3 class="tier-name">Night</h3>
+            <p class="tier-when">It does its homework.</p>
+            <p>It picks one open question, bets on the answer and writes notes for tomorrow. Muse Spark Open plays you in practice scenes, and Glimmer trains on the best replies.</p>
+            <p class="tier-model">Muse Spark Open · Muse Glimmer</p>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+          <div>
+            <h3 class="tier-name">Morning</h3>
+            <p class="tier-when">See what changed.</p>
+            <p>Ask yesterday's question again. Tonight's adapter answers beside the model from before.</p>
+            <p class="tier-model">Muse Glimmer + tonight's adapter</p>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+        </div>
+        <p class="hood">Under the hood: Glimmer 30B on one A100-80GB, a LoRA of rank up to 32 on attention and MLP per person per night, hot-loaded into vLLM on Modal. About $1 of GPU a night.</p>
+      </div>
+    </section>
+
+    <section class="sect" id="receipt" aria-labelledby="receipt-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">One logged night</span>
+          <h2 id="receipt-heading">Night 2 of a held-out person. <em>From the run's own log.</em></h2>
+        </div>
+        <ol class="receipt">
+          <li><span class="r-step">Practice</span><span class="r-what">Muse Spark Open played the person in 12 scenes. 5 replies were corrected.</span></li>
+          <li><span class="r-step">Train</span><span class="r-what">18 training rows, 13.4 minutes on one A100-80GB.</span></li>
+          <li><span class="r-step">Adapter</span><span class="r-what"><code>p-72dfc7220a90-n2</code>, built on night 1's <code>p-14135bade01f-n1</code>, saved to a Modal volume.</span></li>
+          <li><span class="r-step">Morning</span><span class="r-what">560 replies from every version of it, judged blind in both orders.</span></li>
+          <li><span class="r-step">Cost</span><span class="r-what">$2.27 for the night: $1.12 practice, $1.04 training, $0.11 for notes and checks. Night 1 cost $1.50. The 560-reply test cost $8.63 more and isn&rsquo;t part of the product.</span></li>
+        </ol>
+        <p class="hood">A simulated person, with days compressed so a week runs in a day. Run Nov 2–3, scored once.</p>
+      </div>
+    </section>
+
+    <section class="sect" id="results" aria-labelledby="results-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">Results</span>
+          <h2 id="results-heading">Tested on unseen simulated people. <em>Scored once.</em></h2>
+        </div>
+        <p class="results-lede"><strong>The notes improve answers today. Each person&rsquo;s weights learned that person, but aren&rsquo;t better than the base model yet. So chat answers with the notes, and the adapter answers in the morning&rsquo;s side-by-side.</strong> Every test and pass mark was set before we ran it, on three simulated people drawn after the code froze.</p>
+        <ul class="figures">
+          <li class="lead">
+            <span class="chip live">Held-out</span>
+            <p class="fig">76<small>%</small></p>
+            <h3>Its overnight notes made answers better.</h3>
+            <p>Same model, same question, with and without the notes it wrote overnight. Judged blind by DeepSeek, in both orders. 66% on style. 120 and 90 comparisons.</p>
           </li>
-          <li id="grow">
-            <span class="chip research">Judge code</span>
-            <h3>Grow your own</h3>
-            <p>Enter the code from the submission form. You get a fresh, private Anjo: no email, no password. She lives in this browser tab.</p>
-            <form class="code-form" id="code-form" novalidate>
-              <label class="field-label" for="code">Judge code</label>
-              <div class="code-row">
-                <input class="field-input" id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" required aria-describedby="code-status" />
-                <button class="btn btn-primary" type="submit" id="code-submit">Start my Anjo</button>
-              </div>
-              <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
-            </form>
+          <li class="lead">
+            <span class="chip live">Held-out</span>
+            <p class="fig">57<small>%</small></p>
+            <h3>Training alone isn't better yet.</h3>
+            <p>Two nights, notes off, against the base model. 52% on style. Short of our pass mark.</p>
+          </li>
+          <li class="half">
+            <span class="chip live">Held-out</span>
+            <p class="fig">78<small>%</small></p>
+            <h3>Each adapter fits its own person.</h3>
+            <p>Against an adapter trained on someone else. 60% on style. Better than a mismatched adapter; better than the base model is still unproven.</p>
+          </li>
+          <li class="half">
+            <span class="chip existing">From logged nights</span>
+            <p class="fig"><small>$</small>41&ndash;60</p>
+            <h3>Per person, per month.</h3>
+            <p>Thirty times each person&rsquo;s average logged night, $1.36 to $2.01, training every night. $12&ndash;15 modelled with lighter nights. Our ceiling is $10, so not viable yet.</p>
           </li>
         </ul>
+        <h3 class="misses-head" id="misses">What didn't work</h3>
+        <ul class="misses">
+          <li>Training plus notes did worse than notes alone (32%).</li>
+          <li>Training every night costs four to six times our ceiling.</li>
+        </ul>
+        <p class="evidence-link"><a href="https://github.com/kevindechang/anjo-sleep">Method, pass marks, every number and the pre-registration ledger &rarr;</a></p>
       </div>
     </section>
 
     <section class="sect" id="new" aria-labelledby="new-heading">
       <div class="wrap">
         <div class="sect-head">
-          <span class="kicker">What's new</span>
-          <h2 id="new-heading">Built in nine days. <em>On an app that already ships.</em></h2>
+          <span class="kicker">New vs existing</span>
+          <h2 id="new-heading">What we built. <em>What it runs on.</em></h2>
         </div>
         <ol class="index">
           <li>
             <h3>Sleep</h3>
             <div class="body">
               <span class="chip live">New</span>
-              <p>Each night she reads the day, picks what she wants to settle, studies, bets on herself and practises. Then she makes a small weight update, and a gate keeps it only if she does better.</p>
+              <p>A nightly loop: study the day, practise, train, and test the result the next morning.</p>
             </div>
           </li>
           <li>
             <h3>MIND</h3>
             <div class="body">
               <span class="chip live">New</span>
-              <p>Her working state about you: open questions with credences, predictions with check-by dates, wants, and what her chooser picked. You watch it change as you talk.</p>
+              <p>Open questions and predictions with check-by dates, scored when they come due. The research model is ours, trained from scratch.</p>
             </div>
           </li>
           <li>
-            <h3>This product</h3>
+            <h3>Muse Glimmer</h3>
             <div class="body">
-              <span class="chip live">New</span>
-              <p>Chat, sleep and wake on your own data, live, with every step of the night on screen.</p>
+              <span class="chip research">Meta · open weights</span>
+              <p>The model that learns. A small adapter per person, trained every night and served with vLLM on Modal.</p>
             </div>
           </li>
           <li>
-            <h3>Glimmer</h3>
+            <h3>Muse Spark Open</h3>
             <div class="body">
-              <span class="chip research">Meta's open model</span>
-              <p>The model that learns. Each Anjo trains her own small adapter on Glimmer. Muse Spark answers while Glimmer wakes up.</p>
+              <span class="chip research">Meta · open weights</span>
+              <p>Plays each person in practice scenes, and played the simulated people we tested on.</p>
             </div>
           </li>
           <li>
             <h3>The Anjo app</h3>
             <div class="body">
               <span class="chip existing">Existing</span>
-              <p>The iOS app this grows from: memory across time, the Inner World and the chat. It shipped before the hackathon.</p>
+              <p>The iOS app this grows from. It shipped before the hackathon.</p>
               <a class="proof-link" href="https://anjo.love/">anjo.love &rarr;</a>
             </div>
           </li>
         </ol>
+      </div>
+    </section>
+
+    <section class="sect" id="research" aria-labelledby="research-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">Appendix</span>
+          <h2 id="research-heading">MIND: research, <em>not in the app.</em></h2>
+        </div>
+        <div class="research-card">
+          <span class="chip research">Separate model, trained from scratch</span>
+          <p><strong>It gives odds on open questions about a person, scored when each check-by date comes.</strong> On 60 unseen simulated people over 12 weeks, its odds carried about a third of the avoidable error of the best Gemini setup (excess log loss 0.029 against 0.082).</p>
+          <p>What didn't work: untrained on a new kind of world, it did worse than guessing 50/50, and we couldn't show that its questions to you pay off. The odds in the app come from its night agent, not from MIND.</p>
+        </div>
       </div>
     </section>
   </main>
@@ -133,7 +256,7 @@
         <div><a class="brand" href="/sleep/app">Anjo</a><p>A personal intelligence that grows with you.</p></div>
         <div><h2>New at the hackathon</h2><p>Sleep</p><p>MIND</p><p>This product</p></div>
         <div><h2>Existing</h2><a href="https://anjo.love/">The Anjo app</a></div>
-        <div><h2>Models</h2><p>Glimmer learns</p><p>Muse Spark answers while Glimmer wakes</p></div>
+        <div><h2>Meta models</h2><p>Muse Glimmer learns</p><p>Muse Spark Open practises</p><p>Muse Spark answers while Glimmer wakes</p></div>
       </div>
       <div class="foot"><span>Built with Muse Spark Open · &copy; 2026 Anjo</span><div class="foot-links"><a href="/sleep/demo">Teo's Anjo</a><a href="https://anjo.love/">anjo.love</a></div></div>
     </div>

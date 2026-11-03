@@ -14,7 +14,9 @@ its answers back on every later night; only the checkpoint's side is asked every
   it is None and every base answer is asked and none is kept: a miss, never a hit.
 - **Only the base side is kept.** The gates hand this cache nothing but the base model's answers;
   the checkpoint's side never reaches it. The safety gate keeps the base model's replies, never
-  their flags, so tonight's reply check reads them afresh.
+  their flags, so tonight's reply check reads them afresh. The collapse gate keeps its flags and,
+  beside them (``read`` and ``keep``, written only when the base was just asked), the base model's
+  replies, so a later night can show one next to the checkpoint's without asking the base again.
 - **A kept answer is checked before use** (``valid``): one of the wrong shape is asked again.
 - Up to vLLM's batch nondeterminism, which a base side computed once per run already carries, a
   kept answer is the answer the base model gives.
@@ -80,6 +82,22 @@ class BaseCache:
 
     store: BaseStore
     serving: str | Callable[[], str | None]  # the server's fingerprint, or how to ask for it
+
+    def _key(self, gate: str, parts: Mapping[str, Any]) -> str | None:
+        serving = self.serving() if callable(self.serving) else self.serving
+        return None if serving is None else base_key(gate, serving, parts)
+
+    def read(self, gate: str, parts: Mapping[str, Any], valid: Callable[[list[Any]], bool]) -> list[Any] | None:
+        """What is kept under this key, never computed: None when nothing valid is."""
+        key = self._key(gate, parts)
+        kept = None if key is None else self.store.get(key)
+        return kept if kept is not None and valid(kept) else None
+
+    def keep(self, gate: str, parts: Mapping[str, Any], answers: Sequence[Any]) -> None:
+        """Keep base answers already in hand under this key (nothing without a fingerprint)."""
+        key = self._key(gate, parts)
+        if key is not None:
+            self.store.put(key, gate, answers)
 
     def answers(
         self, gate: str, parts: Mapping[str, Any], compute: Callable[[], list[T]], valid: Callable[[list[Any]], bool],

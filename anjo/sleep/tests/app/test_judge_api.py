@@ -65,6 +65,15 @@ def test_off_the_sleep_host_there_is_nothing(api: Any, monkeypatch: pytest.Monke
     assert _start(api).status_code == 404
 
 
+def test_each_of_several_codes_lets_a_judge_in(api: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One code per judge, or a new code mid-judging, without touching the accounts already made.
+    monkeypatch.setenv(judge_cohort.CODE_ENV, " first-code , second-code ,")
+    assert _start(api, "second-code").status_code == 200
+    assert _start(api, "first-code").status_code == 200
+    assert _start(api, "third-code").status_code == 403
+    assert _start(api, "first-code , second-code").status_code == 403
+
+
 def test_the_right_code_makes_a_judge_the_apps_auth_accepts(api: Any, talker: Rig) -> None:
     from anjo.core.ai_consent import CURRENT_VERSION
     from anjo.core.db import get_db
@@ -122,7 +131,7 @@ def test_a_judges_own_routes(api: Any, talker: Rig) -> None:
     token = _start(api).json()["token"]
     talking = api.get("/api/sleep/me/talker", headers=_bearer(token))
     assert talking.status_code == 200
-    assert set(talking.json()) == {"state", "eta_s", "model", "reason", "fallback_via"}
+    assert set(talking.json()) == {"state", "eta_s", "model", "reason", "fallback_via", "chat_adapter"}
     assert talking.json()["state"] == "waking" and talking.json()["model"] == "spark-fallback"
     talker.run_wakes()
     assert api.post("/api/sleep/me/heartbeat", headers=_bearer(token)).json()["model"] == "glimmer"
@@ -140,11 +149,39 @@ def test_a_judges_own_routes(api: Any, talker: Rig) -> None:
     assert api.post("/api/sleep/me/undo", headers=_bearer(token)).status_code == 409
 
 
+def _finished_night(user_id: str, night: str, n: int = 1) -> None:
+    """A finished judge's night in the jobs store: the night the wake shows."""
+    from anjo.sleep.app import judge_night as jn
+
+    jn.job_store().put({"night_id": f"jn-{n:016x}", "user_id": user_id, "night": night, "status": "done",
+                        "created_at": f"2026-11-0{n}T08:00:00+00:00"})
+
+
 def test_the_wake_carries_the_nights_before_and_after(api: Any) -> None:
     body = _start(api).json()
-    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new")
+    _finished_night(body["user_id"], "2026-11-03")
+    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new", night="2026-11-03")
     wake = api.get("/api/sleep/me/wake", headers=_bearer(body["token"])).json()
-    assert wake["before_after"] == {"question": "q?", "before": "old", "after": "new"}
+    assert wake["before_after"] == {"question": "q?", "before": "old", "after": "new", "night": "2026-11-03"}
+
+
+@pytest.mark.parametrize("pair_night", ["2026-11-03", None])
+def test_the_wake_never_shows_another_nights_pair_as_tonights(api: Any, pair_night: str | None) -> None:
+    body = _start(api).json()
+    _finished_night(body["user_id"], "2026-11-03", 1)
+    _finished_night(body["user_id"], "2026-11-04", 2)  # tonight's night saved no pair
+    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new", night=pair_night,
+                                   promoted=True)
+    wake = api.get("/api/sleep/me/wake", headers=_bearer(body["token"])).json()
+    assert "before_after" not in wake  # nor its ``promoted``, so the verdict can't come from it
+
+
+def test_a_night_that_saves_no_pair_clears_the_last_one(api: Any) -> None:
+    body = _start(api).json()
+    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new", night="2026-11-03")
+    judge_cohort.clear_before_after(body["user_id"])
+    judge_cohort.clear_before_after(body["user_id"])  # nothing to clear is fine
+    assert judge_cohort.load_before_after(body["user_id"]) is None
 
 
 def test_only_judges_reach_the_judges_routes(api: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -312,3 +349,15 @@ def test_register_sleep_wires_the_judge_product(monkeypatch: pytest.MonkeyPatch)
     finally:
         register.unregister_hooks()
     assert judge_talker.judge_route not in assignment.ROUTE_OVERRIDES
+
+
+def test_the_wake_names_the_two_models_and_whether_the_gate_promoted(api: Any) -> None:
+    body = _start(api).json()
+    _finished_night(body["user_id"], "2026-11-03")
+    judge_cohort.save_before_after(body["user_id"], question="q?", before="old", after="new", night="2026-11-03",
+                                   before_model="base Glimmer", after_model="p-aaaaaaaaaaaa-n1", promoted=False,
+                                   question_source="personal")
+    wake = api.get("/api/sleep/me/wake", headers=_bearer(body["token"])).json()
+    assert wake["before_after"] == {"question": "q?", "before": "old", "after": "new", "night": "2026-11-03",
+                                    "before_model": "base Glimmer",
+                                    "after_model": "p-aaaaaaaaaaaa-n1", "promoted": False, "question_source": "personal"}

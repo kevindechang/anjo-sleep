@@ -25,6 +25,15 @@
   font: 500 12px/1.4 var(--mono); letter-spacing: .02em; color: var(--accent-2);
 }
 .live-pass[hidden] { display: none; }
+.live-pass[data-state="stuck"] { color: var(--ink-soft); }
+.live-pass[data-state="stuck"] .scan { display: none; }
+.live-pass-retry {
+  margin-left: auto; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-full);
+  background: transparent; color: var(--text); font: 500 11px/1.2 var(--mono); letter-spacing: .06em; white-space: nowrap; cursor: pointer;
+  transition: border-color .18s, background .18s;
+}
+.live-pass-retry:hover { border-color: var(--accent); background: var(--surface-2); }
+.live-pass-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .live-pass .scan, .tab[data-thinking]::after { flex: none; }
 .live-pass .scan { position: relative; width: 56px; height: 2px; overflow: hidden; border-radius: 2px; background: var(--track); }
 .live-pass .scan::after {

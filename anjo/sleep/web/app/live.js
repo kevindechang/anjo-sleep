@@ -5,7 +5,7 @@
 import { api, href, ready, signOut, token } from "./api.js";
 import { COPY, fill } from "./copy.js";
 import { byId, say, wireTabs } from "./dom.js";
-import { createChat } from "./chat.js";
+import { createChat, talkerLine } from "./chat.js";
 import { createLivePass } from "./livepass.js";
 import { createPanel } from "./panel.js";
 import { createSince } from "./morning.js";
@@ -14,6 +14,7 @@ import { createThought } from "./thought.js";
 import { createWake } from "./wake.js";
 
 const TALKER_POLL_MS = 15000;
+const TALKER_WARM_POLL_MS = 60000;
 const NARROW = window.matchMedia("(max-width: 959.98px)");
 
 function leave(signedOut) {
@@ -64,36 +65,61 @@ function createTabs() {
   };
 }
 
-// "Glimmer is waking (~N min), replies from Muse Spark meanwhile", or nothing once it is warm.
+// On a phone, one line in the Chat tab on what MIND last did (or is doing); a tap opens Mind.
+function createMindLine(open) {
+  const line = byId("mind-line");
+  const text = byId("mind-line-text");
+  let summary = "";
+  let busy = "";
+  const draw = () => {
+    const words = busy || summary;
+    text.textContent = words;
+    line.hidden = !words;
+    line.dataset.busy = String(Boolean(busy));
+  };
+  line.addEventListener("click", open);
+  return {
+    summary(words) { summary = words; draw(); },
+    busy(words) { busy = words; draw(); },
+  };
+}
+
+// Who answers the chat, whether Glimmer is loading, and which model MIND thinks with: always shown,
+// checked every 15 s while Glimmer loads and every minute once warm (a night's serve, Undo, or a GPU
+// stop can change it), and again right after each of those.
 function createTalker() {
   const box = byId("talker");
   const text = byId("talker-text");
   let timer = null;
+  let last = null;
+  const known = { adapter: null, thinker: null };
+
+  function draw() {
+    if (!last) return;
+    box.dataset.state = last.state === "warm" ? "warm" : last.state === "waking" ? "waking" : "cold";
+    text.textContent = talkerLine(last, known);
+    box.hidden = false;
+  }
 
   async function check() {
     window.clearTimeout(timer);
-    let data;
     try {
-      data = await api.talker();
+      last = await api.talker();
     } catch {
       timer = window.setTimeout(check, TALKER_POLL_MS * 2);
       return;
     }
-    const state = data && data.state;
-    if (state !== "waking" && state !== "cold") {
-      box.hidden = true;
-      return;
-    }
-    box.dataset.state = state;
-    const eta = Number(data.eta_s);
-    text.textContent = state === "cold" ? COPY.talker_cold
-      : Number.isFinite(eta) && eta > 0 ? fill(COPY.talker_waking, { min: Math.max(1, Math.round(eta / 60)) })
-        : COPY.talker_waking_soon;
-    box.hidden = false;
-    timer = window.setTimeout(check, TALKER_POLL_MS);
+    draw();
+    timer = window.setTimeout(check, last && last.state === "warm" ? TALKER_WARM_POLL_MS : TALKER_POLL_MS);
   }
 
-  return { check };
+  return {
+    check,
+    note(change) {
+      Object.assign(known, change);
+      draw();
+    },
+  };
 }
 
 async function boot() {
@@ -109,7 +135,14 @@ async function boot() {
   const status = byId("live-status");
   const tabs = createTabs();
   const talker = createTalker();
-  const panel = createPanel({ onNew: () => tabs.noteNew() });
+  const mindLine = createMindLine(() => tabs.select("mind", true));
+  const panel = createPanel({
+    onNew: () => tabs.noteNew(),
+    onActivity: (words, live) => {
+      mindLine.summary(words);
+      if (live && live.thinker) talker.note({ thinker: live.thinker });
+    },
+  });
   let livePass = null;
   const chat = createChat({
     onSend: () => livePass.mark(),
@@ -124,14 +157,24 @@ async function boot() {
     onAnswer: () => tabs.select("chat"), // on a phone, watch the answer go out
     onView: (view) => since.update(view),
   });
-  livePass = createLivePass({ panel, thought });
-  const wake = createWake({ chat, panel, thought, since });
+  livePass = createLivePass({ panel, thought, onLine: (words) => mindLine.busy(words) });
+  const wake = createWake({
+    chat, panel, thought, since,
+    onUndo: () => {
+      talker.note({ adapter: "before" });
+      talker.check();
+    },
+  });
   const sleep = createSleep({
     chat, panel,
-    onFinish: () => thought.refresh(),
-    onAwake: () => {
+    onFinish: (night) => {
+      thought.refresh();
+      if (night && night.status === "done" && night.adapter_live) talker.note({ adapter: "tonight" });
+      talker.check(); // the night's serve may have changed who answers
+    },
+    onAwake: (night) => {
       tabs.select("chat");
-      wake.show();
+      wake.show(night);
     },
     onStatus: (text, kind) => say(status, text, kind),
     onShow: () => {

@@ -72,6 +72,7 @@ from anjo.sleep.serving.wake import KEEP_WARM_PING_S, WarmWindow, read_window
 logger = logging.getLogger(__name__)
 
 WAKE_ENV: Final = "ANJO_SLEEP_JUDGE_WAKE"
+CHAT_ADAPTER_ENV: Final = "ANJO_SLEEP_JUDGE_CHAT_ADAPTER"  # "1": chat with the adapter too (off: notes only)
 IDLE_MIN_ENV: Final = "ANJO_SLEEP_JUDGE_IDLE_MINUTES"
 PREWAKE_MIN_ENV: Final = "ANJO_SLEEP_JUDGE_PREWAKE_MINUTES"
 WAKE_ETA_ENV: Final = "ANJO_SLEEP_JUDGE_WAKE_ETA_S"
@@ -310,7 +311,14 @@ class TalkerStatus:
 
     def view(self) -> dict[str, Any]:
         return {"state": self.state, "eta_s": self.eta_s, "model": self.model, "reason": self.reason,
-                "fallback_via": self.fallback_via}
+                "fallback_via": self.fallback_via, "chat_adapter": chat_adapter_on()}
+
+
+def chat_adapter_on() -> bool:
+    """Whether a judge's chat is served with their promoted adapter. Off by default: in the final
+    (2026-11-03, registered, scored once) adapter plus notes lost to notes alone (32%), so chat is
+    base Glimmer with the overnight notes, and the adapter shows in the wake's before/after."""
+    return os.environ.get(CHAT_ADAPTER_ENV, "").strip().lower() in {"1", "true", "on"}
 
 
 def fallback_via() -> str:
@@ -733,7 +741,7 @@ def judge_route(user_id: str) -> ModelRoute | None:
         return None
     pins: list[QualifiedPin] = []
     if talker().glimmer_first():
-        adapter = current_adapter(user_id)
+        adapter = current_adapter(user_id) if chat_adapter_on() else None
         pin = glimmer_pin(user_id, None if adapter is None else adapter.id,
                           adapter_rendering=None if adapter is None else adapter.rendering)
         pins.append(QualifiedPin(pin, None, None))

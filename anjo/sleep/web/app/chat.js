@@ -5,11 +5,13 @@
 // starts the watch for MIND's live pass (livepass.js).
 
 import { api } from "./api.js";
-import { COPY } from "./copy.js";
+import { COPY, fill } from "./copy.js";
 import { byId, el, reducedMotion, say } from "./dom.js";
 import { streamMessage } from "./sse.js";
 
 const MAX_ROWS_PX = 168;
+const BLANK = "___";
+const FOLLOW_SLACK_PX = 160;
 
 // Who answered, from the done event's model id; nothing for an id it doesn't recognise.
 export function modelName(model) {
@@ -17,6 +19,31 @@ export function modelName(model) {
   if (id.includes("glimmer") || id.includes("sleep_modal")) return COPY.model_glimmer;
   if (id.includes("spark") || id.includes("muse")) return COPY.model_spark;
   return "";
+}
+
+const THINKERS = { "spark-open": "model_spark_open", glimmer: "model_glimmer" };
+
+// The talker label: who answers the chat now (and with which adapter, as far as this page knows),
+// whether Glimmer is loading, and which model MIND's live pass thinks with. ``status`` is
+// GET /me/talker; ``adapter`` is "tonight" after a promoted night, "before" after Undo.
+export function talkerLine(status, { adapter = null, thinker = null } = {}) {
+  const data = status && typeof status === "object" ? status : {};
+  const parts = [];
+  if (data.state === "warm") {
+    // notes-first (chat_adapter false): chat is Glimmer with the overnight notes; the adapter answers only in the before/after
+    const model = data.chat_adapter === false
+      ? (adapter === "tonight" ? COPY.talker_notes_tonight : COPY.model_glimmer)
+      : adapter === "tonight" ? COPY.talker_adapter_tonight : adapter === "before" ? COPY.talker_adapter_before : COPY.model_glimmer;
+    parts.push(fill(COPY.talker_chat, { model }));
+  } else {
+    const fallback = data.fallback_via === "frontier" ? COPY.model_fallback : COPY.model_spark;
+    parts.push(fill(COPY.talker_chat, { model: fallback }));
+    const eta = Number(data.eta_s);
+    parts.push(data.state === "waking" ? (Number.isFinite(eta) && eta > 0
+      ? fill(COPY.talker_loading, { min: Math.max(1, Math.round(eta / 60)) }) : COPY.talker_loading_soon) : COPY.talker_off);
+  }
+  if (THINKERS[thinker]) parts.push(fill(COPY.talker_thinking, { model: COPY[THINKERS[thinker]] }));
+  return parts.join(" · ");
 }
 
 export function createChat({ onReply, onSend = () => {} }) {
@@ -30,9 +57,12 @@ export function createChat({ onReply, onSend = () => {} }) {
   let starting = null;
   let busy = false;
   let asleep = false;
+  let held = false; // a night is being admitted: nothing goes out until it starts or is refused
 
+  // Whether the reader is following the conversation: the log's end, not the page's (the footer
+  // below the chat would otherwise stop the follow early).
   function nearBottom() {
-    return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+    return log.getBoundingClientRect().bottom - window.innerHeight < FOLLOW_SLACK_PX + form.offsetHeight;
   }
 
   function follow(node, force = false) {
@@ -55,7 +85,7 @@ export function createChat({ onReply, onSend = () => {} }) {
   }
 
   function setEnabled() {
-    const off = busy || asleep;
+    const off = busy || asleep || held;
     box.disabled = asleep;
     send.disabled = off;
     document.querySelectorAll(".starter").forEach((b) => { b.disabled = off; });
@@ -114,7 +144,7 @@ export function createChat({ onReply, onSend = () => {} }) {
 
   async function submit(text) {
     const clean = text.trim();
-    if (!clean || busy || asleep) return false;
+    if (!clean || busy || asleep || held) return false;
     busy = true;
     onSend();
     setEnabled();
@@ -141,6 +171,18 @@ export function createChat({ onReply, onSend = () => {} }) {
     return ok;
   }
 
+  // Start a message for them to finish: the first blank ("___") selected, else the cursor at the end.
+  function draft(text) {
+    if (asleep) return;
+    box.value = text;
+    grow();
+    box.focus({ preventScroll: true });
+    const blank = text.indexOf(BLANK);
+    if (blank >= 0) box.setSelectionRange(blank, blank + BLANK.length);
+    else box.setSelectionRange(text.length, text.length);
+    box.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submit(box.value);
@@ -152,8 +194,9 @@ export function createChat({ onReply, onSend = () => {} }) {
     }
   });
   box.addEventListener("input", grow);
+  // A starter is a frame to finish, never a message sent for them: the blanks are theirs.
   document.querySelectorAll(".starter").forEach((button) => {
-    button.addEventListener("click", () => submit(button.textContent));
+    button.addEventListener("click", () => draft(button.dataset.draft || button.textContent));
   });
 
   return {
@@ -164,17 +207,14 @@ export function createChat({ onReply, onSend = () => {} }) {
     // Send words from elsewhere on the page (an answer to MIND's question) as a normal message.
     // False when it can't go now: a reply is still arriving, or Anjo is asleep.
     send: (text) => submit(text),
-    get canSend() { return !busy && !asleep; },
-    get asleep() { return asleep; },
-    // Start a message for them to finish, the cursor at its end.
-    draft(text) {
-      if (asleep) return;
-      box.value = text;
-      grow();
-      box.focus({ preventScroll: true });
-      box.setSelectionRange(text.length, text.length);
-      box.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" });
+    get canSend() { return !busy && !asleep && !held; },
+    // Hold sending while a night is being admitted (Sleep now), and let go if it's refused.
+    hold(value) {
+      held = value;
+      setEnabled();
     },
+    get asleep() { return asleep; },
+    draft,
     setAsleep(value) {
       asleep = value;
       say(status, value ? COPY.chat_during_night : "", "");

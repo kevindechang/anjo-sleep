@@ -294,12 +294,18 @@ def _before_after_path(user_id: str) -> Path:
     return path
 
 
-def save_before_after(user_id: str, *, question: str, before: str, after: str, night: str | None = None) -> None:
-    """The same question answered by last night's model (``before``) and this one (``after``),
-    encrypted at rest like every sleep file, under the account's writer guard."""
+def save_before_after(user_id: str, *, question: str, before: str, after: str, night: str | None = None,
+                      before_model: str | None = None, after_model: str | None = None,
+                      promoted: bool | None = None, question_source: str | None = None) -> None:
+    """The same question answered before the night (``before``, by ``before_model``) and by tonight's
+    adapter (``after``, ``after_model``), whether the gate ``promoted`` it and where the question came
+    from (``question_source``: ``personal`` or ``gate_everyday``), encrypted at rest like
+    every sleep file, under the account's writer guard."""
     from anjo.sleep.app.storage import CODEC, writer_guard
 
     record = {"question": question, "before": before, "after": after, "night": night,
+              "before_model": before_model, "after_model": after_model, "promoted": promoted,
+              "question_source": question_source,
               "at": datetime.now(timezone.utc).isoformat()}
     path = _before_after_path(user_id)
     with writer_guard(user_id)():
@@ -307,6 +313,15 @@ def save_before_after(user_id: str, *, question: str, before: str, after: str, n
         part = path.with_name(f"{path.name}.part")
         part.write_text(CODEC.encode(json.dumps(record, sort_keys=True)), encoding="utf-8")
         os.replace(part, path)
+
+
+def clear_before_after(user_id: str) -> None:
+    """Remove the last pair: a night that saved none must not leave an older night's pair to be read
+    as its own."""
+    from anjo.sleep.app.storage import writer_guard
+
+    with writer_guard(user_id)():
+        _before_after_path(user_id).unlink(missing_ok=True)
 
 
 def load_before_after(user_id: str) -> dict[str, Any] | None:
@@ -323,4 +338,7 @@ def load_before_after(user_id: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict) or not all(isinstance(data.get(k), str) for k in ("question", "before", "after")):
         return None
-    return {"question": data["question"], "before": data["before"], "after": data["after"], "night": data.get("night")}
+    labels = {k: data[k] for k in ("before_model", "after_model", "question_source") if isinstance(data.get(k), str)}
+    promoted = {"promoted": data["promoted"]} if isinstance(data.get("promoted"), bool) else {}
+    return {"question": data["question"], "before": data["before"], "after": data["after"], "night": data.get("night"),
+            **labels, **promoted}

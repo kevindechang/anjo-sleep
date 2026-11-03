@@ -8,7 +8,13 @@
 //   mockcase=visit              her line of thought has a "since your last visit" note from the start
 //                               (otherwise only once a night has run)
 //   mockcase=thoughtoff | thoughtfail | thoughtempty | markfail   (markfail: dispute and hide refused)
-//   mockcase=nopass             MIND's live pass never runs after a reply (its allowance spent)
+//   mockcase=nopass             MIND's live pass never runs after a reply (the daily allowance spent)
+//   mockcase=passfail           MIND's live passes run but fail (the panel says so)
+//   mockcase=gatepair           the wake's pair is the gate's everyday one (default: a personal one)
+//
+// The live passes, as the real API shows them: the first reads your message, keeps evidence and
+// opens no question, and her chooser picks nothing (an abstention); the second forms a want, and
+// the chooser would revisit that thread; from the third a tension opens a question.
 //   mockpass=75                 each live pass takes 75 s (default 4)
 //
 // As on the server, MIND's live pass starts only once a reply's stream has ended and takes a few
@@ -124,24 +130,24 @@ function mind(now) {
   const turns = passed(now); // MIND has seen only the turns its live passes have read
   const questions = [];
   const target = "Why the call to your sister keeps slipping";
-  if (turns >= 1 || night) {
+  if (turns >= 3 || night) {
     const inquired = reached(night, "mind_inquire");
-    const c = inquired ? [0.64, 0.21, 0.15] : turns >= 2 || night ? [0.52, 0.28, 0.2] : [0.4, 0.35, 0.25];
+    const c = inquired ? [0.64, 0.21, 0.15] : turns >= 4 || night ? [0.52, 0.28, 0.2] : [0.4, 0.35, 0.25];
     questions.push({
-      id: "q1", kind: "gap", status: turns >= 2 || night ? "active" : "open",
+      id: "q1", kind: "gap", status: turns >= 4 || night ? "active" : "open",
       subject: text("What makes the call to her hard to start?"),
       hypotheses: [
         { id: "h1", statement: text("The last call ended in an argument, and she may bring it up."), credence: c[0], catch_all: false },
         { id: "h2", statement: text("Calls with her run long, and evenings are when you're most tired."), credence: c[1], catch_all: false },
         { id: "h3", statement: text("something else"), credence: c[2], catch_all: true },
       ],
-      predictions: turns >= 2 || night ? [{
+      predictions: turns >= 4 || night ? [{
         id: "p1", claim: text("You'll mention the last call before the week is out."), given: [0.8, 0.3, 0.5],
         horizon: iso(state.t0 + 5 * DAY), outcome: null,
       }] : [],
     });
   }
-  if (turns >= 3 || night) {
+  if (turns >= 4 || night) {
     questions.push({
       id: "q2", kind: "contradiction", status: "open",
       subject: text("Mornings are the problem, yet you said you run fine on holidays."),
@@ -176,14 +182,36 @@ function mind(now) {
     id: "e1", target: text(target), made_at: iso(now), horizon: iso(now + 3 * DAY), p_needed: 0.62, outcome: "open",
   }] : [];
   const section = (items) => ({ state: items.length ? "ok" : "none", items });
+  const lv = livePass(turns, now);
+  const liveWants = !chose && lv && lv.choice && lv.choice.action ? [
+    { kind: "understand", target: text(target), action: "revisit_thread", strength: 0.58, status: "won", reason: null },
+  ] : [];
+  const targets = [
+    turns >= 1 || night ? { id: "t1", kind: "thread", label: text("Calling your sister after the last argument"), confidence: 0.5, due: null } : null,
+    turns >= 2 || night ? { id: "t2", kind: "commitment", label: text(target), confidence: 0.4, due: iso(state.t0 + 4 * DAY) } : null,
+  ].filter(Boolean);
   const live = { revision: passed(now) + (night ? night.stages.filter((x) => x.state === "done").length : 0),
     live_pass: passing(now) ? "running" : "idle" };
-  if (CASE === "mindempty") return { ...live, as_of: null, questions: section([]), targets: section([]), wants: { ...section([]), night: null }, choices: section([]), expectations: section([]) };
+  if (CASE === "mindempty") return { ...live, live: null, as_of: null, questions: section([]), targets: section([]), wants: { ...section([]), night: null }, choices: section([]), expectations: section([]) };
   return {
-    ...live, as_of: night ? iso(now) : null, questions: section(questions), targets: section([]),
-    wants: { ...section(wants), night: chose ? 1 : null }, choices: section(choices), expectations: section(expectations),
+    ...live, live: lv, as_of: night ? iso(now) : null, questions: section(questions), targets: section(targets),
+    wants: chose ? { ...section(wants), night: 1 } : { ...section(liveWants), night: null, live: true },
+    choices: section(choices), expectations: section(expectations),
     gates: section([]), timeline: section([]),
   };
+}
+
+// judge_views' ``live`` block after ``turns`` landed passes: turn 1 keeps evidence, opens nothing and
+// her chooser abstains; turn 2 forms a want she would act on; turn 3 on, a tension opens a question.
+function livePass(turns, now) {
+  if (!turns) return null;
+  const landed = (state.passes || []).filter(([, end]) => end <= now).map(([, end]) => end || state.t0);
+  const at = iso(landed.length ? landed[landed.length - 1] : now);
+  if (CASE === "passfail") return { at, state: "failed", thinker: "spark-open" };
+  const choice = turns === 1 ? { action: null, target: null }
+    : { action: "revisit_thread", target: text("Why the call to your sister keeps slipping") };
+  return { at, state: "ok", thinker: turns >= 3 ? "glimmer" : "spark-open", new_items: turns === 1 ? 1 : 2,
+    questions_opened: turns === 3 ? 1 : 0, choice };
 }
 
 // Her line of thought with the judge's marks applied, as the route does: hidden items (or a hidden
@@ -256,9 +284,9 @@ async function route(method, path, body, signal) {
   if (CASE === "expired" && path.startsWith("/api/sleep/me/")) return json(401, { detail: "Not authenticated" });
   if (path === "/api/sleep/me/talker") {
     const waited = (now - state.t0) / 1000;
-    if (CASE === "cold") return json(200, { state: "cold", model: "spark-fallback" });
+    if (CASE === "cold") return json(200, { state: "cold", model: "spark-fallback", reason: "wake_off", fallback_via: "muse-spark" });
     if (CASE === "warm" || waited > 25) return json(200, { state: "warm", model: "glimmer" });
-    return json(200, { state: "waking", eta_s: Math.max(60, 180 - waited * 4), model: "spark-fallback" });
+    return json(200, { state: "waking", eta_s: Math.max(60, 180 - waited * 4), model: "spark-fallback", fallback_via: "muse-spark" });
   }
   if (path === "/api/sleep/me/mind") return CASE === "mindfail" ? json(500, {}) : json(200, mind(now));
   if (path === "/api/sleep/me/thought") {
@@ -271,7 +299,7 @@ async function route(method, path, body, signal) {
   if (/^\/api\/chat\/[^/]+\/message$/.test(path)) {
     if (CASE === "chatfail") return json(503, { error: "Service temporarily unavailable" });
     const reply = REPLIES[Math.min(state.turns, REPLIES.length - 1)];
-    const model = (now - state.t0) / 1000 > 25 || CASE === "warm" ? "glimmer-judge" : "muse-spark";
+    const model = CASE !== "cold" && ((now - state.t0) / 1000 > 25 || CASE === "warm") ? "glimmer-judge" : "muse-spark";
     // its live pass starts once the stream below has ended (about 1.3 s plus a word every 65 ms)
     const start = now + 1300 + reply.split(" ").length * 65 + 300;
     save({ turns: state.turns + 1, passes: CASE === "nopass" ? state.passes : [...(state.passes || []), [start, start + PASS_MS]] });
@@ -302,10 +330,16 @@ async function route(method, path, body, signal) {
         "She practised a gentler way to open hard topics; the gate kept it, +3 of 5.",
         "She set one prediction to check in three days.",
       ],
-      before_after: {
-        question: "I still haven't called her. What should I do?",
-        before: "You could set a reminder and call at a time that suits you both. Small steps help.",
-        after: "Start with the part you're avoiding: \"I've been thinking about our last call.\" You don't have to fix it in one go. Want to try the first line here?",
+      before_after: CASE === "gatepair" ? {
+        question: "I have half a cabbage and some leftover rice. What can I make for dinner in about 20 minutes?",
+        before: "Fried rice works well: shred the cabbage, fry it hot with garlic, add the rice and a splash of soy sauce.",
+        after: "Cabbage fried rice. Get the pan very hot, cook the cabbage until it browns at the edges, then the rice, soy and an egg. Twenty minutes, one pan.",
+        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true, question_source: "gate_everyday",
+      } : {
+        question: "Thinking about why the call to your sister keeps slipping: what should I focus on next?",
+        before: "Try scheduling a specific time for the call and setting a reminder. Consistency helps build the habit.",
+        after: "The last call ended badly, so the next one feels like a test. Open with that: \"I've been thinking about our last call.\" You don't have to fix it in one go.",
+        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true, question_source: "personal",
       },
     });
   }

@@ -13,6 +13,8 @@
 //
 // Checks pause while the tab is hidden and pick up as soon as it shows again. While a watch runs,
 // the panel says it is thinking about what you said; new items arrive with the panel's entrance.
+// A watch that ends without seeing the pass land says so (still running at the cap, never started,
+// or the last read failed), with a button to check again: the line never just disappears.
 
 import { COPY } from "./copy.js";
 import { byId } from "./dom.js";
@@ -31,6 +33,16 @@ export function newer(now, base) {
   return String(now) !== String(base);
 }
 
+// How a finished watch ended: "landed" (the line goes), or why it couldn't confirm the pass.
+export function ending({ ok = true, base, revision, livePass, sawRunning, fresh = 0 }) {
+  if (!ok) return "unconfirmed";
+  if (newer(revision, base) || (revision === undefined && livePass === undefined && fresh > 0)) return "landed";
+  if (livePass === "running") return "timeout";
+  if (livePass === "idle") return sawRunning ? "landed" : "nopass";
+  return "timeout";
+}
+const ENDING_COPY = { timeout: "live_timeout", unconfirmed: "live_unconfirmed", nopass: "live_nopass" };
+
 // What to do after an answer: "poll" (again in 2 s), "slow" (again in 10 s), "final" (one last
 // read, then stop) or "stop". ``base`` is the revision before the message, ``sawRunning`` whether
 // any answer since said the pass was running, ``elapsed`` the time since the reply.
@@ -48,9 +60,10 @@ export function nextStep({ base, revision, livePass, sawRunning, elapsed, fresh 
   return elapsed < CAP_MS ? "poll" : "stop";
 }
 
-export function createLivePass({ panel, thought }) {
+export function createLivePass({ panel, thought, onLine = () => {} }) {
   const line = byId("live-pass");
   const text = line.querySelector(".live-pass-text");
+  const retry = byId("live-pass-retry");
   const tab = byId("tab-mind");
   let base;
   let run = 0;
@@ -59,9 +72,22 @@ export function createLivePass({ panel, thought }) {
 
   function thinking(on, words = COPY.live_thinking) {
     line.hidden = !on;
+    line.dataset.state = "busy";
+    retry.hidden = true;
     text.textContent = words;
     if (on) tab.dataset.thinking = "true";
     else delete tab.dataset.thinking;
+    onLine(on ? words : "");
+  }
+
+  // The watch ended without seeing the pass land: say so, and offer to check again.
+  function stuck(how) {
+    thinking(false);
+    line.hidden = false;
+    line.dataset.state = "stuck";
+    text.textContent = COPY[ENDING_COPY[how]];
+    retry.hidden = false;
+    onLine(text.textContent);
   }
 
   function stop() {
@@ -78,9 +104,11 @@ export function createLivePass({ panel, thought }) {
     check();
   });
 
+  retry.addEventListener("click", () => api.watch());
+
   const read = () => Promise.all([panel.refresh(), thought.isOpen() ? thought.refresh() : null]).then(([state]) => state);
 
-  return {
+  const api = {
     // A message is going out: the revision MIND is at before it.
     mark() {
       base = panel.revision();
@@ -111,8 +139,12 @@ export function createLivePass({ panel, thought }) {
           thinking(true, COPY.live_slow);
           later(SLOW_MS);
         } else {
-          if (step === "final") await read();
-          if (mine === run) thinking(false);
+          const last = step === "final" ? await read() : state;
+          if (mine !== run) return;
+          const how = ending({ ok: last.ok, base: from, revision: last.revision, livePass: last.livePass,
+            sawRunning: sawRunning || step === "final", fresh: last.fresh });
+          if (how === "landed") thinking(false);
+          else stuck(how);
         }
       }
       thinking(true);
@@ -120,4 +152,5 @@ export function createLivePass({ panel, thought }) {
     },
     stop,
   };
+  return api;
 }

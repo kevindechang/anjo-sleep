@@ -81,3 +81,15 @@ def test_configured_only_with_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not spark_talker.spark_configured()
     monkeypatch.setenv(meta_api.KEY_ENV, " k ")
     assert spark_talker.spark_configured()
+
+
+def test_a_turn_asks_for_minimal_reasoning_with_room_above_the_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Spark always reasons before it answers (~110 tokens at minimal, ~400-700 at low), and those tokens
+    # count against max_tokens: a bare reply cap ended judge turns with no words at all.
+    monkeypatch.setenv(meta_api.KEY_ENV, "test-meta-key")
+    api = FakeApi(*_reply("Hi"))
+    runtime = spark_talker.SparkRuntime(spark_talker.spark_pin("judge-1"), transport=api)
+    list(runtime.stream(_request("hey"), threading.Event()))
+    body = api.opened[0][2]
+    assert body["reasoning_effort"] == "minimal"
+    assert body["max_tokens"] == 64 + spark_talker.REASONING_HEADROOM_TOKENS

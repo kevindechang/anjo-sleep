@@ -1,5 +1,7 @@
 // The MIND panel: GET /api/sleep/me/mind, in the shape of demo/panel.py's mind_view (questions with
-// hypotheses, credences and predictions; expectations; wants; each night's choice). Every item says
+// hypotheses, credences and predictions; expectations; wants; each night's choice), with
+// judge_views' ``live`` block on top: what her latest live pass read, whether it opened a question,
+// and what her chooser would pick now (or that it picked nothing). Every item says
 // a plain line first and its own stored words second. Items it hasn't shown before arrive with a
 // subtle entrance and a "New" mark; a credence that moved slides from its old value to the new one.
 // Each answer's ``revision`` and ``live_pass`` (idle | running) are kept for livepass.js, which polls
@@ -10,6 +12,7 @@ import { COPY, fill } from "./copy.js";
 import { byId, day, el, percent } from "./dom.js";
 
 const NEW_MARK_MS = 7000;
+const THINKER = { "spark-open": "model_spark_open", glimmer: "model_glimmer" };
 const STATUS_CHIP = { open: "research", active: "live", parked: "muted" };
 
 const section = (value) => (value && Array.isArray(value.items) ? value : { state: "none", items: [] });
@@ -40,7 +43,42 @@ export function overall(hypotheses, given) {
   return seen ? sum : null;
 }
 
-export function createPanel({ onNew }) {
+const clockTime = (iso) => {
+  const at = iso ? new Date(iso) : null;
+  return at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+};
+const plural = (n, one, many) => fill(n === 1 ? one : many, { n });
+
+// One line on what her latest live pass did, from its own counts: nothing here is inferred.
+export function passLine(live) {
+  if (!live || typeof live !== "object") return COPY.pass_none;
+  if (live.state !== "ok") return COPY.pass_failed;
+  const items = Number(live.new_items) || 0;
+  const opened = Number(live.questions_opened) || 0;
+  return [
+    COPY.pass_read,
+    items ? plural(items, COPY.pass_items_one, COPY.pass_items) : COPY.pass_items_none,
+    opened ? plural(opened, COPY.pass_opened_one, COPY.pass_opened) : COPY.pass_opened_none,
+  ].join(" · ");
+}
+
+// Her chooser on the latest pass: {kind: "pick", action, target}, {kind: "none"}, or null when the
+// pass didn't run its chooser (or is older than her last night, whose pick stands).
+export function liveChoice(live) {
+  if (!live || live.state !== "ok" || !live.choice || typeof live.choice !== "object") return null;
+  return live.choice.action ? { kind: "pick", action: live.choice.action, target: live.choice.target } : { kind: "none" };
+}
+
+// The whole pass in one line, for the Chat tab on a phone.
+export function activityLine(live) {
+  if (!live) return "";
+  const choice = liveChoice(live);
+  const pick = !choice ? "" : choice.kind === "none" ? COPY.pass_short_none
+    : fill(COPY.pass_short_pick, { action: word("pick", choice.action, COPY.pick_other) });
+  return [passLine(live), pick].filter(Boolean).join(" · ");
+}
+
+export function createPanel({ onNew, onActivity = () => {} }) {
   const body = byId("mind-body");
   const updated = byId("mind-updated");
   let seen = null;               // item keys shown so far; null before the first render
@@ -80,6 +118,49 @@ export function createPanel({ onNew }) {
     box.append(head);
     if (state === "unavailable") box.append(el("p", "none", COPY.mind_unavailable));
     else if (none) box.append(el("p", "none", none));
+    return box;
+  }
+
+  // Her latest live pass: what it read, what it opened, and her chooser's pick (or none).
+  function activity(live, fresh) {
+    const box = el("section", "mind-section mind-pass");
+    box.dataset.state = !live ? "none" : live.state === "ok" ? "ok" : "failed";
+    if (live && fresh.has(`live:${live.at}`)) box.classList.add("is-new");
+    const head = el("h3", "", COPY.pass_heading);
+    const model = live ? COPY[THINKER[live.thinker]] : "";
+    if (model) head.append(el("span", "count", fill(COPY.pass_thinker, { model })));
+    box.append(head, el("p", "plain", passLine(live)));
+    const choice = liveChoice(live);
+    if (!choice) return box;
+    const row = el("div", `pass-choice${choice.kind === "none" ? " is-none" : ""}`);
+    row.append(el("p", "sub", COPY.pass_choice));
+    if (choice.kind === "none") {
+      row.append(el("p", "plain", COPY.pass_choice_none));
+    } else {
+      row.append(el("p", "plain", fill(COPY.pass_choice_line, { action: word("pick", choice.action, COPY.pick_other) })));
+      const target = exact(choice.target);
+      if (target) row.append(target);
+      row.append(el("p", "sub", COPY.pass_choice_note));
+    }
+    box.append(row);
+    return box;
+  }
+
+  // What she has picked up: her open targets, by their stored labels.
+  function held(data, fresh) {
+    const box = block(COPY.mind_held, data.items.length, data.state, data.items.length ? "" : COPY.mind_none_held);
+    if (!data.items.length) return box;
+    const list = el("ul", "mind-list");
+    for (const t of data.items.slice(0, 6)) {
+      const row = item(`t:${t.id}`, "held", fresh);
+      const tags = el("p", "tags");
+      tags.append(chip(word("target", t.kind, COPY.target_thread), "muted"));
+      row.append(tags);
+      const label = exact(t.label);
+      if (label) row.append(label);
+      list.append(row);
+    }
+    box.append(list);
     return box;
   }
 
@@ -203,6 +284,8 @@ export function createPanel({ onNew }) {
   // Every item's key, to tell what is new since the last render.
   function keys(view) {
     const found = new Set();
+    if (view.live && view.live.at) found.add(`live:${view.live.at}`);
+    section(view.targets).items.forEach((t) => found.add(`t:${t.id}`));
     const choice = section(view.choices).items[0];
     if (choice) found.add(`pick:${choice.night}:${choice.action}`);
     for (const q of section(view.questions).items) {
@@ -216,17 +299,21 @@ export function createPanel({ onNew }) {
   }
 
   function render(view) {
-    updated.textContent = fill(COPY.mind_updated, { time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) });
+    const live = view.live && typeof view.live === "object" ? view.live : null;
+    updated.textContent = live && live.at ? fill(COPY.mind_updated, { time: clockTime(live.at) }) : "";
     const json = contentOf(view);
     if (json === last) return 0; // nothing new: the "New" marks stay as they are
     last = json;
     const now = keys(view);
     const fresh = seen === null ? new Set() : new Set([...now].filter((k) => !seen.has(k)));
     const parts = [section(view.choices), section(view.questions), section(view.expectations), section(view.wants)];
-    if (parts.every((p) => !p.items.length && p.state !== "unavailable")) {
+    const targets = section(view.targets);
+    onActivity(activityLine(live), live);
+    if (!live && !targets.items.length && parts.every((p) => !p.items.length && p.state !== "unavailable")) {
       body.replaceChildren(el("p", "mind-empty", COPY.mind_empty));
     } else {
-      body.replaceChildren(pick(parts[0], parts[3], fresh), questions(parts[1], fresh), expectations(parts[2], fresh), wants(parts[3], fresh));
+      body.replaceChildren(activity(live, fresh), held(targets, fresh), questions(parts[1], fresh), wants(parts[3], fresh),
+        pick(parts[0], parts[3], fresh), expectations(parts[2], fresh));
     }
     credences = new Map();
     for (const q of parts[1].items) (q.hypotheses || []).forEach((h) => credences.set(h.id, h.credence));

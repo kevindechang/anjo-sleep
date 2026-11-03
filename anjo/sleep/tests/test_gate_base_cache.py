@@ -151,7 +151,8 @@ def test_adapter_answers_are_never_cached(tmp_path: Path) -> None:
         assert server.count("adapter", "logprob") == 24  # every choice of every item
         assert server.count("adapter", "reply") == 5 + 4  # every collapse prompt and every safety case
     records = read_records(path, PLAIN)
-    assert sorted(r["gate"] for r in records) == ["collapse", "general", "safety"]  # one base side per gate, once
+    # one base side per gate, once (collapse's base replies beside its flags, for the wake's pair)
+    assert sorted(r["gate"] for r in records) == ["collapse", "collapse_replies", "general", "safety"]
     assert ADAPTER_MARK not in path.read_text(encoding="utf-8")
     assert all(NIGHT_1.id not in str(r) and NIGHT_2.id not in str(r) for r in records)
 
@@ -174,3 +175,40 @@ def test_a_kept_answer_of_the_wrong_shape_is_recomputed(tmp_path: Path) -> None:
     server, _ = _night(path, NIGHT_2)
     assert server.count("base", "logprob") == 24
     assert _night(path, NIGHT_2)[0].count("base", "logprob") == 0  # the recomputed answers are kept again
+
+
+def _paired_night(path: Path, ckpt: CheckpointRef, got: list[tuple[str, Any]]) -> Glimmer:
+    server = Glimmer()
+    CollapseGate(server, ["recycling"], prompts=_prompts(), thresholds=LIMITS, workers=1, cache=_cache(path),
+                 on_pairs=lambda c, pairs: got.append((c.id, pairs))).check(ckpt)
+    return server
+
+
+def test_the_collapse_gate_hands_over_its_real_pairs_and_keeps_the_base_replies(tmp_path: Path) -> None:
+    """Base Glimmer and tonight's adapter answer the same everyday prompt in the gate; those two
+    replies are handed over as they were, the base ones kept so a later night (cache hit) still has
+    them without asking the base model again."""
+    path, got = tmp_path / "gate_base.jsonl", list[tuple[str, Any]]()
+    _paired_night(path, NIGHT_1, got)
+    second = _paired_night(path, NIGHT_2, got)
+    assert second.count("base", "reply") == 0 and second.count("base", "judge") == 5  # only the adapter's replies judged
+    assert [(adapter, len(pairs)) for adapter, pairs in got] == [(NIGHT_1.id, 5), (NIGHT_2.id, 5)]
+    first = got[1][1][0]
+    assert (first.prompt, first.base_reply, first.reply) == ("prompt #0", "on topic", f"{ADAPTER_MARK} on topic")
+    assert (first.base_dragged, first.dragged) == (False, False)
+    assert ADAPTER_MARK not in path.read_text(encoding="utf-8")  # the adapter's side is never kept
+
+
+def test_a_base_side_kept_without_its_replies_hands_over_the_adapter_alone(tmp_path: Path) -> None:
+    """A cache from before the replies were kept: the flags read back, no base reply exists tonight,
+    so no everyday pair is handed over and the base model is not asked just to make one; the adapter
+    the gate checked still is, so a rejected night can still ask its personal question."""
+    path, got = tmp_path / "gate_base.jsonl", list[tuple[str, Any]]()
+    _night(path, NIGHT_1)
+    kept = [r for r in read_records(path, PLAIN) if r["gate"] != "collapse_replies"]
+    path.unlink()
+    from anjo.sleep.evidence.jsonl import append_records
+
+    append_records(path, PLAIN, kept)
+    server = _paired_night(path, NIGHT_2, got)
+    assert server.count("base", "reply") == 0 and got == [(NIGHT_2.id, [])]

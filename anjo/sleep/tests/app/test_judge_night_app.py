@@ -385,7 +385,7 @@ def test_a_promoted_night_shows_its_steps_gives_one_note_and_goes_live(host: dic
     assert notes.queued == [(JUDGE, "The rewritten note.", "sleep")]  # once, the last
     assert job["note"] == "The rewritten note."
     assert served == ["p-aaaaaaaaaaaa-n1"] and job["adapter_live"] is True
-    assert job["stages"]["serve"]["state"] == "done" and job["stages"]["serve"]["summary"] == judge_child.LIVE
+    assert job["stages"]["serve"]["state"] == "done" and job["stages"]["serve"]["summary"] == judge_child.LOADED_FOR_COMPARE  # notes-first chat
     assert job["stages"]["train"]["state"] == "skipped"  # never reached in this fake night
     assert host["book"].open_holds() == () and host["book"].used(jn.POOL) == pytest.approx(1.0)  # 0.8 + 0.2 warm
 
@@ -655,3 +655,63 @@ def test_a_live_pass_then_a_judges_night_extract_each_turn_once(monkeypatch: pyt
     assert [item.text for item in found] == [f"They said: {said[2]}"]
     stored = [item.text for item in evidence_store(JUDGE).stored(date(2026, 11, 4))]
     assert sorted(stored) == sorted(f"They said: {text}" for text in said)  # no item stored twice
+
+
+# ── the wake's before and after, through the night's own process (app/judge_pair.py has the rest) ──
+
+
+def _pair(i: int, *, base_dragged: bool = False, dragged: bool = False) -> Any:
+    from anjo.sleep.gates.collapse import CollapsePair
+
+    return CollapsePair(prompt_id=f"c{i:02d}", prompt=f"everyday question {i}?", base_reply=f"base answer {i}",
+                        reply=f"adapter answer {i}", base_dragged=base_dragged, dragged=dragged)
+
+
+def _paired_run(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, result: NightResult, pairs: list[Any],
+                question: str | None, order: list[str]) -> list[dict[str, Any]]:
+    """A night whose collapse gate hands ``pairs`` over; what was saved, with the order of the
+    calls in ``order`` (the personal replies come within the night, before the adapter is served)."""
+    from anjo.sleep.app import judge_pair
+
+    night_id, saved, sinks = _queued(host, monkeypatch), list[dict[str, Any]](), list[Any]()
+    monkeypatch.setattr(judge_child, "judge_wiring", lambda notifier, *args: sinks.append(args[-1]) or (lambda t, o: None))
+    monkeypatch.setattr(judge_child, "target_label", lambda uid: lambda target_id: None)
+    monkeypatch.setattr(judge_pair, "save_before_after", lambda user_id, **kw: saved.append({"user": user_id, **kw}))
+
+    def reply(adapter: Any, asked: str) -> str:
+        order.append("base" if adapter is None else "adapter")
+        return f"{'base' if adapter is None else 'adapter'} on {asked}"
+
+    def execute(**kwargs: Any) -> JudgeOutcome:
+        sinks[-1](_ckpt(), pairs)  # the collapse gate hands over inside the night's metered gates step
+        order.append("night_over")
+        return JudgeOutcome(result, warm_usd=0.0)
+
+    judge_child.run(night_id, store=host["store"], book=host["book"], environ={"ANJO_DATA_DIR": str(host["root"])},
+                    execute=execute, notifier=Notes(), ensure=lambda ckpt: order.append("served"), live=Live().ports(),
+                    personal=judge_pair.PersonalPorts(question=lambda uid: question, reply=reply))
+    return saved
+
+
+def test_the_night_asks_her_personal_question_before_serving_and_saves_it(host: dict[str, Any],
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.types import GateResult
+
+    order: list[str] = []
+    result = replace(_result("promoted", host["root"], _ckpt()),
+                     gates=MappingProxyType({"collapse": GateResult("collapse", True, 0.0, 5.0)}))
+    saved = _paired_run(host, monkeypatch, result, [_pair(0)], "Thinking about hackathon demo: what next?", order)
+    assert order == ["base", "adapter", "night_over", "served"]  # asked within the night, before serving
+    assert [(s["user"], s["question_source"], s["after"], s["night"], s["promoted"]) for s in saved] == [
+        (JUDGE, "personal", "adapter on Thinking about hackathon demo: what next?", "2026-11-03", True)]
+
+
+def test_with_no_personal_question_the_night_keeps_the_gates_everyday_pair(host: dict[str, Any],
+                                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    from anjo.sleep.types import GateResult
+
+    result = replace(_result("rejected", host["root"]),
+                     gates=MappingProxyType({"collapse": GateResult("collapse", False, 20.0, 5.0, "dragged")}))
+    saved = _paired_run(host, monkeypatch, result, [_pair(0), _pair(1, base_dragged=True)], None, [])
+    assert [(s["question"], s["question_source"], s["promoted"], s["after_model"]) for s in saved] == [
+        ("everyday question 1?", "gate_everyday", False, "p-aaaaaaaaaaaa-n1")]
