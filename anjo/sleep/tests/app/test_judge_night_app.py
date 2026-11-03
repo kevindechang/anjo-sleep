@@ -670,7 +670,7 @@ def _pair(i: int, *, base_dragged: bool = False, dragged: bool = False) -> Any:
 def _paired_run(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, result: NightResult, pairs: list[Any],
                 question: str | None, order: list[str]) -> list[dict[str, Any]]:
     """A night whose collapse gate hands ``pairs`` over; what was saved, with the order of the
-    end-of-night calls in ``order`` (the personal replies come before the adapter is served)."""
+    calls in ``order`` (the personal replies come within the night, before the adapter is served)."""
     from anjo.sleep.app import judge_pair
 
     night_id, saved, sinks = _queued(host, monkeypatch), list[dict[str, Any]](), list[Any]()
@@ -683,7 +683,8 @@ def _paired_run(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, result: N
         return f"{'base' if adapter is None else 'adapter'} on {asked}"
 
     def execute(**kwargs: Any) -> JudgeOutcome:
-        sinks[-1](_ckpt(), pairs)
+        sinks[-1](_ckpt(), pairs)  # the collapse gate hands over inside the night's metered gates step
+        order.append("night_over")
         return JudgeOutcome(result, warm_usd=0.0)
 
     judge_child.run(night_id, store=host["store"], book=host["book"], environ={"ANJO_DATA_DIR": str(host["root"])},
@@ -700,7 +701,7 @@ def test_the_night_asks_her_personal_question_before_serving_and_saves_it(host: 
     result = replace(_result("promoted", host["root"], _ckpt()),
                      gates=MappingProxyType({"collapse": GateResult("collapse", True, 0.0, 5.0)}))
     saved = _paired_run(host, monkeypatch, result, [_pair(0)], "Thinking about hackathon demo: what next?", order)
-    assert order == ["base", "adapter", "served"]
+    assert order == ["base", "adapter", "night_over", "served"]  # asked within the night, before serving
     assert [(s["user"], s["question_source"], s["after"], s["night"], s["promoted"]) for s in saved] == [
         (JUDGE, "personal", "adapter on Thinking about hackathon demo: what next?", "2026-11-03", True)]
 

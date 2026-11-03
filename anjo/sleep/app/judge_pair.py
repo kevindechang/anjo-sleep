@@ -1,13 +1,15 @@
 """The wake's before and after on a judge's night: the same question asked of base Glimmer and of
-tonight's adapter, saved once the night is over (``judge_cohort.save_before_after``).
+tonight's adapter, asked inside the night and saved once it is over (``judge_cohort.save_before_after``).
 
 **Personal first.** The question is made from what this judge said, by a template, never by a model:
 her chooser's target from the latest live pass (the pick, else the strongest want it weighed), as
 "Thinking about <target>: what should I focus on next?"; else the judge's own most recent
 substantive message in the night's window, in their words. Both replies come from the night's own
-serving client at the end of the night, while Glimmer is still up: base Glimmer with no adapter,
-then tonight's adapter by name, each at most ``REPLY_TOKENS``. Saved with ``question_source``
-``personal``.
+serving client as the collapse gate hands over the adapter it checked (``GatePairs``, called inside
+``CollapseGate.check``): so inside the gates step, while the batch's GPU reservation is open, and
+their serving time is in the gates' cost part, the night's cost and the judge's settlement. Base
+Glimmer with no adapter, then tonight's adapter by name, each at most ``REPLY_TOKENS``. Saved with
+``question_source`` ``personal``.
 
 **Else the gate's everyday pair.** When there is no question, or serving can't answer either side,
 the collapse gate's own pair is kept (``GatePairs``: base Glimmer and the adapter on one of the
@@ -15,7 +17,8 @@ gate's everyday prompts, the one scored most in the adapter's favour, else the f
 ``question_source`` ``gate_everyday``.
 
 Either way it is saved whether the gate promoted the adapter or not, and says which. A night whose
-collapse gate didn't run (skipped, or never reached) saves nothing and asks nothing.
+collapse gate didn't run (skipped, or never reached) asks nothing; a night that saves no pair clears
+the last one, so an older night's pair is never read as its own.
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final, Protocol
 
-from anjo.sleep.app.judge_cohort import save_before_after
+from anjo.sleep.app.judge_cohort import clear_before_after, save_before_after
 from anjo.sleep.gates import EVAL_SEED, TEMPERATURE
 from anjo.sleep.gates.collapse import CollapsePair
 from anjo.sleep.types import CheckpointRef, NightResult
@@ -42,24 +45,6 @@ ASK: Final = " What should I do next?"
 logger = logging.getLogger(__name__)
 
 Reply = Callable[[CheckpointRef | None, str], str]
-
-
-class GatePairs:
-    """What tonight's collapse gate handed over: the adapter it checked and its paired replies."""
-
-    def __init__(self) -> None:
-        self.adapter: CheckpointRef | None = None
-        self.pairs: tuple[CollapsePair, ...] = ()
-
-    def __call__(self, ckpt: CheckpointRef, pairs: list[CollapsePair]) -> None:
-        self.adapter, self.pairs = ckpt, tuple(pairs)
-
-    def best(self) -> CollapsePair | None:
-        """The pair most in the adapter's favour (base dragged, adapter not), else the first."""
-        def score(pair: CollapsePair) -> int:
-            return int(pair.base_dragged) - int(pair.dragged)
-
-        return max(self.pairs, key=score) if self.pairs else None  # max keeps the first of equals
 
 
 @dataclass(frozen=True)
@@ -183,25 +168,56 @@ def _personal(user_id: str, adapter: CheckpointRef,
         return None
 
 
-def save_pair(user_id: str, night: str, result: NightResult, pairs: GatePairs,
-              ports: PersonalPorts | Callable[[], PersonalPorts]) -> None:
-    """Tonight's before and after for the wake; nothing when the collapse gate didn't run."""
+class GatePairs:
+    """What tonight's collapse gate hands over (inside its check, so inside the night's metered
+    window): the adapter it checked, its paired replies, and, with ``ports``, the personal question
+    asked of both sides right then. It never raises into the gate: the night stands either way."""
+
+    def __init__(self, user_id: str | None = None, ports: PersonalPorts | Callable[[], PersonalPorts] | None = None) -> None:
+        self._user_id, self._ports = user_id, ports
+        self.adapter: CheckpointRef | None = None
+        self.pairs: tuple[CollapsePair, ...] = ()
+        self.asked: tuple[str, str, str] | None = None
+
+    def __call__(self, ckpt: CheckpointRef, pairs: list[CollapsePair]) -> None:
+        self.adapter, self.pairs = ckpt, tuple(pairs)
+        if self._ports is None or self._user_id is None:
+            return
+        try:
+            self.asked = _personal(self._user_id, ckpt, self._ports)
+        except Exception as error:  # an unforeseen failure: the gate's verdict stands, the wake falls back
+            logger.warning("tonight's personal before-and-after broke (%s)", type(error).__name__)
+            self.asked = None
+
+    def best(self) -> CollapsePair | None:
+        """The pair most in the adapter's favour (base dragged, adapter not), else the first."""
+        def score(pair: CollapsePair) -> int:
+            return int(pair.base_dragged) - int(pair.dragged)
+
+        return max(self.pairs, key=score) if self.pairs else None  # max keeps the first of equals
+
+
+def save_pair(user_id: str, night: str, result: NightResult, pairs: GatePairs) -> None:
+    """Tonight's before and after for the wake, from what the gate handed over (no call is made here);
+    when there is none, the last night's pair is cleared."""
     gate = result.gates.get("collapse")
     adapter = pairs.adapter or result.checkpoint
-    if gate is None or gate.skipped or adapter is None:
-        return
-    labels = {"night": night, "before_model": BASE_MODEL, "after_model": adapter.id,
-              "promoted": result.status == "promoted"}
-    asked = _personal(user_id, adapter, ports)
     everyday = pairs.best()
-    if asked is not None:
-        question, before, after = asked
-        source = PERSONAL
-    elif everyday is not None:
-        question, before, after, source = everyday.prompt, everyday.base_reply, everyday.reply, GATE_EVERYDAY
-    else:
-        return
     try:
-        save_before_after(user_id, question=question, before=before, after=after, question_source=source, **labels)
-    except (OSError, ValueError) as error:  # the night stands; the wake says no pair was saved
+        if gate is None or gate.skipped or adapter is None:
+            clear_before_after(user_id)
+        elif pairs.asked is not None:
+            _save(user_id, night, result, adapter, pairs.asked, PERSONAL)
+        elif everyday is not None:
+            _save(user_id, night, result, adapter, (everyday.prompt, everyday.base_reply, everyday.reply), GATE_EVERYDAY)
+        else:
+            clear_before_after(user_id)
+    except (OSError, ValueError) as error:  # the night stands; the wake shows only a pair from its own night
         logger.warning("tonight's before-and-after wasn't saved (%s)", type(error).__name__)
+
+
+def _save(user_id: str, night: str, result: NightResult, adapter: CheckpointRef, asked: tuple[str, str, str],
+          source: str) -> None:
+    question, before, after = asked
+    save_before_after(user_id, question=question, before=before, after=after, night=night, before_model=BASE_MODEL,
+                      after_model=adapter.id, promoted=result.status == "promoted", question_source=source)

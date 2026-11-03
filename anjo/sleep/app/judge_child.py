@@ -357,17 +357,16 @@ def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str
         notifier = OutreachNotifier()
     held_note = JudgeNotifier(notifier, recorder.note)
     mind = MindLock(str(record["user_id"]), live, on_rest=recorder.rest_mind)
-    pairs = GatePairs()
     outcome: Outcome | None = None
     try:
-        outcome = execute(wiring=judge_wiring(held_note, live, mind, pairs), job=_job(record), profile=from_env(environ),
+        job = _job(record)  # the personal question is asked as the collapse gate hands over (``judge_pair``)
+        pairs = GatePairs(job["user"], personal or (lambda: default_ports(job["user"], job["night"], job["window"])))
+        outcome = execute(wiring=judge_wiring(held_note, live, mind, pairs), job=job, profile=from_env(environ),
                           data_dir=Path(environ[DATA_DIR_ENV]), ledger=book, observer=recorder.observe,
                           environ=environ)
         result: NightResult = outcome.result
         held_note.flush()
-        job = _job(record)
-        save_pair(job["user"], str(record["night"]), result, pairs,
-                  personal or (lambda: default_ports(job["user"], job["night"], job["window"])))
+        save_pair(job["user"], str(record["night"]), result, pairs)  # asked inside the gates step: only saved now
         serve(result.checkpoint if result.status == "promoted" else None, recorder, ensure)
         status, why = ("failed", f"stopped at {result.failed_at}") if result.status == "failed" else ("done", None)
     except Exception as error:  # the night's record says it failed; the process exits non-zero

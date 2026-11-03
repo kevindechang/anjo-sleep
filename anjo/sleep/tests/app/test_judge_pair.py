@@ -1,8 +1,9 @@
 # mypy: disallow-untyped-decorators=False
 """The wake's before and after on a judge's night (``app/judge_pair.py``): one personal question made
 from what this judge said (her chooser's target, else their latest substantive message), asked of
-base Glimmer and tonight's adapter at the end of the night; the collapse gate's everyday pair when
-that can't be done; nothing when the gate didn't run. Fakes only: no GPU, no model."""
+base Glimmer and tonight's adapter inside the collapse gate's metered window (as it hands over what
+it checked); the gate's everyday pair when that can't be done; nothing (and no stale pair left) when
+the gate didn't run. Fakes only: no GPU, no model."""
 from __future__ import annotations
 
 from datetime import date
@@ -34,8 +35,8 @@ def _pair(i: int, *, base_dragged: bool = False, dragged: bool = False) -> Colla
                         base_dragged, dragged)
 
 
-def _gate(*pairs: CollapsePair) -> GatePairs:
-    sink = GatePairs()
+def _gate(*pairs: CollapsePair, ports: PersonalPorts | None = None) -> GatePairs:
+    sink = GatePairs(USER, ports)
     sink(CKPT, list(pairs))
     return sink
 
@@ -62,6 +63,7 @@ def _ports(question: str | None, serving: Serving) -> PersonalPorts:
 def saved(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     monkeypatch.setattr(judge_pair, "save_before_after", lambda user_id, **kw: out.append({"user": user_id, **kw}))
+    monkeypatch.setattr(judge_pair, "clear_before_after", lambda user_id: out.append({"cleared": user_id}))
     return out
 
 
@@ -83,9 +85,11 @@ def test_a_message_is_kept_in_their_own_words() -> None:
 
 def test_the_personal_question_goes_to_base_glimmer_and_the_adapter(saved: list[dict[str, Any]]) -> None:
     serving = Serving()
-    save_pair(USER, "2026-11-03", _result(), _gate(_pair(0)), _ports("Thinking about hackathon demo: what next?", serving))
-    assert serving.asked == [(None, "Thinking about hackathon demo: what next?"),
+    gate = _gate(_pair(0), ports=_ports("Thinking about hackathon demo: what next?", serving))
+    assert serving.asked == [(None, "Thinking about hackathon demo: what next?"),  # asked as the gate hands over
                              ("p-aaaaaaaaaaaa-n1", "Thinking about hackathon demo: what next?")]
+    save_pair(USER, "2026-11-03", _result(), gate)
+    assert len(serving.asked) == 2  # saving asks nothing more
     assert saved == [{"user": USER, "question": "Thinking about hackathon demo: what next?", "before": "base reply",
                       "after": "adapter reply", "night": "2026-11-03", "before_model": "base Glimmer",
                       "after_model": "p-aaaaaaaaaaaa-n1", "promoted": True, "question_source": "personal"}]
@@ -94,7 +98,7 @@ def test_the_personal_question_goes_to_base_glimmer_and_the_adapter(saved: list[
 def test_a_rejected_adapter_is_still_asked_by_name_and_says_so(saved: list[dict[str, Any]]) -> None:
     serving = Serving()
     held = GateResult("collapse", False, 20.0, 5.0, "dragged")
-    save_pair(USER, "2026-11-03", _result("rejected", held), _gate(_pair(0)), _ports("q?", serving))
+    save_pair(USER, "2026-11-03", _result("rejected", held), _gate(_pair(0), ports=_ports("q?", serving)))
     assert serving.asked[1] == ("p-aaaaaaaaaaaa-n1", "q?")
     assert (saved[0]["promoted"], saved[0]["question_source"]) == (False, "personal")
 
@@ -103,24 +107,44 @@ def test_a_rejected_adapter_is_still_asked_by_name_and_says_so(saved: list[dict[
 def test_without_a_personal_pair_the_gates_everyday_one_is_kept_and_labelled(saved: list[dict[str, Any]],
                                                                              why: str) -> None:
     serving = Serving(fail=why == "serving_down")
-    gate = _gate(_pair(0), _pair(1, dragged=True), _pair(2, base_dragged=True))
-    save_pair(USER, "2026-11-03", _result(), gate, _ports(None if why == "no_question" else "q?", serving))
+    gate = _gate(_pair(0), _pair(1, dragged=True), _pair(2, base_dragged=True),
+                 ports=_ports(None if why == "no_question" else "q?", serving))
+    save_pair(USER, "2026-11-03", _result(), gate)
     assert [(s["question"], s["before"], s["after"], s["question_source"]) for s in saved] == [
         ("everyday question 2?", "base answer 2", "adapter answer 2", "gate_everyday")]
 
 
 @pytest.mark.parametrize("case", ["skipped", "never_ran"])
-def test_no_gate_no_pair_and_no_call(saved: list[dict[str, Any]], case: str) -> None:
+def test_no_gate_no_pair_no_call_and_no_stale_pair(saved: list[dict[str, Any]], case: str) -> None:
     serving = Serving()
     gate = GateResult("collapse", False, 0.0, 5.0, "off", skipped=True) if case == "skipped" else None
-    save_pair(USER, "2026-11-03", _result("rejected", gate), GatePairs(), _ports("q?", serving))
-    assert saved == [] and serving.asked == []
+    save_pair(USER, "2026-11-03", _result("rejected", gate), GatePairs(USER, _ports("q?", serving)))
+    assert saved == [{"cleared": USER}] and serving.asked == []  # last night's pair isn't shown as tonight's
 
 
-def test_a_gate_with_no_everyday_pair_still_gets_the_personal_one(saved: list[dict[str, Any]]) -> None:
+def test_a_gate_that_ran_but_has_nothing_to_show_clears_the_old_pair(saved: list[dict[str, Any]]) -> None:
+    save_pair(USER, "2026-11-03", _result(), _gate(ports=_ports(None, Serving())))
+    assert saved == [{"cleared": USER}]
+
+
+def test_a_rejected_adapter_from_an_old_gate_cache_still_gets_the_personal_one(saved: list[dict[str, Any]]) -> None:
+    """The gate's cache predates its replies: it hands over the adapter it checked and no pairs; a
+    rejected night has no checkpoint, so the adapter comes from the hand-over alone."""
     serving = Serving()
-    save_pair(USER, "2026-11-03", _result(), _gate(), _ports("q?", serving))  # base replies weren't kept
-    assert [s["question_source"] for s in saved] == ["personal"]
+    held = GateResult("collapse", False, 20.0, 5.0, "dragged")
+    save_pair(USER, "2026-11-03", _result("rejected", held), _gate(ports=_ports("q?", serving)))
+    assert serving.asked == [(None, "q?"), ("p-aaaaaaaaaaaa-n1", "q?")]
+    assert [(s["question_source"], s["after_model"], s["promoted"]) for s in saved] == [
+        ("personal", "p-aaaaaaaaaaaa-n1", False)]
+
+
+def test_a_personal_question_that_breaks_never_breaks_the_gate(saved: list[dict[str, Any]]) -> None:
+    def broken(adapter: CheckpointRef | None, question: str) -> str:
+        raise RuntimeError("anything at all")
+
+    gate = _gate(_pair(0), ports=PersonalPorts(question=lambda uid: "q?", reply=broken))  # doesn't raise
+    save_pair(USER, "2026-11-03", _result(), gate)
+    assert [s["question_source"] for s in saved] == ["gate_everyday"]
 
 
 def test_the_question_comes_from_her_chooser_first_then_their_last_message(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,3 +177,61 @@ def test_replies_are_short_and_from_the_nights_own_client() -> None:
     assert judge_pair.REPLY_TOKENS <= 200
     with pytest.raises(ValueError):
         judge_pair.client_reply(type("C", (), {"complete": lambda *a, **k: type("R", (), {"text": " "})()})())(None, "q?")
+
+
+def test_the_personal_replies_run_inside_the_nights_gpu_session_and_are_in_its_cost(tmp_path: Path) -> None:
+    """The collapse gate hands over inside the gates step: the two replies run while the batch's GPU
+    reservation is open, and their serving time is in the gates' cost part and the night's cost (which
+    the judge's ledger settles), never after it."""
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+
+    from anjo.sleep.night.run import run_night_batch_with
+    from anjo.sleep.tests.night_fakes import NIGHT, World
+
+    def night(root: Path, personal: bool) -> tuple[NightResult, list[bool]]:
+        world, in_session = World(root), list[bool]()
+        world.plan("p1", NIGHT)
+
+        class Gpu:
+            open_now = False
+
+            @contextmanager
+            def held(self) -> Iterator[None]:
+                self.open_now = True
+                try:
+                    yield
+                finally:
+                    self.open_now = False
+
+            def open(self, due: Any) -> Any:
+                return self.held()
+
+        gpu = Gpu()
+
+        def reply(adapter: CheckpointRef | None, question: str) -> str:
+            in_session.append(gpu.open_now)
+            world.tick()  # a minute of serving time
+            return "a reply"
+
+        sink = GatePairs("p1", PersonalPorts(question=lambda uid: "q?", reply=reply) if personal else None)
+
+        class Gates:
+            def for_person(self, uid: str) -> dict[str, Any]:
+                inner = world.gates.for_person(uid)
+
+                def collapse(ckpt: CheckpointRef) -> GateResult:
+                    checked = inner["collapse"](ckpt)
+                    sink(ckpt, [])  # what CollapseGate.check does before it returns
+                    return checked
+
+                return {**inner, "collapse": collapse}
+
+        return run_night_batch_with(world.deps(gates=Gates(), gpu=gpu), {"p1": NIGHT})["p1"], in_session
+
+    plain, _ = night(tmp_path / "plain", personal=False)
+    asked, in_session = night(tmp_path / "asked", personal=True)
+    assert in_session == [True, True]
+    two_minutes = 2 * 60 / 3600.0 * 1.95  # night_fakes' serving price
+    assert asked.cost_parts["gates"] - plain.cost_parts["gates"] == pytest.approx(two_minutes)
+    assert asked.cost_usd - plain.cost_usd == pytest.approx(two_minutes)
