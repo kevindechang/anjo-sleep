@@ -25,6 +25,10 @@ seed committed before the freeze and revealed after it (seq 74, 75): P03a, P03b 
 two accelerated nights, and one full morning of probes scored each. The judge was DeepSeek V4.1
 Flash on Fireworks. Scored once (seq 91 to 94).
 
+**Checking the scores.** Each person's `results/<id>/scores/final.json` is registered as the
+sha256 of `json.dumps({"life_id": <id>, "final": <the file's text>}, sort_keys=True,
+separators=(",", ":"))` (`reports/final.py`, `_log`). All three match seq 92, 93 and 94.
+
 **Registered claim rows.** A comparison wins when every condition holds: the 95% interval's lower
 bound is above 0.5, the score is at least 0.55, at least 58% of the decisive comparisons are wins,
 and at least 2 of the 3 people are ahead.
@@ -148,7 +152,8 @@ One more development result:
 ## 6. What is and isn't in this repo
 
 - In the repo: every score file, chart, night summary and log under `results/` (simulated people
-  only; the exporter refuses anything else), the MIND held-out package, the ledger on `prereg`, and
+  only; the exporter refuses anything else; night summaries show their log path relative to the
+  data folder), the MIND held-out package, the ledger on `prereg`, and
   the code at every commit.
 - Not in the repo:
   - MIND's raw per-life prediction records, about 30 MB a run;
