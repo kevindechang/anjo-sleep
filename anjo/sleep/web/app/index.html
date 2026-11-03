@@ -27,6 +27,8 @@
       <a class="brand" href="/sleep/app">Anjo</a>
       <div class="nav-links">
         <a class="lnk" href="#grow">Start</a>
+        <a class="lnk" href="#night">One night</a>
+        <a class="lnk" href="#results">Results</a>
         <a class="lnk" href="#new">What's new</a>
         <a class="lnk" href="/sleep/demo">Teo's Anjo</a>
       </div>
@@ -39,7 +41,7 @@
       <div id="hero-pigment-veil" aria-hidden="true"></div>
       <div class="wrap hero-inner">
         <h1>She learns while she sleeps.</h1>
-        <p class="lede">Anjo is a personal intelligence that grows with you.<br />Talk to her, then send her to sleep.<br />She wakes up changed, and shows you why.</p>
+        <p class="lede">Other AIs take notes on you. Anjo sleeps on it.<br />Talk to her by day. At night she works through what you said<br />and trains a small model of her own. In the morning she shows you what changed.</p>
         <form class="code-form hero-code" id="code-form" novalidate>
           <label class="field-label" for="code" id="code-label">Your judge code, from the submission form</label>
           <div class="code-row hero-actions" id="grow">
@@ -57,6 +59,147 @@
       </div>
     </header>
 
+    <section class="sect" id="night" aria-labelledby="night-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">One night</span>
+          <h2 id="night-heading">What happens while you sleep. <em>Every step is on screen.</em></h2>
+        </div>
+        <div class="cycle night-cycle">
+          <div>
+            <h3 class="tier-name">Day</h3>
+            <p class="tier-when">You talk. She listens.</p>
+            <ol>
+              <li>Tell her what you're working toward and what's in the way.</li>
+              <li>Say how you like help: short, blunt, one idea at a time.</li>
+              <li>Watch what she keeps, in her own words, beside the chat.</li>
+            </ol>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+          <div>
+            <h3 class="tier-name">Night</h3>
+            <p class="tier-when">She works on it.</p>
+            <ol>
+              <li>She picks the one question about you she most wants to settle.</li>
+              <li>She looks into it and makes a bet she can check later.</li>
+              <li>She practises on your words and trains her own small model.</li>
+            </ol>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+          <div>
+            <h3 class="tier-name">Morning</h3>
+            <p class="tier-when">She comes back changed.</p>
+            <ol>
+              <li>Ask her the same thing as yesterday and compare, side by side.</li>
+              <li>See what she now thinks about your work, and why.</li>
+              <li>Read every step of her night, start to finish.</li>
+            </ol>
+            <span class="depth" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sect" id="odds" aria-labelledby="odds-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">Honest by design</span>
+          <h2 id="odds-heading">She shows her odds. <em>You can tell her she's wrong.</em></h2>
+        </div>
+        <ul class="frontier">
+          <li>
+            <span class="chip live">New</span>
+            <h3>Hunches with plain odds.</h3>
+            <p>Every hunch comes in plain words, like "about 7 in 10", with a date to check it. When it comes due, she marks herself right or wrong. Until there are enough bets to judge, she says so.</p>
+          </li>
+          <li>
+            <span class="chip live">New</span>
+            <h3>You stay in charge of what she believes.</h3>
+            <p>Think she's got you wrong? Dispute a hunch and she reads your note as evidence the next night. Or hide it, and it's gone from what she shows you.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="sect" id="results" aria-labelledby="results-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">What we measured</span>
+          <h2 id="results-heading">Tested on people she'd never met. <em>Scored once.</em></h2>
+        </div>
+        <p class="results-lede">We wrote down every test and every pass mark before running anything. After the code froze, we drew three new simulated people, ran their nights and scored them once. Every result is below, including the ones that went against us.</p>
+        <ul class="figures">
+          <li class="lead">
+            <span class="chip live">3 new people · scored once</span>
+            <p class="fig">76<small>%</small></p>
+            <h3>Her overnight notes made her answers better.</h3>
+            <p>With the notes she wrote overnight, her answers beat the same model without them in 76% of blind comparisons about the person's work, and in 66% on how they like to be spoken to. That held for all three people.</p>
+            <p class="src">Judged blind by a model from another family, in both orders</p>
+          </li>
+          <li class="lead">
+            <span class="chip research">Research · simulated lives</span>
+            <p class="fig">&frac13;</p>
+            <h3>MIND's odds came closer to the truth than Gemini's.</h3>
+            <p>MIND guessed what each of 60 new simulated people would do next, over twelve weeks. Those guesses carried about a third of the avoidable error that the best Gemini setup we tried carried. MIND is our research model and isn't in the app yet.</p>
+            <p class="src">Avoidable error: the gap to the true odds the simulation used</p>
+          </li>
+          <li>
+            <span class="chip live">Registered row</span>
+            <p class="fig">57<small>%</small></p>
+            <h3>Training alone didn't measurably help yet.</h3>
+            <p>Two nights of training, with every note removed, didn't make her measurably better than the base model: 57% on the person's work and 52% on how they like to be spoken to. The pass mark needed a margin, and neither result had one.</p>
+          </li>
+          <li>
+            <span class="chip live">3 new people</span>
+            <p class="fig">78<small>%</small></p>
+            <h3>But training made her more theirs.</h3>
+            <p>With notes off, her own trained model beat the model trained for another person 78% of the time on their work and 60% on how they like to be spoken to, for all three people. Two of the three were a matched pair, in the same field with opposite tastes, and each one's model did badly for the other. Training moved her toward each person. It didn't yet take her past the base model.</p>
+          </li>
+          <li>
+            <span class="chip live">Measured</span>
+            <p class="fig"><small>$</small>41&ndash;60</p>
+            <h3>Per person, per month. Too much, for now.</h3>
+            <p>That's the price of training her every night. With lighter nights on most days, our model of the bill comes to $12&ndash;15. Our ceiling is $10, so she learns, but not yet at a viable cost.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="sect" id="misses" aria-labelledby="misses-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">What didn't work</span>
+          <h2 id="misses-heading">The parts that failed. <em>Kept on the page.</em></h2>
+        </div>
+        <ul class="misses">
+          <li>
+            <h3>Her trained model plus her notes did worse than her notes alone.</h3>
+            <p>On new work, adding her trained model to her notes lost about two out of three comparisons against her notes alone (32% and 33%, against short and full notes).</p>
+          </li>
+          <li>
+            <h3>Training alone isn't better than the base model yet.</h3>
+            <p>On the person's work, it came out ahead for two of the three people and fell just short of the pass mark. On how they like to be spoken to, it was even.</p>
+          </li>
+          <li>
+            <h3>MIND, dropped untrained into a new kind of world, did worse than always guessing 50/50.</h3>
+            <p>Retrained on that world, it beat Gemini there too. It still has to learn each new kind of life.</p>
+          </li>
+          <li>
+            <h3>We couldn't show that her questions pay off.</h3>
+            <p>Asking the person a question looked useful, but the uncertainty range on the gain still included zero.</p>
+          </li>
+          <li>
+            <h3>The odds in the app don't come from MIND yet.</h3>
+            <p>The hunches you see are written by her night agent. Connecting them to the tested MIND model is the next step.</p>
+          </li>
+          <li>
+            <h3>It costs too much.</h3>
+            <p>Every person's month came in over our $10 ceiling. The biggest cost is the morning test, which runs every version of her side by side.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
     <section class="sect" id="new" aria-labelledby="new-heading">
       <div class="wrap">
         <div class="sect-head">
@@ -68,7 +211,7 @@
             <h3>Sleep</h3>
             <div class="body">
               <span class="chip live">New</span>
-              <p>Each night she reads the day, picks what she wants to settle, studies, bets on herself and practises. Then she makes a small weight update, and a gate keeps it only if she does better.</p>
+              <p>Each night she reads the day, picks what she wants to settle, studies, bets on herself and practises. Then she trains a small update to her own weights.</p>
             </div>
           </li>
           <li>
