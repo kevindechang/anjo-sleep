@@ -24,13 +24,10 @@ window would store each a second time. As extraction starts it waits for a pass 
 moves ``live_mind.extracted_until``) and reads the cursor then: under the night lock, no new pass
 extracts. Only a judge's night does this; every other night's wiring is the app's own.
 
-The wake's before and after: tonight's collapse gate asks base Glimmer and tonight's adapter the same
-everyday prompts, and hands both replies over (``GatePairs``, through ``AppGates.with_pairs``). Once the
-night is over, one of those pairs is saved for the wake (``judge_cohort.save_before_after``): the one
-the gate scored most in the adapter's favour (base dragged into the field, the adapter not), else the
-first. It is saved whether the gate promoted or not, and says which. A night whose collapse gate didn't
-run, or ran on a base side kept from before its replies were, saves nothing: no pair is made up, and
-no model is asked for one.
+The wake's before and after (``judge_pair``): once the night is over, while Glimmer is still up and
+before tonight's adapter is served, one personal question made from what the judge said goes to base
+Glimmer and to tonight's adapter; without one, the collapse gate's everyday pair (handed over through
+``AppGates.with_pairs``) is kept instead. Nothing is saved when the collapse gate didn't run.
 
 The note: phase 1 writes it and the refine step may write it again after the gates, so the night
 view shows each version as it comes, and the judge's outreach gets one note, the last, when the
@@ -49,10 +46,9 @@ from pathlib import Path
 from typing import Any, Final, Protocol
 
 from anjo.sleep.app import judge_night as jn
-from anjo.sleep.app.judge_cohort import save_before_after
+from anjo.sleep.app.judge_pair import GatePairs, PersonalPorts, default_ports, save_pair
 from anjo.sleep.app.judge_stages import Stages, close, fold, phase, rest_mind
 from anjo.sleep.budget import Ledger, Reservation
-from anjo.sleep.gates.collapse import CollapsePair
 from anjo.sleep.checkpoints import DATA_DIR_ENV
 from anjo.sleep.night.demo import from_env
 from anjo.sleep.night.deps import NightDeps, NightOptions, Trainer
@@ -62,7 +58,6 @@ from anjo.sleep.types import CheckpointRef, Evidence, NightResult
 LIVE: Final = "Live: her next reply comes from tonight's weights"
 LOADS_LATER: Final = "Loads with her next reply"
 NOTHING_TO_SERVE: Final = "Nothing new to serve"
-BASE_MODEL: Final = "base Glimmer"  # what the collapse gate's base side answers with
 PASS_WAIT_S: Final = 120.0  # how long a night waits for a live MIND pass already under way, then for its lock
 logger = logging.getLogger(__name__)
 
@@ -286,37 +281,6 @@ def target_label(user_id: str) -> Callable[[str], str | None]:
     return label
 
 
-class GatePairs:
-    """What tonight's collapse gate handed over: the adapter it checked and its paired replies."""
-
-    def __init__(self) -> None:
-        self.adapter: str | None = None
-        self.pairs: tuple[CollapsePair, ...] = ()
-
-    def __call__(self, ckpt: CheckpointRef, pairs: list[CollapsePair]) -> None:
-        self.adapter, self.pairs = ckpt.id, tuple(pairs)
-
-    def best(self) -> CollapsePair | None:
-        """The pair most in the adapter's favour (base dragged, adapter not), else the first."""
-        def score(pair: CollapsePair) -> int:
-            return int(pair.base_dragged) - int(pair.dragged)
-
-        return max(self.pairs, key=score) if self.pairs else None  # max keeps the first of equals
-
-
-def save_pair(user_id: str, night: str, result: NightResult, pairs: GatePairs) -> None:
-    """One real pair from tonight's collapse gate, for the wake; nothing when the gate didn't run."""
-    gate = result.gates.get("collapse")
-    pair = pairs.best()
-    if gate is None or gate.skipped or pair is None or pairs.adapter is None:
-        return
-    try:
-        save_before_after(user_id, question=pair.prompt, before=pair.base_reply, after=pair.reply, night=night,
-                          before_model=BASE_MODEL, after_model=pairs.adapter, promoted=result.status == "promoted")
-    except (OSError, ValueError) as error:  # the night stands; the wake says no pair was saved
-        logger.warning("tonight's before-and-after wasn't saved (%s)", type(error).__name__)
-
-
 def judge_wiring(notifier: Notifier, live: LivePorts | None = None, mind: MindLock | None = None,
                  pairs: GatePairs | None = None) -> Callable[[Trainer, NightOptions], NightDeps]:
     """The app's night wiring, with the judge's note held back, extraction after the live passes',
@@ -378,7 +342,7 @@ def _settle(held: Reservation, outcome: Outcome | None, recorder: Recorder) -> f
 
 def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str, str], execute: Execute,
         notifier: Notifier | None = None, ensure: Callable[[CheckpointRef], None] | None = None,
-        live: LivePorts | None = None) -> int:
+        live: LivePorts | None = None, personal: PersonalPorts | None = None) -> int:
     record = store.get(night_id)
     if record is None:
         return 2
@@ -401,7 +365,9 @@ def run(night_id: str, *, store: jn.JobStore, book: Ledger, environ: Mapping[str
                           environ=environ)
         result: NightResult = outcome.result
         held_note.flush()
-        save_pair(str(record["user_id"]), str(record["night"]), result, pairs)
+        job = _job(record)
+        save_pair(job["user"], str(record["night"]), result, pairs,
+                  personal or (lambda: default_ports(job["user"], job["night"], job["window"])))
         serve(result.checkpoint if result.status == "promoted" else None, recorder, ensure)
         status, why = ("failed", f"stopped at {result.failed_at}") if result.status == "failed" else ("done", None)
     except Exception as error:  # the night's record says it failed; the process exits non-zero

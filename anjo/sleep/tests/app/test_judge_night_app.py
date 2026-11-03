@@ -657,7 +657,7 @@ def test_a_live_pass_then_a_judges_night_extract_each_turn_once(monkeypatch: pyt
     assert sorted(stored) == sorted(f"They said: {text}" for text in said)  # no item stored twice
 
 
-# ── the wake's before and after: one real pair from tonight's collapse gate ──
+# ── the wake's before and after, through the night's own process (app/judge_pair.py has the rest) ──
 
 
 def _pair(i: int, *, base_dragged: bool = False, dragged: bool = False) -> Any:
@@ -667,57 +667,50 @@ def _pair(i: int, *, base_dragged: bool = False, dragged: bool = False) -> Any:
                         reply=f"adapter answer {i}", base_dragged=base_dragged, dragged=dragged)
 
 
-def _gated(status: str, root: Path, *, collapse: Any) -> NightResult:
-    gates = {} if collapse is None else {"collapse": collapse}
-    return replace(_result(status, root, _ckpt() if status == "promoted" else None), gates=MappingProxyType(gates))
+def _paired_run(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, result: NightResult, pairs: list[Any],
+                question: str | None, order: list[str]) -> list[dict[str, Any]]:
+    """A night whose collapse gate hands ``pairs`` over; what was saved, with the order of the
+    end-of-night calls in ``order`` (the personal replies come before the adapter is served)."""
+    from anjo.sleep.app import judge_pair
 
-
-def _paired_run(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, result: NightResult,
-                pairs: list[Any] | None) -> list[dict[str, Any]]:
-    """A night whose collapse gate hands ``pairs`` over (None: the gate never ran); what was saved."""
     night_id, saved, sinks = _queued(host, monkeypatch), list[dict[str, Any]](), list[Any]()
     monkeypatch.setattr(judge_child, "judge_wiring", lambda notifier, *args: sinks.append(args[-1]) or (lambda t, o: None))
     monkeypatch.setattr(judge_child, "target_label", lambda uid: lambda target_id: None)
-    monkeypatch.setattr(judge_child, "save_before_after", lambda user_id, **kw: saved.append({"user": user_id, **kw}))
+    monkeypatch.setattr(judge_pair, "save_before_after", lambda user_id, **kw: saved.append({"user": user_id, **kw}))
+
+    def reply(adapter: Any, asked: str) -> str:
+        order.append("base" if adapter is None else "adapter")
+        return f"{'base' if adapter is None else 'adapter'} on {asked}"
 
     def execute(**kwargs: Any) -> JudgeOutcome:
-        if pairs is not None:
-            sinks[-1](_ckpt(), pairs)
+        sinks[-1](_ckpt(), pairs)
         return JudgeOutcome(result, warm_usd=0.0)
 
     judge_child.run(night_id, store=host["store"], book=host["book"], environ={"ANJO_DATA_DIR": str(host["root"])},
-                    execute=execute, notifier=Notes(), ensure=lambda ckpt: None, live=Live().ports())
+                    execute=execute, notifier=Notes(), ensure=lambda ckpt: order.append("served"), live=Live().ports(),
+                    personal=judge_pair.PersonalPorts(question=lambda uid: question, reply=reply))
     return saved
 
 
-def test_the_wake_gets_the_pair_the_gate_scored_most_for_tonights_adapter(host: dict[str, Any],
+def test_the_night_asks_her_personal_question_before_serving_and_saves_it(host: dict[str, Any],
                                                                           monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.types import GateResult
 
-    passed = GateResult("collapse", True, 0.0, 5.0)
-    pairs = [_pair(0), _pair(1, dragged=True), _pair(2, base_dragged=True), _pair(3, base_dragged=True)]
-    saved = _paired_run(host, monkeypatch, _gated("promoted", host["root"], collapse=passed), pairs)
-    assert saved == [{"user": JUDGE, "question": "everyday question 2?", "before": "base answer 2",
-                      "after": "adapter answer 2", "night": "2026-11-03", "before_model": judge_child.BASE_MODEL,
-                      "after_model": "p-aaaaaaaaaaaa-n1", "promoted": True}]
+    order: list[str] = []
+    result = replace(_result("promoted", host["root"], _ckpt()),
+                     gates=MappingProxyType({"collapse": GateResult("collapse", True, 0.0, 5.0)}))
+    saved = _paired_run(host, monkeypatch, result, [_pair(0)], "Thinking about hackathon demo: what next?", order)
+    assert order == ["base", "adapter", "served"]
+    assert [(s["user"], s["question_source"], s["after"], s["night"], s["promoted"]) for s in saved] == [
+        (JUDGE, "personal", "adapter on Thinking about hackathon demo: what next?", "2026-11-03", True)]
 
 
-def test_with_no_score_between_them_the_first_pair_is_kept_and_a_rejection_says_so(
-        host: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_with_no_personal_question_the_night_keeps_the_gates_everyday_pair(host: dict[str, Any],
+                                                                            monkeypatch: pytest.MonkeyPatch) -> None:
     from anjo.sleep.types import GateResult
 
-    held = GateResult("collapse", False, 20.0, 5.0, "dragged")
-    saved = _paired_run(host, monkeypatch, _gated("rejected", host["root"], collapse=held), [_pair(0), _pair(1)])
-    assert [(s["question"], s["promoted"], s["after_model"]) for s in saved] == [
-        ("everyday question 0?", False, "p-aaaaaaaaaaaa-n1")]
-
-
-@pytest.mark.parametrize("case", ["skipped", "never_ran", "no_pairs"])
-def test_no_gate_no_pair(host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    from anjo.sleep.types import GateResult
-
-    gate = {"skipped": GateResult("collapse", False, 0.0, 5.0, "off", skipped=True), "never_ran": None,
-            "no_pairs": GateResult("collapse", True, 0.0, 5.0)}[case]
-    result = _gated("rejected", host["root"], collapse=gate)
-    pairs = None if case == "never_ran" else [] if case == "no_pairs" else [_pair(0)]
-    assert _paired_run(host, monkeypatch, result, pairs) == []
+    result = replace(_result("rejected", host["root"]),
+                     gates=MappingProxyType({"collapse": GateResult("collapse", False, 20.0, 5.0, "dragged")}))
+    saved = _paired_run(host, monkeypatch, result, [_pair(0), _pair(1, base_dragged=True)], None, [])
+    assert [(s["question"], s["question_source"], s["promoted"], s["after_model"]) for s in saved] == [
+        ("everyday question 1?", "gate_everyday", False, "p-aaaaaaaaaaaa-n1")]
