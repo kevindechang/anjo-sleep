@@ -1,7 +1,5 @@
 # Results: every run, October 27 to November 3, 2026
 
-<!-- COPY-PENDING(kevin): first draft. -->
-
 This page lists every experiment we ran during the hackathon: the two registered tests, the
 development runs that chose the recipe, and the runs that produced no result, each with its cause.
 Every person in these runs is simulated. No real person's data is in any number here.
@@ -47,9 +45,9 @@ Per person (knowledge / interaction):
 
 | Person | 3 v 1 | 3 v 3x | Adapter scored |
 |---|---|---|---|
-| P07a | 0.738 / 0.617 | 0.662 / 0.567 | night 2 |
-| P03a | 0.537 / 0.483 | 0.775 / 0.567 | night 2 |
-| P03b | 0.438 / 0.450 | 0.900 / 0.667 | night 1: the gate didn't promote its night-2 adapter |
+| P07a (Hugh) | 0.738 / 0.617 | 0.662 / 0.567 | night 2 |
+| P03a (Elena) | 0.537 / 0.483 | 0.775 / 0.567 | night 2 |
+| P03b (Theo) | 0.438 / 0.450 | 0.900 / 0.667 | night 1: the gate didn't promote its night-2 adapter |
 
 **Measured in the same mornings, not claim rows.**
 
@@ -166,7 +164,7 @@ One more development result:
 ## Appendix: every scored night
 
 Generated from `results/*/scores/night-*.json`. Columns are arm vs base (1) unless named, as
-knowledge / interaction. "–" means the arm wasn't run that morning. Daily-v1 mornings use 8
+knowledge / interaction. "Night" is the person's simulated calendar date, not the date the run happened. "–" means the arm wasn't run that morning. Daily-v1 mornings use 8
 knowledge probes and are noisy; full mornings use 40.
 
 | Account | id | Night | Probe set | Knowledge n | Adapter | 2C v 1 | 3 v 1 | 4 v 1 | 3 v 3x | 4 v 2C |

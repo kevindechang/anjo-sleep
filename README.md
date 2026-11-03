@@ -1,11 +1,9 @@
 # Anjo Sleep
 
-<!-- COPY-PENDING(kevin): every paragraph of this README is a first draft. -->
-
-**It sleeps on it.** Anjo Sleep gives each person their own copy of an open model, Muse Glimmer
-30B, and teaches it that person every night. During the day you just talk with Anjo. At night
-her state decides what to work on: she follows up on a plan you dated, or studies a topic you
-left open. She practises the kind of conversation you have, a personal adapter trains on that
+**It sleeps on it.** Anjo Sleep gives each person their own LoRA adapter on an open model, Muse
+Glimmer 30B, and trains it on that person every night. During the day you just talk with Anjo. At
+night its state decides what to work on: it follows up on a plan you dated, or studies a topic you
+left open. It practises the kind of conversation you have, the person's adapter trains on that
 practice, and three gates check the result: general skills, collapse into your field, and
 safety. Only a night that passes every gate it runs is promoted. For the hackathon the safety
 gate is switched off (`ANJO_SLEEP_SAFETY_GATE`): it sends no case to a model, runs only its
@@ -14,27 +12,33 @@ still guards every reply a person sees. After a night that fails or is rejected,
 model keeps serving.
 
 **Naps and deep sleeps.** Not every night trains. Sleep pressure builds from the turns and new
-evidence since her last deep sleep and the threads she is most at risk on. Below the threshold she
+evidence since its last deep sleep and the threads it is most at risk on. Below the threshold it
 naps: extraction, the chooser and the brief run, at about $0, and nothing wakes Glimmer. MIND's
-thinking and the note wait for her next deep sleep, which reads every day she napped. Once pressure
-reaches the threshold, or a week has passed, she sleeps deep and the full night runs. The threshold
+thinking and the note wait for its next deep sleep, which reads every day it napped. Once pressure
+reaches the threshold, or a week has passed, it sleeps deep and the full night runs. The threshold
 rises as the month's spend nears its cap (`ANJO_SLEEP_MONTH_USD`, $15 by default), and a deep sleep
 that would pass the cap becomes a nap that says so (`python -m anjo.sleep.night.past --month <id>`
 prints a month's spend and the room left). `ANJO_SLEEP_PRESSURE=0` turns naps off. Every page shows
 which kind of night it was, with its pressure and the reason.
 
-**State decides, weights learn.** What Anjo knows about you stays in her state: the evidence
-store, the brief, her targets and the receipts for every choice she made. Facts stay word for
-word, so they stay exact and delete cleanly. The weights learn the language of your field and
-how to talk with you, and we test whether they do with no notes in the prompt at all, against
-the base model and against another person's trained weights. MIND, her inquiry process, notices
-problems nobody assigned, works on them across nights, and changes a belief only on evidence.
+**State decides; we test what the weights learn.** What Anjo knows about you stays in its state:
+the evidence store, the brief, its targets and the receipts for every choice it made. Facts stay
+word for word, so they stay exact and delete cleanly. The weights train on the language of your
+field and how you talk, and we test what they learned with no notes in the prompt at all, against
+the base model and against another person's trained weights. MIND, its inquiry process (research,
+not a Meta model), notices problems nobody assigned and works on them across nights; in the app it
+is the side panel of open questions, odds and a dated prediction.
 
 Built for the Meta Global AI Developer Hackathon, October 27 to November 4, 2026.
-Built with Muse Spark Open, under the Muse Model License and its Usage Policy (see NOTICE).
+Built on Meta's models: Muse Glimmer 30B (open weights) trains and serves each person's adapter,
+Muse Spark Open plays the person in practice and writes the teacher's replies, and Muse Spark
+answers while Glimmer's GPU is asleep. Muse Spark Open is used under the Muse Model License and its
+Usage Policy (see NOTICE).
 
-<!-- COPY-PENDING(kevin): the live link line. -->
 **Try it live:** [sleep.anjo.nexus](https://sleep.anjo.nexus), with the access code from the submission.
+You get a fresh Anjo. Its chat answers with base Glimmer plus the overnight notes, the arm that won;
+**Sleep now** runs a compressed night with every step visible, and the morning shows the night's
+adapter beside the notes. `/sleep/demo` shows Teo's pre-run week, night by night.
 
 ## Results
 
@@ -51,12 +55,11 @@ people in them are simulated. The two registered tests were each scored once:
     to the notes made answers worse (0.320).
   - Training every night costs $41 to $60 a person a month, against our $10 ceiling.
 - **MIND held-out: 60 people over 12 weeks.** MIND, a small model we trained from scratch, had
-  a third of the best Gemini setup's avoidable error (excess log loss 0.029 against 0.082). Its
-  questions didn't pay off yet (P4 failed). On a new kind of world it needs retraining first.
+  a third of the best Gemini setup's avoidable error on the queries Gemini answered (excess log
+  loss 0.029 against 0.082). Its questions didn't pay off yet (P4 failed), and its overnight step
+  hurt (P5). On a new kind of world it needs retraining first. MIND is research, not a Meta model.
 
 ## Architecture
-
-<!-- COPY-PENDING(kevin): node labels. -->
 
 ```mermaid
 flowchart LR
@@ -69,16 +72,16 @@ flowchart LR
 
     subgraph sleep["Anjo Sleep (this repo, built during the hackathon)"]
         route["Route override"]
-        glimmer["Her own Glimmer 30B on SageMaker (vLLM + LoRA)"]
+        glimmer["Glimmer 30B + each person's LoRA (vLLM on Modal or SageMaker)"]
         evidence["Evidence store and targets"]
-        chooser["Her chooser: wants, choices, receipts"]
-        mind["MIND: questions, hypotheses, findings"]
+        chooser["Its chooser: wants, choices, receipts"]
+        mind["MIND (research): open questions, odds, findings"]
         homework["Homework (Muse Wonder)"]
         practice["Practice (Muse Spark Open)"]
-        train["Nightly training (QLoRA on Modal)"]
-        gates["Gates: general, collapse, safety"]
+        train["Nightly training (QLoRA rank 32 on Modal)"]
+        gates["Gates: general, collapse, safety (off for the hackathon)"]
         note["Held note"]
-        sealed["Sealed tests (Muse Spark judge)"]
+        sealed["Sealed tests (DeepSeek V4.1 Flash judge)"]
     end
 
     appUI --> server
