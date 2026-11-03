@@ -109,6 +109,8 @@ button, input, textarea, select { font-family: inherit; }
 .night-cycle .tier-name { margin: 0; font-size: 12px; }
 .night-cycle .tier-when { margin: var(--s2) 0 0; font: 620 clamp(20px, 2.2vw, 26px)/1.1 var(--sans); letter-spacing: -0.03em; color: var(--text); }
 .night-cycle .tier-when + p { margin: var(--s3) 0 0; color: var(--muted); font-size: 15.5px; line-height: 1.6; max-width: 34ch; }
+.night-cycle .tier-model { margin: var(--s4) 0 0; font: 500 11px/1.4 var(--mono); letter-spacing: .06em; color: var(--accent); }
+.home-hero .hero-tech { margin: var(--s3) auto 0; max-width: 46ch; font: 500 13px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); text-wrap: balance; }
 .code-row .field-input { flex: 1 1 12rem; text-transform: uppercase; }
 .code-row .btn { height: 46px; flex: 0 0 auto; }
 .chip.existing { color: var(--muted); }
