@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from anjo.sleep.harness import HARNESS_ENV
 from anjo.sleep.night.daily import morning_receipt
 from anjo.sleep.night.deps import Prices
 from anjo.sleep.probes.arms import ArmDeps
@@ -24,6 +25,7 @@ from anjo.sleep.probes.morning import (
     ARMS_EXTRA_ENV,
     COMMITTED_ARMS,
     DAILY,
+    HARNESS_ARM,
     MORNING_PROBES,
     MORNING_SUBSET_ENV,
     Morning,
@@ -73,11 +75,15 @@ def test_the_setting_names_the_full_morning_or_the_daily_subset_and_nothing_else
 def test_the_full_morning_asks_the_committed_arms_until_the_extra_setting_names_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A full score from before 2A and 4M stays the same run: the extra arms join only on the setting.
-    assert full_arms({}) == COMMITTED_ARMS and "2A" not in full_arms({}) and "4M" not in full_arms({})
-    assert full_arms({ARMS_EXTRA_ENV: "1"}) == ARM_ORDER and {"2A", "4M"} <= set(full_arms({ARMS_EXTRA_ENV: "1"}))
-    assert full_arms({ARMS_EXTRA_ENV: "0"}) == COMMITTED_ARMS
+    # A full score from before 2A and 4M stays the same run: the extra arms join only on the setting,
+    # and the reported-only 2H arm joins unless its switch is explicitly off.
+    assert full_arms({HARNESS_ENV: "0"}) == COMMITTED_ARMS and "2A" not in full_arms({HARNESS_ENV: "0"})
+    assert full_arms({}) == (*COMMITTED_ARMS, HARNESS_ARM) and "2A" not in full_arms({}) and "4M" not in full_arms({})
+    assert full_arms({ARMS_EXTRA_ENV: "1"}) == (*ARM_ORDER, HARNESS_ARM) and {"2A", "4M"} <= set(full_arms({ARMS_EXTRA_ENV: "1"}))
+    assert full_arms({ARMS_EXTRA_ENV: "0"}) == (*COMMITTED_ARMS, HARNESS_ARM)
+    assert full_arms({ARMS_EXTRA_ENV: "1", HARNESS_ENV: "0"}) == ARM_ORDER
     monkeypatch.setenv(ARMS_EXTRA_ENV, "1")
+    monkeypatch.setenv(HARNESS_ENV, "0")
     build, registry = _build(tmp_path)
     done = run_morning("p1", NIGHT, registry.adapters["p1"], morning=build("p1", "film_founder", NIGHT))
     record = json.loads(done.path.read_text(encoding="utf-8"))
@@ -96,7 +102,10 @@ def test_an_unknown_subset_or_a_final_run_on_one_stops_the_runner_before_it_star
 
 
 @pytest.mark.parametrize("subset", [DAILY, None])
-def test_the_runners_morning_asks_the_set_named_and_its_step_records_it(tmp_path: Path, subset: Any) -> None:
+def test_the_runners_morning_asks_the_set_named_and_its_step_records_it(
+    tmp_path: Path, subset: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(HARNESS_ENV, "0")  # the full set's registered six, before the reported-only 2H
     build, registry = _build(tmp_path)
     score = accelerated.morning_scorer(build, {"p1": "film_founder"}, subset)
     done = cast(MorningResult, score("p1", NIGHT, "development",

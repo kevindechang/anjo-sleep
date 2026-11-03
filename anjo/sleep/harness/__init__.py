@@ -1,6 +1,6 @@
 """Harness learning: the person's ways of working with them, one vetted edit a night.
 
-The loop is off unless ``ANJO_SLEEP_HARNESS=1``. Off, the night writes no strategy and the morning
+The loop is on unless ``ANJO_SLEEP_HARNESS=0``. Off, the night writes no strategy and the morning
 asks no ``2H`` arm, so every file it writes is today's. On, a night may add, replace or remove one
 line of the person's strategy list after a contrastive probe promotes it past a noise bar
 (``harness.loop``); the morning's ``2H`` arm reads the list and is reported beside the registered
@@ -20,5 +20,6 @@ STRATEGY_WORDS: Final = 40
 
 
 def harness_on(environ: Mapping[str, str] | None = None) -> bool:
-    """The switch: on only for the exact value ``1`` (unset, ``0`` or anything else is off)."""
-    return (os.environ if environ is None else environ).get(HARNESS_ENV, "").strip() == "1"
+    """The switch: on when unset, blank or ``1``; the exact value ``0`` is off. Any other value is
+    off too, as it always was: the switch refuses nothing, it only reads the one word."""
+    return (os.environ if environ is None else environ).get(HARNESS_ENV, "").strip() in ("", "1")

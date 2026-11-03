@@ -85,10 +85,10 @@ def _replay(i: int, *, created_at: Any = AT, target: str = "glimmer") -> Any:
 
 
 def test_the_switch_off_sends_todays_payload_and_builds_todays_rows(tmp_path: Path) -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
-    off = objective.night_cfg(seed)
-    assert off == objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "0"}) and not off.day_dreams
-    assert objective.night_terms(seed) == Terms(seed=True) == objective.night_terms({**seed, objective.DAY_DREAMS_ENV: "0"})
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.CAPACITY_ENV: "0"}
+    off = objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "0"})
+    assert off == LoraCfg(objective="sft_dpo_seed") and not off.day_dreams
+    assert objective.night_terms({**seed, objective.DAY_DREAMS_ENV: "0"}) == Terms(seed=True)
     sent = training_config(off, 12, warm=True, revision="a" * 40, night=NIGHT)
     assert sent["terms"] == {"fold_rank": None, "dreams": False} and "day_dreams" not in sent["terms"]
     assert sleep_job.seed_plan(sleep_loss, sent, eot=11, pad=0, long_term_rank=0, begun=0.0).day_dreams is False
@@ -103,11 +103,15 @@ def test_the_switch_off_sends_todays_payload_and_builds_todays_rows(tmp_path: Pa
     assert "group" not in written  # a today's row serializes exactly as before
 
 
-def test_the_switch_is_seeded_only_and_rides_with_capacity() -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
-    on = objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "1"})
-    assert on.day_dreams and on.objective == "sft_dpo_seed"
+def test_the_switch_is_on_by_default_seeded_only_and_rides_with_capacity() -> None:
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.CAPACITY_ENV: "0"}
+    on = objective.night_cfg(seed)  # unset is on
+    assert on == objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "1"}) and on.day_dreams
+    assert objective.night_terms(seed) == Terms(seed=True, day_dreams=True)
     assert objective.night_terms({**seed, objective.DAY_DREAMS_ENV: "1"}) == Terms(seed=True, day_dreams=True)
+    quietly_off = objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo"})
+    assert quietly_off.day_dreams is False and quietly_off.passes == 3  # another loss: no raise, capacity still on
+    assert objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo", objective.DAY_DREAMS_ENV: "0"}).day_dreams is False
     capacity = objective.night_cfg({**seed, objective.DAY_DREAMS_ENV: "1", objective.CAPACITY_ENV: "1"})
     assert (capacity.day_dreams, capacity.r, capacity.passes) == (True, 32, 3)
     for bad in ({objective.OBJECTIVE_ENV: "sft_dpo", objective.DAY_DREAMS_ENV: "1"},

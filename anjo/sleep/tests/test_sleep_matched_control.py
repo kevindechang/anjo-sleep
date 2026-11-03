@@ -37,7 +37,8 @@ class _Tick:
 
 
 def test_no_host_setting_pads_a_night_the_budget_is_per_run_and_per_night() -> None:
-    assert objective.night_cfg({"ANJO_SLEEP_MATCH_MINUTES": "6.5"}) == LoraCfg(objective="sft_dpo")
+    assert objective.night_cfg({"ANJO_SLEEP_MATCH_MINUTES": "6.5", objective.OBJECTIVE_ENV: "sft_dpo",
+                                objective.CAPACITY_ENV: "0"}) == LoraCfg(objective="sft_dpo")
     assert not hasattr(objective, "MATCH_ENV")
     cfg = LoraCfg(objective="sft_dpo", match_by_night=BUDGETS)
     sent = training_config(cfg, 12, warm=False, revision="a" * 40, night=NIGHT + timedelta(days=1))

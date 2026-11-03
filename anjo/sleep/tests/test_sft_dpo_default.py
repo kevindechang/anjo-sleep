@@ -1,13 +1,15 @@
 # mypy: disallow-untyped-decorators=False
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
-"""Nights train ``sft_dpo`` by default (Kevin, 2026-10-28): ``ANJO_SLEEP_OBJECTIVE`` is ``sft_dpo`` or ``sft``,
-refused otherwise at start; a night with no usable pair trains ``sft`` and logs the counts; MIND's thinker
-keeps its own recipe. Offline: the runners are fakes."""
+"""Which objective the nights train (Kevin, 2026-11-01): ``sft_dpo_seed`` when ``ANJO_SLEEP_OBJECTIVE``
+is unset or blank; ``sft_dpo`` or ``sft`` when named, refused otherwise at start; an ``sft_dpo`` night
+with no usable pair trains ``sft`` and logs the counts; MIND's thinker keeps its own recipe. Offline:
+the runners are fakes."""
 from __future__ import annotations
 
 import dataclasses
 import inspect
 import json
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,9 +27,15 @@ from anjo.sleep.types import CheckpointRef
 NIGHT = date(2026, 10, 28)
 
 
+@dataclass(frozen=True)
+class _Deps:
+    """The wiring's stand-in: it carries the terms the night command replaces."""
+
+    terms: Any = None
+
+
 class Seen(_Runner):
     """A fake GPU runner that keeps what it was sent: the recipe and the dataset's rows."""
-
     def __init__(self) -> None:
         super().__init__()
         self.rows: list[dict[str, Any]] = []
@@ -47,11 +55,15 @@ def _train(tmp_path: Path, data: Any, cfg: LoraCfg, prev: CheckpointRef | None =
     return runner, receipt
 
 
-def test_nights_train_sft_dpo_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert objective.DEFAULT_OBJECTIVE == "sft_dpo" and objective.OBJECTIVES == ("sft_dpo", "sft", "sft_dpo_seed")
-    assert objective.night_cfg({}).objective == "sft_dpo"
-    assert objective.night_cfg({objective.OBJECTIVE_ENV: " "}).objective == "sft_dpo"
-    # The night command builds its trainer with it, and the pairs reach the job.
+def test_the_seed_objective_is_the_default_and_nights_train_sft_dpo_when_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert objective.DEFAULT_OBJECTIVE == "sft_dpo_seed"
+    assert objective.OBJECTIVES == ("sft_dpo", "sft", "sft_dpo_seed")
+    assert objective.night_cfg({}).objective == "sft_dpo_seed"
+    assert objective.night_cfg({objective.OBJECTIVE_ENV: " "}).objective == "sft_dpo_seed"
+    assert objective.night_terms({}).seed is True
+    # The night command builds its trainer with it, and the pairs reach the job when sft_dpo is named.
     from anjo.sleep.night import __main__ as command
 
     built: list[LoraCfg | None] = []
@@ -64,11 +76,13 @@ def test_nights_train_sft_dpo_by_default(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("ANJO_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(objective.OBJECTIVE_ENV, raising=False)
     monkeypatch.setattr(command, "LoraTrainer", Capture)
-    monkeypatch.setattr(command, "_wiring", lambda path: lambda trainer, options: "deps")
+    monkeypatch.setattr(command, "_wiring", lambda path: lambda trainer, options: _Deps())
     monkeypatch.setattr(command, "run_night_batch_with", lambda deps, nights, **kw: {})
     command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
-    assert [cfg.objective if cfg else None for cfg in built] == ["sft_dpo"]
-    runner, receipt = _train(tmp_path, _with_pairs(3), objective.night_cfg({}))
+    monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo")
+    command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
+    assert [cfg.objective if cfg else None for cfg in built] == ["sft_dpo_seed", "sft_dpo"]
+    runner, receipt = _train(tmp_path, _with_pairs(3), objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo"}))
     assert runner.calls[0][1]["config"]["objective"] == "sft_dpo"  # type: ignore[index]
     assert sum("chosen" in row for row in runner.rows) == 3 and receipt.objective == "sft_dpo"
 
@@ -78,7 +92,7 @@ def test_the_accelerated_run_and_the_example_train_with_it(tmp_path: Path, monke
     from anjo.sleep.examples.synthetic import stages
     from anjo.sleep.sim import accelerated
 
-    monkeypatch.delenv(objective.OBJECTIVE_ENV, raising=False)
+    monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo")
     assert accelerated.main(["--fake", "--days", "3"]) == 0
     nights = json.loads(capsys.readouterr().out)["nights"]
     assert [n["objective"] for n in nights] == ["sft_dpo"] * 3 and all(n["pairs"] >= 1 for n in nights)
@@ -105,7 +119,7 @@ def test_objective_setting_picks_sft_on_request_and_refuses_others(tmp_path: Pat
     assert objective.night_cfg({objective.OBJECTIVE_ENV: "sft"}).objective == "sft"
     assert objective.objective_name({objective.OBJECTIVE_ENV: "sft_dpo"}) == "sft_dpo"
     for bad in ("dpo", "SFT", "sft,dpo", "none"):
-        with pytest.raises(objective.ObjectiveError, match="ANJO_SLEEP_OBJECTIVE is sft_dpo or sft"):
+        with pytest.raises(objective.ObjectiveError, match="ANJO_SLEEP_OBJECTIVE is sft_dpo or sft or sft_dpo_seed"):
             objective.objective_name({objective.OBJECTIVE_ENV: bad})
     # Refused at start: the night command stops before it builds a runner or a trainer.
     from anjo.sleep.night import __main__ as command

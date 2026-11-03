@@ -52,6 +52,12 @@ STEP_ORDER = ["close_day", "extract", "notice", "probes", "choose", "brief", "pr
               "gates", "promote", "note", "finish"]
 
 
+@pytest.fixture(autouse=True)
+def harness_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These step orders are the night's without the harness: its reported-only step is explicitly off."""
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+
+
 def _run(world: World, nights: dict[str, date], **deps: Any) -> dict[str, NightResult]:
     return run_night_batch_with(world.deps(**deps), nights)
 

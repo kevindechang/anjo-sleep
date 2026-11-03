@@ -30,7 +30,8 @@ from anjo.sleep.train.lora import LoraCfg, LoraCfgError, training_config  # noqa
 NIGHT = date(2026, 10, 29)
 MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 BOS, START, MESSAGE, EOT = "<|begin_of_text|>", "<|start|>", "<|message|>", "<|eot|>"
-SEEDED = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1"}
+SEEDED = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.CAPACITY_ENV: "0",
+          objective.DAY_DREAMS_ENV: "0"}
 
 
 @pytest.fixture(scope="module")

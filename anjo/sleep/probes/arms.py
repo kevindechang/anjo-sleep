@@ -18,7 +18,7 @@
 tolerantly: with none stored, the arm's context is C itself, byte for byte.
 
 ``2H`` is the harness arm: with an empty list its prompt is 2C's exactly, so it measures the list
-and nothing else. It is asked only when ``ANJO_SLEEP_HARNESS=1`` (``probes.morning``), never in
+and nothing else. It is asked unless ``ANJO_SLEEP_HARNESS=0`` (``probes.morning``), never in
 place of a registered arm.
 
 ``reply`` only reads: it writes no history, no evidence and no memory (RF5). It never touches the
@@ -45,7 +45,7 @@ from anjo.sleep.types import CheckpointRef, Evidence, Probe
 
 Arm = Literal["1", "2C", "2A", "2F", "3", "3x", "4", "4M", "2H"]
 # Every arm a morning can ask: the six registered ones, the reported-only 2A and 4M
-# (ANJO_SLEEP_ARMS_EXTRA) and the reported-only harness arm 2H (ANJO_SLEEP_HARNESS).
+# (ANJO_SLEEP_ARMS_EXTRA) and the reported-only harness arm 2H (off with ANJO_SLEEP_HARNESS=0).
 ARMS: Final = frozenset(get_args(Arm))
 HARNESS_ARM: Final = "2H"
 WITH_CONTEXT: Final = frozenset({"2C", "2A", "2F", "4", "4M", "2H"})

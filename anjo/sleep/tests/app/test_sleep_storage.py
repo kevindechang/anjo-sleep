@@ -126,9 +126,12 @@ def test_the_strategy_list_exports_only_when_it_exists(auth_client: Any, monkeyp
     from anjo.sleep.app.storage import strategy_store
     from anjo.sleep.harness.store import StrategyEdit
 
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)  # unset is on: the list's empty section
     user_id = _uid()
     _seed(user_id)
+    assert export_sleep(user_id)["strategies"] == []
+
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")  # explicit off: no list, today's section
     assert "strategies" not in export_sleep(user_id)  # switch off, no list ever promoted: today's section
 
     strategy_store(user_id).promote(DAY, StrategyEdit("add", line="Ask for the outline before a draft."),

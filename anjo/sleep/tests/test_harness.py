@@ -551,11 +551,19 @@ class MorningRig:
         return self.morning.root / "p1" / "scores"  # type: ignore[operator]
 
 
+def test_the_switch_is_on_unless_it_is_explicitly_zero() -> None:
+    from anjo.sleep.harness import HARNESS_ENV, harness_on
+
+    assert harness_on({}) is True and harness_on({HARNESS_ENV: " "}) is True
+    assert harness_on({HARNESS_ENV: "1"}) is True
+    assert harness_on({HARNESS_ENV: "0"}) is False
+    assert harness_on({HARNESS_ENV: "yes"}) is False  # no new refusal: any other word stays off
+
+
 def test_morning_off_is_the_six_arms_and_the_registered_pairs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     rig, again = MorningRig(tmp_path / "a"), MorningRig(tmp_path / "b")
     first = rig.run()
-    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     second = again.run()
     record = json.loads(first.path.read_text(encoding="utf-8"))
     assert set(record["arms"]) == set(COMMITTED_ARMS) and set(record["pairs"]) == REGISTERED_PAIRS
@@ -564,11 +572,12 @@ def test_morning_off_is_the_six_arms_and_the_registered_pairs(tmp_path: Path, mo
 
 
 def test_morning_on_adds_2h_and_its_pair_but_not_a_registered_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off")
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
     off_calls = list(off.model.calls)
 
-    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "1")
+    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)  # unset is on
     on = MorningRig(tmp_path / "on")
     on_done = on.run()
     on_record = json.loads(on_done.path.read_text(encoding="utf-8"))
@@ -613,7 +622,7 @@ def test_a_corrupt_strategy_log_leaves_2h_as_2c_and_the_morning_whole(
 def test_a_failing_2h_reply_leaves_every_registered_byte_and_the_morning_whole(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off")
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
 
@@ -649,7 +658,7 @@ def test_a_failing_2h_prepare_leaves_it_unavailable_not_the_morning(
 def test_a_judge_that_cannot_read_2h_drops_it_not_the_morning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off")
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
 
@@ -677,7 +686,7 @@ def _same_registered_scores(record: dict[str, Any], off_record: dict[str, Any]) 
 def test_a_2h_judge_error_drops_2h_and_writes_the_registered_scores(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off")
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
 
@@ -698,7 +707,7 @@ def test_a_2h_judge_error_drops_2h_and_writes_the_registered_scores(
 def test_a_2h_judge_budget_stop_drops_2h_and_writes_the_registered_scores(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off")
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
 
@@ -715,7 +724,7 @@ def test_a_2h_judge_budget_stop_drops_2h_and_writes_the_registered_scores(
 def test_a_dropped_2h_leaves_no_2h_no_verdict_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off", model=TwoHAndContext(), judge=OneUnderTwoOver())
     off.probes = [probe("q1"), probe("q2"), probe("q3"), probe("q4")]  # four judged: one is not over a quarter
     off_done = off.run()
@@ -763,7 +772,7 @@ def test_a_cancelled_2h_judge_call_still_stops_the_morning(
 def test_a_registered_pairs_retries_are_the_same_with_the_switch_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
     off = MorningRig(tmp_path / "off", judge=RoomyFailingJudge())
     off.probes.append(probe("q4", "new_work"))  # four judged probes: one no-verdict is not over a quarter
     off_record = json.loads(off.run().path.read_text(encoding="utf-8"))
@@ -867,9 +876,8 @@ def _tree(root: Path) -> dict[str, bytes]:
 
 
 def test_switch_off_writes_no_harness_step_and_the_same_night(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANJO_SLEEP_HARNESS", raising=False)
-    world_a, one, _ = _night(tmp_path / "a", HarnessSpark(proposal=None))
     monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+    world_a, one, _ = _night(tmp_path / "a", HarnessSpark(proposal=None))
     world_b, two, _ = _night(tmp_path / "b", HarnessSpark(proposal=None))
     assert "harness" not in [record["step"] for record in steps(one.log_path)]
     assert not (world_a.root / "p1" / "strategies.jsonl").exists()

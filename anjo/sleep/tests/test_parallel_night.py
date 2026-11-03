@@ -44,6 +44,12 @@ MORNING_NIGHT = date(2026, 11, 3)
 PRICES = Prices(spark_in_per_m=0.2, spark_out_per_m=0.6, train_gpu_per_hour=2.5, serve_gpu_per_hour=1.95)
 
 
+@pytest.fixture(autouse=True)
+def harness_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These counts are the registered morning's: the reported-only 2H arm is explicitly off."""
+    monkeypatch.setenv("ANJO_SLEEP_HARNESS", "0")
+
+
 def _digit(text: str, mod: int) -> int:
     return int(hashlib.sha256(text.encode()).hexdigest()[:8], 16) % mod
 

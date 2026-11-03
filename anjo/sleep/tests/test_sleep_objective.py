@@ -2,9 +2,9 @@
 # (pyproject's follow_imports = "skip" hides pytest's own types, so its decorators look untyped)
 """The sleep objective (Behrouz, Hashemi and Mirrokni, "Language Models Need Sleep", 2026): knowledge
 seeding against the base with the consolidated day in context, the imitation term, the nightly fold of
-the adapter, and dreams filtered by gradient norm and an anchor check. Each is behind a switch, and with
-every switch off the night is today's. CPU only, on a tiny torch model; tests that need torch skip
-without it."""
+the adapter, and dreams filtered by gradient norm and an anchor check. ``ANJO_SLEEP_OBJECTIVE`` defaults
+to ``sft_dpo_seed``; ``sft_dpo`` with every switch off is the night before 2026-11-01. CPU only, on a
+tiny torch model; tests that need torch skip without it."""
 from __future__ import annotations
 
 import json
@@ -157,7 +157,9 @@ class _NoLeak:
 
 
 def test_switches_off_are_todays_night(tmp_path: Path) -> None:
-    for env in ({}, {objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0"}, {"ANJO_SLEEP_MATCH_MINUTES": "6.5"}):
+    today = {objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"}
+    for env in (today, {**today, objective.FOLD_ENV: "0", objective.DREAMS_ENV: "0"},
+                {**today, "ANJO_SLEEP_MATCH_MINUTES": "6.5"}):
         cfg = objective.night_cfg(env)
         assert cfg == LoraCfg(objective="sft_dpo") and cfg.fold_rank is None and not cfg.dreams
         assert objective.night_terms(env) == Terms() and not (Terms().seed or Terms().dreams)
@@ -201,21 +203,26 @@ def test_the_night_command_sets_the_terms_only_when_a_switch_is_on(tmp_path: Pat
         return {}
 
     monkeypatch.setattr(command, "run_night_batch_with", record)
-    for name in (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV):
+    for name in (objective.OBJECTIVE_ENV, objective.FOLD_ENV, objective.DREAMS_ENV, objective.DAY_DREAMS_ENV):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo")  # today's objective, explicitly
     command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
     monkeypatch.setenv(objective.OBJECTIVE_ENV, "sft_dpo_seed")
     monkeypatch.setenv(objective.DREAMS_ENV, "1")
+    monkeypatch.setenv(objective.DAY_DREAMS_ENV, "0")
     command.execute(wiring="w:x", night=NIGHT, users=["u1"], personas={"u1": "founder"})
     assert [deps.terms for deps in seen] == [Terms(), Terms(seed=True, dreams=True)]
 
 
 def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night() -> None:
-    on = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.DREAMS_ENV: "1"}
+    on = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.FOLD_ENV: "1", objective.DREAMS_ENV: "1",
+          objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"}
     cfg = objective.night_cfg(on)
     assert (cfg.objective, cfg.fold_rank, cfg.dreams) == ("sft_dpo_seed", config.MAX_LORA_RANK, True)
     assert objective.night_terms(on) == Terms(seed=True, dreams=True)
-    for bad in ({objective.FOLD_ENV: "1"}, {objective.DREAMS_ENV: "1"}, {objective.FOLD_ENV: "yes"}):
+    for bad in ({objective.OBJECTIVE_ENV: "sft_dpo", objective.FOLD_ENV: "1"},
+                {objective.OBJECTIVE_ENV: "sft_dpo", objective.DREAMS_ENV: "1"},
+                {objective.FOLD_ENV: "yes"}):
         with pytest.raises(objective.ObjectiveError):
             objective.night_cfg(bad)
     with pytest.raises(LoraCfgError):
@@ -225,12 +232,13 @@ def test_fold_and_dreams_need_the_seed_objective_and_bad_values_stop_the_night()
 
 
 def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> None:
-    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
-    cfg = objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"})
+    seed = {objective.OBJECTIVE_ENV: "sft_dpo_seed", objective.DAY_DREAMS_ENV: "0"}
+    cfg = objective.night_cfg(seed)  # unset is on
     assert (cfg.objective, cfg.r, cfg.passes, cfg.fold_rank) == ("sft_dpo_seed", config.MAX_LORA_RANK, 3, None)
+    assert objective.night_cfg({**seed, objective.CAPACITY_ENV: "1"}) == cfg
     assert objective.night_terms({**seed, objective.CAPACITY_ENV: "1"}) == Terms(seed=True)  # the same rows
     off = objective.night_cfg({**seed, objective.CAPACITY_ENV: "0"})
-    assert off == objective.night_cfg(seed) == LoraCfg(objective="sft_dpo_seed") and off.passes is None
+    assert off == LoraCfg(objective="sft_dpo_seed") and off.passes is None
     assert plan_steps(40, cfg) == StepPlan(accumulation=1, epochs=3, steps_per_epoch=40)
     sent = training_config(cfg, 12, warm=True, revision="a" * 40, night=NIGHT)
     assert sent["terms"] == {"fold_rank": None, "dreams": False, "passes": 3} and (sent["r"], sent["alpha"]) == (32, 64)
@@ -240,7 +248,8 @@ def test_capacity_is_the_servers_most_rank_and_three_passes_one_row_a_step() -> 
         with pytest.raises(ValueError):
             colab_train.load_config(json.dumps({**sent, "terms": {**sent["terms"], "passes": bad}}))
     assert training_config(off, 12, warm=True, revision="a" * 40, night=NIGHT)["terms"] == {"fold_rank": None, "dreams": False}
-    plain = objective.night_cfg({objective.CAPACITY_ENV: "1"})  # today's objective: the host's step plan carries it
+    plain = objective.night_cfg({objective.OBJECTIVE_ENV: "sft_dpo"})  # today's objective, capacity on like any night
+    assert plain.passes == 3 and plain.r == config.MAX_LORA_RANK
     sent_plain = training_config(plain, 12, warm=False, revision="a" * 40, night=NIGHT)
     assert (plain.objective, sent_plain["r"], sent_plain["accumulation"], sent_plain["epochs"]) == ("sft_dpo", 32, 1, 3)
     assert "terms" not in sent_plain and colab_train.load_config(json.dumps(sent_plain))["epochs"] == 3

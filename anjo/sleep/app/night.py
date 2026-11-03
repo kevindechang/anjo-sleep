@@ -48,10 +48,10 @@ persona's people (``app/mind_core.py``); its dream seeds are where the sleep obj
 start (``ANJO_SLEEP_DREAMS=1``, ``night/core_dreams.py``), her Glimmer speaking from them on the
 night's client; with the core off the dreams are not wired. With ``ANJO_SLEEP_DREAMS_CHANNEL=1``
 (the channel on) each dream's reply goes through the thought channel over its own imagined state,
-and its row carries that state. With ``ANJO_SLEEP_DAY_DREAMS=1`` her Glimmer also writes the messages
-the person might send next from the consolidated day and answers them on the night's client
-(``night/day_dreams.py``); the training job keeps only the groups that improve (``train/sleep_loss.py``).
-Task 16's
+and its row carries that state. With ``ANJO_SLEEP_DAY_DREAMS=0`` her Glimmer writes no day dream;
+unset, under ``sft_dpo_seed``, she writes the messages the person might send next from the consolidated
+day and answers them on the night's client (``night/day_dreams.py``); the training job keeps only the
+groups that improve (``train/sleep_loss.py``). Task 16's
 estimator stays ``None`` until its coefficients are registered, so no expectation is recorded before then.
 
 With ``ANJO_SLEEP_AGENT_BASELINE=1`` the night also runs the comparison's conventional agent (arm
@@ -121,8 +121,7 @@ from anjo.sleep.night.deps import (
 )
 from anjo.sleep.night.channel_night import ChannelSetup, MindState
 from anjo.sleep.night.core_dreams import core_dreams, dreams_channel
-from anjo.sleep.night.day_dreams import SWITCH_ENV as DAY_DREAMS_ENV
-from anjo.sleep.night.day_dreams import GlimmerDayDreams, NoDayDreams
+from anjo.sleep.night.day_dreams import GlimmerDayDreams, NoDayDreams, day_dreams_on
 from anjo.sleep.night.demo import DEMO_MIN_SCENES, DemoProfile
 from anjo.sleep.night.core_snapshot import CHANNEL_ENV, channel_arm
 from anjo.sleep.night.gpu import ReservedGpu
@@ -422,7 +421,7 @@ def build(trainer: Trainer, options: NightOptions) -> NightDeps:
         core=core, dreams=core_dreams(core, evidence_store, client, seed=night_settings.seed,
                                       channel=dreams_channel(os.environ, channel)),
         day_dreams=(GlimmerDayDreams(client, seed=night_settings.seed)
-                    if os.environ.get(DAY_DREAMS_ENV, "").strip() == "1" else NoDayDreams()),  # switch off: no source
+                    if day_dreams_on(os.environ) else NoDayDreams()),  # explicit 0: no source
         estimator=registered_estimator(), baseline=baseline,
     )
 

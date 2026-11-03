@@ -548,7 +548,8 @@ def morning_scorer(build: Callable[[str, str, date], Morning], personas: Mapping
 
 
 def _with_terms(deps: NightDeps, terms: Terms) -> NightDeps:
-    """The wiring's ports with sft_dpo_seed's terms; with every switch off, untouched (today's night)."""
+    """The wiring's ports with sft_dpo_seed's terms; with the switches' explicit off values, untouched
+    (today's night)."""
     return replace(deps, terms=terms) if terms != Terms() else deps
 
 

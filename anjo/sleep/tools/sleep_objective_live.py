@@ -88,13 +88,16 @@ CONTROL_OF: Final = {"today": "seed", "seed_matched": "dreams"}  # a control, an
 TWIN_OF: Final = {"protect_random": "protect"}  # the same job with one thing swapped: equal minutes by construction
 NEEDS: Final = {"seed": ("today",), "dreams": ("seed_matched",), "protect": ("protect_random", "fold")}  # a claim's comparisons
 PRESSURE_ENV: Final = "ANJO_SLEEP_PRESSURE"
-SEED: Final = {objective.OBJECTIVE_ENV: objective.SEED_OBJECTIVE}
+SEED: Final = {objective.OBJECTIVE_ENV: objective.SEED_OBJECTIVE, objective.CAPACITY_ENV: "0",
+               objective.DAY_DREAMS_ENV: "0"}
 ENVS: Final[Mapping[str, Mapping[str, str]]] = {
     "seed": SEED, "fold": {**SEED, objective.FOLD_ENV: "1"}, "dreams": {**SEED, objective.DREAMS_ENV: "1"},
-    "today": {objective.OBJECTIVE_ENV: "sft_dpo"}, "seed_matched": SEED,
+    "today": {objective.OBJECTIVE_ENV: "sft_dpo", objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"},
+    "seed_matched": SEED,
     "protect": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "anchors"},
     "protect_random": {**SEED, objective.FOLD_ENV: "1", objective.PROTECT_ENV: "random"},
-    "seed_cap": {**SEED, objective.CAPACITY_ENV: "1"},
+    "seed_cap": {objective.OBJECTIVE_ENV: objective.SEED_OBJECTIVE, objective.CAPACITY_ENV: "1",
+                 objective.DAY_DREAMS_ENV: "0"},
 }
 # Estimates per night (2026-10-29), not measurements: seeding's teacher passes 0.9, fresh samples 1.3,
 # imitation 0.8, the fold 0.1, dreams' ranking and block 1.3 plus 1.5 minutes of serving for their text.

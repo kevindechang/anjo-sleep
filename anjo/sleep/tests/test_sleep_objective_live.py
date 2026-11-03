@@ -368,7 +368,7 @@ def test_the_capacity_arm_runs_beside_a_reused_seed_arm_and_no_shell_sets_it(tmp
     [cap] = runs.calls
     assert cap["account"] == "syn-k" and cap["env"][objective.CAPACITY_ENV] == "1"
     assert cap["env"][objective.OBJECTIVE_ENV] == "sft_dpo_seed" and objective.FOLD_ENV not in cap["env"]
-    assert objective.CAPACITY_ENV not in live.arm_env("seed", {objective.CAPACITY_ENV: "1"}, "tok")
+    assert live.arm_env("seed", {objective.CAPACITY_ENV: "1"}, "tok")[objective.CAPACITY_ENV] == "0"
     assert live.arm_usd("seed_cap", 3, 2.0) > live.arm_usd("seed", 3, 2.0)  # its added minutes are priced
     assert any(line.startswith("seed_cap: ") for line in lines) and not ledger.open_holds()
     assert ("seed_cap", "seed") in knowledge_score.PAIRS  # scored against the seed arm night by night
