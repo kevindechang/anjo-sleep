@@ -312,3 +312,7 @@ button, input, textarea, select { font-family: inherit; }
 .compare-note { margin: var(--s4) 0 0; max-width: 80ch; font: 500 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); }
 .compare-note strong { color: var(--text); font-weight: 500; }
 @media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
+.compare-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.compare mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-2); padding: 0 .15em; border-radius: 3px; }
+.compare-note code { font: 500 11.5px/1 var(--mono); color: var(--accent-2); }
+@media (max-width: 860px) { .compare-3 { grid-template-columns: 1fr; } }
