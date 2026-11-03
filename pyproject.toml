@@ -40,6 +40,15 @@ pythonpath = ["."]
 consider_namespace_packages = true
 addopts = "-v"
 
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# The rules the trunk enforces: Ruff's defaults, plus suppressions must name what they suppress.
+select = ["E4", "E7", "E9", "F", "PGH003", "PGH004"]
+ignore = ["E701"]  # `if x: return` guard clauses, used on purpose
+
 [tool.ruff.lint.per-file-ignores]
 # MIND's held-out tools are registered by sha256 (ledger seq 84-88); editing them breaks the hash.
 "anjo/sleep/mind/cog/heldout/tools/*" = ["E741"]

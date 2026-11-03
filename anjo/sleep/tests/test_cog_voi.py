@@ -12,11 +12,13 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from anjo.sleep.mind.cog import core
-from anjo.sleep.mind.cog.toy_life import ToyLife
-from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question
-from anjo.sleep.mind.cog.voi import MindInquirer, entropy
-from anjo.sleep.tests.test_cog_core import DEV, trained_tiny
+pytest.importorskip("torch")  # MIND's model; the public `test` extra doesn't install it
+
+from anjo.sleep.mind.cog import core  # noqa: E402
+from anjo.sleep.mind.cog.toy_life import ToyLife  # noqa: E402
+from anjo.sleep.mind.cog.types import Event, LifeMeta, Prediction, Query, Question  # noqa: E402
+from anjo.sleep.mind.cog.voi import MindInquirer, entropy  # noqa: E402
+from anjo.sleep.tests.test_cog_core import DEV, trained_tiny  # noqa: E402
 
 
 # ── the formula ──────────────────────────────────────────────────────────────

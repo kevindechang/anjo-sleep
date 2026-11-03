@@ -27,6 +27,32 @@ if PRIVATE_ANJO:
 else:
     collect_ignore = ["app"]
 
+# In the public repo, a few tests reach code that only exists privately (``anjo.core``, through the
+# app's prices) or the Google SDK (MIND's Gemini judge). Without them, that one error is a skip that
+# says which is missing; any other error, and either one with the module present, still fails.
+GOOGLE_SDK = importlib.util.find_spec("google") is not None
+
+
+def _missing(name: str | None) -> str | None:
+    parts = (name or "").split(".")
+    if parts[:2] == ["anjo", "core"] and not PRIVATE_ANJO:
+        return "private Anjo"
+    if parts[0] == "google" and not GOOGLE_SDK:
+        return "the google-genai SDK"
+    return None
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]):  # type: ignore[no-untyped-def]
+    outcome = yield
+    report = outcome.get_result()
+    if call.excinfo is None or not call.excinfo.errisinstance(ModuleNotFoundError):
+        return
+    what = _missing(getattr(call.excinfo.value, "name", None))
+    if what is not None and report.failed:
+        report.outcome = "skipped"
+        report.longrepr = (str(item.path), item.location[1] or 0, f"Skipped: needs {what}, not in the public repo")
+
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch: pytest.MonkeyPatch) -> None:

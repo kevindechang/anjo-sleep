@@ -13,16 +13,19 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
-from anjo.sleep.mind.cog import core, train_cog
-from anjo.sleep.mind.cog.encode import Vocab, activity_kinds, build_vocab, collate, encode_life, encode_queries
-from anjo.sleep.mind.cog.night import (
+torch = pytest.importorskip("torch")  # MIND's model; the public `test` extra doesn't install it
+
+from anjo.sleep.mind.cog import core, train_cog  # noqa: E402
+from anjo.sleep.mind.cog.encode import (  # noqa: E402
+    Vocab, activity_kinds, build_vocab, collate, encode_life, encode_queries,
+)
+from anjo.sleep.mind.cog.night import (  # noqa: E402
     NO_GAIN, Adapter, Replayed, night, paid, priorities, served, transfer, update_gain,
 )
-from anjo.sleep.mind.cog.toy_life import ToyLife
-from anjo.sleep.mind.cog.types import Event, Life, Prediction, Query, Resolution
-from anjo.sleep.mind.core.net import fast_update
+from anjo.sleep.mind.cog.toy_life import ToyLife  # noqa: E402
+from anjo.sleep.mind.cog.types import Event, Life, Prediction, Query, Resolution  # noqa: E402
+from anjo.sleep.mind.core.net import fast_update  # noqa: E402
 
 DEV = range(10_000, 10_024)
 
