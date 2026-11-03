@@ -431,12 +431,21 @@ def current_adapter(user_id: str) -> CheckpointRef | None:
     return _adapter_source[0](user_id) if _adapter_source else None
 
 
+def _chat_adapter_allowed(user_id: str) -> bool:
+    """A judge's chat carries their adapter only under the judges' switch (notes-first otherwise:
+    ``judge_talker.chat_adapter_on``); everyone else's turns keep their promoted adapter."""
+    from anjo.sleep.app.judge_cohort import is_judge
+    from anjo.sleep.app.judge_talker import chat_adapter_on
+
+    return chat_adapter_on() or not is_judge(user_id)
+
+
 def sleep_route(user_id: str) -> ModelRoute | None:
     """The route override: a flagged person's open-model turns go to Glimmer, everyone else's
     route is unchanged (None)."""
     if not sleep_enabled_for(user_id):
         return None
-    adapter = current_adapter(user_id)
+    adapter = current_adapter(user_id) if _chat_adapter_allowed(user_id) else None
     pin = glimmer_pin(user_id, None if adapter is None else adapter.id,
                       adapter_rendering=None if adapter is None else adapter.rendering)
     route: ModelRoute = ModelRoute(ROUTE_ANJO, None, OVERRIDE_CAUSE, None, (QualifiedPin(pin, None, None),))

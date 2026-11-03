@@ -56,6 +56,7 @@ from anjo.sleep.ports import EvidenceSource, Notifier
 from anjo.sleep.types import CheckpointRef, Evidence, NightResult
 
 LIVE: Final = "Live: her next reply comes from tonight's weights"
+LOADED_FOR_COMPARE: Final = "Loaded for the before-and-after; chat uses her notes"
 LOADS_LATER: Final = "Loads with her next reply"
 NOTHING_TO_SERVE: Final = "Nothing new to serve"
 PASS_WAIT_S: Final = 120.0  # how long a night waits for a live MIND pass already under way, then for its lock
@@ -315,7 +316,9 @@ def serve(checkpoint: CheckpointRef | None, recorder: Recorder,
         logger.warning("tonight's adapter isn't live yet (%s)", type(error).__name__)
         recorder.serve("failed", LOADS_LATER, False)
         return False
-    recorder.serve("done", LIVE, True)
+    from anjo.sleep.app.judge_talker import chat_adapter_on
+
+    recorder.serve("done", LIVE if chat_adapter_on() else LOADED_FOR_COMPARE, True)
     return True
 
 

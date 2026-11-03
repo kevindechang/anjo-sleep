@@ -114,7 +114,7 @@ def spark_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_judge_arriving_wakes_her_once_and_spark_answers_meanwhile(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert r.talker.status().view() == {"state": "cold", "eta_s": 240, "model": "spark-fallback", "reason": None,
-                                        "fallback_via": "muse-spark"}
+                                        "fallback_via": "muse-spark", "chat_adapter": False}
 
     r.talker.arrive()
     r.at(10)
@@ -127,7 +127,7 @@ def test_a_judge_arriving_wakes_her_once_and_spark_answers_meanwhile(tmp_path: P
     r.run_wakes()
     assert r.serving.wakes == 1
     assert r.talker.status().view() == {"state": "warm", "eta_s": None, "model": "glimmer", "reason": None,
-                                        "fallback_via": None}
+                                        "fallback_via": None, "chat_adapter": False}
     assert r.talker.glimmer_first()
     assert r.serving.pings == 0  # Modal is never pinged to learn whether she is up
 
@@ -352,6 +352,54 @@ def test_a_judge_waits_on_no_cold_start(judge_env: Rig) -> None:
     warm = judge_talker.judge_route("judge-1")
     assert warm is not None and [q.pin.host for q in warm.served] == [GLIMMER_HOST, SPARK_HOST]
     assert warm.served[0].pin.user_id == "judge-1" and warm.served[0].pin.adapter is None
+
+
+def _promoted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from anjo.sleep.app import runtime
+    from anjo.sleep.types import CheckpointRef
+
+    trained = CheckpointRef("p-1a2b3c4d-n1", "judge-1", date(2026, 11, 3), "x", None)
+    monkeypatch.setattr(runtime, "_adapter_source", [lambda user_id: trained if user_id == "judge-1" else None])
+
+
+def test_a_judges_chat_answers_with_notes_not_the_adapter_by_default(judge_env: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The final's registered result (2026-11-03): adapter plus notes lost to notes alone (32%), so a
+    judge's chat is base Glimmer with the overnight notes; the adapter shows in the wake's before/after."""
+    monkeypatch.delenv(judge_talker.CHAT_ADAPTER_ENV, raising=False)
+    _promoted(monkeypatch)
+    judge_env.talker.arrive()
+    judge_env.run_wakes()
+    warm = judge_talker.judge_route("judge-1")
+    assert warm is not None and warm.served[0].pin.adapter is None
+    assert judge_talker.talker().status().view()["chat_adapter"] is False
+
+
+def test_the_chat_adapter_switch_puts_the_adapter_back(judge_env: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(judge_talker.CHAT_ADAPTER_ENV, "1")
+    _promoted(monkeypatch)
+    judge_env.talker.arrive()
+    judge_env.run_wakes()
+    warm = judge_talker.judge_route("judge-1")
+    assert warm is not None and warm.served[0].pin.adapter == "p-1a2b3c4d-n1"
+    assert judge_talker.talker().status().view()["chat_adapter"] is True
+
+
+def test_the_sleep_route_fallthrough_keeps_a_judges_chat_on_notes(judge_env: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No Spark key while cold: judge_route steps aside and sleep_route decides. It must not put the
+    adapter back on a judge's chat (Codex review, 2026-11-03); everyone else keeps theirs."""
+    from anjo.sleep.app import runtime
+
+    monkeypatch.delenv("ANJO_META_API_KEY")
+    monkeypatch.delenv(judge_talker.CHAT_ADAPTER_ENV, raising=False)
+    _promoted(monkeypatch)
+    assert judge_talker.judge_route("judge-1") is None
+    fallthrough = runtime.sleep_route("judge-1")
+    assert fallthrough is not None and fallthrough.served[0].pin.adapter is None
+    monkeypatch.setenv(judge_talker.CHAT_ADAPTER_ENV, "1")
+    switched = runtime.sleep_route("judge-1")
+    assert switched is not None and switched.served[0].pin.adapter == "p-1a2b3c4d-n1"
 
 
 def test_the_kill_switch_still_holds_for_judges(judge_env: Rig, monkeypatch: pytest.MonkeyPatch) -> None:

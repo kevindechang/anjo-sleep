@@ -385,7 +385,7 @@ def test_a_promoted_night_shows_its_steps_gives_one_note_and_goes_live(host: dic
     assert notes.queued == [(JUDGE, "The rewritten note.", "sleep")]  # once, the last
     assert job["note"] == "The rewritten note."
     assert served == ["p-aaaaaaaaaaaa-n1"] and job["adapter_live"] is True
-    assert job["stages"]["serve"]["state"] == "done" and job["stages"]["serve"]["summary"] == judge_child.LIVE
+    assert job["stages"]["serve"]["state"] == "done" and job["stages"]["serve"]["summary"] == judge_child.LOADED_FOR_COMPARE  # notes-first chat
     assert job["stages"]["train"]["state"] == "skipped"  # never reached in this fake night
     assert host["book"].open_holds() == () and host["book"].used(jn.POOL) == pytest.approx(1.0)  # 0.8 + 0.2 warm
 

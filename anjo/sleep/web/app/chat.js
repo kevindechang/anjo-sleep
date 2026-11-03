@@ -30,7 +30,10 @@ export function talkerLine(status, { adapter = null, thinker = null } = {}) {
   const data = status && typeof status === "object" ? status : {};
   const parts = [];
   if (data.state === "warm") {
-    const model = adapter === "tonight" ? COPY.talker_adapter_tonight : adapter === "before" ? COPY.talker_adapter_before : COPY.model_glimmer;
+    // notes-first (chat_adapter false): chat is Glimmer with the overnight notes; the adapter answers only in the before/after
+    const model = data.chat_adapter === false
+      ? (adapter === "tonight" ? COPY.talker_notes_tonight : COPY.model_glimmer)
+      : adapter === "tonight" ? COPY.talker_adapter_tonight : adapter === "before" ? COPY.talker_adapter_before : COPY.model_glimmer;
     parts.push(fill(COPY.talker_chat, { model }));
   } else {
     const fallback = data.fallback_via === "frontier" ? COPY.model_fallback : COPY.model_spark;

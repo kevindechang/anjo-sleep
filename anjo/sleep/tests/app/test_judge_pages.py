@@ -512,7 +512,7 @@ def test_the_wake_keeps_weights_apart_from_working_state() -> None:
     assert done.returncode == 0, done.stderr
     out = json.loads(done.stdout)
     assert out["promoted"] == [
-        {"kind": "promoted", "text": "Weights promoted: tonight's adapter is live. Gate kept it: +3 of 5."},
+        {"kind": "promoted", "text": "Weights promoted: tonight's adapter passed the gate. Chat uses her notes. Gate kept it: +3 of 5."},
         {"kind": "changed", "text": "Working state changed: 2 things, listed below."}]
     assert out["kept"] == [{"kind": "kept", "text": "Weights kept: the gate kept last night's model."},
                            {"kind": "same", "text": "Working state: nothing she could measure changed."}]
@@ -533,6 +533,8 @@ console.log(JSON.stringify({
   warm: C.talkerLine({ state: "warm" }, { thinker: "glimmer" }),
   served: C.talkerLine({ state: "warm" }, { adapter: "tonight" }),
   undone: C.talkerLine({ state: "warm" }, { adapter: "before" }),
+  notes: C.talkerLine({ state: "warm", chat_adapter: false }, { adapter: "tonight" }),
+  notes_undone: C.talkerLine({ state: "warm", chat_adapter: false }, { adapter: "before" }),
 }));
 """
 
@@ -553,5 +555,8 @@ def test_the_talker_label_names_who_answers_and_who_thinks() -> None:
     assert out["warm"] == "Chat: Glimmer · MIND: Glimmer"
     assert out["served"] == "Chat: Glimmer + tonight's adapter"
     assert out["undone"] == "Chat: Glimmer, as she was before this night"
+    # notes-first serving (2026-11-03): chat is Glimmer with the overnight notes, never the adapter
+    assert out["notes"] == "Chat: Glimmer + tonight's notes"
+    assert out["notes_undone"] == "Chat: Glimmer"
     live = (APP_DIR / "live.js").read_text()
     assert "TALKER_WARM_POLL_MS" in live  # still checked once warm: a serve or Undo can change it
