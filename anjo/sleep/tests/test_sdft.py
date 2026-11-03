@@ -40,7 +40,9 @@ from anjo.sleep.train.dataset import Pair, SeedRow
 from anjo.sleep.train.lora import LoraCfg, LoraCfgError, training_config
 from anjo.sleep.types import Evidence, Probe
 
-SEED = {objective.OBJECTIVE_ENV: "sft_dpo_seed"}
+# The night before capacity and day dreams became defaults (sleep/defaults): this file pins it.
+BEFORE = {objective.CAPACITY_ENV: "0", objective.DAY_DREAMS_ENV: "0"}
+SEED = {objective.OBJECTIVE_ENV: "sft_dpo_seed", **BEFORE}
 ON = {**SEED, objective.SDFT_ENV: "1"}
 TONE = "Short. Answer first."
 PREFERENCE = "Wants the flaw named before the strength."
@@ -104,7 +106,8 @@ def _loss_batch(sdft: tuple[Any, ...] = ()) -> Any:
 
 
 def test_the_switch_off_is_todays_night_byte_for_byte(tmp_path: Path) -> None:
-    for env, today in (({}, "sft_dpo"), ({objective.SDFT_ENV: "0"}, "sft_dpo"), (SEED, "sft_dpo_seed"),
+    plain = {objective.OBJECTIVE_ENV: "sft_dpo", **BEFORE}
+    for env, today in ((plain, "sft_dpo"), ({**plain, objective.SDFT_ENV: "0"}, "sft_dpo"), (SEED, "sft_dpo_seed"),
                        ({**SEED, objective.SDFT_ENV: "0"}, "sft_dpo_seed"), ({**SEED, objective.SDFT_ENV: " "}, "sft_dpo_seed")):
         cfg = objective.night_cfg(env)
         assert cfg == LoraCfg(objective=today) and not cfg.sdft
@@ -143,7 +146,7 @@ def test_the_switch_rides_only_on_the_seed_objective_and_never_in_a_matched_cont
     for bad in ({**sent, "terms": {**sent["terms"], "sdft": "yes"}}, {**sent, "match_minutes": 5.0}):
         with pytest.raises(ValueError):
             colab_train.load_config(json.dumps(bad))
-    for env in ({objective.SDFT_ENV: "1"}, {objective.OBJECTIVE_ENV: "sft", objective.SDFT_ENV: "1"},
+    for env in ({objective.OBJECTIVE_ENV: "sft_dpo", objective.SDFT_ENV: "1"}, {objective.OBJECTIVE_ENV: "sft", objective.SDFT_ENV: "1"},
                 {**SEED, objective.SDFT_ENV: "yes"}):
         with pytest.raises(objective.ObjectiveError):
             objective.night_cfg(env)

@@ -29,7 +29,7 @@ UID = "judge-1"
 PROFILE = demo.DemoProfile()
 DEMO = NightSettings(token_cap=16384, min_new_examples=1, demo=PROFILE)
 PHASE_ONE = ["close_day", "extract", "notice", "probes", "choose", "brief", "homework", "self_predict", "note"]
-PHASE_TWO = ["practice", "dataset", "train", "gates", "promote", "refine", "finish"]
+PHASE_TWO = ["practice", "harness", "dataset", "train", "gates", "promote", "refine", "finish"]
 
 
 class Observed:

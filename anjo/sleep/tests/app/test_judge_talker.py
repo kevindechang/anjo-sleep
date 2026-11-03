@@ -531,7 +531,7 @@ def test_a_stopped_processs_holds_are_settled_at_their_bound_and_live_ones_left(
                 f"{HOLD_KIND}5151-live:0", "night_gpu:other"):
         assert ledger.reserve(job, ("modal_usd",), Bound(3600.0, 100.0)) is not None
     assert settle_orphans(ledger, "1-test", alive=lambda pid: pid == 5151) == 2
-    assert sorted(ledger.settlements()) == [f"{HOLD_KIND}4242-dead:0", f"{HOLD_KIND}{os.getpid()}-old:0"]
+    assert sorted(ledger.settlements()) == sorted([f"{HOLD_KIND}4242-dead:0", f"{HOLD_KIND}{os.getpid()}-old:0"])
     assert all(usd == pytest.approx(100.0) for usd in ledger.settlements().values())
     assert sorted(h.job for h in ledger.open_holds()) == [f"{HOLD_KIND}1-test:0", f"{HOLD_KIND}5151-live:0",
                                                           "night_gpu:other"]
