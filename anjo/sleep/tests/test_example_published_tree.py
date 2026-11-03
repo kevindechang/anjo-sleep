@@ -86,3 +86,22 @@ def test_published_tree_imports_on_its_own(tmp_path: Path) -> None:
 
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
     assert "no crisis gate" in done.stdout.lower()
+
+
+def test_every_rename_source_exists_in_the_trunk() -> None:
+    root = SLEEP.parents[1]  # the trunk, or a published tree where the files already sit at `new`
+    missing = [old for old, new in publish.PATH_RENAMES
+               if not (root / old).is_file() and not (root / new).is_file()]
+
+    assert missing == []
+
+
+@needs_publish_tools
+def test_published_root_carries_the_agent_and_policy_files(tmp_path: Path) -> None:
+    clone = _published_clone(tmp_path)
+
+    for name in ("AGENTS.md", "llms.txt", "SAFETY.md", "SECURITY.md", "CONTRIBUTING.md",
+                 "CITATION.cff", ".github/workflows/ci.yml"):
+        assert (clone / name).is_file(), name
+    assert not (clone / "anjo" / "sleep" / "AGENTS.md").exists()
+    assert not (clone / "anjo" / "sleep" / "github").exists()

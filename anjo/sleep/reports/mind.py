@@ -48,7 +48,7 @@ RESAMPLES: Final = 10_000
 SEED: Final = 20261028
 CONFIDENCE: Final = 0.95
 UNOBSERVED: Final = "not observed"  # a decider never asked: no number, and never silence
-# COPY-PENDING(kevin): the spec asks only that lesions be "reported the same way".
+# Copy: the spec asks only that lesions be "reported the same way".
 LESION_LINES: Final = (("D2", "Without her confidence (D2)"), ("D3", "Without revision gating (D3)"),
                        ("D4", "By earliest due (D4)"))
 

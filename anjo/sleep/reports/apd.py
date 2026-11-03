@@ -99,7 +99,7 @@ def claim(pilot: Pilot) -> str:
             f"alarms); an equally resourced agent with a persistent notebook resolved {b[0]} ({b[1]})."
         )
     if result == "loss":
-        # COPY-PENDING(kevin): the spec says only "stated plainly".
+        # Copy: the spec says only "stated plainly".
         return (
             f"{_pilot_of(pilot.sign.lives)}, an equally resourced agent with a persistent notebook outscored MIND: "
             f"it resolved {b[0]} before the person raised them ({b[1]} false alarms), and MIND resolved {m[0]} "

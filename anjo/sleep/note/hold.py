@@ -26,7 +26,7 @@ PROMPT_PATH: Final = Path(__file__).parent / "prompts" / "note_v1.md"
 SOURCE: Final = "sleep_note"
 TEMPERATURE: Final = 0.7
 DECLINE: Final = "NOTHING"
-# COPY-PENDING(kevin): the honest line on a rejected night, and the sources heading.
+# Copy: the honest line on a rejected night, and the sources heading.
 HELD_BACK_LINE: Final = (
     "One more thing: I also tried to learn from our recent conversations overnight, and I held "
     "that update back because it didn't pass my own checks."

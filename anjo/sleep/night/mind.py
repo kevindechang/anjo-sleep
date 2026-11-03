@@ -627,7 +627,7 @@ def _fact(finding: Finding, source: Sequence[Evidence], cited: Sequence[Evidence
     if source:
         return Fact(text=finding.statement, source=source[0].source)
     days = sorted({item.day.isoformat() for item in cited if item.kind in findings.PERSON_KINDS})
-    # COPY-PENDING(kevin): how a note cites the person's own words.
+    # Copy: how a note cites the person's own words.
     return Fact(text=finding.statement, source=f"what you told me on {', '.join(days) or 'earlier days'}")
 
 

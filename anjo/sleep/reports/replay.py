@@ -69,9 +69,9 @@ def claimed(pairs: Sequence[Versus]) -> bool:
 def claim(pairs: Sequence[Versus]) -> str:
     lives = pairs[0].sign.lives
     if claimed(pairs):
-        # COPY-PENDING(kevin): the spec's claim, in a pilot's words.
+        # Copy: the spec's claim, in a pilot's words.
         return f"In a {lives}-life pilot, replaying simulated lives improved her inquiry performance."
-    # COPY-PENDING(kevin): the spec gives no sentence for no claim.
+    # Copy: the spec gives no sentence for no claim.
     return (
         f"In a {lives}-life pilot, replaying simulated lives didn't beat both the unreplayed thinker and a "
         "thinker trained on random branches, so we make no claim for it."
@@ -116,7 +116,7 @@ def section(audited: Sequence[LifeScore], gemini: Sequence[LifeScore]) -> str:
 def invalid(failed: Mapping[ArmName, int]) -> str:
     """The section when a thinker call failed: the counts, and no sentence that any arm wins or loses."""
     counts = ", ".join(f"{arm} {count}" for arm, count in failed.items())
-    # COPY-PENDING(kevin): the spec gives no sentence for a failed run.
+    # Copy: the spec gives no sentence for a failed run.
     return "\n\n".join((
         "## Replay (Task 17b)",
         f"The comparison is invalid: thinker calls failed during the arms' runs ({counts}). An arm with a "

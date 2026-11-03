@@ -10,3 +10,14 @@ copy of a personal model trained by this code carries both documents with it.
 
   Muse Model License:  https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md
   Usage Policy:        Exhibit A of the same file
+
+One data file is not under the Apache License:
+
+  anjo/sleep/sets/general.jsonl is distributed as a whole under CC BY-SA 4.0
+  (https://creativecommons.org/licenses/by-sa/4.0/). It contains items derived from
+  - AI2 ARC (allenai/ai2_arc), CC BY-SA 4.0. Clark et al., "Think you have Solved Question
+    Answering? Try ARC, the AI2 Reasoning Challenge", 2018. https://allenai.org/data/arc
+  - MMLU (cais/mmlu), MIT License. Hendrycks et al., ICLR 2021. https://github.com/hendrycks/test
+  - HellaSwag (Rowan/hellaswag), MIT License. Zellers et al., ACL 2019.
+    https://github.com/rowanz/hellaswag
+  How the items were sampled and changed: anjo/sleep/sets/PROVENANCE.md.

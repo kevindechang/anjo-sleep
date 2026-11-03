@@ -1,0 +1,33 @@
+# Anjo Sleep
+
+> Each person gets their own LoRA adapter on Muse Glimmer 30B, trained on them every night, plus
+> MIND, a small trained model that puts odds on what a person will do. Both were scored once against
+> pre-registered pass marks on held-out simulated people. Research preview v0.1.0, built for the Meta
+> Global AI Developer Hackathon (October 27 to November 4, 2026).
+
+To check every headline number offline: `git fetch origin prereg && python -m anjo.sleep.tools.verify_claims`.
+
+## Start here
+
+- [AGENTS.md](AGENTS.md): repo map, the claim to evidence to ledger table, how to run, limitations
+- [README.md](README.md): what it does, results, architecture, how to run it live
+- [RESULTS.md](anjo/sleep/RESULTS.md): every run, including the failed ones and why
+- [SAFETY.md](SAFETY.md): what is switched off, what still guards a person, what the results don't show
+
+## Evidence
+
+- [Claim checker](anjo/sleep/tools/verify_claims.py): ledger chain, score hashes, MIND hashes
+- [Ledger code](anjo/sleep/prereg/ledger.py): the hash chain; the entries are on the `prereg` branch
+- [Sleep final scores](anjo/sleep/results/): `*/scores/final.json`, ledger seq 92 to 94
+- [MIND held-out test](anjo/sleep/mind/cog/heldout/prereg_mind_heldout.md): pre-registration; scores in `score/SCORES.json`
+
+## Code
+
+- [One night](anjo/sleep/night/run.py): `run_night`, the stages in order
+- [Training recipe](anjo/sleep/train/): QLoRA, 4-bit NF4, rank 32, attention + MLP
+- [Gates](anjo/sleep/gates/): general skills, collapse, safety
+- [Standalone example](anjo/sleep/examples/synthetic/): `python -m anjo.sleep.examples.synthetic --fake`
+
+## Optional
+
+- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CITATION.cff](CITATION.cff), [NOTICE](NOTICE)

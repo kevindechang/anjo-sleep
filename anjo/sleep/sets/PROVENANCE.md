@@ -43,17 +43,15 @@ uses whatever the API serves. If a dataset changes upstream, the set changes too
 | `allenai/ai2_arc` | CC BY-SA 4.0 | YAML `license: cc-by-sa-4.0` | **ShareAlike.** See the action item below. |
 | `Rowan/hellaswag` | MIT | Body text ("MIT", linking `rowanz/hellaswag/LICENSE`); the YAML front matter has **no `license` field** | Difference: the licence is only in the body text. |
 
-### Action item: ARC is CC BY-SA 4.0, not Apache-2.0
+### Resolved: `general.jsonl` is CC BY-SA 4.0 as a whole
 
-The 60 `arc_challenge` items are adapted from a CC BY-SA 4.0 dataset. ShareAlike requires that the adapted
-material keep CC BY-SA 4.0. Apache-2.0 is not one of the licences CC lists as compatible with BY-SA 4.0. So
-publishing these items inside an Apache-2.0 repo, under Apache-2.0, is not clean. Options, for the repo owner
-to decide:
-
-1. Keep the ARC items in a separate file under CC BY-SA 4.0, with its own licence notice. Or
-2. Drop `arc_challenge` and sample 60 more items from MMLU or HellaSwag. This changes the set.
-
-Until that is decided, do not treat `general.jsonl` as Apache-2.0 in full.
+The 60 `arc_challenge` items are adapted from a CC BY-SA 4.0 dataset, and ShareAlike requires that adapted
+material keep CC BY-SA 4.0, which Apache-2.0 is not compatible with. The file can't be split or resampled:
+its sha256 is registered in the ledger (seq 7, before night 1; seq 61, at the freeze), and every gate result
+cites it. So the file stays as it is and is distributed **as a whole under CC BY-SA 4.0**
+(https://creativecommons.org/licenses/by-sa/4.0/), with the attribution below. The 140 MMLU and HellaSwag
+items are MIT, which permits that. Nothing else in the repo changes licence: the code, including
+`build_general.py`, stays Apache-2.0. The repo's `NOTICE` and README licence section say the same.
 
 ## Attribution text (for the repo NOTICE or README)
 

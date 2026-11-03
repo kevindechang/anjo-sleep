@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 NO_HELD_OUT: Final = HeldOutText(())
 OPEN_STATES: Final = frozenset({"ok"})
-# COPY-PENDING(kevin): the opener when no note waits, built from the want her chooser picked.
+# Copy: the opener when no note waits, built from the want her chooser picked.
 WANT_OPENERS: Final = {
     "inquire": "One thing I keep turning over: {target}. Can I ask you about it?",
     "hold_note": "I've been holding something about {target} for you.",

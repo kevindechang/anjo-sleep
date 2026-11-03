@@ -375,7 +375,7 @@ back after a Colab timeout can train for up to twice the job's timeout.
 | | SageMaker | | |
 | | Modal | | |
 
-The wake time sets the live page's copy (Task 13), which is `COPY-PENDING(kevin)`.
+The wake time sets the live page's copy (Task 13).
 
 ## 2. The dev host
 

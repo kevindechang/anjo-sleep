@@ -1,6 +1,5 @@
 """Every word a visitor reads on the live page (Task 13a), in one place.
 
-COPY-PENDING(kevin): all of it, the starter scenes included, until Kevin approves it (spec §12.1).
 One edit here changes the page: ``index.html`` holds only ``{{key}}`` placeholders, filled from
 ``COPY`` on the server, and ``app.js`` reads the same mapping from the page. Error replies carry a
 ``COPY`` value as their ``detail``.
@@ -26,7 +25,6 @@ class Scene:
     prompt: str
 
 
-# COPY-PENDING(kevin)
 SCENES: Final[tuple[Scene, ...]] = (
     Scene(
         "midnight-deck", "The small-hours rewrite",
@@ -47,7 +45,6 @@ SCENES: Final[tuple[Scene, ...]] = (
     ),
 )
 
-# COPY-PENDING(kevin)
 # Dailies' before and after (``dailies``): the one scene each morning's card asks both checkpoints.
 # It is not a starter scene, so showing its answers never unblinds a starter scene's pair
 # (``service``'s ``vote_first``); the decontamination test holds it to the same rules.
@@ -57,7 +54,6 @@ DAILY_SCENE: Final = Scene(
     "before I sleep, and I don't want it to read like a support ticket. How do I open it?",
 )
 
-# COPY-PENDING(kevin)
 COPY: Final[Mapping[str, str]] = MappingProxyType({
     # the page
     "page_title": "Anjo Sleep: two replies, one person",

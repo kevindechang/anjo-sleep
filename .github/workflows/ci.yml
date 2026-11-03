@@ -1,0 +1,35 @@
+# Published as the public repo's .github/workflows/ci.yml (publish.py PATH_RENAMES).
+# Offline end to end: no keys, no secrets, no network calls from the tests.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch the pre-registration ledger
+        run: git fetch --no-tags origin prereg:refs/remotes/origin/prereg
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[test]" ruff
+      - name: Lint
+        run: ruff check anjo
+      - name: Verify every registered claim
+        run: python -m anjo.sleep.tools.verify_claims
+      - name: Tests
+        run: pytest -q -p no:cacheprovider
+      - name: The standalone example, faked
+        run: python -m anjo.sleep.examples.synthetic --fake --no-chat

@@ -67,6 +67,13 @@ PATH_RENAMES = (
     ("anjo/sleep/NOTICE", "NOTICE"),
     ("anjo/sleep/pyproject.public.toml", "pyproject.toml"),
     ("anjo/sleep/.gitignore", ".gitignore"),
+    ("anjo/sleep/AGENTS.md", "AGENTS.md"),
+    ("anjo/sleep/llms.txt", "llms.txt"),
+    ("anjo/sleep/SAFETY.md", "SAFETY.md"),
+    ("anjo/sleep/SECURITY.md", "SECURITY.md"),
+    ("anjo/sleep/CONTRIBUTING.md", "CONTRIBUTING.md"),
+    ("anjo/sleep/CITATION.cff", "CITATION.cff"),
+    ("anjo/sleep/github/ci.yml", ".github/workflows/ci.yml"),
 )
 
 PushAction = Literal["create", "up-to-date", "fast-forward", "replace-scaffold", "forced"]

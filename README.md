@@ -42,6 +42,11 @@ adapter beside the notes. `/sleep/demo` shows Teo's pre-run week, night by night
 
 ## Results
 
+**Check every number yourself, offline, in seconds:** `git fetch origin prereg && python -m
+anjo.sleep.tools.verify_claims` re-hashes each registered file against the ledger and prints both
+tables below. For coding agents and reviewers, [AGENTS.md](AGENTS.md) maps each claim to its file
+and ledger entry; [SAFETY.md](SAFETY.md) says what is switched off.
+
 Every run we did, including the ones that failed and why, is in [RESULTS.md](anjo/sleep/RESULTS.md). All
 people in them are simulated. The two registered tests were each scored once:
 
@@ -198,5 +203,9 @@ pytest
 
 ## Licence
 
-Apache 2.0 (see `LICENSE`). Built with Muse Spark Open; the Muse Model License and Usage Policy
-are linked in `NOTICE`.
+v0.1.0, a research preview. The code is Apache 2.0 (see `LICENSE`). One data file is not:
+`anjo/sleep/sets/general.jsonl`, the general-skills gate set, is CC BY-SA 4.0 as a whole because 60
+of its items come from AI2 ARC; its sha256 is registered, so it stays as it is (attribution in
+`NOTICE`, details in `anjo/sleep/sets/PROVENANCE.md`). Muse Glimmer 30B is open weights from Meta.
+Built with Muse Spark Open under the Muse Model License and its Usage Policy (linked in `NOTICE`);
+an adapter trained on its outputs carries both. No weights or adapters are in this repo.

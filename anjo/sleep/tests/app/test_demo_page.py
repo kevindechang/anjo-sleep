@@ -755,7 +755,7 @@ def test_past_the_warm_cap_the_page_runs_on_starters_and_says_so(account: str) -
     assert refused.status_code == 429 and refused.json()["detail"] == words.COPY["live_spent"]
     assert model.calls == [] and serving.pings == 0  # not even asked: on SageMaker a ping keeps her up
     assert client.post("/api/sleep/demo/starters/nobody-to-tell", headers=headers).status_code == 200
-    assert "COPY-PENDING(kevin)" in Path(words.__file__).read_text() and words.COPY["live_spent"]
+    assert words.COPY["live_spent"]
 
 
 def test_outside_the_live_hours_nothing_is_bought(account: str, monkeypatch: pytest.MonkeyPatch) -> None:

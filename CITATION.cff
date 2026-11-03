@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Anjo Sleep: a personal model that learns its person overnight"
+version: 0.1.0
+date-released: 2026-11-04
+license: Apache-2.0
+repository-code: "https://github.com/kevindechang/anjo-sleep"
+url: "https://sleep.anjo.nexus"
+authors:
+  - family-names: Chang
+    given-names: Chia Wei
+abstract: >-
+  Per-person nightly QLoRA adapters on Muse Glimmer 30B, scored against pre-registered pass marks
+  on held-out simulated people, plus MIND, a small trained predictor of what a person will do next.
+  Built for the Meta Global AI Developer Hackathon, October 27 to November 4, 2026.
+keywords:
+  - personalization
+  - LoRA
+  - continual learning
+  - pre-registration
+  - user modeling
