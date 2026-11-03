@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 
 import numpy as np
@@ -324,6 +325,8 @@ def test_people_vary() -> None:
 # ---- speed -------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true",
+                    reason="a wall-clock budget for a dev machine; shared CI runners vary too much")
 def test_speed_500_lives() -> None:
     t0 = time.perf_counter()
     for seed in range(10_000, 10_500):
