@@ -362,14 +362,21 @@ def test_a_slow_pass_is_still_seen_and_a_hidden_tab_pauses_the_checks() -> None:
     assert final["reads"][-2:] == [10000, 10000] and final["hidden"] and final["pending"] == 0
 
 
-def test_the_judge_pages_call_anjo_her() -> None:
-    """AGENTS.md: Anjo has her own state. The pages never call her "it"."""
+def test_the_landing_calls_anjo_it() -> None:
+    """Kevin, 2026-11-03: the landing calls Anjo "it", never "she"."""
     from anjo.sleep.app.judge_pages import APP_DIR
 
     index = (APP_DIR / "index.html").read_text()
-    assert "She learns while she sleeps." in index and "It learns" not in index
+    assert "It learns while it sleeps." in index
+    assert not re.search(r"\b(she|her|hers|herself)\b", index, re.IGNORECASE)
+
+
+def test_the_judge_pages_call_anjo_her() -> None:
+    """The product page still calls Anjo "her" until it moves to "it" (Kevin, 2026-11-03)."""
+    from anjo.sleep.app.judge_pages import APP_DIR
+
     copy = "\n".join(line for line in (APP_DIR / "copy.js").read_text().splitlines() if not line.lstrip().startswith("//"))
-    for text in (index, (APP_DIR / "live.html").read_text(), copy):
+    for text in ((APP_DIR / "live.html").read_text(), copy):
         assert not re.search(r"\b(its|itself)\b", text, re.IGNORECASE)
     for phrase in ("What she's working out about you", "Her bet on herself"):
         assert phrase in (APP_DIR / "live.html").read_text(), phrase
