@@ -95,6 +95,7 @@ export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
     byId("compare-sides").hidden = !has;
     byId("compare-none").hidden = has;
     byId("compare-note").hidden = true;
+    byId("compare-title").textContent = COPY.wake_compare;
     byId("wake-compare").classList.remove("is-historical");
     if (!has) {
       byId("compare-none").textContent = COPY.wake_compare_none;
@@ -106,7 +107,9 @@ export function createWake({ chat, panel, thought, since, onUndo = () => {} }) {
     const labels = compareLabels(pair);
     byId("compare-before-label").textContent = labels.before;
     byId("compare-after-label").textContent = labels.after;
-    byId("compare-why").hidden = !pair.after_model;
+    const personal = pair.question_source === "personal";
+    byId("compare-title").textContent = personal ? COPY.wake_compare_personal : COPY.wake_compare;
+    byId("compare-why").hidden = personal || !pair.after_model;
     byId("compare-why").textContent = COPY.wake_compare_why;
   }
 

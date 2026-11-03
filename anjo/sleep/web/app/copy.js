@@ -210,6 +210,8 @@ export const COPY = Object.freeze({
   wake_bet_censored: "She ran out of time to tell.",
   wake_changed: "What changed",
   wake_nothing_changed: "Nothing she could measure changed tonight.",
+  wake_compare: "Same question, before and after sleep",
+  wake_compare_personal: "Same question about you, before and after sleep",
   wake_before: "Before sleep",
   wake_after: "After sleep",
   wake_side: "{side} · {model}",

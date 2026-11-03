@@ -10,6 +10,7 @@
 //   mockcase=thoughtoff | thoughtfail | thoughtempty | markfail   (markfail: dispute and hide refused)
 //   mockcase=nopass             MIND's live pass never runs after a reply (the daily allowance spent)
 //   mockcase=passfail           MIND's live passes run but fail (the panel says so)
+//   mockcase=gatepair           the wake's pair is the gate's everyday one (default: a personal one)
 //
 // The live passes, as the real API shows them: the first reads your message, keeps evidence and
 // opens no question, and her chooser picks nothing (an abstention); the second forms a want, and
@@ -329,11 +330,16 @@ async function route(method, path, body, signal) {
         "She practised a gentler way to open hard topics; the gate kept it, +3 of 5.",
         "She set one prediction to check in three days.",
       ],
-      before_after: {
+      before_after: CASE === "gatepair" ? {
         question: "I have half a cabbage and some leftover rice. What can I make for dinner in about 20 minutes?",
         before: "Fried rice works well: shred the cabbage, fry it hot with garlic, add the rice and a splash of soy sauce.",
         after: "Cabbage fried rice. Get the pan very hot, cook the cabbage until it browns at the edges, then the rice, soy and an egg. Twenty minutes, one pan.",
-        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true,
+        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true, question_source: "gate_everyday",
+      } : {
+        question: "Thinking about why the call to your sister keeps slipping: what should I focus on next?",
+        before: "Try scheduling a specific time for the call and setting a reminder. Consistency helps build the habit.",
+        after: "The last call ended badly, so the next one feels like a test. Open with that: \"I've been thinking about our last call.\" You don't have to fix it in one go.",
+        before_model: "base Glimmer", after_model: "p-3f9c1a2b7d4e-n1", promoted: true, question_source: "personal",
       },
     });
   }
