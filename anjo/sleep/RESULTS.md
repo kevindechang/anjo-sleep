@@ -94,13 +94,13 @@ exact odds.
 | Test | Result | 95% CI | Bar |
 |---|---|---|---|
 | P1: MIND vs online logistic regression, log loss | −0.0028 | −0.0040 to −0.0016 | pass |
-| P2: MIND vs the best Gemini setup (stats prompt + Platt), log loss | −0.0526 | −0.0605 to −0.0449 | pass |
+| P2: MIND vs the best Gemini setup (stats prompt + Platt), log loss on the queries Gemini answered | −0.0526 | −0.0605 to −0.0449 | pass |
 | P3: uncertainty ranks its own errors (AURC, MIND vs online LR) | −0.071 | −0.081 to −0.060 | pass |
 | P4: asking questions pays off, utility per life | +0.40 | −0.23 to +1.01 | **fail** |
 | P5 (no bar): the night step's effect on log loss | +0.0043 | +0.0034 to +0.0053 | harmful |
 
-In excess log loss, MIND's 0.029 against the best Gemini setup's 0.082 is a third of the
-avoidable error. On a world written independently of MIND's training world, untrained MIND scored
+On those queries, MIND's excess log loss was 0.029 and the best Gemini setup's 0.082: a third of
+the avoidable error. On a world written independently of MIND's training world, untrained MIND scored
 0.721, worse than a constant 50/50 (0.693). Trained on that world (protocol 2), it beat online
 logistic regression by 0.040 (0.036 to 0.045) and beat every Gemini setup we ran there.
 
@@ -113,7 +113,7 @@ Every scored night is in the appendix, generated from `results/*/scores/`.
 | Oct 28 | `film-founder` (Teo) | first full loop: day, night, morning | night 1 promoted; $1.19 for night, homework and morning | Teo's week became the demo |
 | Oct 29 | `obj-today`, `obj-fold`, `obj-protect`, `obj-protect-random`, `obj-seed2`, `obj-seed-cap` | training-objective arms and a random-protection control, 3 nights each | no objective differed significantly on 69 knowledge items | found the knowledge scorer moved up to 14.5 points between identical runs (FP8 scaling under 16-way concurrency); scored one request at a time after that |
 | Oct 29 | critic A/B, 160 scenes | DeepSeek V4.1 Flash as the practice critic, vs Muse Spark | non-inferior: 0.5375, lower bound 0.484 vs a bar of 0.40; unreadable replies 0 vs 29 | switched the critic to DeepSeek |
-| Oct 30 | `obj-founder`, `obj-founder-donor`, `obj-researcher`, `obj-researcher-donor` | development read: 4 people, 2 nights, full mornings, judged by Muse Spark | knowledge 3 v 1 **0.578** (0.509 to 0.647, a pass); interaction 3 v 1 0.521; 3 v 3x 0.559 / 0.525; 4 v 2C knowledge 0.405 | kept the recipe; a DeepSeek rescore was started Nov 1 and not finished |
+| Oct 30 | `obj-founder`, `obj-founder-donor`, `obj-researcher`, `obj-researcher-donor` | development read: 4 people, 2 nights, full mornings, judged by Muse Spark | knowledge 3 v 1 **0.578** (0.509 to 0.647, a pass); interaction 3 v 1 0.521; 3 v 3x 0.559 / 0.525; 4 v 2C on new_work 0.405 | kept the recipe; a DeepSeek rescore was started Nov 1 and not finished |
 | Oct 30 to 31 | `obj-mind-film-founder`, `obj-mind-week2-founder` | MIND's notes and inquiry over long accelerated lives | 21 and 6 scored nights (daily probes, appendix) | used to build MIND's inquiry; no claim |
 | Nov 1 | `obj-dd-founder-donor` | the final recipe: seeded SFT+DPO objective, extra capacity, day dreams | 3 v 1 knowledge 0.575, interaction 0.633; 2C v 1 0.750 / 0.733; 4 v 2C 0.350 / 0.567 | met the bar we wrote before it ran (knowledge at least 0.55, interaction not below the development read's 0.52), so this recipe was frozen |
 
