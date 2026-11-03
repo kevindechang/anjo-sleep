@@ -40,8 +40,8 @@
       <div id="hero-pigment-veil" aria-hidden="true"></div>
       <div class="wrap hero-inner">
         <h1>It studies your day while you sleep.</h1>
-        <p class="lede">Its overnight notes won 76% of blind comparisons on three unseen simulated people.</p>
-        <p class="hero-tech">Each person also gets their own Muse Glimmer adapter, trained nightly. That part is still an experiment.</p>
+        <p class="lede">Each night it trains a Muse Glimmer adapter for you alone, and writes notes for the morning.</p>
+        <p class="hero-tech">On three unseen simulated people, the notes won 76% of blind comparisons. The trained weights alone won 57%: specific to each person, not yet better.</p>
         <form class="code-form hero-code" id="code-form" novalidate>
           <label class="field-label" for="code" id="code-label">Your judge code, from the submission form</label>
           <div class="code-row hero-actions" id="grow">
@@ -169,8 +169,8 @@
           <li class="half">
             <span class="chip live">Held-out</span>
             <p class="fig">78<small>%</small></p>
-            <h3>But the training was specific to each person.</h3>
-            <p>Each person's own adapter beat one trained on someone else. 60% on style. It learned the person; it didn't yet beat the base model.</p>
+            <h3>Each adapter fits its own person.</h3>
+            <p>Against an adapter trained on someone else. 60% on style. Better than a mismatched adapter; better than the base model is still unproven.</p>
           </li>
           <li class="half">
             <span class="chip existing">From logged nights</span>
@@ -185,11 +185,6 @@
           <li>Training every night costs four to six times our ceiling.</li>
         </ul>
         <p class="evidence-link"><a href="https://github.com/kevindechang/anjo-sleep">Method, pass marks, every number and the pre-registration ledger &rarr;</a></p>
-        <div class="research-card">
-          <span class="chip research">Research, separate from the app</span>
-          <p><strong>MIND's odds carried a third of Gemini's avoidable error.</strong> Predicting 60 unseen simulated people over 12 weeks, excess log loss over the true odds was 0.029 against 0.082 for the best Gemini setup. MIND is our own model, trained from scratch, and isn't in the app yet.</p>
-          <p>What didn't work: untrained on a new kind of world, it did worse than guessing 50/50, and we couldn't show that its questions to you pay off. The odds in the app come from its night agent, not from MIND.</p>
-        </div>
       </div>
     </section>
 
@@ -237,6 +232,20 @@
             </div>
           </li>
         </ol>
+      </div>
+    </section>
+
+    <section class="sect" id="research" aria-labelledby="research-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">Appendix</span>
+          <h2 id="research-heading">MIND: research, <em>not in the app.</em></h2>
+        </div>
+        <div class="research-card">
+          <span class="chip research">Separate model, trained from scratch</span>
+          <p><strong>It gives odds on open questions about a person, scored when each check-by date comes.</strong> On 60 unseen simulated people over 12 weeks, its odds carried about a third of the avoidable error of the best Gemini setup (excess log loss 0.029 against 0.082).</p>
+          <p>What didn't work: untrained on a new kind of world, it did worse than guessing 50/50, and we couldn't show that its questions to you pay off. The odds in the app come from its night agent, not from MIND.</p>
+        </div>
       </div>
     </section>
   </main>
