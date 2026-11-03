@@ -14,8 +14,9 @@ alternative)), and how it resolved; ``what_changed`` is the plain lines since th
 (``ownership.what_changed``); ``before_after`` is the pair the night saved
 (``judge_cohort.save_before_after``: one question asked of base Glimmer and of the night's adapter,
 made from what they said or else from the collapse gate's everyday prompts, ``judge_pair``), when
-there is one, with ``before_model``, ``after_model``, whether the gate ``promoted`` the adapter and
-``question_source`` when the night recorded them.
+there is one and its ``night`` is the night the wake shows (the judge's latest ended night; another
+night's pair is never shown, nor its ``promoted``), with ``before_model``, ``after_model``, whether
+the gate ``promoted`` the adapter and ``question_source`` when the night recorded them.
 """
 from __future__ import annotations
 
@@ -165,8 +166,19 @@ def wake_payload(user_id: str) -> dict[str, Any]:
         "what_changed": _what_changed(user_id),
     }
     pair = load_before_after(user_id)
-    if pair is not None:
+    shown = _shown_night(user_id)
+    if pair is not None and shown is not None and pair.get("night") == shown:  # never another night's pair
         out["before_after"] = {"question": pair["question"], "before": pair["before"], "after": pair["after"],
+                               "night": shown,
                                **{k: pair[k] for k in ("before_model", "after_model", "promoted", "question_source")
                                   if k in pair}}
     return out
+
+
+def _shown_night(user_id: str) -> str | None:
+    """The night the wake shows: the judge's latest night that is no longer queued or running."""
+    from anjo.sleep.app import judge_night as jn
+
+    ended = [job for job in jn.job_store().for_user(user_id) if job.get("status") not in jn.ACTIVE]
+    night = ended[-1].get("night") if ended else None  # ``for_user`` is in the order they were made
+    return night if isinstance(night, str) else None

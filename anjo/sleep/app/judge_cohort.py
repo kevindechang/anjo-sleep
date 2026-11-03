@@ -315,6 +315,15 @@ def save_before_after(user_id: str, *, question: str, before: str, after: str, n
         os.replace(part, path)
 
 
+def clear_before_after(user_id: str) -> None:
+    """Remove the last pair: a night that saved none must not leave an older night's pair to be read
+    as its own."""
+    from anjo.sleep.app.storage import writer_guard
+
+    with writer_guard(user_id)():
+        _before_after_path(user_id).unlink(missing_ok=True)
+
+
 def load_before_after(user_id: str) -> dict[str, Any] | None:
     """The pair the night saved last, or None (none yet, or it can't be read)."""
     from anjo.sleep.app.storage import CODEC
