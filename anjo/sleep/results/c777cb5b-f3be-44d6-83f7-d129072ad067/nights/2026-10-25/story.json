@@ -1,0 +1,103 @@
+{
+ "version": 4,
+ "night": "2026-10-25",
+ "status": "promoted",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 19
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the dreams term is off tonight"
+  }
+ },
+ "rehearse": {
+  "scenes": 10,
+  "seeded": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "flagged": 10,
+  "corrected": 6
+ },
+ "learn": {
+  "rows": 8,
+  "surprise": {
+   "not_run": "no row carried MIND's surprise weight"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding": {
+   "rows": 1,
+   "kl_before": 0.8626231551170349,
+   "kl_after": 0.8787024617195129,
+   "minutes": 1.8543
+  },
+  "imitation": {
+   "rows": 1,
+   "reward": 0.0,
+   "minutes": 0.9642
+  },
+  "fold": {
+   "not_run": "the adapter wasn't folded tonight"
+  },
+  "protect": {
+   "not_run": "no protected slot tonight"
+  },
+  "core_adaptation": {
+   "not_run": "MIND's core doesn't adapt to her in the night yet"
+  }
+ },
+ "check": {
+  "gates": [
+   {
+    "name": "collapse",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 5.0
+   },
+   {
+    "name": "general",
+    "passed": true,
+    "skipped": false,
+    "value": 0.5,
+    "threshold": 2.0
+   },
+   {
+    "name": "safety",
+    "passed": false,
+    "skipped": true,
+    "value": 0.0,
+    "threshold": 0.0
+   }
+  ],
+  "promoted": true
+ },
+ "wake": {
+  "morning": {
+   "replies": 28,
+   "no_verdict": 0
+  },
+  "self_model": {
+   "not_run": "MIND's self-model isn't scored yet"
+  }
+ }
+}

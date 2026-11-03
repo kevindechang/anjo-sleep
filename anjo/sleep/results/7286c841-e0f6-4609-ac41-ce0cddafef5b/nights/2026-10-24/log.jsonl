@@ -1,0 +1,3 @@
+{"error": "glimmer_not_ready", "noop": false, "status": "failed", "step": "simulate", "system": "chat route", "uses": "existing", "wake_seconds": 600.0029727079673}
+{"night_status": "failed", "noop": false, "status": "ok", "step": "finish", "system": null, "uses": "new"}
+{"noop": false, "seconds_saved": 0, "since_last_turn_s": 12917.4, "status": "skipped", "step": "gpu_stop", "system": null, "uses": "new", "why": "none_running"}

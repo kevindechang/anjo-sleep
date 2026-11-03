@@ -1,0 +1,110 @@
+{
+ "checkpoint": {
+  "id": "p-51330df18a7e-n1",
+  "night": "2026-10-28",
+  "parent_id": null,
+  "person_id": "9a9e5e9b-2f15-4601-9236-53c943f99eac",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-51330df18a7e-n1"
+ },
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.6,
+     "target_id": "t-9d6f3b7ab5a051cb",
+     "want_id": "follow_up:t-9d6f3b7ab5a051cb",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-9d6f3b7ab5a051cb"
+  },
+  {
+   "action": "hold_note",
+   "considered": [
+    {
+     "action": "hold_note",
+     "kind": "share",
+     "reason": null,
+     "status": "won",
+     "strength": 0.9,
+     "target_id": "t-9d6f3b7ab5a051cb",
+     "want_id": "share:t-9d6f3b7ab5a051cb",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-9d6f3b7ab5a051cb"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.021861750000000003,
+  "extract": 0.0,
+  "gates": 0.21436304152411564,
+  "mind": 0.0,
+  "practice": 0.0,
+  "training": 0.10746308061384803
+ },
+ "cost_usd": 0.3436878721379637,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.5
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.7016694170888513,
+ "log_path": "$ANJO_DATA_DIR/sleep/results/9a9e5e9b-2f15-4601-9236-53c943f99eac/nights/2026-10-28.5/log.jsonl",
+ "night": "2026-10-28",
+ "night_end": "2026-10-28T16:00:00+00:00",
+ "paid_actions": 1,
+ "status": "promoted",
+ "steps": [
+  "sweep",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-51330df18a7e-n1",
+ "user_id_hash": null,
+ "wake_seconds": 224.60507179202978,
+ "wonder_calls": 8,
+ "wonder_usd": 0.226524
+}

@@ -1,0 +1,105 @@
+{
+ "version": 4,
+ "night": "2026-10-25",
+ "status": "promoted",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 28
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the dreams term is off tonight"
+  }
+ },
+ "rehearse": {
+  "scenes": 15,
+  "seeded": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "flagged": 13,
+  "corrected": 1
+ },
+ "learn": {
+  "rows": 15,
+  "surprise": {
+   "not_run": "no row carried MIND's surprise weight"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding": {
+   "rows": 9,
+   "kl_before": 2.303903818130493,
+   "kl_after": 1.9774154424667358,
+   "minutes": 1.9021
+  },
+  "imitation": {
+   "rows": 4,
+   "reward": 0.0,
+   "minutes": 1.213
+  },
+  "fold": {
+   "not_run": "the adapter wasn't folded tonight"
+  },
+  "protect": {
+   "not_run": "no protected slot tonight"
+  },
+  "core_adaptation": {
+   "not_run": "MIND's core doesn't adapt to her in the night yet"
+  }
+ },
+ "check": {
+  "gates": [
+   {
+    "name": "collapse",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 5.0
+   },
+   {
+    "name": "general",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 2.0
+   },
+   {
+    "name": "safety",
+    "passed": false,
+    "skipped": true,
+    "value": 0.0,
+    "threshold": 0.0
+   }
+  ],
+  "promoted": true
+ },
+ "wake": {
+  "morning": {
+   "failed": {
+    "step": "morning",
+    "error": "ResultUnread: /v1/completions's result wasn't read within 300 s of its HTTP 303 (last: ReadTimeout)"
+   }
+  },
+  "self_model": {
+   "not_run": "MIND's self-model isn't scored yet"
+  }
+ }
+}

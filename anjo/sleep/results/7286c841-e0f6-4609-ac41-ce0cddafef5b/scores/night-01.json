@@ -1,0 +1,196 @@
+{
+ "arms": {
+  "1": {
+   "interaction": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 6,
+    "score": 0.5,
+    "ties": 6,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 8,
+    "score": 0.5,
+    "ties": 8,
+    "wins": 0
+   },
+   "overall": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 14,
+    "score": 0.5,
+    "ties": 14,
+    "wins": 0
+   }
+  },
+  "3": {
+   "interaction": {
+    "ci": [
+     0.25,
+     0.5
+    ],
+    "decisive_share": 0.0,
+    "losses": 2,
+    "n": 6,
+    "score": 0.3333333333333333,
+    "ties": 4,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.125,
+     0.625
+    ],
+    "decisive_share": 0.3333333333333333,
+    "losses": 4,
+    "n": 8,
+    "score": 0.375,
+    "ties": 2,
+    "wins": 2
+   },
+   "overall": {
+    "ci": [
+     0.21428571428571427,
+     0.5
+    ],
+    "decisive_share": 0.25,
+    "losses": 6,
+    "n": 14,
+    "score": 0.35714285714285715,
+    "ties": 6,
+    "wins": 2
+   }
+  }
+ },
+ "checkpoint": "p-1d0d9fa13ed7-n1",
+ "checkpoint_basis": "promoted",
+ "label": "development",
+ "night": "2026-10-07",
+ "outcomes": [
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "film_student-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "film_student-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-new_work-15"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-vocab-02"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-tone_hold-15"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "film_student-tone_hold-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.25,
+   "margin_b": -0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-taste_ab-14"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.3125,
+   "margin_b": 0.25,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.875,
+   "margin_b": -0.875,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "film_student-taste_ab-13"
+  }
+ ],
+ "pairs": {},
+ "probes": 14,
+ "seconds": 146.209,
+ "subset": "daily-v1",
+ "unavailable": {},
+ "wake_seconds": 0.705582374939695
+}

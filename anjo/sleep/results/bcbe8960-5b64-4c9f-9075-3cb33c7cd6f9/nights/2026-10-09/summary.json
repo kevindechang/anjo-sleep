@@ -1,0 +1,113 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "brief": {
+  "error": "BriefError: the brief is over its 2000-token budget; retried: the brief is over its 2000-token budget",
+  "kept": "2026-10-08",
+  "why": "brief kept from 2026-10-08"
+ },
+ "checkpoint": {
+  "id": "p-49d6d81f88aa-n3",
+  "night": "2026-10-09",
+  "parent_id": "p-9b8f94357f21-n2",
+  "person_id": "bcbe8960-5b64-4c9f-9075-3cb33c7cd6f9",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-49d6d81f88aa-n3"
+ },
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.9,
+     "target_id": "t-4fc64eb9512f05e3",
+     "want_id": "follow_up:t-4fc64eb9512f05e3",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-581c9325204a4239",
+     "want_id": "follow_up:t-581c9325204a4239",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-4fc64eb9512f05e3"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.1034685,
+  "extract": 0.026328,
+  "gates": 0.14533719777743195,
+  "mind": 0.001217964831982196,
+  "practice": 1.0441966085455092,
+  "training": 0.1282607635125007
+ },
+ "cost_usd": 1.448809034667424,
+ "day_index": 2,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": -1.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.8089571660384536,
+ "git_sha": "4e565e7999e6acf11d49176b12f560a4d1188cc9",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/bcbe8960-5b64-4c9f-9075-3cb33c7cd6f9/nights/2026-10-09/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-09",
+ "night_end": "2026-10-30T01:38:19.768296+00:00",
+ "paid_actions": 1,
+ "status": "promoted",
+ "steps": [
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-49d6d81f88aa-n3",
+ "user_id_hash": null,
+ "wake_seconds": 0.8984823749633506,
+ "wonder_calls": 7,
+ "wonder_usd": 0.171652
+}

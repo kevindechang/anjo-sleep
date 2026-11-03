@@ -1,0 +1,162 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "brief": {
+  "error": "BriefError: the brief is over its 2000-token budget; retried: the brief is over its 2000-token budget",
+  "kept": "2026-10-18",
+  "why": "brief kept from 2026-10-18"
+ },
+ "checkpoint": {
+  "id": "p-068ee32c4114-n4",
+  "night": "2026-10-20",
+  "parent_id": "p-67afb41d403e-n3",
+  "person_id": "d2972e79-305a-45c7-8eeb-042cc1e1a2c3",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-068ee32c4114-n4"
+ },
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.9,
+     "target_id": "t-8f6dea4fd326e4f1",
+     "want_id": "follow_up:t-8f6dea4fd326e4f1",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-ec7ccbe5caee78b7",
+     "want_id": "follow_up:t-ec7ccbe5caee78b7",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-8f6dea4fd326e4f1"
+  },
+  {
+   "action": null,
+   "considered": [
+    {
+     "action": "hold_note",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.8,
+     "target_id": "t-8f6dea4fd326e4f1",
+     "want_id": "follow_up:t-8f6dea4fd326e4f1",
+     "weight": 1.0
+    },
+    {
+     "action": "hold_note",
+     "kind": "share",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.7,
+     "target_id": "t-8f6dea4fd326e4f1",
+     "want_id": "share:t-8f6dea4fd326e4f1",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "action_not_offered",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-ec7ccbe5caee78b7",
+     "want_id": "follow_up:t-ec7ccbe5caee78b7",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.11602974999999999,
+  "extract": 0.037183499999999994,
+  "gates": 0.1181239313626429,
+  "mind": 0.0012957958540743373,
+  "practice": 1.2260835269530812,
+  "training": 0.14940795037643206
+ },
+ "cost_usd": 1.6481244545462306,
+ "day_index": 4,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": -2.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.8510324589442462,
+ "git_sha": "3f42c94d87be02237a2e463a5161735347c0c445",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/d2972e79-305a-45c7-8eeb-042cc1e1a2c3/nights/2026-10-20/log.jsonl",
+ "mind_loop": {
+  "focus": [],
+  "other": {
+   "held_up": 3,
+   "scenes": 15
+  },
+  "predictions": [],
+  "record": "practice:2026-10-20",
+  "scenes": {},
+  "why": "her log holds no question at the night's start"
+ },
+ "morning_probes": "daily-v1",
+ "night": "2026-10-20",
+ "night_end": "2026-10-31T04:30:42.191446+00:00",
+ "paid_actions": 1,
+ "status": "promoted",
+ "steps": [
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-068ee32c4114-n4",
+ "user_id_hash": null,
+ "wake_seconds": 0.6751085000578314,
+ "wonder_calls": 7,
+ "wonder_usd": 0.20757199999999998
+}

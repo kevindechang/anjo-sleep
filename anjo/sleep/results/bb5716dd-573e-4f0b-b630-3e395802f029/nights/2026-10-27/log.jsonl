@@ -1,0 +1,6 @@
+{"holds_settled": 0, "noop": false, "sessions_not_ours": 0, "sessions_stopped": 0, "status": "ok", "step": "sweep", "system": null, "uses": "new"}
+{"answered": 9, "failed_turns": 0, "noop": false, "short_day": false, "status": "ok", "step": "simulate", "system": "chat route", "uses": "existing", "wake_seconds": 255.5317794169532}
+{"night": "2026-10-27", "noop": false, "status": "ok", "step": "close_day", "system": null, "uses": "new", "window": ["2026-10-30T13:44:31.903470+00:00", "2026-10-30T13:52:22.842546+00:00"]}
+{"error": "ModelApiError: Fireworks chat with accounts/fireworks/models/muse-spark-open failed in transport (ReadError)", "noop": false, "status": "failed", "step": "extract", "system": "history store", "uses": "existing"}
+{"night_status": "failed", "noop": false, "status": "ok", "step": "finish", "system": null, "uses": "new"}
+{"containers": 1, "graceful": true, "noop": false, "seconds_saved": 600, "since_last_turn_s": 1412.7, "status": "ok", "step": "gpu_stop", "system": null, "uses": "new"}

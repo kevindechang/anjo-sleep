@@ -1,0 +1,63 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.6,
+     "target_id": "t-5cf62db1247b5b64",
+     "want_id": "follow_up:t-5cf62db1247b5b64",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-5cf62db1247b5b64"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.0566835,
+  "extract": 0.03442525,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 0.27503875,
+  "training": 0.0
+ },
+ "cost_usd": 0.3661475,
+ "day_index": 0,
+ "failed_at": "practice",
+ "gates": {},
+ "git_sha": "7eadbefff9ea689ea2700386bc3fb318b029be65",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/a2fb5ac0-db02-4eda-8974-dc9ae5f11c30/nights/2026-10-27/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-27",
+ "night_end": "2026-10-30T15:21:30.036899+00:00",
+ "paid_actions": 1,
+ "status": "failed",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wake_seconds": 0.9024111250182614,
+ "wonder_calls": 7,
+ "wonder_usd": 0.298008
+}

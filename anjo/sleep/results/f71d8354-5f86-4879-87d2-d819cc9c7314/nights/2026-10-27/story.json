@@ -1,0 +1,41 @@
+{
+ "version": 4,
+ "night": "2026-10-27",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "failed": {
+   "step": "brief",
+   "error": "ModelApiError: Fireworks chat with accounts/fireworks/models/muse-spark-open failed in transport (ReadError)"
+  }
+ },
+ "dream": {
+  "questions": 0,
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the night stopped at brief"
+  }
+ },
+ "rehearse": {
+  "not_run": "the night stopped at brief"
+ },
+ "learn": {
+  "not_run": "the night stopped at brief"
+ },
+ "check": {
+  "not_run": "the night stopped at brief"
+ },
+ "wake": {
+  "not_run": "the night stopped at brief"
+ }
+}

@@ -1,0 +1,87 @@
+{
+ "accelerated": true,
+ "checkpoint": {
+  "id": "p-aa6d2bdc71bd-n1",
+  "night": "2026-10-24",
+  "parent_id": null,
+  "person_id": "da1b273d-5e92-4458-a651-c8b3bd5d8738",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-aa6d2bdc71bd-n1"
+ },
+ "choices": [
+  {
+   "action": null,
+   "considered": [],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.02502075,
+  "extract": 0.01852875,
+  "gates": 0.12987751634705638,
+  "mind": 0.0,
+  "practice": 0.805105011535072,
+  "training": 0.3157494796298528
+ },
+ "cost_usd": 1.2942815075119811,
+ "day_index": 0,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 1.0086425000336021,
+ "git_sha": "109094877201dfe7912212f12829facfcf494a06",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/da1b273d-5e92-4458-a651-c8b3bd5d8738/nights/2026-10-24/log.jsonl",
+ "morning_probes": "full",
+ "night": "2026-10-24",
+ "night_end": "2026-10-29T15:27:43.025810+00:00",
+ "paid_actions": 0,
+ "status": "promoted",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-aa6d2bdc71bd-n1",
+ "user_id_hash": null,
+ "wake_seconds": 0.7270953330444172,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

@@ -1,0 +1,5 @@
+{"answered": 9, "failed_turns": 0, "noop": false, "short_day": false, "status": "ok", "step": "simulate", "system": "chat route", "uses": "existing", "wake_seconds": 0.7609936250373721}
+{"night": "2026-10-17", "noop": false, "status": "ok", "step": "close_day", "system": null, "uses": "new", "window": ["2026-10-30T16:27:31.660686+00:00", "2026-10-30T16:31:01.371503+00:00"]}
+{"items": 15, "kinds": {"correction": 1, "lesson": 9, "preference": 3, "tone_request": 2}, "min_new_examples": 1, "new_since_last_training": 21, "noop": false, "status": "ok", "step": "extract", "system": "history store", "training_night": true, "uses": "existing"}
+{"budget": {"cycle_cap": 12, "cycles_used": 0, "token_cap": 20000, "tokens_used": 2}, "decisions": [], "glimmer_calls": 1, "new": 14, "noop": false, "ops": {}, "questions_opened": 0, "rejected": {}, "resolver_tokens": 0, "spark_calls": 0, "status": "ok", "step": "notice", "system": null, "uses": "new"}
+{"how": "sealed once", "noop": false, "sealed": 80, "status": "ok", "step": "probes", "system": null, "uses": "new"}

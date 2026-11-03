@@ -1,0 +1,72 @@
+{
+ "version": 4,
+ "night": "2026-10-08",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 22
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the night trained without the sleep objective's terms"
+  }
+ },
+ "rehearse": {
+  "scenes": 14,
+  "seeded": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "flagged": 14,
+  "corrected": 2
+ },
+ "learn": {
+  "rows": 19,
+  "surprise": {
+   "not_run": "no row carried MIND's surprise weight"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "imitation": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "fold": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "protect": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "core_adaptation": {
+   "not_run": "MIND's core doesn't adapt to her in the night yet"
+  }
+ },
+ "check": {
+  "failed": {
+   "step": "gates",
+   "error": "ServerUnresponsive: the server didn't answer /v1/models within 15 s; requests fail at once for 60 s"
+  }
+ },
+ "wake": {
+  "not_run": "the night stopped at gates"
+ }
+}

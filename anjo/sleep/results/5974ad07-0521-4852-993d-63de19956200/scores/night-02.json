@@ -1,0 +1,5080 @@
+{
+ "arms": {
+  "1": {
+   "interaction": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 30,
+    "score": 0.5,
+    "ties": 30,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 40,
+    "score": 0.5,
+    "ties": 40,
+    "wins": 0
+   },
+   "overall": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 70,
+    "score": 0.5,
+    "ties": 70,
+    "wins": 0
+   }
+  },
+  "2C": {
+   "interaction": {
+    "ci": [
+     0.5,
+     0.75
+    ],
+    "decisive_share": 0.7222222222222222,
+    "losses": 5,
+    "n": 30,
+    "score": 0.6333333333333333,
+    "ties": 12,
+    "wins": 13
+   },
+   "knowledge": {
+    "ci": [
+     0.5375,
+     0.725
+    ],
+    "decisive_share": 0.6666666666666666,
+    "losses": 11,
+    "n": 40,
+    "score": 0.6375,
+    "ties": 7,
+    "wins": 22
+   },
+   "overall": {
+    "ci": [
+     0.5571428571428572,
+     0.7071428571428572
+    ],
+    "decisive_share": 0.6862745098039216,
+    "losses": 16,
+    "n": 70,
+    "score": 0.6357142857142857,
+    "ties": 19,
+    "wins": 35
+   }
+  },
+  "2F": {
+   "interaction": {
+    "ci": [
+     0.5833333333333334,
+     0.8
+    ],
+    "decisive_share": 0.8333333333333334,
+    "losses": 3,
+    "n": 30,
+    "score": 0.7,
+    "ties": 12,
+    "wins": 15
+   },
+   "knowledge": {
+    "ci": [
+     0.575,
+     0.6875
+    ],
+    "decisive_share": 0.6666666666666666,
+    "losses": 11,
+    "n": 40,
+    "score": 0.6375,
+    "ties": 7,
+    "wins": 22
+   },
+   "overall": {
+    "ci": [
+     0.6,
+     0.7214285714285714
+    ],
+    "decisive_share": 0.7254901960784313,
+    "losses": 14,
+    "n": 70,
+    "score": 0.6642857142857143,
+    "ties": 19,
+    "wins": 37
+   }
+  },
+  "3": {
+   "interaction": {
+    "ci": [
+     0.38333333333333336,
+     0.6166666666666667
+    ],
+    "decisive_share": 0.5,
+    "losses": 6,
+    "n": 30,
+    "score": 0.5,
+    "ties": 18,
+    "wins": 6
+   },
+   "knowledge": {
+    "ci": [
+     0.3125,
+     0.5625
+    ],
+    "decisive_share": 0.42857142857142855,
+    "losses": 20,
+    "n": 40,
+    "score": 0.4375,
+    "ties": 5,
+    "wins": 15
+   },
+   "overall": {
+    "ci": [
+     0.38571428571428573,
+     0.55
+    ],
+    "decisive_share": 0.44680851063829785,
+    "losses": 26,
+    "n": 70,
+    "score": 0.4642857142857143,
+    "ties": 23,
+    "wins": 21
+   }
+  },
+  "3x": {
+   "interaction": {
+    "ci": [
+     0.38333333333333336,
+     0.6166666666666667
+    ],
+    "decisive_share": 0.5,
+    "losses": 6,
+    "n": 30,
+    "score": 0.5,
+    "ties": 18,
+    "wins": 6
+   },
+   "knowledge": {
+    "ci": [
+     0.25,
+     0.525
+    ],
+    "decisive_share": 0.37142857142857144,
+    "losses": 22,
+    "n": 40,
+    "score": 0.3875,
+    "ties": 5,
+    "wins": 13
+   },
+   "overall": {
+    "ci": [
+     0.34285714285714286,
+     0.5285714285714286
+    ],
+    "decisive_share": 0.40425531914893614,
+    "losses": 28,
+    "n": 70,
+    "score": 0.4357142857142857,
+    "ties": 23,
+    "wins": 19
+   }
+  },
+  "4": {
+   "interaction": {
+    "ci": [
+     0.5833333333333334,
+     0.8166666666666667
+    ],
+    "decisive_share": 0.8333333333333334,
+    "losses": 3,
+    "n": 30,
+    "score": 0.7,
+    "ties": 12,
+    "wins": 15
+   },
+   "knowledge": {
+    "ci": [
+     0.575,
+     0.75
+    ],
+    "decisive_share": 0.7096774193548387,
+    "losses": 9,
+    "n": 40,
+    "score": 0.6625,
+    "ties": 9,
+    "wins": 22
+   },
+   "overall": {
+    "ci": [
+     0.6071428571428571,
+     0.75
+    ],
+    "decisive_share": 0.7551020408163265,
+    "losses": 12,
+    "n": 70,
+    "score": 0.6785714285714286,
+    "ties": 21,
+    "wins": 37
+   }
+  }
+ },
+ "checkpoint": "p-9b417d805cc0-n2",
+ "checkpoint_basis": "promoted",
+ "judge_model": "accounts/fireworks/models/deepseek-v4p1-flash",
+ "label": "development",
+ "night": "2026-10-28",
+ "outcomes": [
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.0625,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.4063,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.6875,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.0625,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.4063,
+   "margin_b": 1.5,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.25,
+   "margin_b": -0.375,
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.4375,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.2187,
+   "margin_b": -0.6875,
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.0,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.3125,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.0625,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.3438,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.25,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.3125,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.9687,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.8125,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.625,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.9375,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.625,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.0625,
+   "margin_b": 1.5,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.7812,
+   "margin_b": -0.375,
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5625,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.0938,
+   "margin_b": -0.6875,
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.3125,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.375,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.375,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.25,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.125,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.9375,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.0625,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.875,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.6875,
+   "margin_b": 1.5,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.3125,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4687,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.8125,
+   "margin_b": -0.6875,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.5625,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.125,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.1875,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.5,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.8125,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.0,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.1875,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0625,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.1875,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 1.5,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.375,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.6875,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.6875,
+   "margin_b": -0.6875,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.4375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.25,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.75,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.6875,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4375,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.6875,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.5,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": -1.0,
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.7812,
+   "margin_b": 1.5,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.8437,
+   "margin_b": -0.375,
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.0625,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.5313,
+   "margin_b": -0.6875,
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.375,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.125,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.25,
+   "margin_b": -0.1875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.125,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.8125,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.9375,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0,
+   "margin_b": 0.1875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.0625,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.875,
+   "margin_b": -1.1875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.6875,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.3125,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4687,
+   "margin_b": 1.6875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.8125,
+   "margin_b": -0.6875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.5625,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0,
+   "margin_b": 0.0,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.125,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.0625,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.6875,
+   "margin_b": 2.4063,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4375,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.6875,
+   "margin_b": -1.6875,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.5,
+   "margin_b": 2.1875,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": 2.0625,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.7812,
+   "margin_b": 3.4063,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.8437,
+   "margin_b": 3.25,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.0625,
+   "margin_b": 4.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.5313,
+   "margin_b": 2.2187,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": -0.0,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": 1.3125,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.375,
+   "margin_b": -1.0625,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.125,
+   "margin_b": 2.3438,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "founder_donor-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-06"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-18"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-23"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-03"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-pushback-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": 2.25,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.3125,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.6875,
+   "margin_b": 2.9687,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4375,
+   "margin_b": 1.8125,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.6875,
+   "margin_b": -1.625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-05"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.5,
+   "margin_b": 1.9375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.1875,
+   "margin_b": 1.625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.7812,
+   "margin_b": 4.0625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.8437,
+   "margin_b": 3.7812,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.0625,
+   "margin_b": 3.5625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.5313,
+   "margin_b": 2.0938,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": -0.3125,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": 2.375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.375,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.125,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-06"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-12"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-13"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-09"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "founder_donor-vocab-15"
+  }
+ ],
+ "pairs": {
+  "3_vs_3x": {
+   "interaction": {
+    "ci": [
+     0.4,
+     0.6333333333333333
+    ],
+    "decisive_share": 0.5454545454545454,
+    "losses": 5,
+    "n": 30,
+    "score": 0.5166666666666667,
+    "ties": 19,
+    "wins": 6
+   },
+   "knowledge": {
+    "ci": [
+     0.4875,
+     0.75
+    ],
+    "decisive_share": 0.6470588235294118,
+    "losses": 12,
+    "n": 40,
+    "score": 0.625,
+    "ties": 6,
+    "wins": 22
+   },
+   "overall": {
+    "ci": [
+     0.4928571428571429,
+     0.6642857142857143
+    ],
+    "decisive_share": 0.6222222222222222,
+    "losses": 17,
+    "n": 70,
+    "score": 0.5785714285714286,
+    "ties": 25,
+    "wins": 28
+   }
+  },
+  "4_vs_2C": {
+   "interaction": {
+    "ci": [
+     0.4166666666666667,
+     0.65
+    ],
+    "decisive_share": 0.5833333333333334,
+    "losses": 5,
+    "n": 30,
+    "score": 0.5333333333333333,
+    "ties": 18,
+    "wins": 7
+   },
+   "knowledge": {
+    "ci": [
+     0.375,
+     0.6375
+    ],
+    "decisive_share": 0.5,
+    "losses": 15,
+    "n": 40,
+    "score": 0.5,
+    "ties": 10,
+    "wins": 15
+   },
+   "overall": {
+    "ci": [
+     0.42857142857142855,
+     0.6
+    ],
+    "decisive_share": 0.5238095238095238,
+    "losses": 20,
+    "n": 70,
+    "score": 0.5142857142857142,
+    "ties": 28,
+    "wins": 22
+   }
+  },
+  "4_vs_2F": {
+   "interaction": {
+    "ci": [
+     0.35,
+     0.55
+    ],
+    "decisive_share": 0.36363636363636365,
+    "losses": 7,
+    "n": 30,
+    "score": 0.45,
+    "ties": 19,
+    "wins": 4
+   },
+   "knowledge": {
+    "ci": [
+     0.2625,
+     0.5125
+    ],
+    "decisive_share": 0.3548387096774194,
+    "losses": 20,
+    "n": 40,
+    "score": 0.3875,
+    "ties": 9,
+    "wins": 11
+   },
+   "overall": {
+    "ci": [
+     0.32857142857142857,
+     0.5
+    ],
+    "decisive_share": 0.35714285714285715,
+    "losses": 27,
+    "n": 70,
+    "score": 0.4142857142857143,
+    "ties": 28,
+    "wins": 15
+   }
+  }
+ },
+ "pinned": true,
+ "probes": 80,
+ "seconds": 6465.66,
+ "unavailable": {},
+ "wake_seconds": 0.6340328329242766
+}

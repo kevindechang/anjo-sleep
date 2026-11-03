@@ -1,0 +1,43 @@
+{
+ "version": 4,
+ "night": "2026-10-27",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 5
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the night stopped at practice"
+  }
+ },
+ "rehearse": {
+  "failed": {
+   "step": "practice",
+   "error": "BudgetStop: baseten_sleep_usd can't hold the worst case of night:practice:6f9daaab-e346-4f61-92fb-7844c7f01912:2026-10-27"
+  }
+ },
+ "learn": {
+  "not_run": "the night stopped at practice"
+ },
+ "check": {
+  "not_run": "the night stopped at practice"
+ },
+ "wake": {
+  "not_run": "the night stopped at practice"
+ }
+}

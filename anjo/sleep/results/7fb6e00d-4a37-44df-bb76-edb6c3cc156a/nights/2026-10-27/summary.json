@@ -1,0 +1,55 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": null,
+   "considered": [],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.031254500000000005,
+  "extract": 0.02357175,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 1.7901010910105835,
+  "training": 0.0
+ },
+ "cost_usd": 1.8449273410105835,
+ "day_index": 0,
+ "failed_at": "train",
+ "gates": {},
+ "git_sha": "3c5b14f3e3d55ebf017a530bab8088d49f3e7b84",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/7fb6e00d-4a37-44df-bb76-edb6c3cc156a/nights/2026-10-27/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-27",
+ "night_end": "2026-11-01T15:29:12.119189+00:00",
+ "paid_actions": 0,
+ "status": "failed",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "harness",
+  "dataset",
+  "train",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wake_seconds": 1.107057125074789,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

@@ -1,0 +1,145 @@
+{
+ "accelerated": true,
+ "checkpoint": {
+  "id": "p-a46f3cedff7d-n2",
+  "night": "2026-10-25",
+  "parent_id": "p-93f612db49dd-n1",
+  "person_id": "c777cb5b-f3be-44d6-83f7-d129072ad067",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-a46f3cedff7d-n2"
+ },
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.9,
+     "target_id": "t-e0524003aac77013",
+     "want_id": "follow_up:t-e0524003aac77013",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-39e7503089612ed6",
+     "want_id": "follow_up:t-39e7503089612ed6",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-e0524003aac77013"
+  },
+  {
+   "action": "hold_note",
+   "considered": [
+    {
+     "action": "hold_note",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.8,
+     "target_id": "t-e0524003aac77013",
+     "want_id": "follow_up:t-e0524003aac77013",
+     "weight": 1.0
+    },
+    {
+     "action": "hold_note",
+     "kind": "share",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.8,
+     "target_id": "t-e0524003aac77013",
+     "want_id": "share:t-e0524003aac77013",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "action_not_offered",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-39e7503089612ed6",
+     "want_id": "follow_up:t-39e7503089612ed6",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-e0524003aac77013"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.15105475000000002,
+  "extract": 0.041778,
+  "gates": 0.0839777840871781,
+  "mind": 0.0,
+  "practice": 0.9308785041373163,
+  "training": 0.343869580411087
+ },
+ "cost_usd": 1.5515586186355814,
+ "day_index": 1,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.5
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.8173112089280039,
+ "git_sha": "9a13fddf6529051f92cbac1882871c7a234916a0",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/c777cb5b-f3be-44d6-83f7-d129072ad067/nights/2026-10-25/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-25",
+ "night_end": "2026-10-29T03:39:04.110499+00:00",
+ "paid_actions": 1,
+ "status": "promoted",
+ "steps": [
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-a46f3cedff7d-n2",
+ "user_id_hash": null,
+ "wake_seconds": 0.8033752079354599,
+ "wonder_calls": 8,
+ "wonder_usd": 0.250752
+}

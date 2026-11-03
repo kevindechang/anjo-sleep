@@ -1,0 +1,5 @@
+{"answered": 5, "failed_turns": 0, "noop": false, "short_day": false, "status": "ok", "step": "simulate", "system": "chat route", "uses": "existing", "wake_seconds": 0.7332077079918236}
+{"night": "2026-10-19", "noop": false, "status": "ok", "step": "close_day", "system": null, "uses": "new", "window": ["2026-10-31T04:17:06.245334+00:00", "2026-10-31T04:19:00.601085+00:00"]}
+{"error": "ModelApiError: Fireworks chat with accounts/fireworks/models/muse-spark-open timed out after 300s", "noop": false, "status": "failed", "step": "extract", "system": "history store", "uses": "existing"}
+{"night_status": "failed", "noop": false, "status": "ok", "step": "finish", "system": null, "uses": "new"}
+{"containers": 1, "graceful": true, "noop": false, "seconds_saved": 600, "since_last_turn_s": 1780.6, "status": "ok", "step": "gpu_stop", "system": null, "uses": "new"}

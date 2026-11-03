@@ -1,0 +1,162 @@
+{
+ "accelerated": true,
+ "alone": true,
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": null,
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.9,
+     "target_id": "t-1208f9ab6f1739e5",
+     "want_id": "follow_up:t-1208f9ab6f1739e5",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.9,
+     "target_id": "t-1bc9d37f1ede0287",
+     "want_id": "follow_up:t-1bc9d37f1ede0287",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.9,
+     "target_id": "t-77cd1669e68bdf21",
+     "want_id": "follow_up:t-77cd1669e68bdf21",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.9,
+     "target_id": "t-acfb5a1d9c5d32b4",
+     "want_id": "follow_up:t-acfb5a1d9c5d32b4",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.9,
+     "target_id": "t-b887a604268e49b9",
+     "want_id": "follow_up:t-b887a604268e49b9",
+     "weight": 1.0
+    },
+    {
+     "action": "hold_note",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.8,
+     "target_id": "t-46e718e4f165153e",
+     "want_id": "follow_up:t-46e718e4f165153e",
+     "weight": 1.0
+    },
+    {
+     "action": "inquire",
+     "kind": "settle",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.25,
+     "target_id": "t-77cd1669e68bdf21",
+     "want_id": "settle:q1",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "budget",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-7efd56b241385493",
+     "want_id": "follow_up:t-7efd56b241385493",
+     "weight": 1.0
+    },
+    {
+     "action": "revisit_thread",
+     "kind": "understand",
+     "reason": "below_threshold",
+     "status": "held_back",
+     "strength": 0.09999999999999998,
+     "target_id": "t-379d453596284af1",
+     "want_id": "understand:t-379d453596284af1",
+     "weight": 1.0
+    },
+    {
+     "action": "inquire",
+     "kind": "understand",
+     "reason": "below_threshold",
+     "status": "held_back",
+     "strength": 0.0800373437273275,
+     "target_id": "t-1208f9ab6f1739e5",
+     "want_id": "understand:t-1208f9ab6f1739e5",
+     "weight": 1.0
+    },
+    {
+     "action": "inquire",
+     "kind": "understand",
+     "reason": "below_threshold",
+     "status": "held_back",
+     "strength": 0.0800373437273275,
+     "target_id": "t-77cd1669e68bdf21",
+     "want_id": "understand:t-77cd1669e68bdf21",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.0,
+  "extract": 0.0,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 0.0,
+  "training": 0.0
+ },
+ "cost_usd": 0.0,
+ "day_index": 0,
+ "failed_at": "brief",
+ "gates": {},
+ "git_sha": "a9f9dcf555ff6b18a63ef4ebbbc2572568fe2751",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/f71d8354-5f86-4879-87d2-d819cc9c7314/nights/2026-10-25/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-25",
+ "night_end": "2026-10-31T10:36:50.384904+00:00",
+ "paid_actions": 0,
+ "status": "failed",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "inquire",
+  "brief",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

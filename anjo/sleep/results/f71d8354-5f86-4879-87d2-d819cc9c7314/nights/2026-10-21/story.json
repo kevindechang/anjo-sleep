@@ -1,0 +1,45 @@
+{
+ "version": 4,
+ "night": "2026-10-21",
+ "status": "nothing_new",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "kept_from": "2026-10-18",
+  "error": "BriefError: the brief ran to its 15000-token cap; retried: the brief ran to its 15000-token cap"
+ },
+ "dream": {
+  "questions": 0,
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "too little new since her last training: nothing to learn tonight"
+  }
+ },
+ "rehearse": {
+  "not_run": "too little new since her last training: nothing to learn tonight"
+ },
+ "learn": {
+  "not_run": "too little new since her last training: nothing to learn tonight"
+ },
+ "check": {
+  "not_run": "too little new since her last training: nothing to learn tonight"
+ },
+ "wake": {
+  "morning": {
+   "replies": 28,
+   "no_verdict": 0
+  },
+  "self_model": {
+   "not_run": "MIND's self-model isn't scored yet"
+  }
+ }
+}

@@ -1,0 +1,11 @@
+{"holds_settled": 1, "noop": false, "sessions_not_ours": 0, "sessions_stopped": 0, "status": "ok", "step": "sweep", "system": null, "uses": "new"}
+{"answered": 9, "failed_turns": 0, "noop": false, "short_day": false, "status": "ok", "step": "simulate", "system": "chat route", "uses": "existing", "wake_seconds": 287.40881029202137}
+{"night": "2026-10-27", "noop": false, "status": "ok", "step": "close_day", "system": null, "uses": "new", "window": ["2026-10-30T09:17:00.605044+00:00", "2026-10-30T09:25:27.830789+00:00"]}
+{"items": 11, "kinds": {"lesson": 3, "preference": 8}, "min_new_examples": 1, "new_since_last_training": 9, "noop": false, "status": "ok", "step": "extract", "system": "history store", "training_night": true, "uses": "existing"}
+{"noop": true, "port": "notice (Task 17): no-op", "status": "ok", "step": "notice", "system": null, "uses": "new"}
+{"how": "sealed once", "noop": false, "sealed": 80, "status": "ok", "step": "probes", "system": null, "uses": "new"}
+{"action": null, "allowance": {"actions_left": 2, "calls_left": 12, "usd_left": 3.0}, "expectation": null, "noop": false, "not_offered": [], "offered": ["hold_note", "prepare_commitment", "revisit_thread"], "ports": {"chooser": "StateChooser", "expectations": "estimator not registered (Task 16)", "homework": "available", "inquiry": "no-op (Task 17)"}, "receipt": {"candidates": [], "opportunity": "away", "outcome": null, "outcome_reason": null, "question_id": null, "winner": null}, "status": "ok", "step": "choose", "system": null, "target_id": null, "uses": "new", "wonder_month": {"cap_usd": 3.0, "left_usd": 3.0, "spent_usd": 0.0}}
+{"folded": 9, "noop": false, "status": "ok", "step": "brief", "system": null, "uses": "new"}
+{"error": "ModelApiError: Fireworks chat with accounts/fireworks/models/muse-spark-open timed out after 180s", "noop": false, "status": "failed", "step": "practice", "system": null, "uses": "new"}
+{"night_status": "failed", "noop": false, "status": "ok", "step": "finish", "system": null, "uses": "new"}
+{"noop": false, "seconds_saved": 0, "since_last_turn_s": 0.1, "status": "skipped", "step": "gpu_stop", "system": null, "uses": "new", "why": "recent_turn"}

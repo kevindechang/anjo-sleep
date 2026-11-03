@@ -1,0 +1,102 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": null,
+   "considered": [],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.12189975,
+  "extract": 0.019802999999999998,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 1.3079368891842476,
+  "training": 0.0
+ },
+ "cost_usd": 1.4496396391842477,
+ "day_index": 1,
+ "failed_at": "train",
+ "final_run": {
+  "alone_from": null,
+  "days": 2,
+  "lives": [
+   [
+    "a3aec189-359e-401f-b990-1375d8c0fa8e",
+    "P03a"
+   ],
+   [
+    "4fc642c6-193c-4835-957f-1dc84938db2d",
+    "P03b"
+   ],
+   [
+    "13f17861-04d4-4638-b3bf-2e96582f8853",
+    "P07a"
+   ]
+  ],
+  "mind": false,
+  "practice_scenes": 16,
+  "seed": 20261028,
+  "start": "2026-10-27"
+ },
+ "gates": {},
+ "git_sha": "1b27bce098eba6918ca00d2cedc64bb354bb8316",
+ "gpu_batch": {
+  "digest": "7d68510590d3",
+  "people": 3
+ },
+ "label": "final",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/a3aec189-359e-401f-b990-1375d8c0fa8e/nights/2026-10-28/log.jsonl",
+ "morning_probes": "full",
+ "night": "2026-10-28",
+ "night_end": "2026-11-02T10:37:33.099472+00:00",
+ "paid_actions": 0,
+ "recipe": {
+  "ANJO_SLEEP_ADAPTER_FOLD": null,
+  "ANJO_SLEEP_AGENT_BASELINE": null,
+  "ANJO_SLEEP_ARMS_EXTRA": null,
+  "ANJO_SLEEP_BACKEND": "modal",
+  "ANJO_SLEEP_CAPACITY": "1",
+  "ANJO_SLEEP_CHANNEL": null,
+  "ANJO_SLEEP_CONCURRENCY": "16",
+  "ANJO_SLEEP_DAY_DREAMS": "1",
+  "ANJO_SLEEP_DREAMS": null,
+  "ANJO_SLEEP_DREAM_CURRICULUM": null,
+  "ANJO_SLEEP_GLIMMER_REVISION": "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+  "ANJO_SLEEP_HARNESS": "1",
+  "ANJO_SLEEP_JUDGE": "deepseek",
+  "ANJO_SLEEP_MORNING_SUBSET": null,
+  "ANJO_SLEEP_OBJECTIVE": "sft_dpo_seed",
+  "ANJO_SLEEP_PRACTICE_ROLES": null,
+  "ANJO_SLEEP_PRESSURE": "0",
+  "ANJO_SLEEP_PROTECT": null,
+  "ANJO_SLEEP_SERVE_DETERMINISTIC": null,
+  "ANJO_SLEEP_TRAIN_RUNNER": "colab_modal"
+ },
+ "status": "failed",
+ "steps": [
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "harness",
+  "dataset",
+  "train",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wake_seconds": 226.40818454208784,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

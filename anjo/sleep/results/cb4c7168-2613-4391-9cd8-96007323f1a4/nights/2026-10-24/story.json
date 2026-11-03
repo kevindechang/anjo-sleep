@@ -1,0 +1,34 @@
+{
+ "version": 2,
+ "night": "2026-10-24",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  },
+  "threads": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  },
+  "boundaries": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  }
+ },
+ "rehearse": {
+  "not_run": "the night stopped at brief"
+ },
+ "learn": {
+  "not_run": "the night stopped at brief"
+ },
+ "check": {
+  "not_run": "the night stopped at brief"
+ },
+ "wake": {
+  "not_run": "the night stopped at brief"
+ }
+}

@@ -1,0 +1,6338 @@
+{
+ "accelerated": true,
+ "arms": {
+  "1": {
+   "interaction": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 30,
+    "score": 0.5,
+    "ties": 30,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 40,
+    "score": 0.5,
+    "ties": 40,
+    "wins": 0
+   },
+   "overall": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 70,
+    "score": 0.5,
+    "ties": 70,
+    "wins": 0
+   }
+  },
+  "2C": {
+   "interaction": {
+    "ci": [
+     0.55,
+     0.75
+    ],
+    "decisive_share": 0.8,
+    "losses": 3,
+    "n": 30,
+    "score": 0.65,
+    "ties": 15,
+    "wins": 12
+   },
+   "knowledge": {
+    "ci": [
+     0.7,
+     0.9125
+    ],
+    "decisive_share": 0.8378378378378378,
+    "losses": 6,
+    "n": 40,
+    "score": 0.8125,
+    "ties": 3,
+    "wins": 31
+   },
+   "overall": {
+    "ci": [
+     0.6642857142857143,
+     0.8142857142857143
+    ],
+    "decisive_share": 0.8269230769230769,
+    "losses": 9,
+    "n": 70,
+    "score": 0.7428571428571429,
+    "ties": 18,
+    "wins": 43
+   }
+  },
+  "2F": {
+   "interaction": {
+    "ci": [
+     0.5833333333333334,
+     0.7666666666666667
+    ],
+    "decisive_share": 0.8666666666666667,
+    "losses": 2,
+    "n": 30,
+    "score": 0.6833333333333333,
+    "ties": 15,
+    "wins": 13
+   },
+   "knowledge": {
+    "ci": [
+     0.6875,
+     0.875
+    ],
+    "decisive_share": 0.8484848484848485,
+    "losses": 5,
+    "n": 40,
+    "score": 0.7875,
+    "ties": 7,
+    "wins": 28
+   },
+   "overall": {
+    "ci": [
+     0.6714285714285714,
+     0.8071428571428572
+    ],
+    "decisive_share": 0.8541666666666666,
+    "losses": 7,
+    "n": 70,
+    "score": 0.7428571428571429,
+    "ties": 22,
+    "wins": 41
+   }
+  },
+  "2H": {
+   "interaction": {
+    "ci": [
+     0.5333333333333333,
+     0.7166666666666667
+    ],
+    "decisive_share": 0.7857142857142857,
+    "losses": 3,
+    "n": 30,
+    "score": 0.6333333333333333,
+    "ties": 16,
+    "wins": 11
+   },
+   "knowledge": {
+    "ci": [
+     0.65,
+     0.8625
+    ],
+    "decisive_share": 0.8,
+    "losses": 7,
+    "n": 40,
+    "score": 0.7625,
+    "ties": 5,
+    "wins": 28
+   },
+   "overall": {
+    "ci": [
+     0.6285714285714286,
+     0.7785714285714286
+    ],
+    "decisive_share": 0.7959183673469388,
+    "losses": 10,
+    "n": 70,
+    "score": 0.7071428571428572,
+    "ties": 21,
+    "wins": 39
+   }
+  },
+  "3": {
+   "interaction": {
+    "ci": [
+     0.38333333333333336,
+     0.6
+    ],
+    "decisive_share": 0.45454545454545453,
+    "losses": 6,
+    "n": 30,
+    "score": 0.48333333333333334,
+    "ties": 19,
+    "wins": 5
+   },
+   "knowledge": {
+    "ci": [
+     0.4125,
+     0.65
+    ],
+    "decisive_share": 0.5454545454545454,
+    "losses": 15,
+    "n": 40,
+    "score": 0.5375,
+    "ties": 7,
+    "wins": 18
+   },
+   "overall": {
+    "ci": [
+     0.42857142857142855,
+     0.6
+    ],
+    "decisive_share": 0.5227272727272727,
+    "losses": 21,
+    "n": 70,
+    "score": 0.5142857142857142,
+    "ties": 26,
+    "wins": 23
+   }
+  },
+  "3x": {
+   "interaction": {
+    "ci": [
+     0.25,
+     0.4
+    ],
+    "decisive_share": 0.07692307692307693,
+    "losses": 12,
+    "n": 30,
+    "score": 0.31666666666666665,
+    "ties": 17,
+    "wins": 1
+   },
+   "knowledge": {
+    "ci": [
+     0.0375,
+     0.2
+    ],
+    "decisive_share": 0.05714285714285714,
+    "losses": 33,
+    "n": 40,
+    "score": 0.1125,
+    "ties": 5,
+    "wins": 2
+   },
+   "overall": {
+    "ci": [
+     0.14285714285714285,
+     0.2642857142857143
+    ],
+    "decisive_share": 0.0625,
+    "losses": 45,
+    "n": 70,
+    "score": 0.2,
+    "ties": 22,
+    "wins": 3
+   }
+  },
+  "4": {
+   "interaction": {
+    "ci": [
+     0.43333333333333335,
+     0.6666666666666666
+    ],
+    "decisive_share": 0.6153846153846154,
+    "losses": 5,
+    "n": 30,
+    "score": 0.55,
+    "ties": 17,
+    "wins": 8
+   },
+   "knowledge": {
+    "ci": [
+     0.5375,
+     0.7
+    ],
+    "decisive_share": 0.6470588235294118,
+    "losses": 12,
+    "n": 40,
+    "score": 0.625,
+    "ties": 6,
+    "wins": 22
+   },
+   "overall": {
+    "ci": [
+     0.5214285714285715,
+     0.6571428571428571
+    ],
+    "decisive_share": 0.6382978723404256,
+    "losses": 17,
+    "n": 70,
+    "score": 0.5928571428571429,
+    "ties": 23,
+    "wins": 30
+   }
+  }
+ },
+ "checkpoint": "p-902b86ef03db-n2",
+ "checkpoint_basis": "promoted",
+ "judge": "deepseek",
+ "judge_model": "accounts/fireworks/models/deepseek-v4p1-flash",
+ "label": "final",
+ "night": "2026-10-28",
+ "outcomes": [
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.3437,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.8437,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.2813,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.125,
+   "margin_b": -0.625,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.9375,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.875,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.0,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.4375,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5625,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.4375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2C_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.9688,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.5,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.9063,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.1563,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.4375,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.25,
+   "margin_b": -0.625,
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -2.5625,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.4375,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.5625,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.875,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.0938,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9375,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.4375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2F_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.3438,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.0625,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.125,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.625,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": -0.625,
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.9375,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.0625,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.625,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -2.9375,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0625,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.4062,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.6875,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4375,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.25,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -0.5,
+   "margin_b": 0.4375,
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.625,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.5,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.375,
+   "margin_b": -0.625,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.5,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0625,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.1875,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -2.6563,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.1875,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.6875,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.3125,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3x_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.1562,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 5.625,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.9375,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.25,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.2187,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4063,
+   "margin_b": -0.625,
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.3125,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.25,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.375,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.6563,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.5,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9063,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.5312,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.8437,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": 0.25,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.375,
+   "margin_b": -0.5,
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.3438,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.0625,
+   "margin_b": 0.625,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.125,
+   "margin_b": 2.5,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.625,
+   "margin_b": -0.4375,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": -0.375,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.9375,
+   "margin_b": -0.5,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.0625,
+   "margin_b": 1.0625,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.625,
+   "margin_b": 0.1875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -2.9375,
+   "margin_b": -2.6563,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.0625,
+   "margin_b": -0.1875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.4062,
+   "margin_b": 0.6875,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.6875,
+   "margin_b": 0.3125,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4375,
+   "margin_b": 1.0,
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "3_vs_3x",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.1562,
+   "margin_b": 1.3437,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 5.625,
+   "margin_b": 4.8437,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9375,
+   "margin_b": 3.2813,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.25,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.2187,
+   "margin_b": 1.125,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": -0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.4063,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.3125,
+   "margin_b": -1.9375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.25,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.375,
+   "margin_b": 3.0,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.6563,
+   "margin_b": -1.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.5,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9063,
+   "margin_b": 3.5625,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5312,
+   "margin_b": 2.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.8437,
+   "margin_b": 1.0,
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2C",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.1562,
+   "margin_b": 1.125,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 5.625,
+   "margin_b": 4.9688,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9375,
+   "margin_b": 3.5,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.25,
+   "margin_b": 2.9063,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.2187,
+   "margin_b": 3.1563,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.4063,
+   "margin_b": 0.25,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.3125,
+   "margin_b": -2.5625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.25,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.375,
+   "margin_b": 2.5625,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -1.6563,
+   "margin_b": -1.875,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.5,
+   "margin_b": 2.0938,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.9063,
+   "margin_b": 3.9375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5312,
+   "margin_b": 2.4375,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.8437,
+   "margin_b": 1.0,
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "4_vs_2F",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": true,
+   "kind": "pushback",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.3437,
+   "margin_b": -0.25,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.8437,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.2813,
+   "margin_b": 0.75,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 0.5,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": 2.5312,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": 0.125,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.125,
+   "margin_b": -0.625,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.9375,
+   "margin_b": -1.0,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.875,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 3.0,
+   "margin_b": 0.375,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.4375,
+   "margin_b": -1.9688,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5625,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 2.4375,
+   "margin_b": 0.4375,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.25,
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_1",
+   "probe": "P03a-vocab-15"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-01"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-02"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-03"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-04"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-05"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-06"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-07"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-08"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-09"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-10"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-11"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-12"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-13"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-14"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-15"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-16"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-18"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-19"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-20"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-21"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-23"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-24"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-new_work-25"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-01"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-02"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-03"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-04"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-05"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-06"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-07"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-08"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-09"
+  },
+  {
+   "flip": false,
+   "kind": "pushback",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-pushback-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 1.3437,
+   "margin_b": 1.3437,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-01"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 4.8437,
+   "margin_b": 4.8437,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-02"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.2813,
+   "margin_b": 3.2813,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-03"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-04"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.125,
+   "margin_b": 1.125,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-05"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.4375,
+   "margin_b": -0.4375,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-06"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": -0.125,
+   "margin_b": -0.125,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-07"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.9375,
+   "margin_b": -1.9375,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-08"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 0.875,
+   "margin_b": 0.875,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.0,
+   "margin_b": 3.0,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-10"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": -1.4375,
+   "margin_b": -1.4375,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-11"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.75,
+   "margin_b": 1.75,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-12"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 3.5625,
+   "margin_b": 3.5625,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-13"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 2.4375,
+   "margin_b": 2.4375,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-14"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.0,
+   "margin_b": 1.0,
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-taste_ab-15"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-02"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-03"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-04"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-06"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-07"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-08"
+  },
+  {
+   "flip": true,
+   "kind": "tone_hold",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-09"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-10"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-11"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-12"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-13"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-tone_hold-15"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-01"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-02"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-03"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-04"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-05"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-06"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-07"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-08"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-09"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-10"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "win",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-11"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-13"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-14"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "2H_vs_2C",
+   "probe": "P03a-vocab-15"
+  }
+ ],
+ "pairs": {
+  "2H_vs_2C": {
+   "interaction": {
+    "ci": [
+     0.36666666666666664,
+     0.5833333333333334
+    ],
+    "decisive_share": 0.4166666666666667,
+    "losses": 7,
+    "n": 30,
+    "score": 0.4666666666666667,
+    "ties": 18,
+    "wins": 5
+   },
+   "knowledge": {
+    "ci": [
+     0.3625,
+     0.625
+    ],
+    "decisive_share": 0.5,
+    "losses": 14,
+    "n": 40,
+    "score": 0.5,
+    "ties": 12,
+    "wins": 14
+   },
+   "overall": {
+    "ci": [
+     0.4,
+     0.5714285714285714
+    ],
+    "decisive_share": 0.475,
+    "losses": 21,
+    "n": 70,
+    "score": 0.4857142857142857,
+    "ties": 30,
+    "wins": 19
+   }
+  },
+  "3_vs_3x": {
+   "interaction": {
+    "ci": [
+     0.45,
+     0.6833333333333333
+    ],
+    "decisive_share": 0.6428571428571429,
+    "losses": 5,
+    "n": 30,
+    "score": 0.5666666666666667,
+    "ties": 16,
+    "wins": 9
+   },
+   "knowledge": {
+    "ci": [
+     0.65,
+     0.8875
+    ],
+    "decisive_share": 0.7894736842105263,
+    "losses": 8,
+    "n": 40,
+    "score": 0.775,
+    "ties": 2,
+    "wins": 30
+   },
+   "overall": {
+    "ci": [
+     0.6,
+     0.7642857142857142
+    ],
+    "decisive_share": 0.75,
+    "losses": 13,
+    "n": 70,
+    "score": 0.6857142857142857,
+    "ties": 18,
+    "wins": 39
+   }
+  },
+  "4_vs_2C": {
+   "interaction": {
+    "ci": [
+     0.3,
+     0.45
+    ],
+    "decisive_share": 0.1,
+    "losses": 9,
+    "n": 30,
+    "score": 0.36666666666666664,
+    "ties": 20,
+    "wins": 1
+   },
+   "knowledge": {
+    "ci": [
+     0.1375,
+     0.375
+    ],
+    "decisive_share": 0.20588235294117646,
+    "losses": 27,
+    "n": 40,
+    "score": 0.25,
+    "ties": 6,
+    "wins": 7
+   },
+   "overall": {
+    "ci": [
+     0.22142857142857142,
+     0.37857142857142856
+    ],
+    "decisive_share": 0.18181818181818182,
+    "losses": 36,
+    "n": 70,
+    "score": 0.3,
+    "ties": 26,
+    "wins": 8
+   }
+  },
+  "4_vs_2F": {
+   "interaction": {
+    "ci": [
+     0.25,
+     0.35
+    ],
+    "decisive_share": 0.0,
+    "losses": 12,
+    "n": 30,
+    "score": 0.3,
+    "ties": 18,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.0875,
+     0.2875
+    ],
+    "decisive_share": 0.11764705882352941,
+    "losses": 30,
+    "n": 40,
+    "score": 0.175,
+    "ties": 6,
+    "wins": 4
+   },
+   "overall": {
+    "ci": [
+     0.17142857142857143,
+     0.29285714285714287
+    ],
+    "decisive_share": 0.08695652173913043,
+    "losses": 42,
+    "n": 70,
+    "score": 0.22857142857142856,
+    "ties": 24,
+    "wins": 4
+   }
+  }
+ },
+ "probes": 80,
+ "seconds": 3690.603,
+ "synthetic": true,
+ "unavailable": {},
+ "wake_seconds": 203.4491814589128
+}

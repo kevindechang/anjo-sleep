@@ -1,0 +1,198 @@
+{
+ "arms": {
+  "1": {
+   "interaction": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 6,
+    "score": 0.5,
+    "ties": 6,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 8,
+    "score": 0.5,
+    "ties": 8,
+    "wins": 0
+   },
+   "overall": {
+    "ci": [
+     0.5,
+     0.5
+    ],
+    "decisive_share": null,
+    "losses": 0,
+    "n": 14,
+    "score": 0.5,
+    "ties": 14,
+    "wins": 0
+   }
+  },
+  "3": {
+   "interaction": {
+    "ci": [
+     0.25,
+     0.25
+    ],
+    "decisive_share": 0.0,
+    "losses": 3,
+    "n": 6,
+    "score": 0.25,
+    "ties": 3,
+    "wins": 0
+   },
+   "knowledge": {
+    "ci": [
+     0.5,
+     0.75
+    ],
+    "decisive_share": 0.6666666666666666,
+    "losses": 2,
+    "n": 8,
+    "score": 0.625,
+    "ties": 2,
+    "wins": 4
+   },
+   "overall": {
+    "ci": [
+     0.39285714285714285,
+     0.5357142857142857
+    ],
+    "decisive_share": 0.4444444444444444,
+    "losses": 5,
+    "n": 14,
+    "score": 0.4642857142857143,
+    "ties": 5,
+    "wins": 4
+   }
+  }
+ },
+ "checkpoint": "p-7fdc99f95637-n1",
+ "checkpoint_basis": "promoted",
+ "judge": "deepseek",
+ "judge_model": "accounts/fireworks/models/deepseek-v4p1-flash",
+ "label": "development",
+ "night": "2026-10-27",
+ "outcomes": [
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-01"
+  },
+  {
+   "flip": true,
+   "kind": "new_work",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-20"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-22"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-17"
+  },
+  {
+   "flip": false,
+   "kind": "new_work",
+   "outcome": "win",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-new_work-19"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-02"
+  },
+  {
+   "flip": true,
+   "kind": "vocab",
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-12"
+  },
+  {
+   "flip": false,
+   "kind": "vocab",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-vocab-05"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-14"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-01"
+  },
+  {
+   "flip": false,
+   "kind": "tone_hold",
+   "outcome": "loss",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-tone_hold-10"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.25,
+   "margin_b": -0.1875,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-09"
+  },
+  {
+   "flip": false,
+   "kind": "taste_ab",
+   "margin_a": 1.375,
+   "margin_b": 1.375,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-08"
+  },
+  {
+   "flip": true,
+   "kind": "taste_ab",
+   "margin_a": 0.4375,
+   "margin_b": 0.0625,
+   "outcome": "tie",
+   "pair": "3_vs_1",
+   "probe": "founder_donor-taste_ab-13"
+  }
+ ],
+ "pairs": {},
+ "probes": 14,
+ "seconds": 154.393,
+ "subset": "daily-v1",
+ "unavailable": {},
+ "wake_seconds": 0.8276095830369741
+}

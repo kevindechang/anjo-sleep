@@ -1,0 +1,97 @@
+{
+ "version": 4,
+ "night": "2026-10-12",
+ "status": "promoted",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "kept_from": "2026-10-08",
+  "error": "BriefError: the brief ran to its 15000-token cap; retried: the brief ran to its 15000-token cap"
+ },
+ "dream": {
+  "questions": 0,
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the night trained without the sleep objective's terms"
+  }
+ },
+ "rehearse": {
+  "scenes": 15,
+  "seeded": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "flagged": 15,
+  "corrected": 11
+ },
+ "learn": {
+  "rows": 31,
+  "surprise": {
+   "not_run": "no row carried MIND's surprise weight"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "imitation": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "fold": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "protect": {
+   "not_run": "the night trained without the sleep objective's terms"
+  },
+  "core_adaptation": {
+   "not_run": "MIND's core doesn't adapt to her in the night yet"
+  }
+ },
+ "check": {
+  "gates": [
+   {
+    "name": "collapse",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 5.0
+   },
+   {
+    "name": "general",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 2.0
+   },
+   {
+    "name": "safety",
+    "passed": false,
+    "skipped": true,
+    "value": 0.0,
+    "threshold": 0.0
+   }
+  ],
+  "promoted": true
+ },
+ "wake": {
+  "morning": {
+   "replies": 28,
+   "no_verdict": 0
+  },
+  "self_model": {
+   "not_run": "MIND's self-model isn't scored yet"
+  }
+ }
+}

@@ -1,0 +1,99 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": {
+  "id": "p-fd133c8bf5bc-n1",
+  "night": "2026-10-16",
+  "parent_id": null,
+  "person_id": "d2972e79-305a-45c7-8eeb-042cc1e1a2c3",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-fd133c8bf5bc-n1"
+ },
+ "choices": [
+  {
+   "action": null,
+   "considered": [],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.027284,
+  "extract": 0.03188275,
+  "gates": 0.1408837618683756,
+  "mind": 0.0017656034181127323,
+  "practice": 1.3437183116770859,
+  "training": 0.10295726597234736
+ },
+ "cost_usd": 1.6484916929359215,
+ "day_index": 0,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": -1.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 1.1228649590630084,
+ "git_sha": "3f42c94d87be02237a2e463a5161735347c0c445",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/d2972e79-305a-45c7-8eeb-042cc1e1a2c3/nights/2026-10-16/log.jsonl",
+ "mind_loop": {
+  "focus": [],
+  "other": {
+   "held_up": 15,
+   "scenes": 16
+  },
+  "predictions": [],
+  "record": "practice:2026-10-16",
+  "scenes": {},
+  "why": "her log holds no question at the night's start"
+ },
+ "morning_probes": "daily-v1",
+ "night": "2026-10-16",
+ "night_end": "2026-10-31T01:38:44.710067+00:00",
+ "paid_actions": 0,
+ "status": "promoted",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-fd133c8bf5bc-n1",
+ "user_id_hash": null,
+ "wake_seconds": 0.96996512520127,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

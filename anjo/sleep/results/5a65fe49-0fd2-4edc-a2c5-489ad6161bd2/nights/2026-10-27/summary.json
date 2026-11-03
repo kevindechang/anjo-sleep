@@ -1,0 +1,113 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.6,
+     "target_id": "t-05f02c734c7c0980",
+     "want_id": "follow_up:t-05f02c734c7c0980",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-8b699d0e4cbd69f0",
+     "want_id": "follow_up:t-8b699d0e4cbd69f0",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-b37f7d9dbf0777a9",
+     "want_id": "follow_up:t-b37f7d9dbf0777a9",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-b73f19b72086409e",
+     "want_id": "follow_up:t-b73f19b72086409e",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-c97d423fbec0d24c",
+     "want_id": "follow_up:t-c97d423fbec0d24c",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-ebd34e7606c1c70a",
+     "want_id": "follow_up:t-ebd34e7606c1c70a",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-05f02c734c7c0980"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.053295,
+  "extract": 0.0465565,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 0.8783785000000003,
+  "training": 0.0
+ },
+ "cost_usd": 0.9782300000000003,
+ "day_index": 0,
+ "failed_at": "practice",
+ "gates": {},
+ "git_sha": "23f548cbb7f2b70784e6c812965274945374383d",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/5a65fe49-0fd2-4edc-a2c5-489ad6161bd2/nights/2026-10-27/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-27",
+ "night_end": "2026-10-31T00:50:19.223329+00:00",
+ "paid_actions": 1,
+ "status": "failed",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wake_seconds": 1.2503500409657136,
+ "wonder_calls": 8,
+ "wonder_usd": 0.302348
+}

@@ -1,0 +1,35 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": null,
+ "choices": [],
+ "cost_parts": {
+  "brief": 0.0,
+  "extract": 0.0,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 0.0,
+  "training": 0.0
+ },
+ "cost_usd": 0.0,
+ "day_index": 7,
+ "failed_at": "simulate",
+ "gates": {},
+ "git_sha": "6bd237ed1956389c96eac52ba8f9a972282061f1",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/7286c841-e0f6-4609-ac41-ce0cddafef5b/nights/2026-10-14/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-14",
+ "night_end": "2026-10-30T05:51:29.234646+00:00",
+ "paid_actions": 0,
+ "status": "failed",
+ "steps": [
+  "simulate",
+  "finish"
+ ],
+ "trained": false,
+ "trained_adapter": null,
+ "user_id_hash": null,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

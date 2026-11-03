@@ -1,0 +1,109 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": {
+  "id": "p-143d577909cb-n2",
+  "night": "2026-10-17",
+  "parent_id": "p-fd133c8bf5bc-n1",
+  "person_id": "d2972e79-305a-45c7-8eeb-042cc1e1a2c3",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-143d577909cb-n2"
+ },
+ "choices": [
+  {
+   "action": "prepare_commitment",
+   "considered": [
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": null,
+     "status": "won",
+     "strength": 0.6,
+     "target_id": "t-b0b85dc500961b4b",
+     "want_id": "follow_up:t-b0b85dc500961b4b",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-b0b85dc500961b4b"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.07416149999999999,
+  "extract": 0.034157,
+  "gates": 0.09698866917190024,
+  "mind": 0.0018341117935293976,
+  "practice": 1.6593006321666914,
+  "training": 0.13745936235564943
+ },
+ "cost_usd": 2.0039012754877703,
+ "day_index": 1,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": -0.5
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 285.9346428331919,
+ "git_sha": "3f42c94d87be02237a2e463a5161735347c0c445",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/d2972e79-305a-45c7-8eeb-042cc1e1a2c3/nights/2026-10-17/log.jsonl",
+ "mind_loop": {
+  "focus": [],
+  "other": {
+   "held_up": 14,
+   "scenes": 15
+  },
+  "predictions": [],
+  "record": "practice:2026-10-17",
+  "scenes": {},
+  "why": "her log holds no question at the night's start"
+ },
+ "morning_probes": "daily-v1",
+ "night": "2026-10-17",
+ "night_end": "2026-10-31T02:35:07.347726+00:00",
+ "paid_actions": 1,
+ "status": "promoted",
+ "steps": [
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-143d577909cb-n2",
+ "user_id_hash": null,
+ "wake_seconds": 1.022852832917124,
+ "wonder_calls": 8,
+ "wonder_usd": 0.200772
+}

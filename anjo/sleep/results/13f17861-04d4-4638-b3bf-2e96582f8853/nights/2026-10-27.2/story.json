@@ -1,0 +1,98 @@
+{
+ "version": 4,
+ "night": "2026-10-27",
+ "status": "promoted",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 15
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the dreams term is off tonight"
+  }
+ },
+ "rehearse": {
+  "night": "2026-10-27",
+  "scenes": 15
+ },
+ "learn": {
+  "rows": 11,
+  "surprise": {
+   "not_run": "no row carried MIND's surprise weight"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding": {
+   "rows": 13,
+   "kl_before": 0.784060537815094,
+   "kl_after": 0.8341048955917358,
+   "minutes": 7.0752
+  },
+  "imitation": {
+   "rows": 4,
+   "reward": 0.04079861111111111,
+   "minutes": 7.7811
+  },
+  "fold": {
+   "not_run": "the adapter wasn't folded tonight"
+  },
+  "protect": {
+   "not_run": "no protected slot tonight"
+  },
+  "core_adaptation": {
+   "not_run": "not measured on the real model: no night runs MIND's core adaptation, and its only check is training loss on the same resolved threads it fits"
+  }
+ },
+ "check": {
+  "gates": [
+   {
+    "name": "collapse",
+    "passed": true,
+    "skipped": false,
+    "value": 1.6666666666666667,
+    "threshold": 5.0
+   },
+   {
+    "name": "general",
+    "passed": true,
+    "skipped": false,
+    "value": -1.5,
+    "threshold": 2.0
+   },
+   {
+    "name": "safety",
+    "passed": false,
+    "skipped": true,
+    "value": 0.0,
+    "threshold": 0.0
+   }
+  ],
+  "promoted": true
+ },
+ "wake": {
+  "morning": {
+   "not_run": "final: each life is scored once, on its last night, after every life's last night"
+  },
+  "self_model": {
+   "not_run": "not measured on the real model: no night scores MIND's self-model, and its nearest number is an offline self-error score on toy slots"
+  }
+ }
+}

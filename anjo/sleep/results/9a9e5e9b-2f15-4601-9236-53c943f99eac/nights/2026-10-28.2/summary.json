@@ -1,0 +1,85 @@
+{
+ "checkpoint": null,
+ "choices": [
+  {
+   "action": "hold_note",
+   "considered": [
+    {
+     "action": "hold_note",
+     "kind": "share",
+     "reason": null,
+     "status": "won",
+     "strength": 0.7,
+     "target_id": "t-5940a3de920b4479",
+     "want_id": "share:t-5940a3de920b4479",
+     "weight": 1.0
+    },
+    {
+     "action": "prepare_commitment",
+     "kind": "follow_up",
+     "reason": "lost_to_target",
+     "status": "held_back",
+     "strength": 0.6,
+     "target_id": "t-9d6f3b7ab5a051cb",
+     "want_id": "follow_up:t-9d6f3b7ab5a051cb",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": "t-5940a3de920b4479"
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.05571225,
+  "extract": 0.0,
+  "gates": 0.0,
+  "mind": 0.0,
+  "practice": 0.0,
+  "training": 0.11802121197914756
+ },
+ "cost_usd": 0.17373346197914755,
+ "failed_at": "gates",
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.8634041249752045,
+ "log_path": "$ANJO_DATA_DIR/sleep/results/9a9e5e9b-2f15-4601-9236-53c943f99eac/nights/2026-10-28.2/log.jsonl",
+ "night": "2026-10-28",
+ "night_end": "2026-10-28T16:00:00+00:00",
+ "paid_actions": 0,
+ "status": "failed",
+ "steps": [
+  "sweep",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-290366ae489c-n1",
+ "user_id_hash": null,
+ "wake_seconds": 0.8546926249982789,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

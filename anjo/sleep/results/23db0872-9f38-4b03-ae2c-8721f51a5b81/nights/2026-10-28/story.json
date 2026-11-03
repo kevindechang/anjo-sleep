@@ -1,0 +1,26 @@
+{
+ "version": 4,
+ "night": "2026-10-28",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "not_run": "the night stopped at simulate"
+ },
+ "dream": {
+  "not_run": "the night stopped at simulate"
+ },
+ "rehearse": {
+  "not_run": "the night stopped at simulate"
+ },
+ "learn": {
+  "not_run": "the night stopped at simulate"
+ },
+ "check": {
+  "not_run": "the night stopped at simulate"
+ },
+ "wake": {
+  "not_run": "the night stopped at simulate"
+ }
+}

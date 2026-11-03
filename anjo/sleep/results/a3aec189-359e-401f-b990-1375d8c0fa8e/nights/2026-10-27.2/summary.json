@@ -1,0 +1,143 @@
+{
+ "accelerated": true,
+ "alone": false,
+ "checkpoint": {
+  "id": "p-eb05db3e38c0-n1",
+  "night": "2026-10-27",
+  "parent_id": null,
+  "person_id": "a3aec189-359e-401f-b990-1375d8c0fa8e",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-eb05db3e38c0-n1"
+ },
+ "choices": [
+  {
+   "action": null,
+   "considered": [],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.0638,
+  "extract": 0.0,
+  "gates": 0.10264097124283823,
+  "mind": 0.0,
+  "practice": 0.1309054799790543,
+  "training": 1.0719824745950366
+ },
+ "cost_usd": 1.3693289258169292,
+ "day_index": 0,
+ "failed_at": null,
+ "final_run": {
+  "alone_from": null,
+  "days": 2,
+  "lives": [
+   [
+    "a3aec189-359e-401f-b990-1375d8c0fa8e",
+    "P03a"
+   ],
+   [
+    "4fc642c6-193c-4835-957f-1dc84938db2d",
+    "P03b"
+   ],
+   [
+    "13f17861-04d4-4638-b3bf-2e96582f8853",
+    "P07a"
+   ]
+  ],
+  "mind": false,
+  "practice_scenes": 16,
+  "seed": 20261028,
+  "start": "2026-10-27"
+ },
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 1.6666666666666667
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 255.62614824995399,
+ "git_sha": "1b27bce098eba6918ca00d2cedc64bb354bb8316",
+ "gpu_batch": {
+  "digest": "7d68510590d3",
+  "people": 3
+ },
+ "label": "final",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/a3aec189-359e-401f-b990-1375d8c0fa8e/nights/2026-10-27.2/log.jsonl",
+ "morning_probes": "full",
+ "night": "2026-10-27",
+ "night_end": "2026-11-02T05:59:22.868418+00:00",
+ "paid_actions": 0,
+ "recipe": {
+  "ANJO_SLEEP_ADAPTER_FOLD": null,
+  "ANJO_SLEEP_AGENT_BASELINE": null,
+  "ANJO_SLEEP_ARMS_EXTRA": null,
+  "ANJO_SLEEP_BACKEND": "modal",
+  "ANJO_SLEEP_CAPACITY": "1",
+  "ANJO_SLEEP_CHANNEL": null,
+  "ANJO_SLEEP_CONCURRENCY": "16",
+  "ANJO_SLEEP_DAY_DREAMS": "1",
+  "ANJO_SLEEP_DREAMS": null,
+  "ANJO_SLEEP_DREAM_CURRICULUM": null,
+  "ANJO_SLEEP_GLIMMER_REVISION": "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+  "ANJO_SLEEP_HARNESS": "1",
+  "ANJO_SLEEP_JUDGE": "deepseek",
+  "ANJO_SLEEP_MORNING_SUBSET": null,
+  "ANJO_SLEEP_OBJECTIVE": "sft_dpo_seed",
+  "ANJO_SLEEP_PRACTICE_ROLES": null,
+  "ANJO_SLEEP_PRESSURE": "0",
+  "ANJO_SLEEP_PROTECT": null,
+  "ANJO_SLEEP_SERVE_DETERMINISTIC": null,
+  "ANJO_SLEEP_TRAIN_RUNNER": "colab_modal"
+ },
+ "status": "promoted",
+ "steps": [
+  "sweep",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "harness",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-eb05db3e38c0-n1",
+ "user_id_hash": null,
+ "vm": {
+  "day_s": null,
+  "idle_s_before": null,
+  "night": "2026-10-27",
+  "scoring_s": null,
+  "vm_kept": false
+ },
+ "wake_seconds": 265.1445136249531,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

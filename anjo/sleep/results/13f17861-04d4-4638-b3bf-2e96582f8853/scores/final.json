@@ -1,0 +1,354 @@
+{
+ "accelerated": true,
+ "attempt": 1,
+ "dimensions": {
+  "interaction": {
+   "3_vs_1": {
+    "outcome": "inconclusive",
+    "stats": {
+     "ci": [
+      0.45,
+      0.5777777777777777
+     ],
+     "decisive_share": 0.5405405405405406,
+     "losses": 17,
+     "n": 90,
+     "per_life": {
+      "13f17861-04d4-4638-b3bf-2e96582f8853": {
+       "ahead": true,
+       "behind": false,
+       "losses": 4,
+       "n": 30,
+       "score": 0.6166666666666667,
+       "ties": 15,
+       "wins": 11
+      },
+      "4fc642c6-193c-4835-957f-1dc84938db2d": {
+       "ahead": false,
+       "behind": true,
+       "losses": 7,
+       "n": 30,
+       "score": 0.45,
+       "ties": 19,
+       "wins": 4
+      },
+      "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+       "ahead": false,
+       "behind": true,
+       "losses": 6,
+       "n": 30,
+       "score": 0.48333333333333334,
+       "ties": 19,
+       "wins": 5
+      }
+     },
+     "score": 0.5166666666666667,
+     "ties": 53,
+     "wins": 20
+    }
+   },
+   "3_vs_3x": {
+    "excluded_lives": [],
+    "outcome": "win",
+    "stats": {
+     "ci": [
+      0.5333333333333333,
+      0.6611111111111111
+     ],
+     "decisive_share": 0.7142857142857143,
+     "losses": 12,
+     "n": 90,
+     "per_life": {
+      "13f17861-04d4-4638-b3bf-2e96582f8853": {
+       "ahead": true,
+       "behind": false,
+       "losses": 4,
+       "n": 30,
+       "score": 0.5666666666666667,
+       "ties": 18,
+       "wins": 8
+      },
+      "4fc642c6-193c-4835-957f-1dc84938db2d": {
+       "ahead": true,
+       "behind": false,
+       "losses": 3,
+       "n": 30,
+       "score": 0.6666666666666666,
+       "ties": 14,
+       "wins": 13
+      },
+      "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+       "ahead": true,
+       "behind": false,
+       "losses": 5,
+       "n": 30,
+       "score": 0.5666666666666667,
+       "ties": 16,
+       "wins": 9
+      }
+     },
+     "score": 0.6,
+     "ties": 48,
+     "wins": 30
+    }
+   },
+   "claim": "A week of nightly training didn't make her weights measurably better in interaction without notes. Here is exactly what we measured.",
+   "claim_row": "none",
+   "pair_lives_ahead_on_3x": true,
+   "qualifiers": [
+    {
+     "claim": "the measured cost per person per month at the registered configuration; over the ceiling the wording is: her weights learned, but not yet at a viable cost ($X a month)",
+     "id": "cost"
+    },
+    {
+     "claim": "4 against 2C and 4 against 2F on new_work, each as win, loss, inconclusive or matches, beside 2F's prompt length and cost per turn",
+     "id": "memory"
+    }
+   ]
+  },
+  "knowledge": {
+   "3_vs_1": {
+    "outcome": "inconclusive",
+    "stats": {
+     "ci": [
+      0.5,
+      0.6375
+     ],
+     "decisive_share": 0.5894736842105263,
+     "losses": 39,
+     "n": 120,
+     "per_life": {
+      "13f17861-04d4-4638-b3bf-2e96582f8853": {
+       "ahead": true,
+       "behind": false,
+       "losses": 6,
+       "n": 40,
+       "score": 0.7375,
+       "ties": 9,
+       "wins": 25
+      },
+      "4fc642c6-193c-4835-957f-1dc84938db2d": {
+       "ahead": false,
+       "behind": true,
+       "losses": 18,
+       "n": 40,
+       "score": 0.4375,
+       "ties": 9,
+       "wins": 13
+      },
+      "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+       "ahead": true,
+       "behind": false,
+       "losses": 15,
+       "n": 40,
+       "score": 0.5375,
+       "ties": 7,
+       "wins": 18
+      }
+     },
+     "score": 0.5708333333333333,
+     "ties": 25,
+     "wins": 56
+    }
+   },
+   "3_vs_3x": {
+    "excluded_lives": [],
+    "outcome": "win",
+    "stats": {
+     "ci": [
+      0.7125,
+      0.8416666666666667
+     ],
+     "decisive_share": 0.8130841121495327,
+     "losses": 20,
+     "n": 120,
+     "per_life": {
+      "13f17861-04d4-4638-b3bf-2e96582f8853": {
+       "ahead": true,
+       "behind": false,
+       "losses": 9,
+       "n": 40,
+       "score": 0.6625,
+       "ties": 9,
+       "wins": 22
+      },
+      "4fc642c6-193c-4835-957f-1dc84938db2d": {
+       "ahead": true,
+       "behind": false,
+       "losses": 3,
+       "n": 40,
+       "score": 0.9,
+       "ties": 2,
+       "wins": 35
+      },
+      "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+       "ahead": true,
+       "behind": false,
+       "losses": 8,
+       "n": 40,
+       "score": 0.775,
+       "ties": 2,
+       "wins": 30
+      }
+     },
+     "score": 0.7791666666666667,
+     "ties": 13,
+     "wins": 87
+    }
+   },
+   "claim": "A week of nightly training didn't make her weights measurably better in knowledge without notes. Here is exactly what we measured.",
+   "claim_row": "none",
+   "pair_lives_ahead_on_3x": true,
+   "qualifiers": [
+    {
+     "claim": "the measured cost per person per month at the registered configuration; over the ceiling the wording is: her weights learned, but not yet at a viable cost ($X a month)",
+     "id": "cost"
+    },
+    {
+     "claim": "4 against 2C and 4 against 2F on new_work, each as win, loss, inconclusive or matches, beside 2F's prompt length and cost per turn",
+     "id": "memory"
+    }
+   ]
+  }
+ },
+ "donors": {
+  "13f17861-04d4-4638-b3bf-2e96582f8853": "a3aec189-359e-401f-b990-1375d8c0fa8e",
+  "4fc642c6-193c-4835-957f-1dc84938db2d": "a3aec189-359e-401f-b990-1375d8c0fa8e",
+  "a3aec189-359e-401f-b990-1375d8c0fa8e": "4fc642c6-193c-4835-957f-1dc84938db2d"
+ },
+ "fairness": {
+  "4_vs_2C": {
+   "new_work": {
+    "ci": [
+     0.23333333333333334,
+     0.41333333333333333
+    ],
+    "decisive_share": 0.2857142857142857,
+    "losses": 45,
+    "n": 75,
+    "per_life": {
+     "13f17861-04d4-4638-b3bf-2e96582f8853": {
+      "ahead": false,
+      "behind": false,
+      "losses": 10,
+      "n": 25,
+      "score": 0.5,
+      "ties": 5,
+      "wins": 10
+     },
+     "4fc642c6-193c-4835-957f-1dc84938db2d": {
+      "ahead": false,
+      "behind": true,
+      "losses": 19,
+      "n": 25,
+      "score": 0.2,
+      "ties": 2,
+      "wins": 4
+     },
+     "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+      "ahead": false,
+      "behind": true,
+      "losses": 16,
+      "n": 25,
+      "score": 0.26,
+      "ties": 5,
+      "wins": 4
+     }
+    },
+    "score": 0.32,
+    "ties": 12,
+    "wins": 18
+   },
+   "outcome": "loss"
+  },
+  "4_vs_2F": {
+   "new_work": {
+    "ci": [
+     0.24666666666666667,
+     0.42
+    ],
+    "decisive_share": 0.29508196721311475,
+    "losses": 43,
+    "n": 75,
+    "per_life": {
+     "13f17861-04d4-4638-b3bf-2e96582f8853": {
+      "ahead": true,
+      "behind": false,
+      "losses": 7,
+      "n": 25,
+      "score": 0.62,
+      "ties": 5,
+      "wins": 13
+     },
+     "4fc642c6-193c-4835-957f-1dc84938db2d": {
+      "ahead": false,
+      "behind": true,
+      "losses": 19,
+      "n": 25,
+      "score": 0.16,
+      "ties": 4,
+      "wins": 2
+     },
+     "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+      "ahead": false,
+      "behind": true,
+      "losses": 17,
+      "n": 25,
+      "score": 0.22,
+      "ties": 5,
+      "wins": 3
+     }
+    },
+    "score": 0.3333333333333333,
+    "ties": 14,
+    "wins": 18
+   },
+   "outcome": "loss"
+  }
+ },
+ "freeze_sha": "1b27bce098eba6918ca00d2cedc64bb354bb8316",
+ "freeze_tag": "sleep-freeze",
+ "git_sha": "1b27bce098eba6918ca00d2cedc64bb354bb8316",
+ "judge_model": "accounts/fireworks/models/deepseek-v4p1-flash",
+ "life_id": "13f17861-04d4-4638-b3bf-2e96582f8853",
+ "manifest_commit": "1b27bce098eba6918ca00d2cedc64bb354bb8316",
+ "pair_lives": [
+  "a3aec189-359e-401f-b990-1375d8c0fa8e",
+  "4fc642c6-193c-4835-957f-1dc84938db2d"
+ ],
+ "provenance": {
+  "13f17861-04d4-4638-b3bf-2e96582f8853": {
+   "accelerated": true,
+   "synthetic": true
+  },
+  "4fc642c6-193c-4835-957f-1dc84938db2d": {
+   "accelerated": true,
+   "synthetic": true
+  },
+  "a3aec189-359e-401f-b990-1375d8c0fa8e": {
+   "accelerated": true,
+   "synthetic": true
+  }
+ },
+ "qualifiers": [
+  {
+   "claim": "the measured cost per person per month at the registered configuration; over the ceiling the wording is: her weights learned, but not yet at a viable cost ($X a month)",
+   "id": "cost"
+  },
+  {
+   "claim": "4 against 2C and 4 against 2F on new_work, each as win, loss, inconclusive or matches, beside 2F's prompt length and cost per turn",
+   "id": "memory"
+  },
+  {
+   "claim": "the measured cost per person per month at the registered configuration; over the ceiling the wording is: her weights learned, but not yet at a viable cost ($X a month)",
+   "id": "cost"
+  },
+  {
+   "claim": "4 against 2C and 4 against 2F on new_work, each as win, loss, inconclusive or matches, beside 2F's prompt length and cost per turn",
+   "id": "memory"
+  }
+ ],
+ "rerun_reason": null,
+ "single_life": "13f17861-04d4-4638-b3bf-2e96582f8853",
+ "synthetic": true
+}

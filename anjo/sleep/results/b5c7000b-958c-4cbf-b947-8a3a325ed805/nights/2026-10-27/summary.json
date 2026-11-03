@@ -1,0 +1,98 @@
+{
+ "accelerated": true,
+ "checkpoint": {
+  "id": "p-d9b5111cb51d-n1",
+  "night": "2026-10-27",
+  "parent_id": null,
+  "person_id": "b5c7000b-958c-4cbf-b947-8a3a325ed805",
+  "rendering": "g6c2c4fbb63df/low",
+  "uri": "modal-volume://anjo-sleep-adapters/p-d9b5111cb51d-n1"
+ },
+ "choices": [
+  {
+   "action": null,
+   "considered": [
+    {
+     "action": "revisit_thread",
+     "kind": "understand",
+     "reason": "below_threshold",
+     "status": "held_back",
+     "strength": 0.09999999999999998,
+     "target_id": "t-380d001867779d84",
+     "want_id": "understand:t-380d001867779d84",
+     "weight": 1.0
+    }
+   ],
+   "opportunity": "away",
+   "question_id": null,
+   "target_id": null
+  }
+ ],
+ "cost_parts": {
+  "brief": 0.021866499999999997,
+  "extract": 0.01719,
+  "gates": 0.1853211861491242,
+  "mind": 0.0,
+  "practice": 0.5784785270273849,
+  "training": 0.08371750402220642
+ },
+ "cost_usd": 0.8865737171987155,
+ "day_index": 0,
+ "failed_at": null,
+ "gates": {
+  "collapse": {
+   "gate": "collapse",
+   "passed": true,
+   "reason": null,
+   "threshold": 5.0,
+   "value": 0.0
+  },
+  "general": {
+   "gate": "general",
+   "passed": true,
+   "reason": null,
+   "threshold": 2.0,
+   "value": 0.0
+  },
+  "safety": {
+   "gate": "safety",
+   "passed": false,
+   "reason": "off for the hackathon",
+   "skipped": true,
+   "threshold": 0.0,
+   "value": 0.0
+  }
+ },
+ "gates_wake_seconds": 0.6447449590777978,
+ "git_sha": "4fbed2e2d3d90e182ed20c29363cbb94fcd1865b",
+ "label": "development",
+ "log_path": "$ANJO_DATA_DIR/sleep/results/b5c7000b-958c-4cbf-b947-8a3a325ed805/nights/2026-10-27/log.jsonl",
+ "morning_probes": "daily-v1",
+ "night": "2026-10-27",
+ "night_end": "2026-10-29T18:47:04.796481+00:00",
+ "paid_actions": 0,
+ "status": "promoted",
+ "steps": [
+  "sweep",
+  "simulate",
+  "close_day",
+  "extract",
+  "notice",
+  "probes",
+  "choose",
+  "brief",
+  "practice",
+  "dataset",
+  "train",
+  "gates",
+  "promote",
+  "note",
+  "finish"
+ ],
+ "trained": true,
+ "trained_adapter": "p-d9b5111cb51d-n1",
+ "user_id_hash": null,
+ "wake_seconds": 226.9613193339901,
+ "wonder_calls": 0,
+ "wonder_usd": 0.0
+}

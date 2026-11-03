@@ -1,0 +1,48 @@
+{
+ "version": 4,
+ "night": "2026-10-28",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 8
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the dreams term is off tonight"
+  }
+ },
+ "rehearse": {
+  "scenes": 12,
+  "seeded": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "flagged": 12,
+  "corrected": 4
+ },
+ "learn": {
+  "failed": {
+   "step": "train",
+   "error": "OSError"
+  }
+ },
+ "check": {
+  "not_run": "the night stopped at train"
+ },
+ "wake": {
+  "not_run": "the night stopped at train"
+ }
+}

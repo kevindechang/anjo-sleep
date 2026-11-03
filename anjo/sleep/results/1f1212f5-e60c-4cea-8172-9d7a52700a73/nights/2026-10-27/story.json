@@ -1,0 +1,43 @@
+{
+ "version": 4,
+ "night": "2026-10-27",
+ "status": "failed",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 9
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "threads": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "boundaries": {
+   "not_run": "MIND's core didn't dream for her tonight"
+  },
+  "dreams": {
+   "not_run": "the night stopped at practice"
+  }
+ },
+ "rehearse": {
+  "failed": {
+   "step": "practice",
+   "error": "ModelApiError: Fireworks chat with accounts/fireworks/models/muse-spark-open timed out after 180s"
+  }
+ },
+ "learn": {
+  "not_run": "the night stopped at practice"
+ },
+ "check": {
+  "not_run": "the night stopped at practice"
+ },
+ "wake": {
+  "not_run": "the night stopped at practice"
+ }
+}

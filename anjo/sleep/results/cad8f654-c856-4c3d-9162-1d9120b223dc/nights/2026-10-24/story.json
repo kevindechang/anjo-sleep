@@ -1,0 +1,89 @@
+{
+ "version": 3,
+ "night": "2026-10-24",
+ "status": "promoted",
+ "sleep": {
+  "not_run": "no sleep pressure: every night sleeps deep"
+ },
+ "brief": {
+  "folded": 6
+ },
+ "dream": {
+  "questions": {
+   "not_run": "MIND's inquiry is off"
+  },
+  "ignitions": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  },
+  "threads": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  },
+  "boundaries": {
+   "not_run": "MIND's core doesn't dream in the night yet"
+  }
+ },
+ "rehearse": {
+  "scenes": 16,
+  "seeded": {
+   "not_run": "practice isn't seeded on the dream's threads yet"
+  },
+  "flagged": 16,
+  "corrected": 2
+ },
+ "learn": {
+  "rows": 16,
+  "surprise": {
+   "not_run": "MIND's surprise doesn't weight the loss yet"
+  },
+  "channel_loss": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "stamp": {
+   "not_run": "the thought channel was off tonight"
+  },
+  "seeding_kl": {
+   "not_run": "the night's training has no seeding term yet"
+  },
+  "fold": {
+   "not_run": "the night's adapter isn't folded yet"
+  },
+  "core_adaptation": {
+   "not_run": "MIND's core doesn't adapt to her in the night yet"
+  }
+ },
+ "check": {
+  "gates": [
+   {
+    "name": "collapse",
+    "passed": true,
+    "skipped": false,
+    "value": 0.0,
+    "threshold": 5.0
+   },
+   {
+    "name": "general",
+    "passed": true,
+    "skipped": false,
+    "value": 2.0,
+    "threshold": 2.0
+   },
+   {
+    "name": "safety",
+    "passed": false,
+    "skipped": true,
+    "value": 0.0,
+    "threshold": 0.0
+   }
+  ],
+  "promoted": true
+ },
+ "wake": {
+  "morning": {
+   "replies": 28,
+   "no_verdict": 0
+  },
+  "self_model": {
+   "not_run": "MIND's self-model isn't scored yet"
+  }
+ }
+}
