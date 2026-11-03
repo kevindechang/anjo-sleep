@@ -238,13 +238,15 @@
     <section class="sect" id="research" aria-labelledby="research-heading">
       <div class="wrap">
         <div class="sect-head">
-          <span class="kicker">Appendix</span>
-          <h2 id="research-heading">MIND: research, <em>not in the app.</em></h2>
+          <span class="kicker">The second bet</span>
+          <h2 id="research-heading">MIND: a third of Gemini's avoidable error, <em>on simulated people.</em></h2>
         </div>
         <div class="research-card">
-          <span class="chip research">Separate model, trained from scratch</span>
-          <p><strong>It gives odds on open questions about a person, scored when each check-by date comes.</strong> On 60 unseen simulated people over 12 weeks, its odds carried about a third of the avoidable error of the best Gemini setup (excess log loss 0.029 against 0.082).</p>
-          <p>What didn't work: untrained on a new kind of world, it did worse than guessing 50/50, and we couldn't show that its questions to you pay off. The odds in the app come from its night agent, not from MIND.</p>
+          <span class="chip research">Research · a small model we trained from scratch · not a Meta model</span>
+          <p><strong>It gives odds on what a person will do, scored when each check-by date comes.</strong> On 60 held-out simulated people from its home simulator, over 12 weeks, it had about a third of the best Gemini setup's avoidable error (excess log loss 0.029 against 0.082, on the queries Gemini answered), and its doubt tracked its mistakes.</p>
+          <p>What didn't work: asking questions didn't pay off, its overnight step hurt, and on a differently written world it did worse than a coin flip until we retrained it. Pass marks were registered before scoring.</p>
+          <p>In the side panel, Glimmer runs MIND's inquiry loop: it writes the open questions and their odds (Spark Open while Glimmer sleeps). The predictor scored here isn't live yet.</p>
+          <a class="proof-link" href="https://github.com/kevindechang/anjo-sleep">Every number, checked against the ledger, in the repo &rarr;</a>
         </div>
       </div>
     </section>
