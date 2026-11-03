@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
   <meta name="theme-color" content="#0a0a0b" />
-  <title>Anjo Sleep: it learns while it sleeps</title>
+  <title>Anjo Sleep: it studies your day while you sleep</title>
   <meta name="description" content="Anjo is a personal intelligence that grows with you. Talk to it by day; at night it studies what you said and trains a small model of its own. Built at the Meta hackathon." />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
@@ -39,9 +39,9 @@
       <div id="hero-pigment" aria-hidden="true"></div>
       <div id="hero-pigment-veil" aria-hidden="true"></div>
       <div class="wrap hero-inner">
-        <h1>It learns while it sleeps.</h1>
-        <p class="lede">Other AIs take notes on you. Anjo sleeps on it.</p>
-        <p class="hero-tech">Every person gets their own Muse Glimmer adapter, trained each night on their day.</p>
+        <h1>It studies your day while you sleep.</h1>
+        <p class="lede">Its overnight notes won 76% of blind comparisons on three unseen simulated people.</p>
+        <p class="hero-tech">Each person also gets their own Muse Glimmer adapter, trained nightly. That part is still an experiment.</p>
         <form class="code-form hero-code" id="code-form" novalidate>
           <label class="field-label" for="code" id="code-label">Your judge code, from the submission form</label>
           <div class="code-row hero-actions" id="grow">
@@ -49,10 +49,10 @@
             <button class="btn btn-primary btn-lg" type="submit" id="code-submit">Try a night with Anjo</button>
           </div>
           <p class="form-status" id="code-status" role="status" aria-live="polite"></p>
-          <p class="hero-fine">Private to this tab. No email, no password.</p>
+          <p class="hero-fine">No email, no password.</p>
         </form>
         <a class="hero-alt" href="/sleep/demo">Or see Teo's finished week <span aria-hidden="true">&rarr;</span></a>
-        <p class="hero-note">Built at the Meta hackathon, Oct 27 – Nov 4, 2026: Sleep, MIND and this product are new. The Anjo iOS app existed before.</p>
+        <p class="hero-note">Built at the Meta hackathon, Oct 27 – Nov 4, 2026. New: the nightly Sleep loop, MIND and this judge web app. Existing: the Anjo iOS app.</p>
       </div>
     </header>
 
@@ -73,7 +73,7 @@
           <div>
             <h3 class="tier-name">Night</h3>
             <p class="tier-when">It studies you.</p>
-            <p>It picks one open question and bets on the answer. Muse Spark Open plays you in practice scenes, and Glimmer trains on the best replies.</p>
+            <p>It picks one open question, bets on the answer and writes notes for tomorrow. Muse Spark Open plays you in practice scenes, and Glimmer trains on the best replies.</p>
             <p class="tier-model">Muse Spark Open · Muse Glimmer</p>
             <span class="depth" aria-hidden="true"></span>
           </div>
@@ -85,6 +85,24 @@
             <span class="depth" aria-hidden="true"></span>
           </div>
         </div>
+        <p class="hood">Under the hood: Glimmer 30B on one A100-80GB, a LoRA of rank up to 32 on attention and MLP per person per night, hot-loaded into vLLM on Modal. About $1 of GPU a night.</p>
+      </div>
+    </section>
+
+    <section class="sect" id="receipt" aria-labelledby="receipt-heading">
+      <div class="wrap">
+        <div class="sect-head">
+          <span class="kicker">One real night</span>
+          <h2 id="receipt-heading">Night 2 of a held-out person. <em>From the run's own log.</em></h2>
+        </div>
+        <ol class="receipt">
+          <li><span class="r-step">Practice</span><span class="r-what">Muse Spark Open played the person in 12 scenes. 5 replies were corrected.</span></li>
+          <li><span class="r-step">Train</span><span class="r-what">18 training rows, 13.4 minutes on one A100-80GB.</span></li>
+          <li><span class="r-step">Adapter</span><span class="r-what"><code>p-72dfc7220a90-n2</code>, built on night 1's <code>p-14135bade01f-n1</code>, saved to a Modal volume.</span></li>
+          <li><span class="r-step">Morning</span><span class="r-what">560 replies from every version of it, judged blind in both orders.</span></li>
+          <li><span class="r-step">Cost</span><span class="r-what">$2.27 for the night: $1.12 practice, $1.04 training.</span></li>
+        </ol>
+        <p class="hood">A simulated person, with days compressed so a week runs in a day. Run Nov 2–3, scored once.</p>
       </div>
     </section>
 
@@ -100,33 +118,32 @@
             <span class="chip live">Held-out</span>
             <p class="fig">76<small>%</small></p>
             <h3>Its overnight notes made answers better.</h3>
-            <p>Blind comparisons against the same model without notes. 66% on style.</p>
+            <p>Same model, same question, with and without the notes it wrote overnight. Judged blind by DeepSeek, in both orders. 66% on style. 120 and 90 comparisons.</p>
           </li>
           <li class="lead">
-            <span class="chip research">Research</span>
-            <p class="fig">&frac13;</p>
-            <h3>MIND's odds: a third of Gemini's avoidable error.</h3>
-            <p>Predicting 60 unseen simulated people over 12 weeks. Excess log loss over the true odds: 0.029 against 0.082 for the best Gemini setup. Our own model, not in the app yet.</p>
-          </li>
-          <li>
             <span class="chip live">Held-out</span>
             <p class="fig">57<small>%</small></p>
             <h3>Training alone isn't better yet.</h3>
             <p>Two nights, notes off, against the base model. 52% on style. Short of our pass mark.</p>
           </li>
-          <li>
+          <li class="half">
             <span class="chip live">Held-out</span>
             <p class="fig">78<small>%</small></p>
             <h3>But the training was personal.</h3>
             <p>Each person's own model beat a model trained on someone else. 60% on style. Personal, but not yet better than the base model.</p>
           </li>
-          <li>
+          <li class="half">
             <span class="chip live">Measured</span>
             <p class="fig"><small>$</small>41&ndash;60</p>
             <h3>Per person, per month.</h3>
             <p>Training every night. $12&ndash;15 with lighter nights. Our ceiling is $10.</p>
           </li>
         </ul>
+        <div class="research-card">
+          <span class="chip research">Research, separate from the app</span>
+          <p><strong>MIND's odds carried a third of Gemini's avoidable error.</strong> Predicting 60 unseen simulated people over 12 weeks, excess log loss over the true odds was 0.029 against 0.082 for the best Gemini setup. MIND is our own model, trained from scratch, and isn't in the app yet.</p>
+        </div>
+        <p class="evidence-link">Method, pass marks and the pre-registration ledger: in the submission's public repo.</p>
         <h3 class="misses-head" id="misses">What didn't work</h3>
         <ul class="misses">
           <li>Training plus notes did worse than notes alone (32%).</li>

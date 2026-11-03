@@ -279,3 +279,22 @@ button, input, textarea, select { font-family: inherit; }
   .msg { animation: none; }
   .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span, .mind-line, .mind-line-go { transition: none; }
 }
+.night-cycle + .hood { margin: var(--s4) 0 0; max-width: 72ch; font: 500 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted-2); }
+.figures li.half { grid-column: span 3; }
+.receipt { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); max-width: 920px; }
+.receipt li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--s5); padding: var(--s4) 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+.receipt .r-step { font: 500 11px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.receipt .r-what { color: var(--text); font-size: 16.5px; line-height: 1.55; }
+.receipt code { font: 500 13.5px/1 var(--mono); color: var(--accent-2); }
+#receipt .hood, .night-cycle + .hood { color: var(--muted); }
+#receipt .hood { margin-top: var(--s4); font: 500 12px/1.6 var(--mono); }
+.research-card { margin-top: var(--s5); max-width: 860px; padding: var(--s5) var(--s6); border: 1px solid var(--line); border-radius: var(--r-md); display: flex; flex-direction: column; gap: var(--s3); }
+.research-card p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.6; }
+.research-card strong { color: var(--text); font-weight: 600; }
+.evidence-link { margin: var(--s5) 0 0; font: 500 12px/1.5 var(--mono); letter-spacing: .04em; color: var(--muted); }
+.evidence-link a { color: var(--accent-2); }
+.evidence-link a:hover, .evidence-link a:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+@media (max-width: 860px) {
+  .figures li.half { grid-column: auto; }
+  .receipt li { grid-template-columns: 1fr; gap: var(--s2); }
+}

@@ -367,7 +367,7 @@ def test_the_landing_calls_anjo_it() -> None:
     from anjo.sleep.app.judge_pages import APP_DIR
 
     index = (APP_DIR / "index.html").read_text()
-    assert "It learns while it sleeps." in index
+    assert "It studies your day while you sleep." in index
     assert not re.search(r"\b(she|her|hers|herself)\b", index, re.IGNORECASE)
 
 
