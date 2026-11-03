@@ -16,9 +16,10 @@ verdicts on them, are asked every night. The base replies are kept beside the fl
 (``collapse_replies``, written only when the base was just asked).
 
 **The pairs.** With ``on_pairs``, each ``check`` hands over what it already has: every prompt with
-the base model's reply and the checkpoint's, and whether each was dragged (``CollapsePair``). Only
-when the base replies are in hand (asked tonight, or kept); a base side kept before its replies
-were hands over nothing, and the base model is never asked just for a pair.
+the base model's reply and the checkpoint's, and whether each was dragged (``CollapsePair``), inside
+the check (so inside the night's metered gates step). The pairs only when the base replies are in
+hand (asked tonight, or kept); a base side kept before its replies were hands over the checkpoint
+with no pairs, and the base model is never asked just for a pair.
 """
 from __future__ import annotations
 
@@ -126,7 +127,7 @@ class CollapseGate:
             asked.extend(reply for reply, _ in answered)
             return [dragged for _, dragged in answered]
 
-        flags = base_side(self._cache, "collapse", self._key, compute, self._valid)
+        flags: list[bool] = base_side(self._cache, "collapse", self._key, compute, self._valid)
         if asked:
             self._base_replies = asked
             if self._cache is not None:
@@ -136,7 +137,10 @@ class CollapseGate:
         return flags
 
     def _hand_over(self, ckpt: CheckpointRef, base: list[bool], mine: list[tuple[str, bool]]) -> None:
-        if self._on_pairs is None or self._base_replies is None:
+        if self._on_pairs is None:
+            return
+        if self._base_replies is None:  # a base side kept before its replies: the checkpoint alone
+            self._on_pairs(ckpt, [])
             return
         self._on_pairs(ckpt, [CollapsePair(p.id, p.prompt, b_reply, reply, b_flag, flag) for p, b_reply, b_flag, (reply, flag)
                               in zip(self._prompts, self._base_replies, base, mine, strict=True)])

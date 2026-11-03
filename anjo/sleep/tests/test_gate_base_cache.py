@@ -199,9 +199,10 @@ def test_the_collapse_gate_hands_over_its_real_pairs_and_keeps_the_base_replies(
     assert ADAPTER_MARK not in path.read_text(encoding="utf-8")  # the adapter's side is never kept
 
 
-def test_a_base_side_kept_without_its_replies_hands_over_no_pair_and_asks_nothing(tmp_path: Path) -> None:
+def test_a_base_side_kept_without_its_replies_hands_over_the_adapter_alone(tmp_path: Path) -> None:
     """A cache from before the replies were kept: the flags read back, no base reply exists tonight,
-    so no pair is handed over, and the base model is not asked just to make one."""
+    so no everyday pair is handed over and the base model is not asked just to make one; the adapter
+    the gate checked still is, so a rejected night can still ask its personal question."""
     path, got = tmp_path / "gate_base.jsonl", list[tuple[str, Any]]()
     _night(path, NIGHT_1)
     kept = [r for r in read_records(path, PLAIN) if r["gate"] != "collapse_replies"]
@@ -210,4 +211,4 @@ def test_a_base_side_kept_without_its_replies_hands_over_no_pair_and_asks_nothin
 
     append_records(path, PLAIN, kept)
     server = _paired_night(path, NIGHT_2, got)
-    assert server.count("base", "reply") == 0 and got == []
+    assert server.count("base", "reply") == 0 and got == [(NIGHT_2.id, [])]
