@@ -140,9 +140,11 @@ explicitly changes nothing, and `0` turns any one of them off:
 export ANJO_SLEEP_OBJECTIVE=sft_dpo_seed  # one sleep loss: SFT, DPO, knowledge seeding (the other choices: sft_dpo, sft)
 export ANJO_SLEEP_CAPACITY=1             # the server's top LoRA rank, three passes over the night's rows
 export ANJO_SLEEP_DAY_DREAMS=1           # also trains on earlier practice and Glimmer's own day dreams
-export ANJO_SLEEP_PRESSURE=0             # every night sleeps deep (no naps)
 export ANJO_SLEEP_HARNESS=1              # the night's strategy loop (anjo/sleep/harness/)
 ```
+
+One switch is not a default: the final also set `ANJO_SLEEP_PRESSURE=0`, so every night slept deep.
+Unset, a cheap night may nap instead (`anjo/sleep/night/sleep_pressure.py`). Export it to match.
 
 It also ran Spark Open on Fireworks (`ANJO_SLEEP_SPARK=fireworks`) with DeepSeek V4.1 Flash as the
 judge (`ANJO_SLEEP_JUDGE=deepseek`); those choose providers, not how the adapter trains.
