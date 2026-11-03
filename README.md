@@ -132,6 +132,20 @@ pip install -e ".[test]"
 python -m anjo.sleep.examples.synthetic --fake
 ```
 
+**The final's recipe isn't the code default.** The registered final trained with these switches
+(ledger seq 73). Export them before a live run to train the way it did:
+
+```bash
+export ANJO_SLEEP_OBJECTIVE=sft_dpo_seed  # one sleep loss: SFT, DPO, knowledge seeding (default: sft_dpo)
+export ANJO_SLEEP_CAPACITY=1             # the server's top LoRA rank, three passes over the night's rows
+export ANJO_SLEEP_DAY_DREAMS=1           # also trains on earlier practice and Glimmer's own day dreams
+export ANJO_SLEEP_PRESSURE=0             # every night sleeps deep (no naps)
+export ANJO_SLEEP_HARNESS=1              # the night's strategy loop (anjo/sleep/harness/)
+```
+
+It also ran Spark Open on Fireworks (`ANJO_SLEEP_SPARK=fireworks`) with DeepSeek V4.1 Flash as the
+judge (`ANJO_SLEEP_JUDGE=deepseek`); those choose providers, not how the adapter trains.
+
 Then live, with your own keys. This pays for Baseten, the Meta API and Modal GPU time:
 
 ```bash
