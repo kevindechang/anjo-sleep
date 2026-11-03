@@ -298,3 +298,17 @@ button, input, textarea, select { font-family: inherit; }
   .figures li.half { grid-column: auto; }
   .receipt li { grid-template-columns: 1fr; gap: var(--s2); }
 }
+
+/* the before/after: one real question, the next morning, with and without its notes */
+.compare-q { margin: 0 0 var(--s5); max-width: 70ch; font-size: clamp(18px, 1.8vw, 22px); line-height: 1.45; letter-spacing: -0.01em; color: var(--text); text-wrap: pretty; }
+.compare-q::before { content: 'Asked: '; font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted-2); vertical-align: 3px; }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.compare > div { background: var(--canvas); padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
+.compare > div.after { background: color-mix(in srgb, var(--accent) 5%, var(--canvas)); }
+.compare h3 { margin: 0; font: 500 11px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted-2); }
+.compare .after h3 { color: var(--accent); }
+.compare blockquote { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.65; white-space: pre-line; }
+.compare .after blockquote { color: var(--text); }
+.compare-note { margin: var(--s4) 0 0; max-width: 80ch; font: 500 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); }
+.compare-note strong { color: var(--text); font-weight: 500; }
+@media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
