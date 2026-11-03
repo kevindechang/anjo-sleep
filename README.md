@@ -33,6 +33,9 @@ problems nobody assigned, works on them across nights, and changes a belief only
 Built for the Meta Global AI Developer Hackathon, October 27 to November 4, 2026.
 Built with Muse Spark Open, under the Muse Model License and its Usage Policy (see NOTICE).
 
+<!-- COPY-PENDING(kevin): the live link line. -->
+**Try it live:** [sleep.anjo.nexus](https://sleep.anjo.nexus), with the access code from the submission.
+
 ## Results
 
 Every run we did, including the ones that failed and why, is in [RESULTS.md](anjo/sleep/RESULTS.md). All
