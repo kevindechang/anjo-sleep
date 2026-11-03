@@ -80,7 +80,19 @@
 &ldquo;Thank you for letting us put a copy of <mark>First Clear Night Over Norfolk</mark> on the community shelf.&rdquo;</blockquote>
           </div>
         </div>
-        <p class="compare-note">The base model never heard of the guide. The notes named it, and so did the adapter&rsquo;s weights, without personal notes or history in the prompt. <strong>Hugh</strong> is a held-out simulated person; these are fresh replies from his scored adapter (<code>p-72dfc7220a90-n2</code>), the morning after night 2. We picked this one of the first four questions; on question four the adapter&rsquo;s answer was the thinnest of the three. Hugh is the person where training did best. Averages over all three people: notes 76%, training alone 57%. All four questions and replies are in the repo.</p>
+        <p class="compare-note">The base model never heard of the guide. The notes named it, and so did the adapter&rsquo;s weights, without personal notes or history in the prompt. <strong>Hugh</strong> is a held-out simulated person; these are fresh replies from his scored adapter (<code>p-72dfc7220a90-n2</code>), the morning after night 2. We picked this one of the first four questions; on question four the adapter&rsquo;s answer was the thinnest of the three. All four questions and replies are in the repo.</p>
+        <table class="per-person">
+          <caption>Hugh is where training did best. All three held-out people, knowledge questions, 40 blind comparisons each. 50% means no difference.</caption>
+          <thead>
+            <tr><th scope="col">Person</th><th scope="col">Notes vs base</th><th scope="col">Adapter alone vs base</th><th scope="col">Own adapter vs another person&rsquo;s</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Hugh, stargazing guide</th><td>79%</td><td>74%</td><td>66%</td></tr>
+            <tr><th scope="row">Elena, posed weddings</th><td>81%</td><td>54%</td><td>78%</td></tr>
+            <tr><th scope="row">Theo, candid weddings</th><td>69%</td><td class="below">44%</td><td>90%</td></tr>
+            <tr class="all"><th scope="row">All three</th><td>76%</td><td>57%</td><td>78%</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -140,7 +152,7 @@
           <span class="kicker">Results</span>
           <h2 id="results-heading">Tested on unseen simulated people. <em>Scored once.</em></h2>
         </div>
-        <p class="results-lede">Every test and pass mark was set before we ran it, on three simulated people drawn after the code froze.</p>
+        <p class="results-lede"><strong>The notes improve answers today. Each person&rsquo;s weights learned that person, but aren&rsquo;t better than the base model yet.</strong> Every test and pass mark was set before we ran it, on three simulated people drawn after the code froze.</p>
         <ul class="figures">
           <li class="lead">
             <span class="chip live">Held-out</span>
@@ -157,28 +169,27 @@
           <li class="half">
             <span class="chip live">Held-out</span>
             <p class="fig">78<small>%</small></p>
-            <h3>But the training was personal.</h3>
-            <p>Each person's own model beat a model trained on someone else. 60% on style. Personal, but not yet better than the base model.</p>
+            <h3>But the training was specific to each person.</h3>
+            <p>Each person's own adapter beat one trained on someone else. 60% on style. It learned the person; it didn't yet beat the base model.</p>
           </li>
           <li class="half">
-            <span class="chip live">Measured</span>
+            <span class="chip existing">From logged nights</span>
             <p class="fig"><small>$</small>41&ndash;60</p>
             <h3>Per person, per month.</h3>
-            <p>Training every night. $12&ndash;15 with lighter nights. Our ceiling is $10.</p>
+            <p>Logged nightly costs times 30, training every night. $12&ndash;15 modelled with lighter nights. Our ceiling is $10, so not viable yet.</p>
           </li>
         </ul>
-        <div class="research-card">
-          <span class="chip research">Research, separate from the app</span>
-          <p><strong>MIND's odds carried a third of Gemini's avoidable error.</strong> Predicting 60 unseen simulated people over 12 weeks, excess log loss over the true odds was 0.029 against 0.082 for the best Gemini setup. MIND is our own model, trained from scratch, and isn't in the app yet.</p>
-        </div>
-        <p class="evidence-link"><a href="https://github.com/kevindechang/anjo-sleep">Method, pass marks, every number and the pre-registration ledger &rarr;</a></p>
         <h3 class="misses-head" id="misses">What didn't work</h3>
         <ul class="misses">
           <li>Training plus notes did worse than notes alone (32%).</li>
-          <li>Untrained on a new kind of world, MIND did worse than guessing 50/50.</li>
-          <li>We couldn't show that its questions to you pay off.</li>
-          <li>The odds in the app come from its night agent, not from MIND yet.</li>
+          <li>Training every night costs four to six times our ceiling.</li>
         </ul>
+        <p class="evidence-link"><a href="https://github.com/kevindechang/anjo-sleep">Method, pass marks, every number and the pre-registration ledger &rarr;</a></p>
+        <div class="research-card">
+          <span class="chip research">Research, separate from the app</span>
+          <p><strong>MIND's odds carried a third of Gemini's avoidable error.</strong> Predicting 60 unseen simulated people over 12 weeks, excess log loss over the true odds was 0.029 against 0.082 for the best Gemini setup. MIND is our own model, trained from scratch, and isn't in the app yet.</p>
+          <p>What didn't work: untrained on a new kind of world, it did worse than guessing 50/50, and we couldn't show that its questions to you pay off. The odds in the app come from its night agent, not from MIND.</p>
+        </div>
       </div>
     </section>
 

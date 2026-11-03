@@ -279,7 +279,7 @@ button, input, textarea, select { font-family: inherit; }
   .msg { animation: none; }
   .field-input, .composer textarea, .starter, .tab, .hero-alt, .hero-alt span, .mind-line, .mind-line-go { transition: none; }
 }
-.night-cycle + .hood { margin: var(--s4) 0 0; max-width: 72ch; font: 500 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted-2); }
+.night-cycle + .hood { margin: var(--s4) 0 0; max-width: 72ch; font: 500 13px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted-2); }
 .figures li.half { grid-column: span 3; }
 .receipt { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); max-width: 920px; }
 .receipt li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--s5); padding: var(--s4) 0; border-bottom: 1px solid var(--line); align-items: baseline; }
@@ -287,7 +287,7 @@ button, input, textarea, select { font-family: inherit; }
 .receipt .r-what { color: var(--text); font-size: 16.5px; line-height: 1.55; }
 .receipt code { font: 500 13.5px/1 var(--mono); color: var(--accent-2); }
 #receipt .hood, .night-cycle + .hood { color: var(--muted); }
-#receipt .hood { margin-top: var(--s4); font: 500 12px/1.6 var(--mono); }
+#receipt .hood { margin-top: var(--s4); font: 500 13px/1.6 var(--mono); }
 .research-card { margin-top: var(--s5); max-width: 860px; padding: var(--s5) var(--s6); border: 1px solid var(--line); border-radius: var(--r-md); display: flex; flex-direction: column; gap: var(--s3); }
 .research-card p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.6; }
 .research-card strong { color: var(--text); font-weight: 600; }
@@ -309,10 +309,23 @@ button, input, textarea, select { font-family: inherit; }
 .compare .after h3 { color: var(--accent); }
 .compare blockquote { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.65; white-space: pre-line; }
 .compare .after blockquote { color: var(--text); }
-.compare-note { margin: var(--s4) 0 0; max-width: 80ch; font: 500 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); }
+.compare-note { margin: var(--s4) 0 0; max-width: 72ch; font: 400 15px/1.6 var(--sans); color: var(--muted); text-wrap: pretty; }
 .compare-note strong { color: var(--text); font-weight: 500; }
 @media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
 .compare-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .compare mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-2); padding: 0 .15em; border-radius: 3px; }
 .compare-note code { font: 500 11.5px/1 var(--mono); color: var(--accent-2); }
 @media (max-width: 860px) { .compare-3 { grid-template-columns: 1fr; } }
+
+/* all three held-out people beside the picked example (Astra round 5: show the spread, not only the best case) */
+.per-person { margin: var(--s6) 0 0; width: 100%; max-width: 860px; border-collapse: collapse; font-size: 15px; }
+.per-person caption { caption-side: top; text-align: left; padding: 0 0 var(--s3); color: var(--muted); font-size: 15px; line-height: 1.55; text-wrap: pretty; }
+.per-person th, .per-person td { padding: var(--s3) var(--s4) var(--s3) 0; border-top: 1px solid var(--line); text-align: left; font-weight: 400; }
+.per-person thead th { font: 500 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted-2); vertical-align: bottom; }
+.per-person tbody th { color: var(--text); }
+.per-person td { font-variant-numeric: tabular-nums; color: var(--text); }
+.per-person td.below { color: var(--muted-2); }
+.per-person tr.all th, .per-person tr.all td { border-top-color: var(--muted-2); font-weight: 600; }
+.results-lede strong { color: var(--text); font-weight: 600; }
+.research-card { margin-top: var(--s8); }
+@media (max-width: 600px) { .per-person { font-size: 13.5px; } .per-person th, .per-person td { padding-right: var(--s2); } }
